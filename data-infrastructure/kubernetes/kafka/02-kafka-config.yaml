@@ -1,0 +1,73 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-config
+  namespace: kafka
+data:
+  server.properties: |
+    # Server Basics
+    broker.id=${KAFKA_BROKER_ID}
+    
+    # Network Configuration
+    listeners=PLAINTEXT://:9092,SSL://:9093,SASL_SSL://:9094
+    advertised.listeners=PLAINTEXT://${POD_IP}:9092,SSL://${POD_IP}:9093,SASL_SSL://${POD_IP}:9094
+    listener.security.protocol.map=PLAINTEXT:PLAINTEXT,SSL:SSL,SASL_SSL:SASL_SSL
+    inter.broker.listener.name=PLAINTEXT
+    
+    # Log Configuration
+    log.dirs=/var/lib/kafka/data
+    log.retention.hours=168
+    log.segment.bytes=1073741824
+    log.retention.check.interval.ms=300000
+    
+    # Replication
+    default.replication.factor=3
+    min.insync.replicas=2
+    
+    # Performance
+    num.network.threads=3
+    num.io.threads=8
+    socket.send.buffer.bytes=102400
+    socket.receive.buffer.bytes=102400
+    socket.request.max.bytes=104857600
+    
+    # Zookeeper
+    zookeeper.connect=zookeeper-0.zookeeper-headless.kafka.svc.cluster.local:2181,zookeeper-1.zookeeper-headless.kafka.svc.cluster.local:2181,zookeeper-2.zookeeper-headless.kafka.svc.cluster.local:2181
+    zookeeper.connection.timeout.ms=18000
+    
+    # Auto Topic Creation
+    auto.create.topics.enable=false
+    
+    # Security
+    ssl.keystore.location=/etc/kafka/secrets/kafka.keystore.jks
+    ssl.keystore.password=${KEYSTORE_PASSWORD}
+    ssl.key.password=${KEY_PASSWORD}
+    ssl.truststore.location=/etc/kafka/secrets/kafka.truststore.jks
+    ssl.truststore.password=${TRUSTSTORE_PASSWORD}
+    ssl.client.auth=required
+    ssl.endpoint.identification.algorithm=
+    
+    # SASL
+    sasl.enabled.mechanisms=PLAIN
+    sasl.mechanism.inter.broker.protocol=PLAIN
+    
+    # Logging
+    log4j.rootLogger=INFO, stdout
+    log4j.appender.stdout=org.apache.log4j.ConsoleAppender
+    log4j.appender.stdout.layout=org.apache.log4j.PatternLayout
+    log4j.appender.stdout.layout.ConversionPattern=[%d] %p %m (%c)%n
+    
+    # Metrics
+    metric.reporters=io.confluent.metrics.reporter.ConfluentMetricsReporter
+    confluent.metrics.reporter.bootstrap.servers=localhost:9092
+    confluent.metrics.reporter.topic.replicas=1
+    
+    # Transaction Settings
+    transaction.state.log.replication.factor=3
+    transaction.state.log.min.isr=2
+    
+    # Rack Awareness
+    broker.rack=${NODE_NAME}
+    
+    # Delete Topic Enable
+    delete.topic.enable=true

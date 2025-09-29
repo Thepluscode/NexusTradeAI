@@ -1,0 +1,175 @@
+name: Continuous Deployment
+
+on:
+  push:
+    branches: [ main ]
+  release:
+    types: [ published ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: nexus-trade-ai
+
+jobs:
+  # Build and Push Docker Images
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        service: [api-gateway, auth-service, market-data-service, trading-engine, risk-management-service, web-app]
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Login to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/${{ matrix.service }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=sha
+          
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./services/${{ matrix.service }}
+        file: ./services/${{ matrix.service }}/Dockerfile
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  # Deploy to Staging
+  deploy-staging:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: staging
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.27.0'
+        
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-west-2
+        
+    - name: Update kubeconfig
+      run: aws eks update-kubeconfig --name nexus-staging-cluster
+      
+    - name: Deploy to staging
+      run: |
+        # Update image tags in Kubernetes manifests
+        sed -i "s|image: nexus-trade/|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/|g" infrastructure/kubernetes/staging/*.yaml
+        sed -i "s|:latest|:${{ github.sha }}|g" infrastructure/kubernetes/staging/*.yaml
+        
+        # Apply Kubernetes manifests
+        kubectl apply -f infrastructure/kubernetes/staging/
+        
+        # Wait for rollout to complete
+        kubectl rollout status deployment/api-gateway -n nexus-staging
+        kubectl rollout status deployment/trading-engine -n nexus-staging
+        
+    - name: Run smoke tests
+      run: |
+        # Wait for services to be ready
+        sleep 60
+        
+        # Run basic health checks
+        ./scripts/smoke-tests.sh staging
+
+  # Deploy to Production
+  deploy-production:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    environment: production
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.27.0'
+        
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-west-2
+        
+    - name: Update kubeconfig
+      run: aws eks update-kubeconfig --name nexus-production-cluster
+      
+    - name: Deploy to production
+      run: |
+        # Update image tags in Kubernetes manifests
+        sed -i "s|image: nexus-trade/|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/|g" infrastructure/kubernetes/production/*.yaml
+        sed -i "s|:latest|:${{ github.ref_name }}|g" infrastructure/kubernetes/production/*.yaml
+        
+        # Apply Kubernetes manifests with blue-green deployment
+        kubectl apply -f infrastructure/kubernetes/production/
+        
+        # Wait for rollout to complete
+        kubectl rollout status deployment/api-gateway -n nexus-production
+        kubectl rollout status deployment/trading-engine -n nexus-production
+        
+    - name: Run production health checks
+      run: |
+        sleep 120
+        ./scripts/health-checks.sh production
+        
+    - name: Notify deployment success
+      uses: 8398a7/action-slack@v3
+      with:
+        status: success
+        text: "🚀 Nexus Trade AI v${{ github.ref_name }} deployed to production successfully!"
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # Rollback on Failure
+  rollback:
+    needs: deploy-production
+    runs-on: ubuntu-latest
+    if: failure()
+    environment: production
+    steps:
+    - name: Rollback production deployment
+      run: |
+        kubectl rollout undo deployment/api-gateway -n nexus-production
+        kubectl rollout undo deployment/trading-engine -n nexus-production
+        
+    - name: Notify rollback
+      uses: 8398a7/action-slack@v3
+      with:
+        status: failure
+        text: "⚠️ Production deployment failed. Rolling back to previous version."
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

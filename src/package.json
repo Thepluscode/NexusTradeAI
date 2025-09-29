@@ -1,0 +1,34 @@
+{
+  "name": "@nexustradeai/orchestrator",
+  "version": "1.0.0",
+  "description": "Nexus Trade AI System Orchestrator - Main coordination layer for the trading platform",
+  "main": "main.js",
+  "scripts": {
+    "start": "node main.js",
+    "dev": "nodemon main.js",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
+  },
+  "keywords": [
+    "trading",
+    "algorithmic-trading",
+    "orchestrator",
+    "nexustradeai",
+    "financial-technology"
+  ],
+  "author": "Nexus Trade AI",
+  "license": "MIT",
+  "dependencies": {
+    "events": "^3.3.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1",
+    "jest": "^29.7.0",
+    "eslint": "^8.50.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

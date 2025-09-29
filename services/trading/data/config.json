@@ -1,0 +1,22 @@
+{
+  "symbols": [
+    "AAPL",
+    "GOOGL",
+    "MSFT",
+    "TSLA",
+    "NVDA",
+    "AMZN",
+    "RDDT",
+    "META",
+    "NFLX"
+  ],
+  "strategies": [
+    "meanReversion",
+    "momentum",
+    "arbitrage",
+    "neuralNet"
+  ],
+  "riskPerTrade": 0.02,
+  "maxPositionSize": 10000,
+  "lastUpdate": "2025-08-07T13:16:20.151Z"
+}

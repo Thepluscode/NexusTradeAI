@@ -1,0 +1,21 @@
+{
+  "name": "nexustradeai-profitable-trading",
+  "version": "1.0.0",
+  "description": "Profitable automated trading engine for NexusTradeAI",
+  "main": "profitable-trading-server.js",
+  "scripts": {
+    "start": "node profitable-trading-server.js",
+    "dev": "nodemon profitable-trading-server.js",
+    "test": "node test-strategies.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "axios": "^1.6.0",
+    "dotenv": "^16.3.1",
+    "ws": "^8.14.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}

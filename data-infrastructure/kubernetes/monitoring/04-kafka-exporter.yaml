@@ -1,0 +1,72 @@
+# Kafka Exporter Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-exporter
+  namespace: monitoring
+  labels:
+    app: kafka-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-exporter
+  template:
+    metadata:
+      labels:
+        app: kafka-exporter
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9308"
+    spec:
+      containers:
+      - name: kafka-exporter
+        image: danielqsj/kafka-exporter:v1.4.0
+        imagePullPolicy: IfNotPresent
+        args:
+        - --kafka.server=kafka-0.kafka-headless.kafka.svc.cluster.local:9092
+        - --kafka.server=kafka-1.kafka-headless.kafka.svc.cluster.local:9092
+        - --kafka.server=kafka-2.kafka-headless.kafka.svc.cluster.local:9092
+        - --sasl.enabled=false
+        - --tls.enabled=false
+        - --web.telemetry-path=/metrics
+        - --log.level=info
+        ports:
+        - containerPort: 9308
+          name: http-metrics
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+        livenessProbe:
+          httpGet:
+            path: /metrics
+            port: http-metrics
+          initialDelaySeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /metrics
+            port: http-metrics
+          initialDelaySeconds: 5
+          timeoutSeconds: 5
+---
+# Kafka Exporter Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-exporter
+  namespace: monitoring
+  labels:
+    app: kafka-exporter
+spec:
+  ports:
+  - name: http-metrics
+    port: 9308
+    targetPort: http-metrics
+    protocol: TCP
+  selector:
+    app: kafka-exporter

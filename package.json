@@ -1,0 +1,87 @@
+{
+  "name": "nexus-trade-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI-Powered Cross-Market Trading & Risk Intelligence Platform",
+  "scripts": {
+    "start": "node automation-server.js",
+    "start:trading": "node trading-server.js",
+    "dev": "nodemon automation-server.js",
+    "dev:trading": "nodemon trading-server.js",
+    "dev:services": "npm run dev --workspace=services/ai-service",
+    "build": "npm run build --workspaces",
+    "test": "jest",
+    "test:unit": "jest --selectProjects unit",
+    "test:integration": "jest --selectProjects integration",
+    "test:performance": "jest --selectProjects performance",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:ci": "jest --ci --coverage --watchAll=false",
+    "test:debug": "node --inspect-brk node_modules/.bin/jest --runInBand",
+    "test:workspaces": "npm test --workspaces",
+    "lint": "eslint . --ext .js,.jsx,.ts,.tsx --max-warnings=0",
+    "lint:fix": "eslint . --ext .js,.jsx,.ts,.tsx --fix",
+    "format": "prettier --write \"**/*.{js,jsx,ts,tsx,json,md}\"",
+    "format:check": "prettier --check \"**/*.{js,jsx,ts,tsx,json,md}\"",
+    "clean": "rm -rf coverage .jest-cache logs/*.log",
+    "setup:test": "npm run setup:test:db && npm run setup:test:redis",
+    "setup:test:db": "createdb nexus_trade_test || true",
+    "setup:test:redis": "redis-cli -n 15 flushdb || true",
+    "prepare": "[ -d .git ] && husky install || echo 'Skipping husky install - not a git repository'"
+  },
+  "dependencies": {
+    "axios": "^1.5.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.0",
+    "express": "^4.18.0",
+    "ioredis": "^5.3.0",
+    "lodash": "^4.17.21",
+    "moment": "^2.29.4",
+    "node-cron": "^3.0.2",
+    "node-fetch": "^3.3.2",
+    "pg": "^8.16.3",
+    "uuid": "^9.0.0",
+    "winston": "^3.10.0",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.22.0",
+    "@babel/preset-env": "^7.22.0",
+    "babel-jest": "^29.6.0",
+    "concurrently": "^8.2.0",
+    "eslint": "^8.45.0",
+    "eslint-config-prettier": "^8.8.0",
+    "eslint-plugin-prettier": "^5.0.0",
+    "husky": "^8.0.3",
+    "jest": "^29.6.0",
+    "jest-html-reporters": "^3.1.0",
+    "jest-junit": "^16.0.0",
+    "lerna": "^7.1.4",
+    "nodemon": "^3.0.0",
+    "prettier": "^3.0.0",
+    "supertest": "^6.3.0",
+    "typescript": "^5.1.6",
+    "wsrun": "^5.2.4"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-org/nexus-trade-ai.git"
+  },
+  "keywords": [
+    "trading",
+    "ai",
+    "blockchain",
+    "fintech",
+    "risk-management"
+  ],
+  "author": "Nexus Trade AI Team",
+  "license": "Proprietary",
+  "bugs": {
+    "url": "https://github.com/your-org/nexus-trade-ai/issues"
+  },
+  "homepage": "https://github.com/your-org/nexus-trade-ai#readme"
+}

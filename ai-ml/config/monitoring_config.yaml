@@ -1,0 +1,250 @@
+# Monitoring configuration
+monitoring:
+  update_interval: 300  # seconds
+  retention_period: 86400  # 24 hours in seconds
+  
+# Alert thresholds
+thresholds:
+  accuracy_drop: 0.1  # 10% drop in accuracy triggers warning
+  prediction_time: 1000  # 1 second (in milliseconds)
+  drift_score: 0.3  # Maximum allowed feature drift score
+  error_rate: 0.05  # 5% error rate threshold
+
+# Alerting configuration
+alerts:
+  email:
+    enabled: true
+    recipients:
+      - "ml-team@nexustrade.ai"
+    smtp_server: "smtp.gmail.com"
+    smtp_port: 587
+    
+  slack:
+    enabled: true
+    webhook_url: "https://hooks.slack.com/services/..."
+    channel: "#ml-alerts"
+  
+  pagerduty:
+    enabled: false
+    integration_key: "your-pagerduty-key"
+
+# Drift detection configuration
+drift_detection:
+  enabled: true
+  methods:
+    - "ks_test"  # Kolmogorov-Smirnov test
+    - "chi2_test"  # Chi-squared test
+    - "psi"  # Population Stability Index
+  baseline_window: 7  # days
+  detection_window: 1  # day
+  
+# Model-specific configurations
+model_configs:
+  lstm:
+    drift_threshold: 0.3
+    accuracy_threshold: 0.7
+    
+  lightgbm:
+    drift_threshold: 0.25
+    accuracy_threshold: 0.75
+    
+  ensemble:
+    drift_threshold: 0.2
+    accuracy_threshold: 0.8
+
+# Performance monitoring
+performance:
+  metrics:
+    - "prediction_latency"
+    - "throughput"
+    - "error_rate"
+    - "cpu_usage"
+    - "memory_usage"
+    - "gpu_usage"
+  
+  # Resource usage thresholds (percentage)
+  resource_thresholds:
+    cpu: 80
+    memory: 80
+    gpu: 80
+
+# Data quality monitoring
+data_quality:
+  check_nulls: true
+  check_ranges: true
+  check_outliers: true
+  feature_ranges:  # Example ranges for common features
+    price: {min: 0, max: 10000}
+    volume: {min: 0, max: 1e9}
+    rsi: {min: 0, max: 100}
+
+# Logging configuration
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  file: "/var/log/nexustrade/model_monitoring.log"
+  max_size: 100  # MB
+  backup_count: 5
+
+# Integration with other services
+integrations:
+  mlflow:
+    enabled: true
+    tracking_uri: "http://localhost:5000"
+    
+  prometheus:
+    enabled: true
+    port: 9090
+    
+  grafana:
+    enabled: true
+    url: "http://localhost:3000"
+
+# Scheduling
+schedules:
+  daily_report:
+    enabled: true
+    time: "09:00"  # 9 AM UTC
+    recipients:
+      - "ml-team@nexustrade.ai"
+      - "trading-desk@nexustrade.ai"
+  
+  model_retraining:
+    enabled: true
+    schedule: "0 0 * * 0"  # Every Sunday at midnight
+    models:
+      - "lstm"
+      - "lightgbm"
+      - "ensemble"
+
+# Feature store configuration
+feature_store:
+  enabled: true
+  type: "redis"  # or "postgres", "s3", etc.
+  config:
+    host: "localhost"
+    port: 6379
+    db: 0
+
+# Model registry
+model_registry:
+  type: "mlflow"
+  staging_path: "models:/{model_name}/staging"
+  production_path: "models:/{model_name}/production"
+  
+# Alert message templates
+alert_templates:
+  drift_detected: |
+    🚨 Model Drift Detected
+    Model: {model_name}
+    Drift Score: {drift_score:.3f}
+    Features with drift: {features_with_drift}
+    
+  performance_degradation: |
+    ⚠️ Performance Degradation
+    Model: {model_name}
+    Metric: {metric}
+    Current: {current_value:.3f}
+    Threshold: {threshold:.3f}
+    
+  data_quality_issue: |
+    ❌ Data Quality Issue
+    Model: {model_name}
+    Issue: {issue}
+    Affected Features: {features}
+
+# Notification preferences
+notifications:
+  on_drift: true
+  on_performance_issue: true
+  on_data_quality_issue: true
+  on_model_retrained: true
+  on_schedule: true
+
+# Retention policies
+retention:
+  prediction_logs: 30  # days
+  metrics: 90  # days
+  alerts: 180  # days
+  
+# Security
+security:
+  enable_auth: true
+  allowed_ips:
+    - "127.0.0.1"
+    - "10.0.0.0/8"
+  
+# External dependencies
+dependencies:
+  redis: 
+    required: true
+    version: ">=4.0.0"
+  mlflow:
+    required: true
+    version: ">=2.0.0"
+  prometheus:
+    required: false
+    version: ">=2.0.0"
+
+# Custom metrics
+custom_metrics:
+  - name: "custom_metric_1"
+    description: "Custom metric example"
+    query: "SELECT * FROM predictions WHERE timestamp > NOW() - INTERVAL '1 hour'"
+    threshold: 0.1
+    
+# Feature importance tracking
+feature_importance:
+  enabled: true
+  update_frequency: "daily"  # or "hourly", "weekly"
+  top_n_features: 10
+
+# Model performance baselines
+performance_baselines:
+  lstm:
+    accuracy: 0.85
+    precision: 0.82
+    recall: 0.83
+    f1: 0.82
+    
+  lightgbm:
+    accuracy: 0.88
+    precision: 0.86
+    recall: 0.87
+    f1: 0.86
+
+# API configuration
+api:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8081
+  auth_required: true
+  rate_limit: "100/minute"
+  
+# Storage configuration
+storage:
+  type: "local"  # or "s3", "gcs", "azure"
+  path: "/var/lib/nexustrade/monitoring"
+  retention_days: 30
+
+# Version information
+version: "1.0.0"
+environment: "production"
+
+# Tags for organization
+tags:
+  - "trading"
+  - "ml-models"
+  - "monitoring"
+
+# Documentation links
+documentation:
+  api: "https://docs.nexustrade.ai/api"
+  monitoring: "https://docs.nexustrade.ai/monitoring"
+  alerts: "https://docs.nexustrade.ai/alerts"
+
+# Maintenance mode
+maintenance:
+  enabled: false
+  message: "Scheduled maintenance in progress"
+  start_time: "2023-01-01T00:00:00Z"
+  end_time: "2023-01-01T04:00:00Z"

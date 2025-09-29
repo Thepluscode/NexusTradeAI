@@ -1,0 +1,191 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nexustrade-production
+  labels:
+    name: nexustrade-production
+    environment: production
+    app: nexustrade-ai
+    tier: production
+    version: v1.0.0
+  annotations:
+    description: "NexusTradeAI Production Environment - High-Performance Trading Platform"
+    contact: "devops@nexustrade.ai"
+    cost-center: "trading-platform"
+    compliance: "SOC2-Type2,PCI-DSS"
+    backup-policy: "daily"
+    monitoring: "enabled"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: production-quota
+  namespace: nexustrade-production
+  labels:
+    environment: production
+    component: resource-management
+spec:
+  hard:
+    # CPU and Memory limits for high-performance trading
+    requests.cpu: "100"
+    requests.memory: 200Gi
+    limits.cpu: "200"
+    limits.memory: 400Gi
+
+    # Storage for market data and trading history
+    requests.storage: "1Ti"
+    persistentvolumeclaims: "50"
+
+    # Network resources
+    services: "50"
+    services.loadbalancers: "10"
+    services.nodeports: "5"
+
+    # Configuration and secrets
+    secrets: "100"
+    configmaps: "100"
+
+    # Workload limits
+    pods: "200"
+    replicationcontrollers: "50"
+    deployments.apps: "50"
+    statefulsets.apps: "20"
+    jobs.batch: "100"
+    cronjobs.batch: "20"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: production-limits
+  namespace: nexustrade-production
+  labels:
+    environment: production
+    component: resource-management
+spec:
+  limits:
+  # Container limits for trading services
+  - default:
+      cpu: "4"
+      memory: "8Gi"
+      ephemeral-storage: "10Gi"
+    defaultRequest:
+      cpu: "1"
+      memory: "2Gi"
+      ephemeral-storage: "5Gi"
+    max:
+      cpu: "16"
+      memory: "32Gi"
+      ephemeral-storage: "50Gi"
+    min:
+      cpu: "100m"
+      memory: "256Mi"
+      ephemeral-storage: "1Gi"
+    type: Container
+
+  # Pod limits
+  - max:
+      cpu: "32"
+      memory: "64Gi"
+    min:
+      cpu: "200m"
+      memory: "512Mi"
+    type: Pod
+
+  # PVC limits for data storage
+  - default:
+      storage: "20Gi"
+    max:
+      storage: "500Gi"
+    min:
+      storage: "5Gi"
+    type: PersistentVolumeClaim
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: production-network-policy
+  namespace: nexustrade-production
+  labels:
+    environment: production
+    component: security
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+
+  # Ingress rules - allow traffic from specific namespaces
+  ingress:
+  # Allow internal communication within production namespace
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: nexustrade-production
+
+  # Allow monitoring traffic
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: nexustrade-monitoring
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 9090
+    - protocol: TCP
+      port: 3000
+
+  # Allow ingress controller traffic
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 80
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 8080
+
+  # Egress rules - control outbound traffic
+  egress:
+  # Allow internal communication
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: nexustrade-production
+
+  # Allow system communication
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53
+
+  # Allow HTTPS/HTTP for external APIs (market data, exchanges)
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 80
+
+  # Allow database connections
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 5432  # PostgreSQL
+    - protocol: TCP
+      port: 6379  # Redis
+    - protocol: TCP
+      port: 27017 # MongoDB
+    - protocol: TCP
+      port: 8086  # InfluxDB

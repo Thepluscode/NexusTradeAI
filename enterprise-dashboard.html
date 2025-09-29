@@ -1,0 +1,1081 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexus Trade AI - Enterprise FCT Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #334155 100%);
+            color: white;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        .header {
+            background: rgba(15, 23, 42, 0.95);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(59, 130, 246, 0.2);
+            padding: 1rem 2rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        .nav-menu {
+            display: flex;
+            gap: 2rem;
+            align-items: center;
+        }
+
+        .nav-item {
+            color: rgba(255, 255, 255, 0.8);
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+
+        .nav-item:hover {
+            color: white;
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        .nav-item.active {
+            color: #3b82f6;
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        .section {
+            display: none;
+        }
+
+        .section.active {
+            display: block;
+        }
+
+        .banking-btn {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(59, 130, 246, 0.05));
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            color: white;
+            padding: 12px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 0.9rem;
+            font-weight: 500;
+            text-align: left;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .banking-btn:hover {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(59, 130, 246, 0.1));
+            border-color: rgba(59, 130, 246, 0.5);
+            transform: translateY(-1px);
+        }
+
+        .banking-btn.deposit {
+            border-color: rgba(34, 197, 94, 0.3);
+            background: linear-gradient(135deg, rgba(34, 197, 94, 0.1), rgba(34, 197, 94, 0.05));
+        }
+
+        .banking-btn.deposit:hover {
+            border-color: rgba(34, 197, 94, 0.5);
+            background: linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(34, 197, 94, 0.1));
+        }
+
+        .banking-btn.withdraw {
+            border-color: rgba(245, 158, 11, 0.3);
+            background: linear-gradient(135deg, rgba(245, 158, 11, 0.1), rgba(245, 158, 11, 0.05));
+        }
+
+        .banking-btn.withdraw:hover {
+            border-color: rgba(245, 158, 11, 0.5);
+            background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(245, 158, 11, 0.1));
+        }
+
+        .banking-btn.quick {
+            border-color: rgba(139, 92, 246, 0.3);
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(139, 92, 246, 0.05));
+        }
+
+        .banking-btn.quick:hover {
+            border-color: rgba(139, 92, 246, 0.5);
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.2), rgba(139, 92, 246, 0.1));
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(45deg, #3b82f6, #06b6d4);
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: rgba(34, 197, 94, 0.1);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+            border-radius: 20px;
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #22c55e;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .metric-card {
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 16px;
+            padding: 1.5rem;
+            backdrop-filter: blur(20px);
+            transition: all 0.3s ease;
+        }
+
+        .metric-card:hover {
+            border-color: rgba(59, 130, 246, 0.4);
+            transform: translateY(-2px);
+        }
+
+        .metric-header {
+            display: flex;
+            justify-content: between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .metric-title {
+            font-size: 0.875rem;
+            color: #94a3b8;
+            font-weight: 500;
+        }
+
+        .metric-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #3b82f6;
+            margin-bottom: 0.5rem;
+        }
+
+        .metric-change {
+            font-size: 0.875rem;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .positive { color: #22c55e; }
+        .negative { color: #ef4444; }
+
+        .main-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 2rem;
+            margin-bottom: 2rem;
+        }
+
+        .chart-container {
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 16px;
+            padding: 1.5rem;
+            backdrop-filter: blur(20px);
+        }
+
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .chart-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+            color: white;
+        }
+
+        .time-selector {
+            display: flex;
+            gap: 8px;
+        }
+
+        .time-btn {
+            padding: 6px 12px;
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 8px;
+            color: #3b82f6;
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .time-btn.active {
+            background: #3b82f6;
+            color: white;
+        }
+
+        .positions-table {
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 16px;
+            padding: 1.5rem;
+            backdrop-filter: blur(20px);
+            margin-bottom: 2rem;
+        }
+
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .table th {
+            text-align: left;
+            padding: 12px;
+            color: #94a3b8;
+            font-weight: 500;
+            font-size: 0.875rem;
+            border-bottom: 1px solid rgba(59, 130, 246, 0.2);
+        }
+
+        .table td {
+            padding: 12px;
+            border-bottom: 1px solid rgba(30, 41, 59, 0.5);
+        }
+
+        .strategy-badge {
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .strategy-nexus { background: rgba(59, 130, 246, 0.2); color: #3b82f6; }
+        .strategy-momentum { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+        .strategy-mean { background: rgba(168, 85, 247, 0.2); color: #a855f7; }
+
+        .controls-panel {
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 16px;
+            padding: 1.5rem;
+            backdrop-filter: blur(20px);
+        }
+
+        .control-group {
+            margin-bottom: 1.5rem;
+        }
+
+        .control-label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: #94a3b8;
+        }
+
+        .control-input {
+            width: 100%;
+            padding: 10px 12px;
+            background: rgba(30, 41, 59, 0.5);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 8px;
+            color: white;
+            font-size: 0.875rem;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            text-decoration: none;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            color: white;
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #22c55e, #16a34a);
+            color: white;
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: white;
+        }
+
+        .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        .nexus-alpha-panel {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(168, 85, 247, 0.1));
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 16px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .nexus-alpha-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 1rem;
+        }
+        .nexus-alpha-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            background: linear-gradient(45deg, #3b82f6, #a855f7);
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .strategy-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+
+        .strategy-card {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 12px;
+            padding: 1rem;
+            text-align: center;
+        }
+
+        .strategy-name {
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .strategy-confidence {
+            font-size: 0.875rem;
+            color: #94a3b8;
+        }
+
+        .logs-container {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 16px;
+            padding: 1.5rem;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 0.875rem;
+        }
+
+        .log-entry {
+            margin-bottom: 8px;
+            padding: 8px;
+            border-left: 3px solid #3b82f6;
+            padding-left: 12px;
+            opacity: 0;
+            animation: fadeIn 0.3s ease forwards;
+        }
+
+        @keyframes fadeIn {
+            to { opacity: 1; }
+        }
+
+        .log-timestamp {
+            color: #64748b;
+            margin-right: 8px;
+        }
+
+        .log-level-info { border-left-color: #3b82f6; }
+        .log-level-success { border-left-color: #22c55e; }
+        .log-level-warning { border-left-color: #f59e0b; }
+        .log-level-error { border-left-color: #ef4444; }
+
+        @media (max-width: 1024px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .metrics-grid {
+                grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-content">
+            <div class="logo">
+                <div style="font-size: 1.5rem;">🧠</div>
+                <h1>Nexus Trade AI</h1>
+                <span style="font-size: 0.875rem; color: #64748b;">Enterprise FCT Platform</span>
+            </div>
+            <nav class="nav-menu">
+                <a href="http://localhost:8080/dashboard.html" class="nav-item">
+                    <i class="fas fa-chart-line"></i> Trading Dashboard
+                </a>
+                <a href="#" class="nav-item active" onclick="showSection('trading')">🎯 Enterprise</a>
+                <a href="#" class="nav-item" onclick="showSection('banking')">🏦 Banking</a>
+                <a href="#" class="nav-item" onclick="showSection('portfolio')">📊 Portfolio</a>
+                <a href="#" class="nav-item" onclick="showSection('analytics')">📈 Analytics</a>
+                <a href="http://localhost:3012/banking-dashboard.html" class="nav-item" target="_blank">
+                    <i class="fas fa-university"></i> Banking Portal
+                </a>
+            </nav>
+            <div class="status-badge">
+                <div class="status-dot"></div>
+                <span>Fully Automated • Live Trading</span>
+            </div>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Trading Section -->
+        <div id="trading-section" class="section active">
+        <!-- Key Metrics -->
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <div class="metric-header">
+                    <span class="metric-title">Daily P&L</span>
+                    <span>💰</span>
+                </div>
+                <div class="metric-value" id="dailyPnL">$2,847.50</div>
+                <div class="metric-change positive">
+                    <span>↗</span> +12.4% from yesterday
+                </div>
+            </div>
+
+            <div class="metric-card">
+                <div class="metric-header">
+                    <span class="metric-title">Active Positions</span>
+                    <span>📊</span>
+                </div>
+                <div class="metric-value" id="activePositions">7</div>
+                <div class="metric-change">
+                    <span>→</span> 3 BUY • 4 SELL
+                </div>
+            </div>
+
+            <div class="metric-card">
+                <div class="metric-header">
+                    <span class="metric-title">Win Rate</span>
+                    <span>🎯</span>
+                </div>
+                <div class="metric-value" id="winRate">73.2%</div>
+                <div class="metric-change positive">
+                    <span>↗</span> +2.1% this week
+                </div>
+            </div>
+
+            <div class="metric-card">
+                <div class="metric-header">
+                    <span class="metric-title">Nexus Alpha Score</span>
+                    <span>🧠</span>
+                </div>
+                <div class="metric-value" id="nexusScore">8.7</div>
+                <div class="metric-change positive">
+                    <span>↗</span> Excellent performance
+                </div>
+            </div>
+        </div>
+
+        <!-- Nexus Alpha Strategy Panel -->
+        <div class="nexus-alpha-panel">
+            <div class="nexus-alpha-header">
+                <span style="font-size: 1.5rem;">🧠</span>
+                <h2 class="nexus-alpha-title">Nexus Alpha Multi-Strategy Engine</h2>
+                <div class="status-badge" style="margin-left: auto;">
+                    <div class="status-dot"></div>
+                    <span>AI Active</span>
+                </div>
+            </div>
+            
+            <div class="strategy-grid">
+                <div class="strategy-card">
+                    <div class="strategy-name">Trend Following</div>
+                    <div class="strategy-confidence">Confidence: 85%</div>
+                    <div style="margin-top: 8px; color: #22c55e;">🟢 ACTIVE</div>
+                </div>
+                <div class="strategy-card">
+                    <div class="strategy-name">Mean Reversion</div>
+                    <div class="strategy-confidence">Confidence: 72%</div>
+                    <div style="margin-top: 8px; color: #22c55e;">🟢 ACTIVE</div>
+                </div>
+                <div class="strategy-card">
+                    <div class="strategy-name">Volatility Breakout</div>
+                    <div class="strategy-confidence">Confidence: 91%</div>
+                    <div style="margin-top: 8px; color: #22c55e;">🟢 ACTIVE</div>
+                </div>
+                <div class="strategy-card">
+                    <div class="strategy-name">AI Signals</div>
+                    <div class="strategy-confidence">LSTM + RL</div>
+                    <div style="margin-top: 8px; color: #22c55e;">🟢 ACTIVE</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content Grid -->
+        <div class="main-grid">
+            <div class="chart-container">
+                <div class="chart-header">
+                    <h3 class="chart-title">Portfolio Performance</h3>
+                    <div class="time-selector">
+                        <button class="time-btn">1H</button>
+                        <button class="time-btn active">1D</button>
+                        <button class="time-btn">1W</button>
+                        <button class="time-btn">1M</button>
+                    </div>
+                </div>
+                <div style="height: 300px; display: flex; align-items: center; justify-content: center; color: #64748b;">
+                    📈 Real-time performance chart would be displayed here
+                    <br><small>Integration with TradingView or Chart.js</small>
+                </div>
+            </div>
+
+            <div class="controls-panel">
+                <h3 style="margin-bottom: 1.5rem; color: white;">Automation Controls</h3>
+                
+                <div class="control-group">
+                    <label class="control-label">Risk Per Trade</label>
+                    <input type="range" class="control-input" min="0.5" max="5" value="2" step="0.1">
+                    <small style="color: #64748b;">2.0%</small>
+                </div>
+
+                <div class="control-group">
+                    <label class="control-label">Max Daily Loss</label>
+                    <input type="number" class="control-input" value="5000" placeholder="5000">
+                </div>
+
+                <div class="control-group">
+                    <label class="control-label">Active Brokers</label>
+                    <select class="control-input">
+                        <option>Alpaca (Paper)</option>
+                        <option>Binance (Testnet)</option>
+                        <option>Interactive Brokers</option>
+                    </select>
+                </div>
+
+                <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 2rem;">
+                    <button class="btn btn-success">
+                        <span>▶️</span> Start Automation
+                    </button>
+                    <button class="btn btn-primary">
+                        <span>⏸️</span> Pause Trading
+                    </button>
+                    <button class="btn btn-danger">
+                        <span>🚨</span> Emergency Stop
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Active Positions Table -->
+        <div class="positions-table">
+            <h3 style="margin-bottom: 1.5rem; color: white;">Active Positions</h3>
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Strategy</th>
+                        <th>Side</th>
+                        <th>Quantity</th>
+                        <th>Entry Price</th>
+                        <th>Current Price</th>
+                        <th>P&L</th>
+                        <th>Confidence</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>AAPL</strong></td>
+                        <td><span class="strategy-badge strategy-nexus">Nexus Alpha</span></td>
+                        <td>BUY</td>
+                        <td>100</td>
+                        <td>$175.20</td>
+                        <td>$178.45</td>
+                        <td class="positive">+$325.00</td>
+                        <td>87%</td>
+                    </tr>
+                    <tr>
+                        <td><strong>GOOGL</strong></td>
+                        <td><span class="strategy-badge strategy-momentum">Momentum</span></td>
+                        <td>SELL</td>
+                        <td>50</td>
+                        <td>$2,750.00</td>
+                        <td>$2,735.50</td>
+                        <td class="positive">+$725.00</td>
+                        <td>72%</td>
+                    </tr>
+                    <tr>
+                        <td><strong>TSLA</strong></td>
+                        <td><span class="strategy-badge strategy-mean">Mean Rev</span></td>
+                        <td>BUY</td>
+                        <td>75</td>
+                        <td>$210.80</td>
+                        <td>$208.90</td>
+                        <td class="negative">-$142.50</td>
+                        <td>91%</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- System Logs -->
+        <div class="positions-table">
+            <h3 style="margin-bottom: 1.5rem; color: white;">System Activity</h3>
+            <div class="logs-container" id="systemLogs">
+                <div class="log-entry log-level-success">
+                    <span class="log-timestamp">14:23:45</span>
+                    <span>Nexus Alpha signal executed: BUY 100 AAPL @ $175.20 (Confidence: 87%)</span>
+                </div>
+                <div class="log-entry log-level-info">
+                    <span class="log-timestamp">14:22:10</span>
+                    <span>Risk check passed for AAPL position (2.1% portfolio risk)</span>
+                </div>
+                <div class="log-entry log-level-success">
+                    <span class="log-timestamp">14:21:33</span>
+                    <span>Position closed: MSFT - P&L: +$450.00 (Take Profit)</span>
+                </div>
+                <div class="log-entry log-level-info">
+                    <span class="log-timestamp">14:20:15</span>
+                    <span>Market data updated: 8 symbols processed</span>
+                </div>
+            </div>
+        </div>
+        </div>
+
+        <!-- Banking Section -->
+        <div id="banking-section" class="section" style="display: none;">
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <div class="metric-header">
+                        <span class="metric-title">Account Balance</span>
+                        <span>💰</span>
+                    </div>
+                    <div class="metric-value" id="accountBalance">$1,175,767.40</div>
+                    <div class="metric-change positive">
+                        <span>↗</span> Available for trading
+                    </div>
+                </div>
+
+                <div class="metric-card">
+                    <div class="metric-header">
+                        <span class="metric-title">Pending Deposits</span>
+                        <span>⏳</span>
+                    </div>
+                    <div class="metric-value" id="pendingDeposits">$0.00</div>
+                    <div class="metric-change">
+                        <span>→</span> Processing
+                    </div>
+                </div>
+
+                <div class="metric-card">
+                    <div class="metric-header">
+                        <span class="metric-title">Realized Profits</span>
+                        <span>💵</span>
+                    </div>
+                    <div class="metric-value" id="realizedProfits">$1,080,707.23</div>
+                    <div class="metric-change positive">
+                        <span>↗</span> Ready to withdraw
+                    </div>
+                </div>
+
+                <div class="metric-card">
+                    <div class="metric-header">
+                        <span class="metric-title">Total Bot Profit</span>
+                        <span>🚀</span>
+                    </div>
+                    <div class="metric-value" id="totalBotProfit">$2,118,589.40</div>
+                    <div class="metric-change positive">
+                        <span>↗</span> Unrealized + Realized
+                    </div>
+                </div>
+            </div>
+
+            <!-- Banking Actions -->
+            <div class="nexus-alpha-panel">
+                <div class="nexus-alpha-header">
+                    <span style="font-size: 1.5rem;">🏦</span>
+                    <h2 class="nexus-alpha-title">Banking & Transfers</h2>
+                    <div class="status-badge" style="margin-left: auto;">
+                        <div class="status-dot"></div>
+                        <span>Banking Active</span>
+                    </div>
+                </div>
+
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; margin-top: 1.5rem;">
+                    <!-- Deposit Options -->
+                    <div class="metric-card">
+                        <h3 style="color: #22c55e; margin-bottom: 1rem;">💰 Deposit Money</h3>
+                        <div style="display: grid; gap: 0.75rem;">
+                            <button class="banking-btn deposit" onclick="openBankingWindow('deposit', 'us')">
+                                🇺🇸 US Banking (ACH/Wire)
+                            </button>
+                            <button class="banking-btn deposit" onclick="openBankingWindow('deposit', 'uk')">
+                                🇬🇧 UK Banking (Faster Payments)
+                            </button>
+                            <button class="banking-btn deposit" onclick="openBankingWindow('deposit', 'eu')">
+                                🇪🇺 EU Banking (SEPA)
+                            </button>
+                            <button class="banking-btn deposit" onclick="openBankingWindow('deposit', 'nigeria')">
+                                🇳🇬 Nigeria Banking (USSD/Mobile)
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Withdrawal Options -->
+                    <div class="metric-card">
+                        <h3 style="color: #f59e0b; margin-bottom: 1rem;">💳 Withdraw Profits</h3>
+                        <div style="display: grid; gap: 0.75rem;">
+                            <button class="banking-btn withdraw" onclick="withdrawProfits('us')">
+                                🇺🇸 Withdraw to US Bank
+                            </button>
+                            <button class="banking-btn withdraw" onclick="withdrawProfits('uk')">
+                                🇬🇧 Withdraw to UK Bank
+                            </button>
+                            <button class="banking-btn withdraw" onclick="withdrawProfits('eu')">
+                                🇪🇺 Withdraw to EU Bank
+                            </button>
+                            <button class="banking-btn withdraw" onclick="withdrawProfits('nigeria')">
+                                🇳🇬 Withdraw to Nigerian Bank
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Quick Actions -->
+                    <div class="metric-card">
+                        <h3 style="color: #3b82f6; margin-bottom: 1rem;">⚡ Quick Actions</h3>
+                        <div style="display: grid; gap: 0.75rem;">
+                            <button class="banking-btn quick" onclick="openBankingWindow('instant', 'card')">
+                                💳 Instant Deposit (Card)
+                            </button>
+                            <button class="banking-btn quick" onclick="openBankingWindow('convert', 'currency')">
+                                💱 Currency Converter
+                            </button>
+                            <button class="banking-btn quick" onclick="openBankingWindow('history', 'transactions')">
+                                📊 Transaction History
+                            </button>
+                            <button class="banking-btn quick" onclick="openBankingWindow('accounts', 'manage')">
+                                🏛️ Manage Bank Accounts
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Transactions -->
+            <div class="positions-table">
+                <h3 style="margin-bottom: 1.5rem; color: white;">Recent Banking Transactions</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Type</th>
+                            <th>Method</th>
+                            <th>Amount</th>
+                            <th>Status</th>
+                            <th>Country</th>
+                        </tr>
+                    </thead>
+                    <tbody id="bankingTransactions">
+                        <tr>
+                            <td>2024-01-15 14:23</td>
+                            <td><span class="strategy-badge strategy-trend">Deposit</span></td>
+                            <td>ACH Transfer</td>
+                            <td class="positive">+$10,000.00</td>
+                            <td><span style="color: #22c55e;">Completed</span></td>
+                            <td>🇺🇸 US</td>
+                        </tr>
+                        <tr>
+                            <td>2024-01-14 09:15</td>
+                            <td><span class="strategy-badge strategy-mean">Withdrawal</span></td>
+                            <td>Wire Transfer</td>
+                            <td class="negative">-$5,000.00</td>
+                            <td><span style="color: #22c55e;">Completed</span></td>
+                            <td>🇬🇧 UK</td>
+                        </tr>
+                        <tr>
+                            <td>2024-01-13 16:45</td>
+                            <td><span class="strategy-badge strategy-trend">Deposit</span></td>
+                            <td>SEPA Transfer</td>
+                            <td class="positive">+€8,500.00</td>
+                            <td><span style="color: #f59e0b;">Pending</span></td>
+                            <td>🇪🇺 EU</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Section switching
+        function showSection(sectionName) {
+            // Hide all sections
+            document.querySelectorAll('.section').forEach(section => {
+                section.classList.remove('active');
+                section.style.display = 'none';
+            });
+
+            // Show selected section
+            const targetSection = document.getElementById(sectionName + '-section');
+            if (targetSection) {
+                targetSection.classList.add('active');
+                targetSection.style.display = 'block';
+            }
+
+            // Update navigation
+            document.querySelectorAll('.nav-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            event.target.classList.add('active');
+        }
+
+        // Banking integration functions
+        function openBankingWindow(action, country) {
+            let url;
+
+            if (country === 'us') {
+                url = 'services/banking/banking-dashboard.html';
+            } else {
+                url = 'services/banking/international-banking-dashboard.html';
+            }
+
+            // Add parameters for pre-selection
+            const userId = localStorage.getItem('nexus-demo-user-id') || 'demo-user-123';
+            const params = new URLSearchParams({
+                action: action,
+                country: country,
+                userId: userId,
+                amount: action === 'withdraw' ? getRealizedProfits() : ''
+            });
+
+            window.open(`${url}?${params.toString()}`, '_blank', 'width=1200,height=800');
+        }
+
+        function withdrawProfits(country) {
+            const realizedProfits = getRealizedProfits();
+
+            if (realizedProfits <= 0) {
+                alert('No realized profits available for withdrawal.');
+                return;
+            }
+
+            const confirmed = confirm(`Withdraw $${realizedProfits.toLocaleString()} in realized profits to your ${country.toUpperCase()} bank account?`);
+
+            if (confirmed) {
+                openBankingWindow('withdraw', country);
+            }
+        }
+
+        function getRealizedProfits() {
+            const realizedElement = document.getElementById('realizedProfits');
+            if (realizedElement) {
+                return parseFloat(realizedElement.textContent.replace('$', '').replace(',', ''));
+            }
+            return 1080707.23; // Default value
+        }
+
+        // Load banking data
+        async function loadBankingData() {
+            try {
+                // Use the pre-configured demo user
+                let userId = localStorage.getItem('nexus-demo-user-id') || '7acaaea8-f9d5-4422-8c11-62e522e601b5';
+
+                if (!localStorage.getItem('nexus-demo-user-id')) {
+                    localStorage.setItem('nexus-demo-user-id', userId);
+                }
+
+                // Try to load balance directly
+                const response = await fetch(`http://localhost:3003/api/banking/balance/${userId}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        updateBankingMetrics(data.data);
+                        return;
+                    }
+                }
+
+                // If that fails, try to create the user
+                if (!localStorage.getItem('nexus-demo-user-created')) {
+                    // Create a demo user
+                    const createUserResponse = await fetch('http://localhost:3003/api/banking/users/register', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            email: 'demo@nexustradeai.com',
+                            firstName: 'Demo',
+                            lastName: 'User',
+                            dateOfBirth: '1990-01-01',
+                            ssn: '123-45-6789',
+                            address: {
+                                street: '123 Demo St',
+                                city: 'Demo City',
+                                state: 'CA',
+                                zip: '90210'
+                            }
+                        })
+                    });
+
+                    if (createUserResponse.ok) {
+                        const userData = await createUserResponse.json();
+                        if (userData.success) {
+                            userId = userData.data.userId;
+                            localStorage.setItem('nexus-demo-user-id', userId);
+                            localStorage.setItem('nexus-demo-user-created', 'true');
+
+                            // Set up demo balance
+                            setTimeout(async () => {
+                                await fetch(`http://localhost:3003/api/banking/demo/setup/${userId}`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        balance: 1175767.40
+                                    })
+                                });
+                                // Reload banking data after setup
+                                setTimeout(loadBankingData, 1000);
+                            }, 1000);
+                        }
+                    }
+                }
+
+                // Fallback to mock data
+                updateBankingMetrics({
+                    availableBalance: 1175767.40,
+                    pendingDeposits: 0,
+                    pendingWithdrawals: 0
+                });
+
+            } catch (error) {
+                console.log('Banking service not available, using mock data');
+                // Use mock data if banking service is not running
+                updateBankingMetrics({
+                    availableBalance: 1175767.40,
+                    pendingDeposits: 0,
+                    pendingWithdrawals: 0
+                });
+            }
+        }
+
+        function updateBankingMetrics(data) {
+            document.getElementById('accountBalance').textContent =
+                `$${data.availableBalance.toLocaleString()}`;
+            document.getElementById('pendingDeposits').textContent =
+                `$${data.pendingDeposits.toLocaleString()}`;
+        }
+
+        // Simulate real-time updates
+        function updateMetrics() {
+            // Simulate P&L changes
+            const pnlElement = document.getElementById('dailyPnL');
+            const currentPnL = parseFloat(pnlElement.textContent.replace('$', '').replace(',', ''));
+            const change = (Math.random() - 0.5) * 100;
+            const newPnL = currentPnL + change;
+            pnlElement.textContent = `$${newPnL.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+            
+            // Add random log entry
+            addLogEntry();
+        }
+
+        function addLogEntry() {
+            const logs = document.getElementById('systemLogs');
+            const timestamp = new Date().toLocaleTimeString();
+            const messages = [
+                'Market analysis completed for 8 symbols',
+                'Nexus Alpha confidence score updated: 8.7/10',
+                'Risk monitoring: All positions within limits',
+                'Strategy performance: Trend +2.3%, Mean Rev +1.8%',
+                'Broker connection health check: All systems operational'
+            ];
+            
+            const randomMessage = messages[Math.floor(Math.random() * messages.length)];
+            const logEntry = document.createElement('div');
+            logEntry.className = 'log-entry log-level-info';
+            logEntry.innerHTML = `
+                <span class="log-timestamp">${timestamp}</span>
+                <span>${randomMessage}</span>
+            `;
+            
+            logs.appendChild(logEntry);
+            logs.scrollTop = logs.scrollHeight;
+            
+            // Keep only last 20 entries
+            while (logs.children.length > 20) {
+                logs.removeChild(logs.firstChild);
+            }
+        }
+
+        // Update every 5 seconds
+        setInterval(updateMetrics, 5000);
+
+        // Load banking data on page load
+        loadBankingData();
+        setInterval(loadBankingData, 30000); // Update every 30 seconds
+
+        // Initial log entries
+        setTimeout(() => addLogEntry(), 1000);
+        setTimeout(() => addLogEntry(), 3000);
+    </script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+{
+  "model": {
+    "path": "models/lightgbm_model.joblib",
+    "type": "lightgbm",
+    "input_features": null
+  },
+  "monitoring": {
+    "enabled": true,
+    "drift_threshold": 0.7,
+    "reference_data_path": "data/monitoring/reference_data.parquet",
+    "prediction_log_path": "logs/predictions",
+    "batch_size": 100
+  },
+  "retraining": {
+    "enabled": true,
+    "min_interval_hours": 24,
+    "drift_threshold": 0.8
+  },
+  "mlflow": {
+    "tracking_uri": "http://localhost:5000",
+    "model_name": "nexustradeai_model",
+    "stage": "Production"
+  },
+  "notifications": {
+    "enabled": true,
+    "slack": {
+      "webhook_url": "${SLACK_WEBHOOK_URL}",
+      "channel": "#ml-alerts"
+    },
+    "email": {
+      "enabled": false,
+      "smtp_server": "smtp.gmail.com",
+      "smtp_port": 587,
+      "sender_email": "${EMAIL_SENDER}",
+      "sender_password": "${EMAIL_PASSWORD}",
+      "recipients": ["ml-team@nexustrade.ai"]
+    },
+    "min_severity": "warning"
+  }
+}

@@ -1,0 +1,56 @@
+# /ai-ml/config/deployment.yaml
+model:
+  name: "price_prediction_lstm"
+  version: "1.0.0"
+  framework: "tensorflow"
+  input_shape: [60, 10]  # sequence_length, n_features
+  output_shape: [1]      # single output for price prediction
+
+inference:
+  batch_size: 32
+  max_sequence_length: 100
+  min_sequence_length: 10
+
+scaling:
+  min_replicas: 2
+  max_replicas: 10
+  target_cpu_utilization: 70
+  target_memory_utilization: 80
+
+monitoring:
+  enabled: true
+  metrics:
+    - name: "prediction_latency"
+      type: "histogram"
+      buckets: [0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
+    - name: "prediction_errors"
+      type: "counter"
+    - name: "feature_distribution"
+      type: "histogram"
+
+logging:
+  level: "INFO"
+  format: "json"
+  enable_request_logging: true
+
+endpoints:
+  - name: "predict"
+    path: "/v1/predict"
+    method: "POST"
+    input_schema: "schemas/prediction_request.json"
+    output_schema: "schemas/prediction_response.json"
+    timeout: 30  # seconds
+
+resources:
+  requests:
+    cpu: "1000m"
+    memory: "2Gi"
+  limits:
+    cpu: "2000m"
+    memory: "4Gi"
+
+environment:
+  - name: "TF_CPP_MIN_LOG_LEVEL"
+    value: "1"  # 0=INFO, 1=WARNING, 2=ERROR, 3=FATAL
+  - name: "OMP_NUM_THREADS"
+    value: "1"

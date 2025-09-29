@@ -1,0 +1,365 @@
+/* Premium Design System for NexusTradeAI - $100M Trading Platform */
+
+/* CSS Variables for Premium Design System */
+:root {
+  /* Premium Color Palette */
+  --nexus-primary: #0066FF;
+  --nexus-primary-dark: #0052CC;
+  --nexus-primary-light: #3385FF;
+  --nexus-secondary: #6366F1;
+  --nexus-accent: #8B5CF6;
+  
+  /* Trading Colors */
+  --nexus-bull: #00D4AA;
+  --nexus-bear: #FF4757;
+  --nexus-warning: #FFA726;
+  --nexus-info: #29B6F6;
+  
+  /* Neutral Palette */
+  --nexus-gray-50: #F8FAFC;
+  --nexus-gray-100: #F1F5F9;
+  --nexus-gray-200: #E2E8F0;
+  --nexus-gray-300: #CBD5E1;
+  --nexus-gray-400: #94A3B8;
+  --nexus-gray-500: #64748B;
+  --nexus-gray-600: #475569;
+  --nexus-gray-700: #334155;
+  --nexus-gray-800: #1E293B;
+  --nexus-gray-900: #0F172A;
+  
+  /* Dark Mode */
+  --nexus-dark-bg: #0A0E1A;
+  --nexus-dark-surface: #111827;
+  --nexus-dark-surface-elevated: #1F2937;
+  --nexus-dark-border: #374151;
+  
+  /* Typography */
+  --nexus-font-primary: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --nexus-font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  
+  /* Spacing Scale */
+  --nexus-space-1: 0.25rem;
+  --nexus-space-2: 0.5rem;
+  --nexus-space-3: 0.75rem;
+  --nexus-space-4: 1rem;
+  --nexus-space-5: 1.25rem;
+  --nexus-space-6: 1.5rem;
+  --nexus-space-8: 2rem;
+  --nexus-space-10: 2.5rem;
+  --nexus-space-12: 3rem;
+  --nexus-space-16: 4rem;
+  --nexus-space-20: 5rem;
+  
+  /* Border Radius */
+  --nexus-radius-sm: 0.375rem;
+  --nexus-radius-md: 0.5rem;
+  --nexus-radius-lg: 0.75rem;
+  --nexus-radius-xl: 1rem;
+  --nexus-radius-2xl: 1.5rem;
+  
+  /* Shadows */
+  --nexus-shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --nexus-shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --nexus-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  --nexus-shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  --nexus-shadow-2xl: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  
+  /* Glassmorphism */
+  --nexus-glass-bg: rgba(255, 255, 255, 0.1);
+  --nexus-glass-border: rgba(255, 255, 255, 0.2);
+  --nexus-glass-backdrop: blur(20px);
+  
+  /* Animations */
+  --nexus-transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --nexus-transition-normal: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+  --nexus-transition-slow: 500ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Premium Base Styles */
+.nexus-premium-container {
+  background: linear-gradient(135deg, var(--nexus-dark-bg) 0%, #0D1B2A 50%, var(--nexus-dark-bg) 100%);
+  min-height: 100vh;
+  font-family: var(--nexus-font-primary);
+  color: var(--nexus-gray-100);
+}
+
+/* Premium Glass Card */
+.nexus-glass-card {
+  background: var(--nexus-glass-bg);
+  backdrop-filter: var(--nexus-glass-backdrop);
+  border: 1px solid var(--nexus-glass-border);
+  border-radius: var(--nexus-radius-xl);
+  box-shadow: var(--nexus-shadow-xl);
+  transition: all var(--nexus-transition-normal);
+}
+
+.nexus-glass-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--nexus-shadow-2xl);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+/* Premium Navigation */
+.nexus-premium-nav {
+  background: rgba(15, 23, 42, 0.95);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+.nexus-nav-item {
+  position: relative;
+  padding: var(--nexus-space-3) var(--nexus-space-6);
+  border-radius: var(--nexus-radius-lg);
+  transition: all var(--nexus-transition-fast);
+  font-weight: 500;
+  font-size: 0.875rem;
+  letter-spacing: 0.025em;
+}
+
+.nexus-nav-item:hover {
+  background: rgba(99, 102, 241, 0.1);
+  color: var(--nexus-secondary);
+}
+
+.nexus-nav-item.active {
+  background: linear-gradient(135deg, var(--nexus-primary), var(--nexus-secondary));
+  color: white;
+  box-shadow: 0 4px 12px rgba(0, 102, 255, 0.3);
+}
+
+.nexus-nav-item.active::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  right: -1px;
+  bottom: -1px;
+  background: linear-gradient(135deg, var(--nexus-primary), var(--nexus-secondary));
+  border-radius: var(--nexus-radius-lg);
+  z-index: -1;
+  opacity: 0.5;
+  filter: blur(4px);
+}
+
+/* Premium Buttons */
+.nexus-btn-primary {
+  background: linear-gradient(135deg, var(--nexus-primary), var(--nexus-secondary));
+  color: white;
+  padding: var(--nexus-space-3) var(--nexus-space-6);
+  border-radius: var(--nexus-radius-lg);
+  font-weight: 600;
+  font-size: 0.875rem;
+  border: none;
+  cursor: pointer;
+  transition: all var(--nexus-transition-normal);
+  position: relative;
+  overflow: hidden;
+}
+
+.nexus-btn-primary::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  transition: left var(--nexus-transition-slow);
+}
+
+.nexus-btn-primary:hover::before {
+  left: 100%;
+}
+
+.nexus-btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 25px rgba(0, 102, 255, 0.4);
+}
+
+/* Premium Metrics Cards */
+.nexus-metric-card {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--nexus-radius-xl);
+  padding: var(--nexus-space-6);
+  backdrop-filter: blur(10px);
+  transition: all var(--nexus-transition-normal);
+  position: relative;
+  overflow: hidden;
+}
+
+.nexus-metric-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--nexus-primary), var(--nexus-secondary), var(--nexus-accent));
+}
+
+.nexus-metric-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(255, 255, 255, 0.2);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+}
+
+.nexus-metric-value {
+  font-size: 2.5rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--nexus-primary), var(--nexus-secondary));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: var(--nexus-space-2);
+}
+
+.nexus-metric-label {
+  color: var(--nexus-gray-400);
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Premium Data Tables */
+.nexus-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: var(--nexus-radius-lg);
+  overflow: hidden;
+  box-shadow: var(--nexus-shadow-lg);
+}
+
+.nexus-table th {
+  background: rgba(255, 255, 255, 0.05);
+  padding: var(--nexus-space-4) var(--nexus-space-6);
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--nexus-gray-300);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.nexus-table td {
+  padding: var(--nexus-space-4) var(--nexus-space-6);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-family: var(--nexus-font-mono);
+  font-size: 0.875rem;
+}
+
+.nexus-table tr:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* Premium Status Indicators */
+.nexus-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: var(--nexus-space-2);
+  animation: pulse 2s infinite;
+}
+
+.nexus-status-dot.connected {
+  background: var(--nexus-bull);
+  box-shadow: 0 0 10px rgba(0, 212, 170, 0.5);
+}
+
+.nexus-status-dot.error {
+  background: var(--nexus-bear);
+  box-shadow: 0 0 10px rgba(255, 71, 87, 0.5);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Premium Loading States */
+.nexus-skeleton {
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.05) 25%, rgba(255, 255, 255, 0.1) 50%, rgba(255, 255, 255, 0.05) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite;
+  border-radius: var(--nexus-radius-md);
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* Premium Scrollbars */
+.nexus-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.nexus-scrollbar::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: var(--nexus-radius-sm);
+}
+
+.nexus-scrollbar::-webkit-scrollbar-thumb {
+  background: linear-gradient(135deg, var(--nexus-primary), var(--nexus-secondary));
+  border-radius: var(--nexus-radius-sm);
+}
+
+.nexus-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(135deg, var(--nexus-primary-dark), var(--nexus-secondary));
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .nexus-metric-value {
+    font-size: 2rem;
+  }
+  
+  .nexus-glass-card {
+    margin: var(--nexus-space-4);
+  }
+  
+  .nexus-nav-item {
+    padding: var(--nexus-space-2) var(--nexus-space-4);
+    font-size: 0.75rem;
+  }
+}
+
+/* Premium Animations */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.nexus-animate-fade-in-up {
+  animation: fadeInUp 0.6s ease-out;
+}
+
+.nexus-animate-slide-in-right {
+  animation: slideInRight 0.6s ease-out;
+}

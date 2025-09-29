@@ -1,0 +1,11 @@
+{
+  "brokerType": "alpaca",
+  "name": "alpaca",
+  "credentials": {
+    "apiKey": "PKT8MP1DLZIAIAE8CCRD",
+    "secretKey": "wZkR8HJmzIBFSnNHqxUpstSs6SIiEFAAL9uXFG1P",
+    "paper": true
+  },
+  "createdAt": "2025-08-06T18:37:49.000Z",
+  "enabled": true
+}

@@ -1,0 +1,172 @@
+# Zookeeper Headless Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: zookeeper-headless
+  namespace: kafka
+  labels:
+    app: zookeeper
+    component: server
+spec:
+  ports:
+  - port: 2181
+    name: client
+  - port: 2888
+    name: server
+  - port: 3888
+    name: leader-election
+  - port: 7000
+    name: metrics
+  clusterIP: None
+  selector:
+    app: zookeeper
+---
+# Zookeeper StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: zookeeper
+  namespace: kafka
+  labels:
+    app: zookeeper
+    component: server
+spec:
+  serviceName: zookeeper-headless
+  replicas: 3
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: zookeeper
+      component: server
+  template:
+    metadata:
+      labels:
+        app: zookeeper
+        component: server
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "7000"
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: "app"
+                operator: In
+                values:
+                - zookeeper
+            topologyKey: "kubernetes.io/hostname"
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+      containers:
+      - name: zookeeper
+        image: zookeeper:3.8.0
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 2181
+          name: client
+        - containerPort: 2888
+          name: server
+        - containerPort: 3888
+          name: leader-election
+        - containerPort: 7000
+          name: metrics
+        command:
+        - sh
+        - -c
+        - |
+          echo "Starting Zookeeper with config:"
+          cat /conf/zoo.cfg
+          /docker-entrypoint.sh zkServer.sh start-foreground
+        env:
+        - name: ZOO_MY_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+        - name: ZOO_4LW_COMMANDS_WHITELIST
+          value: "*"
+        - name: ZOO_CFG_EXTRA
+          value: |
+            metricsProvider.className=org.apache.zookeeper.metrics.prometheus.PrometheusMetricsProvider
+            metricsProvider.httpPort=7000
+            metricsProvider.exportJvmInfo=true
+        volumeMounts:
+        - name: config
+          mountPath: /conf
+        - name: data
+          mountPath: /data
+        - name: datalog
+          mountPath: /datalog
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 2
+            memory: 2Gi
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - "zookeeper-ready 2181"
+          initialDelaySeconds: 10
+          timeoutSeconds: 5
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - "zookeeper-ready 2181"
+          initialDelaySeconds: 10
+          timeoutSeconds: 5
+      volumes:
+      - name: config
+        configMap:
+          name: zookeeper-config
+          items:
+          - key: zookeeper.properties
+            path: zoo.cfg
+          - key: log4j.properties
+            path: log4j.properties
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: "standard"
+      resources:
+        requests:
+          storage: 10Gi
+  - metadata:
+      name: datalog
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: "standard"
+      resources:
+        requests:
+          storage: 10Gi
+---
+# Zookeeper Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: zookeeper
+  namespace: kafka
+  labels:
+    app: zookeeper
+    component: server
+spec:
+  ports:
+  - name: client
+    port: 2181
+    targetPort: 2181
+  - name: metrics
+    port: 7000
+    targetPort: 7000
+  selector:
+    app: zookeeper
+    component: server

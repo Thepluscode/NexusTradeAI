@@ -1,0 +1,91 @@
+# Kafka topics configuration
+
+# Market Data Topics
+market_data_1m:
+  name: market_data_1m
+  partitions: 10
+  replication_factor: 3
+  config:
+    retention.ms: 86400000  # 24 hours
+    cleanup.policy: "delete"
+    compression.type: "lz4"
+    max.message.bytes: "2097152"  # 2MB
+
+market_data_5m:
+  name: market_data_5m
+  partitions: 10
+  replication_factor: 3
+  config:
+    retention.ms: 604800000  # 7 days
+    cleanup.policy: "delete"
+    compression.type: "lz4"
+
+market_data_1h:
+  name: market_data_1h
+  partitions: 5
+  replication_factor: 3
+  config:
+    retention.ms: 2592000000  # 30 days
+    cleanup.policy: "compact,delete"
+    min.compaction.lag.ms: "3600000"  # 1 hour
+    delete.retention.ms: "86400000"  # 24 hours
+
+# Trade Execution Topics
+trades:
+  name: trades
+  partitions: 20
+  replication_factor: 3
+  config:
+    retention.ms: 604800000  # 7 days
+    cleanup.policy: "delete"
+
+# System Topics
+system_metrics:
+  name: system_metrics
+  partitions: 5
+  replication_factor: 3
+  config:
+    retention.ms: 259200000  # 3 days
+    cleanup.policy: "delete"
+
+error_logs:
+  name: error_logs
+  partitions: 3
+  replication_factor: 3
+  config:
+    retention.ms: 259200000  # 3 days
+    cleanup.policy: "delete"
+
+# Schema Registry Configuration
+schema_registry:
+  url: "http://schema-registry:8081"
+  compatibility: "FULL"
+  version: "5.5.0"
+
+# Producer Configuration
+producer:
+  bootstrap_servers: "kafka-broker1:9092,kafka-broker2:9092,kafka-broker3:9092"
+  acks: "all"
+  retries: 5
+  max_in_flight_requests_per_connection: 1
+  compression_type: "lz4"
+  batch_size: 16384
+  linger_ms: 10
+  request_timeout_ms: 30000
+  max_block_ms: 60000
+
+# Consumer Configuration
+consumer:
+  bootstrap_servers: "kafka-broker1:9092,kafka-broker2:9092,kafka-broker3:9092"
+  group_id: "market_data_consumers"
+  auto_offset_reset: "latest"
+  enable_auto_commit: true
+  auto_commit_interval_ms: 5000
+  session_timeout_ms: 30000
+  heartbeat_interval_ms: 10000
+  max_poll_interval_ms: 300000
+  max_poll_records: 500
+  fetch_max_bytes: 52428800  # 50MB
+  max_partition_fetch_bytes: 1048576  # 1MB
+  request_timeout_ms: 30000
+  retry_backoff_ms: 100

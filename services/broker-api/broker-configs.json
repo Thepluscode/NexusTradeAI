@@ -1,0 +1,9 @@
+{
+  "alpaca": {
+    "apiKey": "53936124ba414abaa715f98ba69d392e:b476a4e74f0570d327f122797f36293f9b201fdb2142ed885368cd444d131fce",
+    "secretKey": "223e37e29feca5e8d8def186a930045b:efa04183285ca6b74c3271ebd4b510ef8fff8373c1280be265c568da380d9dcb2f9f8a0c9c56b388b2684b4d72c72fad",
+    "paperTrading": true,
+    "connected": true,
+    "connectedAt": "2025-08-12T04:40:38.847Z"
+  }
+}

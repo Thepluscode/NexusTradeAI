@@ -1,0 +1,110 @@
+{
+    "crypto": {
+      "binance": {
+        "name": "Binance",
+        "wsUrl": "wss://stream.binance.com:9443/ws",
+        "restUrl": "https://api.binance.com",
+        "rateLimit": 1200,
+        "ratePeriod": 60000,
+        "supports": ["spot", "futures", "options"],
+        "dataTypes": ["tick", "trade", "orderbook", "ticker"],
+        "symbols": ["BTCUSDT", "ETHUSDT", "ADAUSDT", "DOTUSDT"]
+      },
+      "coinbase": {
+        "name": "Coinbase Pro",
+        "wsUrl": "wss://ws-feed.pro.coinbase.com",
+        "restUrl": "https://api.pro.coinbase.com",
+        "rateLimit": 10,
+        "ratePeriod": 1000,
+        "supports": ["spot"],
+        "dataTypes": ["tick", "trade", "orderbook", "ticker"],
+        "symbols": ["BTC-USD", "ETH-USD", "ADA-USD", "DOT-USD"]
+      },
+      "kraken": {
+        "name": "Kraken",
+        "wsUrl": "wss://ws.kraken.com",
+        "restUrl": "https://api.kraken.com",
+        "rateLimit": 60,
+        "ratePeriod": 60000,
+        "supports": ["spot", "futures"],
+        "dataTypes": ["tick", "trade", "orderbook", "ticker"],
+        "symbols": ["XBTUSD", "ETHUSD", "ADAUSD", "DOTUSD"]
+      }
+    },
+    "stock": {
+      "iex": {
+        "name": "IEX Cloud",
+        "wsUrl": "wss://ws-api.iextrading.com/1.0/tops",
+        "restUrl": "https://cloud.iexapis.com/stable",
+        "rateLimit": 100,
+        "ratePeriod": 1000,
+        "supports": ["equities"],
+        "dataTypes": ["quote", "trade", "bar"],
+        "symbols": ["AAPL", "GOOGL", "MSFT", "TSLA", "AMZN"]
+      },
+      "alpaca": {
+        "name": "Alpaca Markets",
+        "wsUrl": "wss://stream.data.alpaca.markets/v2/iex",
+        "restUrl": "https://data.alpaca.markets/v2",
+        "rateLimit": 200,
+        "ratePeriod": 60000,
+        "supports": ["equities"],
+        "dataTypes": ["quote", "trade", "bar"],
+        "symbols": ["AAPL", "GOOGL", "MSFT", "TSLA", "AMZN"]
+      },
+      "polygon": {
+        "name": "Polygon.io",
+        "wsUrl": "wss://socket.polygon.io/stocks",
+        "restUrl": "https://api.polygon.io/v2",
+        "rateLimit": 5,
+        "ratePeriod": 60000,
+        "supports": ["equities", "options", "forex", "crypto"],
+        "dataTypes": ["quote", "trade", "bar"],
+        "symbols": ["AAPL", "GOOGL", "MSFT", "TSLA", "AMZN"]
+      }
+    },
+    "forex": {
+      "oanda": {
+        "name": "OANDA",
+        "wsUrl": "wss://stream-fxpractice.oanda.com/v3/accounts/{accountId}/pricing/stream",
+        "restUrl": "https://api-fxpractice.oanda.com/v3",
+        "rateLimit": 120,
+        "ratePeriod": 3600000,
+        "supports": ["spot", "cfd"],
+        "dataTypes": ["quote", "tick"],
+        "symbols": ["EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD"]
+      },
+      "fxcm": {
+        "name": "FXCM",
+        "wsUrl": "wss://api-demo.fxcm.com/socketio/",
+        "restUrl": "https://api-demo.fxcm.com",
+        "rateLimit": 300,
+        "ratePeriod": 3600000,
+        "supports": ["spot", "cfd"],
+        "dataTypes": ["quote", "tick"],
+        "symbols": ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD"]
+      }
+    },
+    "commodities": {
+      "ice": {
+        "name": "Intercontinental Exchange",
+        "wsUrl": "wss://www.theice.com/marketdatawebsocket",
+        "restUrl": "https://www.theice.com/marketdata",
+        "rateLimit": 60,
+        "ratePeriod": 60000,
+        "supports": ["futures", "options"],
+        "dataTypes": ["tick", "quote"],
+        "symbols": ["BRN", "WTI", "NG", "SUGAR"]
+      },
+      "cme": {
+        "name": "CME Group",
+        "wsUrl": "wss://api.cmegroup.com/websocket",
+        "restUrl": "https://api.cmegroup.com/v1",
+        "rateLimit": 100,
+        "ratePeriod": 60000,
+        "supports": ["futures", "options"],
+        "dataTypes": ["quote", "trade"],
+        "symbols": ["GC", "SI", "CL", "NG", "ZC", "ZW"]
+      }
+    }
+  }

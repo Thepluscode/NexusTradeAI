@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NexusTradeAI - System Architecture</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%);
+            color: #ffffff;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            background: linear-gradient(45deg, #00f5ff, #0080ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #a0a0a0;
+            font-size: 1.1em;
+        }
+        
+        .navigation {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .nav-button {
+            display: inline-block;
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #00f5ff, #0080ff);
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            margin: 0 10px;
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+        
+        .nav-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0, 245, 255, 0.3);
+        }
+        
+        .architecture-diagram {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 20px;
+            padding: 30px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            margin-bottom: 30px;
+        }
+        
+        .layer {
+            margin-bottom: 40px;
+            position: relative;
+        }
+        
+        .layer-title {
+            text-align: center;
+            font-size: 1.4em;
+            font-weight: bold;
+            margin-bottom: 20px;
+            color: #00f5ff;
+        }
+        
+        .components {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .component {
+            background: linear-gradient(135deg, rgba(0, 245, 255, 0.1), rgba(0, 128, 255, 0.1));
+            border: 1px solid rgba(0, 245, 255, 0.3);
+            border-radius: 12px;
+            padding: 20px;
+            transition: all 0.3s ease;
+        }
+        
+        .component:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0, 245, 255, 0.2);
+        }
+        
+        .component h3 {
+            color: #00f5ff;
+            margin-bottom: 10px;
+            font-size: 1.1em;
+        }
+        
+        .component ul {
+            list-style: none;
+            color: #e0e0e0;
+        }
+        
+        .component li {
+            margin-bottom: 5px;
+            padding-left: 15px;
+            position: relative;
+        }
+        
+        .component li::before {
+            content: "▸";
+            color: #0080ff;
+            position: absolute;
+            left: 0;
+        }
+        
+        .data-flow {
+            display: flex;
+            justify-content: center;
+            margin: 30px 0;
+        }
+        
+        .flow-arrow {
+            width: 0;
+            height: 0;
+            border-left: 15px solid transparent;
+            border-right: 15px solid transparent;
+            border-top: 20px solid #00f5ff;
+            margin: 0 10px;
+        }
+        
+        .security-layer {
+            background: linear-gradient(135deg, rgba(255, 69, 0, 0.1), rgba(255, 140, 0, 0.1));
+            border: 1px solid rgba(255, 140, 0, 0.3);
+        }
+        
+        .security-layer .layer-title {
+            color: #ff8c00;
+        }
+        
+        .legend {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            margin-top: 30px;
+            flex-wrap: wrap;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+        }
+        
+        .core { background: linear-gradient(135deg, rgba(0, 245, 255, 0.3), rgba(0, 128, 255, 0.3)); }
+        .ai { background: linear-gradient(135deg, rgba(138, 43, 226, 0.3), rgba(75, 0, 130, 0.3)); }
+        .security { background: linear-gradient(135deg, rgba(255, 69, 0, 0.3), rgba(255, 140, 0, 0.3)); }
+        .external { background: linear-gradient(135deg, rgba(50, 205, 50, 0.3), rgba(34, 139, 34, 0.3)); }
+        
+        @media (max-width: 768px) {
+            .components {
+                grid-template-columns: 1fr;
+            }
+            
+            .legend {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .header h1 {
+                font-size: 2em;
+            }
+            
+            .nav-button {
+                display: block;
+                margin: 10px auto;
+                width: 200px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>NexusTradeAI</h1>
+            <p>Advanced Trading Bot System Architecture</p>
+        </div>
+        
+        <div class="navigation">
+            <a href="../services/dashboard/dashboard.html" class="nav-button">📊 Live Dashboard</a>
+            <a href="#implementation" class="nav-button">🔧 Implementation Status</a>
+            <a href="#roadmap" class="nav-button">🗺️ Development Roadmap</a>
+        </div>
+        
+        <div class="architecture-diagram">
+            <!-- User Interface Layer -->
+            <div class="layer">
+                <div class="layer-title">📱 User Interface Layer</div>
+                <div class="components">
+                    <div class="component">
+                        <h3>Web Dashboard ✅</h3>
+                        <ul>
+                            <li>Real-time portfolio view</li>
+                            <li>Bot configuration interface</li>
+                            <li>Performance analytics</li>
+                            <li>Risk management controls</li>
+                        </ul>
+                    </div>
+                    <div class="component">
+                        <h3>Mobile App 🚧</h3>
+                        <ul>
+                            <li>Push notifications</li>
+                            <li>Quick trade controls</li>
+                            <li>Emergency stop button</li>
+                            <li>Portfolio monitoring</li>
+                        </ul>
+                    </div>
+                    <div class="component">
+                        <h3>API Gateway ✅</h3>
+                        <ul>
+                            <li>RESTful API endpoints</li>
+                            <li>WebSocket connections</li>
+                            <li>Rate limiting</li>
+                            <li>Authentication middleware</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="data-flow">
+                <div class="flow-arrow"></div>
+            </div>
+            
+            <!-- Core Trading Engine -->
+            <div class="layer">
+                <div class="layer-title">⚡ Core Trading Engine</div>
+                <div class="components">
+                    <div class="component">
+                        <h3>Order Management System 🚧</h3>
+                        <ul>
+                            <li>Multi-exchange routing</li>
+                            <li>Order execution logic</li>
+                            <li>Position tracking</li>
+                            <li>Trade history logging</li>
+                        </ul>
+                    </div>
+                    <div class="component">
+                        <h3>Strategy Engine 🚧</h3>
+                        <ul>
+                            <li>Modular strategy framework</li>
+                            <li>Real-time signal processing</li>
+                            <li>Strategy backtesting</li>
+                            <li>Performance optimization</li>
+                        </ul>
+                    </div>
+                    <div class="component">
+                        <h3>Risk Management Core 🚧</h3>
+                        <ul>
+                            <li>Position sizing calculator</li>
+                            <li>Stop-loss automation</li>
+                            <li>Portfolio exposure limits</li>
+                            <li>Circuit breakers</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="data-flow">
+                <div class="flow-arrow"></div>
+            </div>
+            
+            <!-- AI & Analytics Layer -->
+            <div class="layer">
+                <div class="layer-title">🧠 AI & Analytics Layer</div>
+                <div class="components">
+                    <div class="component">
+                        <h3>ML Model Engine ✅</h3>
+                        <ul>
+                            <li>Price prediction models</li>
+                            <li>Pattern recognition</li>
+                            <li>Sentiment analysis</li>
+                            <li>Automated retraining</li>
+                        </ul>
+                    </div>
+                    <div class="component">
+                        <h3>Technical Analysis 🚧</h3>
+                        <ul>
+                            <li>Real-time indicators</li>
+                            <li>Chart pattern detection</li>
+                            <li>Multi-timeframe analysis</li>
+                            <li>Custom indicator support</li>
+                        </ul>
+                    </div>
+                    <div class="component">
+                        <h3>Market Intelligence 🚧</h3>
+                        <ul>
+                            <li>News sentiment scoring</li>
+                            <li>Social media monitoring</li>
+                            <li>On-chain analytics</li>
+                            <li>Market regime detection</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="data-flow">
+                <div class="flow-arrow"></div>
+            </div>
+
+            <!-- Data Layer -->
+            <div class="layer">
+                <div class="layer-title">📊 Data Management Layer</div>
+                <div class="components">
+                    <div class="component">
+                        <h3>Real-time Data Feeds ✅</h3>
+                        <ul>
+                            <li>Price data aggregation</li>
+                            <li>Order book monitoring</li>
+                            <li>Trade volume analysis</li>
+                            <li>Market depth tracking</li>
+                        </ul>
+                    </div>
+                    <div class="component">
+                        <h3>Historical Data Store 🚧</h3>
+                        <ul>
+                            <li>Time-series database</li>
+                            <li>Data validation & cleaning</li>
+                            <li>Backup & recovery</li>
+                            <li>Query optimization</li>
+                        </ul>
+                    </div>
+                    <div class="component">
+                        <h3>Cache Layer 🚧</h3>
+                        <ul>
+                            <li>Redis for fast access</li>
+                            <li>Market data caching</li>
+                            <li>Session management</li>
+                            <li>Rate limit tracking</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="data-flow">
+                <div class="flow-arrow"></div>
+            </div>
+
+            <!-- Security Layer -->
+            <div class="layer security-layer">
+                <div class="layer-title">🛡️ Security & Compliance Layer</div>
+                <div class="components">
+                    <div class="component">
+                        <h3>Authentication & Authorization 🚧</h3>
+                        <ul>
+                            <li>Multi-factor authentication</li>
+                            <li>Role-based access control</li>
+                            <li>JWT token management</li>
+                            <li>Session security</li>
+                        </ul>
+                    </div>
+                    <div class="component">
+                        <h3>Encryption & Key Management 🚧</h3>
+                        <ul>
+                            <li>API key encryption (AES-256)</li>
+                            <li>Database encryption at rest</li>
+                            <li>TLS/SSL for data in transit</li>
+                            <li>Hardware security modules</li>
+                        </ul>
+                    </div>
+                    <div class="component">
+                        <h3>Compliance & Monitoring 🚧</h3>
+                        <ul>
+                            <li>KYC/AML integration</li>
+                            <li>Audit logging</li>
+                            <li>Regulatory reporting</li>
+                            <li>Fraud detection</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="data-flow">
+                <div class="flow-arrow"></div>
+            </div>
+
+            <!-- External Integrations -->
+            <div class="layer">
+                <div class="layer-title">🔗 External Integrations</div>
+                <div class="components">
+                    <div class="component">
+                        <h3>Exchange Connectors 🚧</h3>
+                        <ul>
+                            <li>Binance, Coinbase Pro, Kraken</li>
+                            <li>FTX, KuCoin, Bybit</li>
+                            <li>Unified API abstraction</li>
+                            <li>Rate limit management</li>
+                        </ul>
+                    </div>
+                    <div class="component">
+                        <h3>Data Providers ✅</h3>
+                        <ul>
+                            <li>CoinGecko, CoinMarketCap</li>
+                            <li>TradingView indicators</li>
+                            <li>News APIs (CryptoPanic)</li>
+                            <li>Social sentiment feeds</li>
+                        </ul>
+                    </div>
+                    <div class="component">
+                        <h3>Third-party Services 🚧</h3>
+                        <ul>
+                            <li>Payment processors</li>
+                            <li>Email/SMS notifications</li>
+                            <li>Tax reporting tools</li>
+                            <li>Cloud infrastructure</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Implementation Status -->
+        <div id="implementation" class="architecture-diagram">
+            <div class="layer-title">🔧 Current Implementation Status</div>
+            <div class="components">
+                <div class="component">
+                    <h3>✅ Completed Components</h3>
+                    <ul>
+                        <li>Web Dashboard with Live Market Data</li>
+                        <li>Symbol Search & Management</li>
+                        <li>Real-time Data Feeds (Mock)</li>
+                        <li>API Gateway & REST Endpoints</li>
+                        <li>ML Model Engine (AI API Service)</li>
+                        <li>Basic Authentication</li>
+                    </ul>
+                </div>
+                <div class="component">
+                    <h3>🚧 In Development</h3>
+                    <ul>
+                        <li>Order Management System</li>
+                        <li>Strategy Engine Framework</li>
+                        <li>Risk Management Core</li>
+                        <li>Exchange Connectors</li>
+                        <li>Historical Data Storage</li>
+                        <li>Advanced Security Features</li>
+                    </ul>
+                </div>
+                <div class="component">
+                    <h3>📋 Planned Features</h3>
+                    <ul>
+                        <li>Mobile Application</li>
+                        <li>Advanced Technical Analysis</li>
+                        <li>Market Intelligence Engine</li>
+                        <li>Compliance & Monitoring</li>
+                        <li>Third-party Integrations</li>
+                        <li>Production Deployment</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color core"></div>
+                <span>Core Systems</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color ai"></div>
+                <span>AI/ML Components</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color security"></div>
+                <span>Security Layer</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color external"></div>
+                <span>External Integrations</span>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

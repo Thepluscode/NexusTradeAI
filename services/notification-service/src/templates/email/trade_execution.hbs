@@ -1,0 +1,56 @@
+<!-- src/templates/email/trade_execution.hbs -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trade Executed - {{data.symbol}}</title>
+</head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0;">
+    <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="background: #1a365d; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0;">
+            <h1 style="margin: 0;">Trade Executed</h1>
+        </div>
+        
+        <div style="padding: 30px; background: #f8f9fa; border-radius: 0 0 8px 8px;">
+            <h2 style="color: #1a365d; margin-top: 0;">{{data.side}} Order Completed</h2>
+            
+            <div style="background: white; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                <table style="width: 100%; border-collapse: collapse;">
+                    <tr>
+                        <td style="padding: 10px; border-bottom: 1px solid #eee;"><strong>Symbol:</strong></td>
+                        <td style="padding: 10px; border-bottom: 1px solid #eee;">{{data.symbol}}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 10px; border-bottom: 1px solid #eee;"><strong>Quantity:</strong></td>
+                        <td style="padding: 10px; border-bottom: 1px solid #eee;">{{data.quantity}}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 10px; border-bottom: 1px solid #eee;"><strong>Price:</strong></td>
+                        <td style="padding: 10px; border-bottom: 1px solid #eee;">${{data.price}}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 10px; border-bottom: 1px solid #eee;"><strong>Total Value:</strong></td>
+                        <td style="padding: 10px; border-bottom: 1px solid #eee;">${{data.totalValue}}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 10px;"><strong>Execution Time:</strong></td>
+                        <td style="padding: 10px;">{{data.executionTime}}</td>
+                    </tr>
+                </table>
+            </div>
+            
+            <p style="margin: 20px 0;">Your {{data.side}} order for {{data.quantity}} shares of {{data.symbol}} has been successfully executed at ${{data.price}} per share.</p>
+            
+            <div style="text-align: center; margin: 30px 0;">
+                <a href="{{data.portfolioUrl}}" style="display: inline-block; padding: 12px 24px; background: #1a365d; color: white; text-decoration: none; border-radius: 6px;">View Portfolio</a>
+            </div>
+        </div>
+        
+        <div style="text-align: center; padding: 20px; font-size: 12px; color: #666;">
+            <p>&copy; {{year}} Nexus Trade AI. All rights reserved.</p>
+            <p>You received this email because you have trade notifications enabled.</p>
+        </div>
+    </div>
+</body>
+</html>

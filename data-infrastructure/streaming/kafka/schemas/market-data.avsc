@@ -1,0 +1,20 @@
+{
+  "type": "record",
+  "name": "MarketData",
+  "namespace": "com.nexustradeai.marketdata",
+  "fields": [
+    {"name": "symbol", "type": "string", "doc": "Trading pair symbol (e.g., BTC-USDT, AAPL)"},
+    {"name": "timestamp", "type": {"type": "long", "logicalType": "timestamp-millis"}, "doc": "Event timestamp in milliseconds since epoch"},
+    {"name": "exchange", "type": "string", "doc": "Exchange identifier (e.g., binance, coinbase)"},
+    {"name": "open", "type": "double", "doc": "Opening price"},
+    {"name": "high", "type": "double", "doc": "Highest price in the interval"},
+    {"name": "low", "type": "double", "doc": "Lowest price in the interval"},
+    {"name": "close", "type": "double", "doc": "Closing price"},
+    {"name": "volume", "type": "double", "doc": "Trading volume in base currency"},
+    {"name": "quote_volume", "type": "double", "doc": "Trading volume in quote currency"},
+    {"name": "trades_count", "type": ["null", "int"], "default": null, "doc": "Number of trades in the interval"},
+    {"name": "interval", "type": "string", "doc": "Time interval (e.g., 1m, 5m, 1h, 1d)"},
+    {"name": "is_snapshot", "type": "boolean", "default": false, "doc": "Whether this is a snapshot or update"},
+    {"name": "metadata", "type": {"type": "map", "values": "string"}, "default": {}, "doc": "Additional metadata"}
+  ]
+}

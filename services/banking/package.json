@@ -1,0 +1,41 @@
+{
+  "name": "nexustrade-banking-service",
+  "version": "1.0.0",
+  "description": "Banking and payment processing service for NexusTradeAI platform",
+  "main": "banking-service.js",
+  "scripts": {
+    "start": "node banking-service.js",
+    "dev": "nodemon banking-service.js",
+    "test": "jest",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "uuid": "^9.0.0",
+    "crypto": "^1.0.1",
+    "stripe": "^12.0.0",
+    "plaid": "^11.0.0",
+    "dwolla-v2": "^3.4.0",
+    "bcrypt": "^5.1.0",
+    "jsonwebtoken": "^9.0.0",
+    "helmet": "^6.1.5",
+    "rate-limiter-flexible": "^2.4.1",
+    "winston": "^3.8.2"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22",
+    "jest": "^29.5.0",
+    "eslint": "^8.40.0"
+  },
+  "keywords": [
+    "banking",
+    "payments",
+    "fintech",
+    "trading",
+    "ach",
+    "wire-transfer"
+  ],
+  "author": "NexusTradeAI",
+  "license": "MIT"
+}

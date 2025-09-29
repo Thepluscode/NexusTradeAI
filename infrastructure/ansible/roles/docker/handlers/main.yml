@@ -1,0 +1,19 @@
+---
+# Docker Handlers for NexusTradeAI
+
+- name: restart docker
+  systemd:
+    name: docker
+    state: restarted
+    daemon_reload: yes
+  become: yes
+
+- name: reload sysctl
+  command: sysctl -p /etc/sysctl.d/99-docker.conf
+  become: yes
+
+- name: restart containerd
+  systemd:
+    name: containerd
+    state: restarted
+  become: yes

@@ -1,0 +1,118 @@
+# Training Scheduler Configuration
+
+# Scheduler settings
+max_concurrent_jobs: 3
+check_interval_seconds: 60
+cleanup_interval_hours: 24
+job_timeout_hours: 12
+workspace_path: "./training_workspace"
+
+# Resource management
+gpu_resources: 1  # Number of GPUs available
+memory_limit_gb: 32  # Memory limit per job in GB
+cpu_cores: 8  # Number of CPU cores to allocate per job
+
+# MLflow tracking
+mlflow_tracking_uri: "http://localhost:5000"
+
+# Redis configuration (for distributed state management)
+redis:
+  host: "localhost"
+  port: 6379
+  password: ""  # Set your password if required
+  db: 0
+
+# Notification settings
+notifications:
+  enabled: true
+  slack:
+    enabled: false
+    webhook_url: "${SLACK_WEBHOOK_URL}"  # Set via environment variable
+    channel: "#ml-alerts"
+  email:
+    enabled: false
+    smtp_server: "smtp.example.com"
+    smtp_port: 587
+    username: "user@example.com"
+    password: "${EMAIL_PASSWORD}"  # Set via environment variable
+    from_address: "ml-scheduler@nexustrade.ai"
+    to_addresses:
+      - "ml-team@nexustrade.ai"
+
+# Recurring schedules
+recurring_schedules:
+  daily_retrain:
+    enabled: true
+    time: "02:00"  # 2 AM
+    models:
+      - "lstm"
+      - "transformer"
+    
+  weekly_refresh:
+    enabled: true
+    day_of_week: "sunday"
+    time: "03:00"  # 3 AM
+    
+  monthly_comparison:
+    enabled: true
+    day_of_month: 1  # 1st of each month
+    time: "04:00"  # 4 AM
+    
+  drift_check:
+    enabled: true
+    interval_hours: 6  # Check every 6 hours
+
+# Retraining trigger configuration
+trigger_conditions:
+  - name: "performance_degradation"
+    type: "performance"
+    threshold: 0.05  # 5% drop in accuracy
+    comparison: "greater"
+    window_hours: 24
+    enabled: true
+    severity: "high"
+    
+  - name: "data_drift_detection"
+    type: "drift"
+    threshold: 0.1  # 10% drift threshold
+    comparison: "greater"
+    window_hours: 48
+    enabled: true
+    severity: "high"
+    
+  - name: "model_age_limit"
+    type: "time"
+    threshold: 30  # 30 days
+    comparison: "greater"
+    window_hours: 24
+    enabled: true
+    severity: "medium"
+    
+  - name: "data_volume_threshold"
+    type: "data_volume"
+    threshold: 10000  # 10k new samples
+    comparison: "greater"
+    window_hours: 168  # 1 week
+    enabled: true
+    severity: "low"
+
+# Model-specific configurations
+model_configs:
+  lstm:
+    config_path: "configs/lstm_retrain_config.yaml"
+    priority: 5  # Medium priority by default
+    
+  transformer:
+    config_path: "configs/transformer_retrain_config.yaml"
+    priority: 5
+    
+  ensemble:
+    config_path: "configs/ensemble_retrain_config.yaml"
+    priority: 8  # Higher priority for ensemble models
+
+# Logging configuration
+logging:
+  level: "INFO"
+  file: "logs/scheduler.log"
+  max_size_mb: 100
+  backup_count: 5

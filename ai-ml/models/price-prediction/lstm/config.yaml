@@ -1,0 +1,39 @@
+# LSTM Price Prediction Model Configuration
+
+# Model parameters
+model:
+  sequence_length: 60
+  n_features: 25
+  params:
+    lstm_units: [128, 64, 32]
+    dropout_rate: 0.3
+    learning_rate: 0.001
+
+data:
+  path: "data/market_data.csv"
+  train_split: 0.8
+
+training:
+  epochs: 100
+  batch_size: 64
+
+features:
+  technical_indicators:
+    - sma_5
+    - sma_10
+    - sma_20
+    - sma_50
+    - ema_5
+    - ema_10
+    - ema_20
+    - rsi
+    - macd
+    - bollinger_bands
+  market_microstructure:
+    - bid_ask_spread
+    - order_imbalance
+    - volume_ratio
+  time_features:
+    - hour
+    - day_of_week
+    - month

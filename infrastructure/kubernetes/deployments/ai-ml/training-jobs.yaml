@@ -1,0 +1,65 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ai-model-training
+  namespace: nexustrade-production
+  labels:
+    app: ai-training
+    component: ml-pipeline
+    tier: ai-ml
+    version: v1.0.0
+  annotations:
+    description: "Scheduled AI model training and retraining jobs"
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM UTC
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 300
+
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 14400  # 4 hours timeout
+      template:
+        metadata:
+          labels:
+            app: ai-training
+            component: ml-pipeline
+            tier: ai-ml
+          annotations:
+            prometheus.io/scrape: "true"
+            prometheus.io/port: "8080"
+        spec:
+          restartPolicy: Never
+          serviceAccountName: ai-training-sa
+
+          # Node selection for GPU instances
+          nodeSelector:
+            node-type: gpu-optimized
+            instance-type: p3.2xlarge
+
+          # Tolerations for GPU nodes
+          tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+
+          containers:
+          - name: model-trainer
+            image: nexustrade/ai-trainer:v1.0.0
+            imagePullPolicy: Always
+
+            # GPU resources
+            resources:
+              requests:
+                cpu: "4"
+                memory: "16Gi"
+                nvidia.com/gpu: 1
+                ephemeral-storage: "50Gi"
+              limits:
+                cpu: "8"
+                memory: "32Gi"
+                nvidia.com/gpu: 1
+                ephemeral-storage: "100Gi"

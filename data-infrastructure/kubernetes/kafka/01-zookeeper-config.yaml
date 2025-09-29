@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zookeeper-config
+  namespace: kafka
+data:
+  log4j.properties: |
+    zookeeper.console.threshold=INFO
+    zookeeper.root.logger=INFO, CONSOLE
+    zookeeper.console.threshold=INFO
+    zookeeper.log.threshold=INFO
+    zookeeper.log.dir=.
+    zookeeper.log.file=zookeeper.log
+    zookeeper.log.maxfilesize=256MB
+    zookeeper.log.maxbackupindex=20
+    zookeeper.tracelog.dir=.
+    zookeeper.tracelog.file=zookeeper_trace.log
+    log4j.rootLogger=${zookeeper.root.logger}
+    log4j.appender.CONSOLE=org.apache.log4j.ConsoleAppender
+    log4j.appender.CONSOLE.Threshold=${zookeeper.console.threshold}
+    log4j.appender.CONSOLE.layout=org.apache.log4j.PatternLayout
+    log4j.appender.CONSOLE.layout.ConversionPattern=%d{ISO8601} [myid:%X{myid}] - %-5p [%t:%C{1}@%L] - %m%n
+  zookeeper.properties: |
+    tickTime=2000
+    initLimit=10
+    syncLimit=5
+    dataDir=/data
+    dataLogDir=/datalog
+    clientPort=2181
+    maxClientCnxns=60
+    autopurge.snapRetainCount=3
+    autopurge.purgeInterval=1
+    metricsProvider.className=org.apache.zookeeper.metrics.prometheus.PrometheusMetricsProvider
+    metricsProvider.httpPort=7000
+    metricsProvider.exportJvmInfo=true

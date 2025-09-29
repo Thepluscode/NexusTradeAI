@@ -1,1 +1,11 @@
 .env
+*.env
+node_modules/
+package-lock.json
+logs/
+*.log
+mongodb-macos-*/
+mongosh-*/
+.DS_Store
+**/.env*
+reset HEAD clients/web-app/.env.local*/.env.example

@@ -1,0 +1,211 @@
+# Kafka Headless Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-headless
+  namespace: kafka
+  labels:
+    app: kafka
+    component: broker
+spec:
+  ports:
+  - port: 9092
+    name: plaintext
+  - port: 9093
+    name: ssl
+  - port: 9094
+    name: sasl-ssl
+  clusterIP: None
+  selector:
+    app: kafka
+    component: broker
+---
+# Kafka Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  namespace: kafka
+  labels:
+    app: kafka
+    component: broker
+spec:
+  ports:
+  - name: plaintext
+    port: 9092
+    targetPort: 9092
+  - name: ssl
+    port: 9093
+    targetPort: 9093
+  - name: sasl-ssl
+    port: 9094
+    targetPort: 9094
+  selector:
+    app: kafka
+    component: broker
+---
+# Kafka StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  namespace: kafka
+  labels:
+    app: kafka
+    component: broker
+spec:
+  serviceName: kafka-headless
+  replicas: 3
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: kafka
+      component: broker
+  template:
+    metadata:
+      labels:
+        app: kafka
+        component: broker
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "7071"
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: "app"
+                operator: In
+                values:
+                - kafka
+            topologyKey: "kubernetes.io/hostname"
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+      initContainers:
+      - name: init-config
+        image: busybox:1.28
+        command: ['sh', '-c']
+        args:
+        - |
+          #!/bin/sh
+          set -e
+          
+          # Create SSL directories
+          mkdir -p /etc/kafka/secrets
+          
+          # Wait for Zookeeper to be ready
+          until nslookup zookeeper-0.zookeeper-headless.kafka.svc.cluster.local; do
+            echo "Waiting for zookeeper..."
+            sleep 1
+          done
+        volumeMounts:
+        - name: config
+          mountPath: /etc/kafka
+      containers:
+      - name: kafka
+        image: confluentinc/cp-kafka:7.0.1
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 9092
+          name: plaintext
+        - containerPort: 9093
+          name: ssl
+        - containerPort: 9094
+          name: sasl-ssl
+        - containerPort: 7071
+          name: jmx
+        env:
+        - name: KAFKA_BROKER_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+        - name: KAFKA_ZOOKEEPER_CONNECT
+          value: zookeeper-0.zookeeper-headless.kafka.svc.cluster.local:2181,zookeeper-1.zookeeper-headless.kafka.svc.cluster.local:2181,zookeeper-2.zookeeper-headless.kafka.svc.cluster.local:2181
+        - name: KAFKA_ADVERTISED_LISTENERS
+          value: "PLAINTEXT://$(POD_IP):9092,SSL://$(POD_IP):9093,SASL_SSL://$(POD_IP):9094"
+        - name: KAFKA_LISTENERS
+          value: "PLAINTEXT://:9092,SSL://:9093,SASL_SSL://:9094"
+        - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+          value: "PLAINTEXT:PLAINTEXT,SSL:SSL,SASL_SSL:SASL_SSL"
+        - name: KAFKA_INTER_BROKER_LISTENER_NAME
+          value: "PLAINTEXT"
+        - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+          value: "3"
+        - name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS
+          value: "0"
+        - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+          value: "2"
+        - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+          value: "3"
+        - name: KAFKA_JMX_PORT
+          value: "7071"
+        - name: KAFKA_JMX_HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: KAFKA_LOG4J_LOGGERS
+          value: "kafka=INFO,kafka.request.logger=WARN,kafka.network.RequestChannel$=WARN,kafka.producer.async.DefaultEventHandler=ERROR,state.change.logger=INFO"
+        - name: KAFKA_OPTS
+          value: "-Djava.security.auth.login.config=/etc/kafka/kafka_jaas.conf"
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        volumeMounts:
+        - name: config
+          mountPath: /etc/kafka
+        - name: data
+          mountPath: /var/lib/kafka/data
+        - name: secrets
+          mountPath: /etc/kafka/secrets
+          readOnly: true
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 2Gi
+          limits:
+            cpu: 4
+            memory: 4Gi
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - -ec
+            - |
+              #!/bin/sh
+              /usr/bin/kafka-broker-api-versions --bootstrap-server=localhost:9092
+          initialDelaySeconds: 30
+          timeoutSeconds: 10
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -ec
+            - |
+              #!/bin/sh
+              /usr/bin/kafka-broker-api-versions --bootstrap-server=localhost:9092
+          initialDelaySeconds: 60
+          timeoutSeconds: 10
+      volumes:
+      - name: config
+        configMap:
+          name: kafka-config
+      - name: secrets
+        secret:
+          secretName: kafka-secrets
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: "ssd"
+      resources:
+        requests:
+          storage: 100Gi

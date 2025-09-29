@@ -1,0 +1,298 @@
+const EventEmitter = require('events');
+const { v4: uuidv4 } = require('uuid');
+const Decimal = require('decimal.js');
+
+class OrderManager extends EventEmitter {
+  constructor(options = {}) {
+    super();
+    this.logger = options.logger;
+    this.metrics = options.metrics;
+    
+    // Order storage
+    this.orders = new Map(); // orderId -> order
+    this.ordersBySymbol = new Map(); // symbol -> Set of orderIds
+    this.ordersByUser = new Map(); // userId -> Set of orderIds
+    
+    // Order states
+    this.ORDER_STATES = {
+      PENDING: 'pending',
+      OPEN: 'open',
+      PARTIALLY_FILLED: 'partially_filled',
+      FILLED: 'filled',
+      CANCELLED: 'cancelled',
+      REJECTED: 'rejected',
+      EXPIRED: 'expired'
+    };
+    
+    // Performance tracking
+    this.stats = {
+      totalOrders: 0,
+      activeOrders: 0,
+      ordersPerSecond: 0,
+      lastProcessedTime: null
+    };
+  }
+
+  async createOrder(orderRequest) {
+    try {
+      const order = {
+        id: uuidv4(),
+        ...orderRequest,
+        state: this.ORDER_STATES.PENDING,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        fills: [],
+        totalFilled: 0,
+        remainingQuantity: parseFloat(orderRequest.quantity),
+        avgFillPrice: 0
+      };
+
+      // Validate order
+      await this.validateOrder(order);
+
+      // Store order
+      this.storeOrder(order);
+
+      // Emit order created event
+      this.emit('order_created', order);
+
+      this.logger?.info(`Order created: ${order.id}`, {
+        symbol: order.symbol,
+        side: order.side,
+        quantity: order.quantity,
+        type: order.type
+      });
+
+      return order;
+    } catch (error) {
+      this.logger?.error('Error creating order:', error);
+      throw error;
+    }
+  }
+
+  async validateOrder(order) {
+    // Required fields validation
+    const requiredFields = ['symbol', 'side', 'type', 'quantity', 'userId'];
+    for (const field of requiredFields) {
+      if (!order[field]) {
+        throw new Error(`Missing required field: ${field}`);
+      }
+    }
+
+    // Side validation
+    if (!['buy', 'sell'].includes(order.side)) {
+      throw new Error('Invalid order side. Must be "buy" or "sell"');
+    }
+
+    // Type validation
+    if (!['market', 'limit', 'stop', 'stop_limit'].includes(order.type)) {
+      throw new Error('Invalid order type');
+    }
+
+    // Quantity validation
+    const quantity = new Decimal(order.quantity);
+    if (quantity.lte(0)) {
+      throw new Error('Quantity must be positive');
+    }
+
+    // Price validation for limit orders
+    if (['limit', 'stop_limit'].includes(order.type) && (!order.price || order.price <= 0)) {
+      throw new Error('Price is required for limit orders and must be positive');
+    }
+
+    // Stop price validation for stop orders
+    if (['stop', 'stop_limit'].includes(order.type) && (!order.stopPrice || order.stopPrice <= 0)) {
+      throw new Error('Stop price is required for stop orders and must be positive');
+    }
+
+    return true;
+  }
+
+  storeOrder(order) {
+    this.orders.set(order.id, order);
+    
+    // Index by symbol
+    if (!this.ordersBySymbol.has(order.symbol)) {
+      this.ordersBySymbol.set(order.symbol, new Set());
+    }
+    this.ordersBySymbol.get(order.symbol).add(order.id);
+    
+    // Index by user
+    if (!this.ordersByUser.has(order.userId)) {
+      this.ordersByUser.set(order.userId, new Set());
+    }
+    this.ordersByUser.get(order.userId).add(order.id);
+    
+    this.stats.totalOrders++;
+    this.stats.activeOrders++;
+  }
+
+  async updateOrderState(orderId, newState, data = {}) {
+    const order = this.orders.get(orderId);
+    if (!order) {
+      throw new Error(`Order not found: ${orderId}`);
+    }
+
+    const oldState = order.state;
+    order.state = newState;
+    order.updatedAt = new Date();
+    
+    // Update additional data
+    Object.assign(order, data);
+
+    // Update active orders count
+    if (this.isActiveState(oldState) && !this.isActiveState(newState)) {
+      this.stats.activeOrders--;
+    }
+
+    this.emit('order_state_changed', { order, oldState, newState });
+
+    this.logger?.info(`Order state changed: ${orderId}`, {
+      oldState,
+      newState,
+      symbol: order.symbol
+    });
+
+    return order;
+  }
+
+  async addFill(orderId, fill) {
+    const order = this.orders.get(orderId);
+    if (!order) {
+      throw new Error(`Order not found: ${orderId}`);
+    }
+
+    // Add fill to order
+    order.fills.push({
+      ...fill,
+      timestamp: new Date()
+    });
+
+    // Update order quantities and prices
+    const fillQuantity = new Decimal(fill.quantity);
+    order.totalFilled += fillQuantity.toNumber();
+    order.remainingQuantity -= fillQuantity.toNumber();
+
+    // Calculate average fill price
+    const totalValue = order.fills.reduce((sum, f) => 
+      sum + (f.quantity * f.price), 0
+    );
+    order.avgFillPrice = totalValue / order.totalFilled;
+
+    // Update order state based on fill
+    let newState;
+    if (order.remainingQuantity <= 0) {
+      newState = this.ORDER_STATES.FILLED;
+    } else if (order.totalFilled > 0) {
+      newState = this.ORDER_STATES.PARTIALLY_FILLED;
+    }
+
+    if (newState && newState !== order.state) {
+      await this.updateOrderState(orderId, newState);
+    }
+
+    this.emit('order_filled', { order, fill });
+
+    return order;
+  }
+
+  async cancelOrder(orderId, reason = 'User cancelled') {
+    const order = this.orders.get(orderId);
+    if (!order) {
+      throw new Error(`Order not found: ${orderId}`);
+    }
+
+    if (!this.isActiveState(order.state)) {
+      throw new Error(`Cannot cancel order in state: ${order.state}`);
+    }
+
+    await this.updateOrderState(orderId, this.ORDER_STATES.CANCELLED, {
+      cancelReason: reason,
+      cancelledAt: new Date()
+    });
+
+    this.emit('order_cancelled', order);
+
+    return order;
+  }
+
+  async expireOrder(orderId) {
+    const order = this.orders.get(orderId);
+    if (!order) {
+      throw new Error(`Order not found: ${orderId}`);
+    }
+
+    await this.updateOrderState(orderId, this.ORDER_STATES.EXPIRED, {
+      expiredAt: new Date()
+    });
+
+    this.emit('order_expired', order);
+
+    return order;
+  }
+
+  getOrder(orderId) {
+    return this.orders.get(orderId);
+  }
+
+  getOrdersBySymbol(symbol) {
+    const orderIds = this.ordersBySymbol.get(symbol) || new Set();
+    return Array.from(orderIds).map(id => this.orders.get(id)).filter(Boolean);
+  }
+
+  getOrdersByUser(userId) {
+    const orderIds = this.ordersByUser.get(userId) || new Set();
+    return Array.from(orderIds).map(id => this.orders.get(id)).filter(Boolean);
+  }
+
+  getActiveOrders() {
+    return Array.from(this.orders.values()).filter(order => 
+      this.isActiveState(order.state)
+    );
+  }
+
+  getOrdersByState(state) {
+    return Array.from(this.orders.values()).filter(order => 
+      order.state === state
+    );
+  }
+
+  isActiveState(state) {
+    return [
+      this.ORDER_STATES.PENDING,
+      this.ORDER_STATES.OPEN,
+      this.ORDER_STATES.PARTIALLY_FILLED
+    ].includes(state);
+  }
+
+  getStats() {
+    return {
+      ...this.stats,
+      ordersByState: this.getOrderCountByState(),
+      ordersBySymbol: this.getOrderCountBySymbol()
+    };
+  }
+
+  getOrderCountByState() {
+    const counts = {};
+    Object.values(this.ORDER_STATES).forEach(state => {
+      counts[state] = 0;
+    });
+
+    this.orders.forEach(order => {
+      counts[order.state] = (counts[order.state] || 0) + 1;
+    });
+
+    return counts;
+  }
+
+  getOrderCountBySymbol() {
+    const counts = {};
+    this.ordersBySymbol.forEach((orderIds, symbol) => {
+      counts[symbol] = orderIds.size;
+    });
+    return counts;
+  }
+}
+
+module.exports = OrderManager;

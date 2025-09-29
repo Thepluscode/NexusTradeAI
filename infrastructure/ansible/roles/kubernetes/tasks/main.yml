@@ -1,0 +1,555 @@
+---
+# Kubernetes Tools Installation and Configuration for NexusTradeAI
+# Optimized for high-performance trading applications
+
+- name: Install required packages
+  package:
+    name:
+      - curl
+      - apt-transport-https
+      - ca-certificates
+      - gnupg
+      - lsb-release
+      - python3-pip
+      - python3-yaml
+      - jq
+    state: present
+  become: yes
+
+- name: Add Kubernetes GPG key
+  apt_key:
+    url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+    state: present
+  become: yes
+
+- name: Add Kubernetes repository
+  apt_repository:
+    repo: "deb https://apt.kubernetes.io/ kubernetes-xenial main"
+    state: present
+  become: yes
+
+- name: Update package cache
+  package:
+    update_cache: yes
+  become: yes
+
+- name: Install kubectl
+  package:
+    name: kubectl={{ kubectl_version | default('1.28.0-00') }}
+    state: present
+  become: yes
+
+- name: Hold kubectl package
+  dpkg_selections:
+    name: kubectl
+    selection: hold
+  become: yes
+
+- name: Install kubectx and kubens
+  get_url:
+    url: "{{ item.url }}"
+    dest: "{{ item.dest }}"
+    mode: '0755'
+  become: yes
+  loop:
+    - url: https://raw.githubusercontent.com/ahmetb/kubectx/master/kubectx
+      dest: /usr/local/bin/kubectx
+    - url: https://raw.githubusercontent.com/ahmetb/kubectx/master/kubens
+      dest: /usr/local/bin/kubens
+
+- name: Install Helm
+  shell: |
+    curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  args:
+    creates: /usr/local/bin/helm
+  become: yes
+
+- name: Install k9s for cluster management
+  shell: |
+    K9S_VERSION=$(curl -s https://api.github.com/repos/derailed/k9s/releases/latest | jq -r '.tag_name')
+    curl -sL https://github.com/derailed/k9s/releases/download/${K9S_VERSION}/k9s_Linux_x86_64.tar.gz | tar xz -C /tmp
+    mv /tmp/k9s /usr/local/bin/
+    chmod +x /usr/local/bin/k9s
+  args:
+    creates: /usr/local/bin/k9s
+  become: yes
+
+- name: Install stern for log tailing
+  shell: |
+    STERN_VERSION=$(curl -s https://api.github.com/repos/stern/stern/releases/latest | jq -r '.tag_name')
+    curl -sL https://github.com/stern/stern/releases/download/${STERN_VERSION}/stern_${STERN_VERSION#v}_linux_amd64.tar.gz | tar xz -C /tmp
+    mv /tmp/stern /usr/local/bin/
+    chmod +x /usr/local/bin/stern
+  args:
+    creates: /usr/local/bin/stern
+  become: yes
+
+- name: Install kustomize
+  shell: |
+    curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+    mv kustomize /usr/local/bin/
+  args:
+    creates: /usr/local/bin/kustomize
+  become: yes
+
+- name: Install AWS CLI v2
+  shell: |
+    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+    unzip -q awscliv2.zip
+    ./aws/install --update
+    rm -rf aws awscliv2.zip
+  args:
+    creates: /usr/local/bin/aws
+  become: yes
+
+- name: Install eksctl
+  shell: |
+    EKSCTL_VERSION=$(curl -s https://api.github.com/repos/weaveworks/eksctl/releases/latest | jq -r '.tag_name')
+    curl -sL "https://github.com/weaveworks/eksctl/releases/download/${EKSCTL_VERSION}/eksctl_Linux_amd64.tar.gz" | tar xz -C /tmp
+    mv /tmp/eksctl /usr/local/bin/
+    chmod +x /usr/local/bin/eksctl
+  args:
+    creates: /usr/local/bin/eksctl
+  become: yes
+
+- name: Install Python Kubernetes client
+  pip:
+    name:
+      - kubernetes
+      - openshift
+      - pyyaml
+      - requests
+    state: present
+  become: yes
+
+- name: Create kubectl configuration directory
+  file:
+    path: "{{ ansible_env.HOME }}/.kube"
+    state: directory
+    mode: '0755'
+
+- name: Create kubectl completion script
+  shell: kubectl completion bash > /etc/bash_completion.d/kubectl
+  args:
+    creates: /etc/bash_completion.d/kubectl
+  become: yes
+
+- name: Create helm completion script
+  shell: helm completion bash > /etc/bash_completion.d/helm
+  args:
+    creates: /etc/bash_completion.d/helm
+  become: yes
+
+- name: Add kubectl aliases to bashrc
+  blockinfile:
+    path: "{{ ansible_env.HOME }}/.bashrc"
+    block: |
+      # Kubernetes aliases for NexusTradeAI
+      alias k='kubectl'
+      alias kgp='kubectl get pods'
+      alias kgs='kubectl get services'
+      alias kgd='kubectl get deployments'
+      alias kgn='kubectl get nodes'
+      alias kaf='kubectl apply -f'
+      alias kdel='kubectl delete'
+      alias klog='kubectl logs'
+      alias kexec='kubectl exec -it'
+      alias kctx='kubectx'
+      alias kns='kubens'
+      
+      # Trading-specific aliases
+      alias kprod='kubectx nexustrade-ai-production'
+      alias kstag='kubectx nexustrade-ai-staging'
+      alias kdev='kubectx nexustrade-ai-development'
+      alias trading-logs='stern -n nexustrade-production trading-engine'
+      alias ai-logs='stern -n nexustrade-production -l component=ai-ml'
+      
+      # Quick status checks
+      alias k-status='kubectl get nodes,pods,services,deployments --all-namespaces'
+      alias k-trading='kubectl get all -n nexustrade-production'
+      alias k-monitoring='kubectl get all -n nexustrade-monitoring'
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - Kubernetes aliases"
+
+- name: Create Kubernetes utility scripts directory
+  file:
+    path: /usr/local/bin/k8s-utils
+    state: directory
+    mode: '0755'
+  become: yes
+
+- name: Create cluster health check script
+  copy:
+    content: |
+      #!/bin/bash
+      # Kubernetes cluster health check for NexusTradeAI
+      
+      set -e
+      
+      echo "=== Kubernetes Cluster Health Check ==="
+      echo "Timestamp: $(date)"
+      echo ""
+      
+      # Check cluster connectivity
+      echo "1. Checking cluster connectivity..."
+      if kubectl cluster-info >/dev/null 2>&1; then
+          echo "✓ Cluster is accessible"
+      else
+          echo "✗ Cannot connect to cluster"
+          exit 1
+      fi
+      
+      # Check node status
+      echo ""
+      echo "2. Checking node status..."
+      kubectl get nodes --no-headers | while read node status roles age version; do
+          if [[ "$status" == "Ready" ]]; then
+              echo "✓ Node $node is Ready"
+          else
+              echo "✗ Node $node is $status"
+          fi
+      done
+      
+      # Check system pods
+      echo ""
+      echo "3. Checking system pods..."
+      FAILED_PODS=$(kubectl get pods -n kube-system --field-selector=status.phase!=Running --no-headers 2>/dev/null | wc -l)
+      if [ "$FAILED_PODS" -eq 0 ]; then
+          echo "✓ All system pods are running"
+      else
+          echo "✗ $FAILED_PODS system pods are not running"
+          kubectl get pods -n kube-system --field-selector=status.phase!=Running
+      fi
+      
+      # Check NexusTradeAI namespaces
+      echo ""
+      echo "4. Checking NexusTradeAI namespaces..."
+      for ns in nexustrade-production nexustrade-staging nexustrade-monitoring; do
+          if kubectl get namespace "$ns" >/dev/null 2>&1; then
+              FAILED_PODS=$(kubectl get pods -n "$ns" --field-selector=status.phase!=Running --no-headers 2>/dev/null | wc -l)
+              if [ "$FAILED_PODS" -eq 0 ]; then
+                  echo "✓ Namespace $ns: All pods running"
+              else
+                  echo "✗ Namespace $ns: $FAILED_PODS pods not running"
+              fi
+          else
+              echo "⚠ Namespace $ns not found"
+          fi
+      done
+      
+      # Check trading engine specifically
+      echo ""
+      echo "5. Checking trading engine status..."
+      if kubectl get deployment trading-engine -n nexustrade-production >/dev/null 2>&1; then
+          READY=$(kubectl get deployment trading-engine -n nexustrade-production -o jsonpath='{.status.readyReplicas}')
+          DESIRED=$(kubectl get deployment trading-engine -n nexustrade-production -o jsonpath='{.spec.replicas}')
+          if [ "$READY" = "$DESIRED" ]; then
+              echo "✓ Trading engine: $READY/$DESIRED replicas ready"
+          else
+              echo "✗ Trading engine: $READY/$DESIRED replicas ready"
+          fi
+      else
+          echo "⚠ Trading engine deployment not found"
+      fi
+      
+      # Check resource usage
+      echo ""
+      echo "6. Checking resource usage..."
+      kubectl top nodes 2>/dev/null || echo "⚠ Metrics server not available"
+      
+      echo ""
+      echo "=== Health Check Complete ==="
+    dest: /usr/local/bin/k8s-utils/health-check.sh
+    mode: '0755'
+  become: yes
+
+- name: Create deployment script
+  copy:
+    content: |
+      #!/bin/bash
+      # NexusTradeAI deployment script
+      
+      set -e
+      
+      ENVIRONMENT=${1:-staging}
+      COMPONENT=${2:-all}
+      
+      echo "=== NexusTradeAI Deployment ==="
+      echo "Environment: $ENVIRONMENT"
+      echo "Component: $COMPONENT"
+      echo "Timestamp: $(date)"
+      echo ""
+      
+      # Validate environment
+      case $ENVIRONMENT in
+          production|staging|development)
+              ;;
+          *)
+              echo "Error: Invalid environment. Use: production, staging, or development"
+              exit 1
+              ;;
+      esac
+      
+      # Set namespace
+      NAMESPACE="nexustrade-$ENVIRONMENT"
+      
+      # Check if namespace exists
+      if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
+          echo "Creating namespace $NAMESPACE..."
+          kubectl create namespace "$NAMESPACE"
+      fi
+      
+      # Deploy components
+      case $COMPONENT in
+          all)
+              echo "Deploying all components..."
+              kubectl apply -f /path/to/k8s/manifests/namespaces/$ENVIRONMENT.yaml
+              kubectl apply -f /path/to/k8s/manifests/configmaps/ -n "$NAMESPACE"
+              kubectl apply -f /path/to/k8s/manifests/secrets/ -n "$NAMESPACE"
+              kubectl apply -f /path/to/k8s/manifests/deployments/databases/ -n "$NAMESPACE"
+              kubectl apply -f /path/to/k8s/manifests/deployments/microservices/ -n "$NAMESPACE"
+              kubectl apply -f /path/to/k8s/manifests/deployments/ai-ml/ -n "$NAMESPACE"
+              kubectl apply -f /path/to/k8s/manifests/services/ -n "$NAMESPACE"
+              ;;
+          trading-engine)
+              echo "Deploying trading engine..."
+              kubectl apply -f /path/to/k8s/manifests/deployments/microservices/trading-engine.yaml -n "$NAMESPACE"
+              ;;
+          databases)
+              echo "Deploying databases..."
+              kubectl apply -f /path/to/k8s/manifests/deployments/databases/ -n "$NAMESPACE"
+              ;;
+          ai-ml)
+              echo "Deploying AI/ML components..."
+              kubectl apply -f /path/to/k8s/manifests/deployments/ai-ml/ -n "$NAMESPACE"
+              ;;
+          *)
+              echo "Error: Invalid component. Use: all, trading-engine, databases, or ai-ml"
+              exit 1
+              ;;
+      esac
+      
+      echo ""
+      echo "Deployment initiated. Checking status..."
+      sleep 10
+      
+      # Check deployment status
+      kubectl get all -n "$NAMESPACE"
+      
+      echo ""
+      echo "=== Deployment Complete ==="
+    dest: /usr/local/bin/k8s-utils/deploy.sh
+    mode: '0755'
+  become: yes
+
+- name: Create log aggregation script
+  copy:
+    content: |
+      #!/bin/bash
+      # Log aggregation script for NexusTradeAI
+      
+      NAMESPACE=${1:-nexustrade-production}
+      COMPONENT=${2:-trading-engine}
+      LINES=${3:-100}
+      
+      echo "=== NexusTradeAI Log Aggregation ==="
+      echo "Namespace: $NAMESPACE"
+      echo "Component: $COMPONENT"
+      echo "Lines: $LINES"
+      echo ""
+      
+      case $COMPONENT in
+          trading-engine)
+              stern -n "$NAMESPACE" trading-engine --tail "$LINES"
+              ;;
+          ai-ml)
+              stern -n "$NAMESPACE" -l component=ai-ml --tail "$LINES"
+              ;;
+          databases)
+              stern -n "$NAMESPACE" -l tier=data --tail "$LINES"
+              ;;
+          all)
+              stern -n "$NAMESPACE" . --tail "$LINES"
+              ;;
+          *)
+              echo "Available components: trading-engine, ai-ml, databases, all"
+              exit 1
+              ;;
+      esac
+    dest: /usr/local/bin/k8s-utils/logs.sh
+    mode: '0755'
+  become: yes
+
+- name: Create performance monitoring script
+  copy:
+    content: |
+      #!/bin/bash
+      # Performance monitoring script for NexusTradeAI
+      
+      NAMESPACE=${1:-nexustrade-production}
+      
+      echo "=== NexusTradeAI Performance Monitoring ==="
+      echo "Namespace: $NAMESPACE"
+      echo "Timestamp: $(date)"
+      echo ""
+      
+      # Node resource usage
+      echo "1. Node Resource Usage:"
+      kubectl top nodes
+      echo ""
+      
+      # Pod resource usage
+      echo "2. Pod Resource Usage in $NAMESPACE:"
+      kubectl top pods -n "$NAMESPACE" --sort-by=cpu
+      echo ""
+      
+      # Trading engine specific metrics
+      echo "3. Trading Engine Metrics:"
+      kubectl get pods -n "$NAMESPACE" -l app=trading-engine -o wide
+      echo ""
+      
+      # Database metrics
+      echo "4. Database Metrics:"
+      kubectl get pods -n "$NAMESPACE" -l tier=data -o wide
+      echo ""
+      
+      # AI/ML metrics
+      echo "5. AI/ML Metrics:"
+      kubectl get pods -n "$NAMESPACE" -l component=ai-ml -o wide
+      echo ""
+      
+      # HPA status
+      echo "6. Horizontal Pod Autoscaler Status:"
+      kubectl get hpa -n "$NAMESPACE" 2>/dev/null || echo "No HPA configured"
+      echo ""
+      
+      # PVC usage
+      echo "7. Persistent Volume Claims:"
+      kubectl get pvc -n "$NAMESPACE"
+      echo ""
+      
+      echo "=== Monitoring Complete ==="
+    dest: /usr/local/bin/k8s-utils/monitor.sh
+    mode: '0755'
+  become: yes
+
+- name: Create backup script
+  copy:
+    content: |
+      #!/bin/bash
+      # Backup script for NexusTradeAI Kubernetes resources
+      
+      BACKUP_DIR="/backup/k8s/$(date +%Y%m%d_%H%M%S)"
+      NAMESPACES="nexustrade-production nexustrade-staging nexustrade-monitoring"
+      
+      echo "=== NexusTradeAI Kubernetes Backup ==="
+      echo "Backup directory: $BACKUP_DIR"
+      echo "Timestamp: $(date)"
+      echo ""
+      
+      # Create backup directory
+      mkdir -p "$BACKUP_DIR"
+      
+      # Backup cluster-wide resources
+      echo "Backing up cluster-wide resources..."
+      kubectl get all --all-namespaces -o yaml > "$BACKUP_DIR/cluster-all.yaml"
+      kubectl get nodes -o yaml > "$BACKUP_DIR/nodes.yaml"
+      kubectl get persistentvolumes -o yaml > "$BACKUP_DIR/persistent-volumes.yaml"
+      kubectl get storageclasses -o yaml > "$BACKUP_DIR/storage-classes.yaml"
+      
+      # Backup namespace-specific resources
+      for ns in $NAMESPACES; do
+          if kubectl get namespace "$ns" >/dev/null 2>&1; then
+              echo "Backing up namespace: $ns"
+              mkdir -p "$BACKUP_DIR/$ns"
+              
+              # Backup all resources in namespace
+              kubectl get all -n "$ns" -o yaml > "$BACKUP_DIR/$ns/all.yaml"
+              kubectl get configmaps -n "$ns" -o yaml > "$BACKUP_DIR/$ns/configmaps.yaml"
+              kubectl get secrets -n "$ns" -o yaml > "$BACKUP_DIR/$ns/secrets.yaml"
+              kubectl get pvc -n "$ns" -o yaml > "$BACKUP_DIR/$ns/pvc.yaml"
+              kubectl get networkpolicies -n "$ns" -o yaml > "$BACKUP_DIR/$ns/networkpolicies.yaml" 2>/dev/null || true
+              kubectl get ingress -n "$ns" -o yaml > "$BACKUP_DIR/$ns/ingress.yaml" 2>/dev/null || true
+          fi
+      done
+      
+      # Create archive
+      echo "Creating backup archive..."
+      tar -czf "$BACKUP_DIR.tar.gz" -C "$(dirname $BACKUP_DIR)" "$(basename $BACKUP_DIR)"
+      rm -rf "$BACKUP_DIR"
+      
+      echo "Backup completed: $BACKUP_DIR.tar.gz"
+      
+      # Cleanup old backups (keep last 7 days)
+      find /backup/k8s/ -name "*.tar.gz" -mtime +7 -delete 2>/dev/null || true
+      
+      echo "=== Backup Complete ==="
+    dest: /usr/local/bin/k8s-utils/backup.sh
+    mode: '0755'
+  become: yes
+
+- name: Create main k8s utility script
+  copy:
+    content: |
+      #!/bin/bash
+      # Main Kubernetes utility script for NexusTradeAI
+      
+      SCRIPT_DIR="/usr/local/bin/k8s-utils"
+      
+      case "$1" in
+          health|health-check)
+              $SCRIPT_DIR/health-check.sh
+              ;;
+          deploy)
+              shift
+              $SCRIPT_DIR/deploy.sh "$@"
+              ;;
+          logs)
+              shift
+              $SCRIPT_DIR/logs.sh "$@"
+              ;;
+          monitor|monitoring)
+              shift
+              $SCRIPT_DIR/monitor.sh "$@"
+              ;;
+          backup)
+              $SCRIPT_DIR/backup.sh
+              ;;
+          *)
+              echo "NexusTradeAI Kubernetes Utilities"
+              echo ""
+              echo "Usage: $0 {health|deploy|logs|monitor|backup}"
+              echo ""
+              echo "Commands:"
+              echo "  health                    - Check cluster health"
+              echo "  deploy [env] [component]  - Deploy components"
+              echo "  logs [namespace] [component] [lines] - View logs"
+              echo "  monitor [namespace]       - Monitor performance"
+              echo "  backup                    - Backup cluster resources"
+              echo ""
+              echo "Examples:"
+              echo "  $0 health"
+              echo "  $0 deploy production trading-engine"
+              echo "  $0 logs nexustrade-production trading-engine 500"
+              echo "  $0 monitor nexustrade-production"
+              echo "  $0 backup"
+              exit 1
+              ;;
+      esac
+    dest: /usr/local/bin/nexus-k8s
+    mode: '0755'
+  become: yes
+
+- name: Verify installations
+  command: "{{ item }}"
+  register: version_check
+  changed_when: false
+  loop:
+    - kubectl version --client
+    - helm version
+    - aws --version
+    - eksctl version
+
+- name: Display installed versions
+  debug:
+    msg: "{{ item.stdout }}"
+  loop: "{{ version_check.results }}"

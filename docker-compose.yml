@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: >
+      sh -c "python run_example.py"
+    networks:
+      - nexus-network
+
+networks:
+  nexus-network:
+    driver: bridge

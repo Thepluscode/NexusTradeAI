@@ -1,0 +1,194 @@
+{
+  "name": "@nexustrade/shared",
+  "version": "1.0.0",
+  "description": "Shared libraries and utilities for NexusTradeAI trading platform",
+  "main": "index.js",
+  "private": true,
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "clean": "rimraf dist",
+    "docs": "typedoc --out docs src",
+    "validate": "npm run lint && npm run test",
+    "prepublishOnly": "npm run validate && npm run build"
+  },
+  "keywords": [
+    "trading",
+    "finance",
+    "algorithmic-trading",
+    "market-data",
+    "technical-analysis",
+    "shared-library"
+  ],
+  "author": "NexusTradeAI Team",
+  "license": "PROPRIETARY",
+  "dependencies": {
+    "@influxdata/influxdb-client": "^1.33.2",
+    "axios": "^1.10.0",
+    "bcrypt": "^6.0.0",
+    "bignumber.js": "^9.1.2",
+    "crypto": "^1.0.1",
+    "ioredis": "^5.3.2",
+    "jsonwebtoken": "^9.0.2",
+    "kafkajs": "^2.2.4",
+    "lodash": "^4.17.21",
+    "moment": "^2.30.1",
+    "moment-timezone": "^0.5.48",
+    "mongodb": "^6.3.0",
+    "pg": "^8.11.3",
+    "qrcode": "^1.5.4",
+    "speakeasy": "^2.0.0",
+    "uuid": "^9.0.1",
+    "ws": "^8.14.2",
+    "zlib": "^1.0.5"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.8",
+    "@types/jsonwebtoken": "^9.0.5",
+    "@types/lodash": "^4.14.202",
+    "@types/node": "^20.10.5",
+    "@types/pg": "^8.10.9",
+    "@types/uuid": "^9.0.7",
+    "@types/ws": "^8.5.10",
+    "@typescript-eslint/eslint-plugin": "^6.13.2",
+    "@typescript-eslint/parser": "^6.13.2",
+    "eslint": "^8.55.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.0.1",
+    "jest": "^29.7.0",
+    "nock": "^13.4.0",
+    "prettier": "^3.1.1",
+    "rimraf": "^5.0.5",
+    "supertest": "^6.3.3",
+    "ts-jest": "^29.1.1",
+    "typedoc": "^0.25.4",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nexustrade-ai/shared.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nexustrade-ai/shared/issues"
+  },
+  "homepage": "https://github.com/nexustrade-ai/shared#readme",
+  "files": [
+    "dist",
+    "libs",
+    "types",
+    "configs",
+    "constants",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./libs/*": {
+      "import": "./dist/libs/*.js",
+      "require": "./dist/libs/*.js",
+      "types": "./dist/libs/*.d.ts"
+    },
+    "./types/*": {
+      "import": "./dist/types/*.js",
+      "require": "./dist/types/*.js",
+      "types": "./dist/types/*.d.ts"
+    },
+    "./constants/*": {
+      "import": "./dist/constants/*.js",
+      "require": "./dist/constants/*.js",
+      "types": "./dist/constants/*.d.ts"
+    },
+    "./configs/*": {
+      "import": "./dist/configs/*.js",
+      "require": "./dist/configs/*.js",
+      "types": "./dist/configs/*.d.ts"
+    }
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "roots": [
+      "<rootDir>/src",
+      "<rootDir>/tests"
+    ],
+    "testMatch": [
+      "**/__tests__/**/*.ts",
+      "**/?(*.)+(spec|test).ts"
+    ],
+    "transform": {
+      "^.+\\.ts$": "ts-jest"
+    },
+    "collectCoverageFrom": [
+      "src/**/*.ts",
+      "!src/**/*.d.ts",
+      "!src/**/*.test.ts",
+      "!src/**/*.spec.ts"
+    ],
+    "coverageDirectory": "coverage",
+    "coverageReporters": [
+      "text",
+      "lcov",
+      "html"
+    ],
+    "coverageThreshold": {
+      "global": {
+        "branches": 80,
+        "functions": 80,
+        "lines": 80,
+        "statements": 80
+      }
+    }
+  },
+  "eslintConfig": {
+    "root": true,
+    "parser": "@typescript-eslint/parser",
+    "plugins": [
+      "@typescript-eslint",
+      "prettier"
+    ],
+    "extends": [
+      "eslint:recommended",
+      "@typescript-eslint/recommended",
+      "prettier"
+    ],
+    "rules": {
+      "prettier/prettier": "error",
+      "@typescript-eslint/no-unused-vars": "error",
+      "@typescript-eslint/no-explicit-any": "warn",
+      "@typescript-eslint/explicit-function-return-type": "off",
+      "@typescript-eslint/explicit-module-boundary-types": "off",
+      "@typescript-eslint/no-inferrable-types": "off",
+      "prefer-const": "error",
+      "no-var": "error"
+    },
+    "env": {
+      "node": true,
+      "es6": true,
+      "jest": true
+    }
+  },
+  "prettier": {
+    "semi": true,
+    "trailingComma": "es5",
+    "singleQuote": true,
+    "printWidth": 100,
+    "tabWidth": 2,
+    "useTabs": false
+  },
+  "publishConfig": {
+    "registry": "https://npm.nexustrade.ai"
+  }
+}

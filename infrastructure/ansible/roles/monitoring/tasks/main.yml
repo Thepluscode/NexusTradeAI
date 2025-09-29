@@ -1,0 +1,660 @@
+---
+# Monitoring Stack Installation for NexusTradeAI
+# Comprehensive monitoring optimized for trading applications
+
+- name: Create monitoring user
+  user:
+    name: monitoring
+    system: yes
+    shell: /bin/false
+    home: /var/lib/monitoring
+    create_home: yes
+  become: yes
+
+- name: Create monitoring directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: monitoring
+    group: monitoring
+    mode: '0755'
+  become: yes
+  loop:
+    - /etc/monitoring
+    - /var/lib/monitoring
+    - /var/log/monitoring
+    - /opt/monitoring
+
+# Node Exporter Installation
+- name: Download Node Exporter
+  get_url:
+    url: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version | default('1.6.1') }}/node_exporter-{{ node_exporter_version | default('1.6.1') }}.linux-amd64.tar.gz"
+    dest: /tmp/node_exporter.tar.gz
+    mode: '0644'
+  become: yes
+
+- name: Extract Node Exporter
+  unarchive:
+    src: /tmp/node_exporter.tar.gz
+    dest: /tmp
+    remote_src: yes
+  become: yes
+
+- name: Install Node Exporter binary
+  copy:
+    src: "/tmp/node_exporter-{{ node_exporter_version | default('1.6.1') }}.linux-amd64/node_exporter"
+    dest: /usr/local/bin/node_exporter
+    owner: monitoring
+    group: monitoring
+    mode: '0755'
+    remote_src: yes
+  become: yes
+
+- name: Create Node Exporter systemd service
+  copy:
+    content: |
+      [Unit]
+      Description=Node Exporter for NexusTradeAI
+      Documentation=https://prometheus.io/docs/guides/node-exporter/
+      Wants=network-online.target
+      After=network-online.target
+
+      [Service]
+      Type=simple
+      User=monitoring
+      Group=monitoring
+      ExecReload=/bin/kill -HUP $MAINPID
+      ExecStart=/usr/local/bin/node_exporter \
+          --web.listen-address=:9100 \
+          --path.procfs=/proc \
+          --path.rootfs=/ \
+          --path.sysfs=/sys \
+          --collector.filesystem.mount-points-exclude='^/(sys|proc|dev|host|etc)($$|/)' \
+          --collector.systemd \
+          --collector.processes \
+          --collector.interrupts \
+          --collector.tcpstat \
+          --collector.meminfo_numa \
+          --collector.cpu.info \
+          --collector.diskstats \
+          --collector.netdev \
+          --collector.netstat \
+          --collector.vmstat \
+          --collector.loadavg \
+          --collector.time \
+          --collector.uname \
+          --collector.version \
+          --log.level=info
+
+      SyslogIdentifier=node_exporter
+      Restart=always
+      RestartSec=1
+      StartLimitInterval=0
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/node_exporter.service
+    mode: '0644'
+  become: yes
+  notify: restart node_exporter
+
+# Process Exporter for detailed process monitoring
+- name: Download Process Exporter
+  get_url:
+    url: "https://github.com/ncabatoff/process-exporter/releases/download/v{{ process_exporter_version | default('0.7.10') }}/process-exporter-{{ process_exporter_version | default('0.7.10') }}.linux-amd64.tar.gz"
+    dest: /tmp/process_exporter.tar.gz
+    mode: '0644'
+  become: yes
+
+- name: Extract Process Exporter
+  unarchive:
+    src: /tmp/process_exporter.tar.gz
+    dest: /tmp
+    remote_src: yes
+  become: yes
+
+- name: Install Process Exporter binary
+  copy:
+    src: "/tmp/process-exporter-{{ process_exporter_version | default('0.7.10') }}.linux-amd64/process-exporter"
+    dest: /usr/local/bin/process-exporter
+    owner: monitoring
+    group: monitoring
+    mode: '0755'
+    remote_src: yes
+  become: yes
+
+- name: Create Process Exporter configuration
+  copy:
+    content: |
+      process_names:
+        # Trading Engine processes
+        - name: "{{.Comm}}"
+          cmdline:
+          - 'trading-engine'
+        
+        # Database processes
+        - name: "{{.Comm}}"
+          cmdline:
+          - 'postgres'
+          - 'redis-server'
+          - 'mongod'
+          - 'influxd'
+        
+        # Kubernetes processes
+        - name: "{{.Comm}}"
+          cmdline:
+          - 'kubelet'
+          - 'kube-proxy'
+          - 'containerd'
+          - 'dockerd'
+        
+        # System processes
+        - name: "{{.Comm}}"
+          cmdline:
+          - 'systemd'
+          - 'sshd'
+          - 'chronyd'
+        
+        # AI/ML processes
+        - name: "{{.Comm}}"
+          cmdline:
+          - 'python.*model'
+          - 'jupyter'
+          - 'tensorboard'
+    dest: /etc/monitoring/process-exporter.yml
+    owner: monitoring
+    group: monitoring
+    mode: '0644'
+  become: yes
+
+- name: Create Process Exporter systemd service
+  copy:
+    content: |
+      [Unit]
+      Description=Process Exporter for NexusTradeAI
+      Documentation=https://github.com/ncabatoff/process-exporter
+      Wants=network-online.target
+      After=network-online.target
+
+      [Service]
+      Type=simple
+      User=monitoring
+      Group=monitoring
+      ExecStart=/usr/local/bin/process-exporter \
+          --config.path=/etc/monitoring/process-exporter.yml \
+          --web.listen-address=:9256
+
+      SyslogIdentifier=process_exporter
+      Restart=always
+      RestartSec=1
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/process-exporter.service
+    mode: '0644'
+  become: yes
+  notify: restart process_exporter
+
+# Blackbox Exporter for endpoint monitoring
+- name: Download Blackbox Exporter
+  get_url:
+    url: "https://github.com/prometheus/blackbox_exporter/releases/download/v{{ blackbox_exporter_version | default('0.24.0') }}/blackbox_exporter-{{ blackbox_exporter_version | default('0.24.0') }}.linux-amd64.tar.gz"
+    dest: /tmp/blackbox_exporter.tar.gz
+    mode: '0644'
+  become: yes
+
+- name: Extract Blackbox Exporter
+  unarchive:
+    src: /tmp/blackbox_exporter.tar.gz
+    dest: /tmp
+    remote_src: yes
+  become: yes
+
+- name: Install Blackbox Exporter binary
+  copy:
+    src: "/tmp/blackbox_exporter-{{ blackbox_exporter_version | default('0.24.0') }}.linux-amd64/blackbox_exporter"
+    dest: /usr/local/bin/blackbox_exporter
+    owner: monitoring
+    group: monitoring
+    mode: '0755'
+    remote_src: yes
+  become: yes
+
+- name: Create Blackbox Exporter configuration
+  copy:
+    content: |
+      modules:
+        http_2xx:
+          prober: http
+          timeout: 5s
+          http:
+            valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+            valid_status_codes: []
+            method: GET
+            headers:
+              Host: nexustrade.ai
+              Accept-Language: en-US
+            no_follow_redirects: false
+            fail_if_ssl: false
+            fail_if_not_ssl: false
+            tls_config:
+              insecure_skip_verify: false
+            preferred_ip_protocol: "ip4"
+        
+        http_post_2xx:
+          prober: http
+          timeout: 5s
+          http:
+            method: POST
+            headers:
+              Content-Type: application/json
+            body: '{}'
+        
+        tcp_connect:
+          prober: tcp
+          timeout: 5s
+        
+        pop3s_banner:
+          prober: tcp
+          timeout: 5s
+          tcp:
+            query_response:
+            - expect: "^+OK"
+            tls: true
+            tls_config:
+              insecure_skip_verify: false
+        
+        ssh_banner:
+          prober: tcp
+          timeout: 10s
+          tcp:
+            query_response:
+            - expect: "^SSH-2.0-"
+        
+        irc_banner:
+          prober: tcp
+          timeout: 5s
+          tcp:
+            query_response:
+            - send: "NICK prober"
+            - send: "USER prober prober prober :prober"
+            - expect: "PING :([^ ]+)"
+              send: "PONG :${1}"
+            - expect: "^:[^ ]+ 001"
+        
+        icmp:
+          prober: icmp
+          timeout: 5s
+          icmp:
+            preferred_ip_protocol: "ip4"
+            source_ip_address: "127.0.0.1"
+    dest: /etc/monitoring/blackbox.yml
+    owner: monitoring
+    group: monitoring
+    mode: '0644'
+  become: yes
+
+- name: Create Blackbox Exporter systemd service
+  copy:
+    content: |
+      [Unit]
+      Description=Blackbox Exporter for NexusTradeAI
+      Documentation=https://github.com/prometheus/blackbox_exporter
+      Wants=network-online.target
+      After=network-online.target
+
+      [Service]
+      Type=simple
+      User=monitoring
+      Group=monitoring
+      ExecStart=/usr/local/bin/blackbox_exporter \
+          --config.file=/etc/monitoring/blackbox.yml \
+          --web.listen-address=:9115
+
+      SyslogIdentifier=blackbox_exporter
+      Restart=always
+      RestartSec=1
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/blackbox_exporter.service
+    mode: '0644'
+  become: yes
+  notify: restart blackbox_exporter
+
+# Install Grafana Agent for log collection
+- name: Add Grafana GPG key
+  apt_key:
+    url: https://packages.grafana.com/gpg.key
+    state: present
+  become: yes
+
+- name: Add Grafana repository
+  apt_repository:
+    repo: "deb https://packages.grafana.com/oss/deb stable main"
+    state: present
+  become: yes
+
+- name: Install Grafana Agent
+  package:
+    name: grafana-agent
+    state: present
+  become: yes
+
+- name: Create Grafana Agent configuration
+  copy:
+    content: |
+      server:
+        log_level: info
+        http_listen_port: 12345
+
+      metrics:
+        wal_directory: /var/lib/grafana-agent/wal
+        global:
+          scrape_interval: 15s
+          external_labels:
+            cluster: nexustrade-ai
+            environment: "{{ environment }}"
+        configs:
+        - name: integrations
+          remote_write:
+          - url: "{{ prometheus_remote_write_url | default('http://localhost:9090/api/v1/write') }}"
+          scrape_configs:
+          - job_name: integrations/node_exporter
+            static_configs:
+            - targets: ['localhost:9100']
+          - job_name: integrations/process_exporter
+            static_configs:
+            - targets: ['localhost:9256']
+          - job_name: integrations/blackbox_exporter
+            static_configs:
+            - targets: ['localhost:9115']
+
+      logs:
+        configs:
+        - name: default
+          clients:
+          - url: "{{ loki_url | default('http://localhost:3100/loki/api/v1/push') }}"
+          positions:
+            filename: /var/lib/grafana-agent/positions.yaml
+          scrape_configs:
+          - job_name: varlogs
+            static_configs:
+            - targets: [localhost]
+              labels:
+                job: varlogs
+                __path__: /var/log/*log
+          - job_name: trading_logs
+            static_configs:
+            - targets: [localhost]
+              labels:
+                job: trading
+                __path__: /var/log/trading/*.log
+          - job_name: kubernetes_logs
+            static_configs:
+            - targets: [localhost]
+              labels:
+                job: kubernetes
+                __path__: /var/log/pods/**/*.log
+
+      integrations:
+        node_exporter:
+          enabled: true
+        process_exporter:
+          enabled: true
+        blackbox_exporter:
+          enabled: true
+    dest: /etc/grafana-agent.yaml
+    owner: grafana-agent
+    group: grafana-agent
+    mode: '0644'
+  become: yes
+  notify: restart grafana_agent
+
+# Install custom trading metrics collector
+- name: Create trading metrics collector script
+  copy:
+    content: |
+      #!/usr/bin/env python3
+      """
+      NexusTradeAI Custom Metrics Collector
+      Collects trading-specific metrics for Prometheus
+      """
+      
+      import time
+      import json
+      import requests
+      import psutil
+      from prometheus_client import start_http_server, Gauge, Counter, Histogram
+      from prometheus_client.core import CollectorRegistry
+      
+      # Trading-specific metrics
+      TRADING_LATENCY = Histogram('trading_latency_seconds', 'Trading operation latency')
+      ORDER_COUNT = Counter('trading_orders_total', 'Total number of orders', ['status', 'exchange'])
+      POSITION_VALUE = Gauge('trading_position_value_usd', 'Current position value in USD', ['symbol'])
+      PNL_GAUGE = Gauge('trading_pnl_usd', 'Profit and Loss in USD', ['strategy'])
+      WIN_RATE = Gauge('trading_win_rate', 'Strategy win rate', ['strategy'])
+      
+      # AI/ML metrics
+      MODEL_ACCURACY = Gauge('ai_model_accuracy', 'Model accuracy score', ['model_name'])
+      PREDICTION_CONFIDENCE = Gauge('ai_prediction_confidence', 'Model prediction confidence', ['model_name'])
+      MODEL_DRIFT = Gauge('ai_model_drift', 'Model drift score', ['model_name'])
+      
+      # System metrics
+      MEMORY_USAGE = Gauge('system_memory_usage_percent', 'Memory usage percentage')
+      CPU_USAGE = Gauge('system_cpu_usage_percent', 'CPU usage percentage')
+      DISK_USAGE = Gauge('system_disk_usage_percent', 'Disk usage percentage', ['mount_point'])
+      
+      def collect_trading_metrics():
+          """Collect trading-specific metrics"""
+          try:
+              # Simulate trading metrics collection
+              # In production, this would connect to trading engine APIs
+              
+              # Example: Order metrics
+              ORDER_COUNT.labels(status='filled', exchange='NYSE').inc(10)
+              ORDER_COUNT.labels(status='pending', exchange='NASDAQ').inc(5)
+              
+              # Example: Position metrics
+              POSITION_VALUE.labels(symbol='AAPL').set(150000)
+              POSITION_VALUE.labels(symbol='GOOGL').set(75000)
+              
+              # Example: Strategy metrics
+              PNL_GAUGE.labels(strategy='DeepLearningMultiAsset').set(12500)
+              WIN_RATE.labels(strategy='DeepLearningMultiAsset').set(0.947)
+              
+              # Example: AI metrics
+              MODEL_ACCURACY.labels(model_name='trading_lstm').set(0.952)
+              PREDICTION_CONFIDENCE.labels(model_name='trading_lstm').set(0.89)
+              MODEL_DRIFT.labels(model_name='trading_lstm').set(0.02)
+              
+          except Exception as e:
+              print(f"Error collecting trading metrics: {e}")
+      
+      def collect_system_metrics():
+          """Collect system metrics"""
+          try:
+              # Memory usage
+              memory = psutil.virtual_memory()
+              MEMORY_USAGE.set(memory.percent)
+              
+              # CPU usage
+              cpu_percent = psutil.cpu_percent(interval=1)
+              CPU_USAGE.set(cpu_percent)
+              
+              # Disk usage
+              for partition in psutil.disk_partitions():
+                  try:
+                      usage = psutil.disk_usage(partition.mountpoint)
+                      DISK_USAGE.labels(mount_point=partition.mountpoint).set(usage.percent)
+                  except PermissionError:
+                      continue
+                      
+          except Exception as e:
+              print(f"Error collecting system metrics: {e}")
+      
+      def main():
+          """Main metrics collection loop"""
+          # Start Prometheus metrics server
+          start_http_server(8000)
+          print("Trading metrics collector started on port 8000")
+          
+          while True:
+              collect_trading_metrics()
+              collect_system_metrics()
+              time.sleep(15)  # Collect metrics every 15 seconds
+      
+      if __name__ == '__main__':
+          main()
+    dest: /opt/monitoring/trading_metrics_collector.py
+    owner: monitoring
+    group: monitoring
+    mode: '0755'
+  become: yes
+
+- name: Install Python dependencies for metrics collector
+  pip:
+    name:
+      - prometheus_client
+      - psutil
+      - requests
+    state: present
+  become: yes
+
+- name: Create trading metrics collector systemd service
+  copy:
+    content: |
+      [Unit]
+      Description=NexusTradeAI Trading Metrics Collector
+      After=network.target
+
+      [Service]
+      Type=simple
+      User=monitoring
+      Group=monitoring
+      WorkingDirectory=/opt/monitoring
+      ExecStart=/usr/bin/python3 /opt/monitoring/trading_metrics_collector.py
+      Restart=always
+      RestartSec=10
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/trading-metrics.service
+    mode: '0644'
+  become: yes
+  notify: restart trading_metrics
+
+# Create monitoring health check script
+- name: Create monitoring health check script
+  copy:
+    content: |
+      #!/bin/bash
+      # NexusTradeAI Monitoring Health Check
+      
+      set -e
+      
+      echo "=== NexusTradeAI Monitoring Health Check ==="
+      echo "Timestamp: $(date)"
+      echo ""
+      
+      # Check Node Exporter
+      echo "1. Checking Node Exporter..."
+      if curl -s http://localhost:9100/metrics > /dev/null; then
+          echo "✓ Node Exporter is running"
+      else
+          echo "✗ Node Exporter is not responding"
+      fi
+      
+      # Check Process Exporter
+      echo "2. Checking Process Exporter..."
+      if curl -s http://localhost:9256/metrics > /dev/null; then
+          echo "✓ Process Exporter is running"
+      else
+          echo "✗ Process Exporter is not responding"
+      fi
+      
+      # Check Blackbox Exporter
+      echo "3. Checking Blackbox Exporter..."
+      if curl -s http://localhost:9115/metrics > /dev/null; then
+          echo "✓ Blackbox Exporter is running"
+      else
+          echo "✗ Blackbox Exporter is not responding"
+      fi
+      
+      # Check Trading Metrics Collector
+      echo "4. Checking Trading Metrics Collector..."
+      if curl -s http://localhost:8000/metrics > /dev/null; then
+          echo "✓ Trading Metrics Collector is running"
+      else
+          echo "✗ Trading Metrics Collector is not responding"
+      fi
+      
+      # Check Grafana Agent
+      echo "5. Checking Grafana Agent..."
+      if systemctl is-active --quiet grafana-agent; then
+          echo "✓ Grafana Agent is running"
+      else
+          echo "✗ Grafana Agent is not running"
+      fi
+      
+      # Check disk space
+      echo "6. Checking disk space..."
+      DISK_USAGE=$(df /var/lib/monitoring | awk 'NR==2 {print $5}' | sed 's/%//')
+      if [ "$DISK_USAGE" -lt 80 ]; then
+          echo "✓ Disk usage is ${DISK_USAGE}%"
+      else
+          echo "⚠ High disk usage: ${DISK_USAGE}%"
+      fi
+      
+      echo ""
+      echo "=== Health Check Complete ==="
+    dest: /usr/local/bin/monitoring-health.sh
+    mode: '0755'
+  become: yes
+
+# Enable and start services
+- name: Enable and start monitoring services
+  systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: yes
+    daemon_reload: yes
+  become: yes
+  loop:
+    - node_exporter
+    - process-exporter
+    - blackbox_exporter
+    - grafana-agent
+    - trading-metrics
+
+- name: Cleanup temporary files
+  file:
+    path: "{{ item }}"
+    state: absent
+  become: yes
+  loop:
+    - /tmp/node_exporter.tar.gz
+    - /tmp/process_exporter.tar.gz
+    - /tmp/blackbox_exporter.tar.gz
+    - /tmp/node_exporter-*
+    - /tmp/process-exporter-*
+    - /tmp/blackbox_exporter-*
+
+- name: Verify monitoring services
+  uri:
+    url: "{{ item }}"
+    method: GET
+    status_code: 200
+  loop:
+    - http://localhost:9100/metrics
+    - http://localhost:9256/metrics
+    - http://localhost:9115/metrics
+    - http://localhost:8000/metrics
+  register: monitoring_check
+  retries: 3
+  delay: 10
+
+- name: Display monitoring status
+  debug:
+    msg: "All monitoring services are running successfully"
+  when: monitoring_check is succeeded

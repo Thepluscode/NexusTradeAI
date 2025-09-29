@@ -1,0 +1,191 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trading-engine
+  namespace: nexustrade-production
+  labels:
+    app: trading-engine
+    component: core-service
+    tier: backend
+    version: v1.0.0
+  annotations:
+    description: "High-performance trading engine with AI-ML strategies"
+    deployment.kubernetes.io/revision: "1"
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: trading-engine
+      tier: backend
+  template:
+    metadata:
+      labels:
+        app: trading-engine
+        component: core-service
+        tier: backend
+        version: v1.0.0
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: trading-engine-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 2000
+
+      # Anti-affinity to spread pods across nodes
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - trading-engine
+              topologyKey: kubernetes.io/hostname
+
+      containers:
+      - name: trading-engine
+        image: nexustrade/trading-engine:v1.0.0
+        imagePullPolicy: Always
+
+        ports:
+        - name: http
+          containerPort: 3003
+          protocol: TCP
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+        - name: health
+          containerPort: 8080
+          protocol: TCP
+
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: PORT
+          value: "3003"
+        - name: METRICS_PORT
+          value: "9090"
+        - name: HEALTH_PORT
+          value: "8080"
+
+        # Database connections
+        - name: POSTGRES_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: database-config
+              key: postgres-host
+        - name: POSTGRES_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: database-config
+              key: postgres-port
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              name: database-config
+              key: postgres-database
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: postgres-username
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: postgres-password
+
+        # Redis connection
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: database-config
+              key: redis-host
+        - name: REDIS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: database-config
+              key: redis-port
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: redis-password
+
+        # API Keys for external services
+        - name: EXCHANGE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: api-keys
+              key: exchange-api-key
+        - name: MARKET_DATA_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: api-keys
+              key: market-data-api-key
+
+        # AI/ML Configuration
+        - name: AI_MODEL_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: ai-config
+              key: model-endpoint
+        - name: AI_MODEL_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: ai-config
+              key: model-version
+
+        resources:
+          requests:
+            cpu: "2"
+            memory: "4Gi"
+            ephemeral-storage: "5Gi"
+          limits:
+            cpu: "8"
+            memory: "16Gi"
+            ephemeral-storage: "20Gi"
+
+        # Health checks
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: health
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+          successThreshold: 1
+
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: health
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+          successThreshold: 1
+
+        # Startup probe for slow initialization
+        startupProbe:
+          httpGet:
+            path: /startup
+            port: health
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 30
+          successThreshold: 1

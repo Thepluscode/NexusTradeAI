@@ -1,0 +1,74 @@
+{
+    "expo": {
+      "name": "Nexus Trade AI",
+      "slug": "nexus-trade-mobile",
+      "version": "1.0.0",
+      "orientation": "portrait",
+      "icon": "./assets/icon.png",
+      "userInterfaceStyle": "dark",
+      "splash": {
+        "image": "./assets/splash.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#0f172a"
+      },
+      "assetBundlePatterns": [
+        "**/*"
+      ],
+      "ios": {
+        "supportsTablet": true,
+        "bundleIdentifier": "com.nexustrade.mobile",
+        "buildNumber": "1.0.0",
+        "infoPlist": {
+          "NSCameraUsageDescription": "This app uses the camera to scan QR codes for quick trading",
+          "NSFaceIDUsageDescription": "This app uses Face ID for secure authentication"
+        }
+      },
+      "android": {
+        "adaptiveIcon": {
+          "foregroundImage": "./assets/adaptive-icon.png",
+          "backgroundColor": "#0f172a"
+        },
+        "package": "com.nexustrade.mobile",
+        "versionCode": 1,
+        "permissions": [
+          "CAMERA",
+          "USE_FINGERPRINT",
+          "USE_BIOMETRIC",
+          "VIBRATE"
+        ]
+      },
+      "web": {
+        "favicon": "./assets/favicon.png",
+        "bundler": "metro"
+      },
+      "plugins": [
+        "expo-notifications",
+        "expo-local-authentication",
+        "expo-secure-store",
+        "expo-camera",
+        "expo-barcode-scanner",
+        [
+          "expo-build-properties",
+          {
+            "android": {
+              "enableProguardInReleaseBuilds": true
+            },
+            "ios": {
+              "flipper": false
+            }
+          }
+        ]
+      ],
+      "extra": {
+        "eas": {
+          "projectId": "nexus-trade-mobile"
+        }
+      },
+      "runtimeVersion": {
+        "policy": "sdkVersion"
+      },
+      "updates": {
+        "url": "https://u.expo.dev/nexus-trade-mobile"
+      }
+    }
+  }

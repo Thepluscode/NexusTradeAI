@@ -1,0 +1,780 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NexusTradeAI - International Banking</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: #ffffff;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            background: linear-gradient(45deg, #00d4ff, #00ff88);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .country-selector {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 30px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .country-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .country-card {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
+        }
+
+        .country-card:hover {
+            transform: translateY(-5px);
+            border-color: #00d4ff;
+        }
+
+        .country-card.selected {
+            border-color: #00ff88;
+            background: rgba(0, 255, 136, 0.2);
+        }
+
+        .country-flag {
+            font-size: 2rem;
+            margin-bottom: 10px;
+        }
+
+        .balance-section {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .balance-card {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 25px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .balance-amount {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: #00ff88;
+            margin-bottom: 10px;
+        }
+
+        .currency-converter {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 30px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .converter-row {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+
+        .converter-input {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            font-size: 1rem;
+        }
+
+        .payment-methods {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .method-card {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 25px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .method-grid {
+            display: grid;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .method-btn {
+            background: linear-gradient(45deg, #00d4ff, #0099cc);
+            color: white;
+            border: none;
+            padding: 15px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .method-btn:hover {
+            background: linear-gradient(45deg, #0099cc, #007399);
+            transform: translateY(-2px);
+        }
+
+        .method-btn.uk {
+            background: linear-gradient(45deg, #ff6b6b, #ee5a52);
+        }
+
+        .method-btn.eu {
+            background: linear-gradient(45deg, #4ecdc4, #44a08d);
+        }
+
+        .method-btn.nigeria {
+            background: linear-gradient(45deg, #45b7d1, #96c93d);
+        }
+
+        .fee-info {
+            font-size: 0.9rem;
+            opacity: 0.8;
+        }
+
+        .exchange-rates {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 30px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .rates-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .rate-item {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .rate-pair {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .rate-value {
+            color: #00ff88;
+            font-size: 1.2rem;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+
+        .modal-content {
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            margin: 5% auto;
+            padding: 30px;
+            border-radius: 15px;
+            width: 90%;
+            max-width: 500px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .close:hover {
+            color: white;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            font-size: 1rem;
+        }
+
+        .btn {
+            background: linear-gradient(45deg, #00d4ff, #0099cc);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+            width: 100%;
+            margin-bottom: 10px;
+        }
+
+        .btn:hover {
+            background: linear-gradient(45deg, #0099cc, #007399);
+            transform: translateY(-2px);
+        }
+
+        .btn-success {
+            background: linear-gradient(45deg, #00ff88, #00cc6a);
+        }
+
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 20px;
+            border-radius: 8px;
+            color: white;
+            font-weight: bold;
+            z-index: 1001;
+            transform: translateX(400px);
+            transition: transform 0.3s ease;
+        }
+
+        .notification.show {
+            transform: translateX(0);
+        }
+
+        .notification.success {
+            background: #00ff88;
+            color: #000;
+        }
+
+        .notification.error {
+            background: #ff4444;
+        }
+
+        .supported-methods {
+            margin-top: 15px;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+        }
+
+        .method-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .method-tag {
+            background: rgba(0, 212, 255, 0.3);
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1><i class="fas fa-globe"></i> International Banking</h1>
+            <p>Deposit and withdraw money from UK, EU, Nigeria, and more</p>
+        </div>
+
+        <!-- Country Selection -->
+        <div class="country-selector">
+            <h3><i class="fas fa-flag"></i> Select Your Country</h3>
+            <div class="country-grid">
+                <div class="country-card" data-country="UK" onclick="selectCountry('UK')">
+                    <div class="country-flag">🇬🇧</div>
+                    <div><strong>United Kingdom</strong></div>
+                    <div>GBP • Faster Payments</div>
+                </div>
+                <div class="country-card" data-country="EU" onclick="selectCountry('EU')">
+                    <div class="country-flag">🇪🇺</div>
+                    <div><strong>European Union</strong></div>
+                    <div>EUR • SEPA Transfers</div>
+                </div>
+                <div class="country-card" data-country="NG" onclick="selectCountry('NG')">
+                    <div class="country-flag">🇳🇬</div>
+                    <div><strong>Nigeria</strong></div>
+                    <div>NGN • Bank Transfer</div>
+                </div>
+                <div class="country-card" data-country="US" onclick="selectCountry('US')">
+                    <div class="country-flag">🇺🇸</div>
+                    <div><strong>United States</strong></div>
+                    <div>USD • ACH Transfers</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Account Balance -->
+        <div class="balance-section">
+            <div class="balance-card">
+                <div class="balance-amount" id="accountBalance">$0.00</div>
+                <div class="balance-label">Available Balance</div>
+                <div style="margin-top: 10px;">
+                    <span id="selectedCurrency">USD</span> • <span id="selectedCountry">Select Country</span>
+                </div>
+            </div>
+            <div class="balance-card">
+                <div style="font-size: 1.5rem; color: #00d4ff; margin-bottom: 10px;" id="pendingAmount">$0.00</div>
+                <div class="balance-label">Pending Transactions</div>
+                <div style="margin-top: 10px;">
+                    <span id="pendingCount">0</span> transactions processing
+                </div>
+            </div>
+        </div>
+
+        <!-- Currency Converter -->
+        <div class="currency-converter">
+            <h3><i class="fas fa-exchange-alt"></i> Currency Converter</h3>
+            <div class="converter-row">
+                <input type="number" class="converter-input" id="convertAmount" placeholder="Amount">
+                <select class="converter-input" id="fromCurrency">
+                    <option value="USD">USD</option>
+                    <option value="GBP">GBP</option>
+                    <option value="EUR">EUR</option>
+                    <option value="NGN">NGN</option>
+                </select>
+                <i class="fas fa-arrow-right" style="color: #00d4ff;"></i>
+                <select class="converter-input" id="toCurrency">
+                    <option value="GBP">GBP</option>
+                    <option value="USD">USD</option>
+                    <option value="EUR">EUR</option>
+                    <option value="NGN">NGN</option>
+                </select>
+                <button class="btn" onclick="convertCurrency()">Convert</button>
+            </div>
+            <div id="conversionResult" style="margin-top: 15px; font-size: 1.2rem; color: #00ff88;"></div>
+        </div>
+
+        <!-- Payment Methods by Country -->
+        <div class="payment-methods">
+            <!-- UK Methods -->
+            <div class="method-card" id="ukMethods" style="display: none;">
+                <h3><i class="fas fa-university"></i> UK Banking Methods</h3>
+                <div class="method-grid">
+                    <button class="method-btn uk" onclick="showDepositModal('uk', 'faster_payments')">
+                        <span><i class="fas fa-bolt"></i> Faster Payments</span>
+                        <span class="fee-info">Free • Instant</span>
+                    </button>
+                    <button class="method-btn uk" onclick="showDepositModal('uk', 'bank_transfer')">
+                        <span><i class="fas fa-university"></i> Bank Transfer</span>
+                        <span class="fee-info">Free • 2 hours</span>
+                    </button>
+                    <button class="method-btn uk" onclick="showDepositModal('uk', 'open_banking')">
+                        <span><i class="fas fa-link"></i> Open Banking</span>
+                        <span class="fee-info">Free • Instant</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- EU Methods -->
+            <div class="method-card" id="euMethods" style="display: none;">
+                <h3><i class="fas fa-euro-sign"></i> EU Banking Methods</h3>
+                <div class="method-grid">
+                    <button class="method-btn eu" onclick="showDepositModal('eu', 'sepa')">
+                        <span><i class="fas fa-university"></i> SEPA Transfer</span>
+                        <span class="fee-info">Free • 1 day</span>
+                    </button>
+                    <button class="method-btn eu" onclick="showDepositModal('eu', 'instant_sepa')">
+                        <span><i class="fas fa-bolt"></i> Instant SEPA</span>
+                        <span class="fee-info">€1.50 • Instant</span>
+                    </button>
+                    <button class="method-btn eu" onclick="showDepositModal('eu', 'bank_transfer')">
+                        <span><i class="fas fa-exchange-alt"></i> International Transfer</span>
+                        <span class="fee-info">0.5% • 2 days</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Nigeria Methods -->
+            <div class="method-card" id="nigeriaMethods" style="display: none;">
+                <h3><i class="fas fa-mobile-alt"></i> Nigeria Banking Methods</h3>
+                <div class="method-grid">
+                    <button class="method-btn nigeria" onclick="showDepositModal('nigeria', 'bank_transfer')">
+                        <span><i class="fas fa-university"></i> Bank Transfer</span>
+                        <span class="fee-info">1.5% • 30 mins</span>
+                    </button>
+                    <button class="method-btn nigeria" onclick="showDepositModal('nigeria', 'ussd')">
+                        <span><i class="fas fa-phone"></i> USSD</span>
+                        <span class="fee-info">₦100 • 5 mins</span>
+                    </button>
+                    <button class="method-btn nigeria" onclick="showDepositModal('nigeria', 'mobile_money')">
+                        <span><i class="fas fa-mobile-alt"></i> Mobile Money</span>
+                        <span class="fee-info">2% • 10 mins</span>
+                    </button>
+                    <button class="method-btn nigeria" onclick="showDepositModal('nigeria', 'card')">
+                        <span><i class="fas fa-credit-card"></i> Debit/Credit Card</span>
+                        <span class="fee-info">2.5% • Instant</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Exchange Rates -->
+        <div class="exchange-rates">
+            <h3><i class="fas fa-chart-line"></i> Live Exchange Rates</h3>
+            <div class="rates-grid" id="exchangeRatesGrid">
+                <!-- Rates will be loaded here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Deposit Modal -->
+    <div id="depositModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('depositModal')">&times;</span>
+            <h2 id="depositModalTitle">Deposit Money</h2>
+            <form id="depositForm">
+                <div class="form-group">
+                    <label>Amount</label>
+                    <input type="number" id="depositAmount" placeholder="0.00" min="1" step="0.01" required>
+                </div>
+                <div class="form-group">
+                    <label>Description (Optional)</label>
+                    <input type="text" id="depositDescription" placeholder="What is this deposit for?">
+                </div>
+                <div id="depositFeeInfo" style="margin-bottom: 15px; padding: 10px; background: rgba(255, 255, 255, 0.1); border-radius: 8px;">
+                    <!-- Fee information will be displayed here -->
+                </div>
+                <button type="submit" class="btn btn-success">Confirm Deposit</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const INTERNATIONAL_API = 'http://localhost:3004';
+        let currentCountry = null;
+        let currentCurrency = 'USD';
+        let currentDepositMethod = null;
+        let exchangeRates = {};
+
+        // Initialize the international banking dashboard
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeInternationalBanking();
+        });
+
+        async function initializeInternationalBanking() {
+            await loadExchangeRates();
+            await loadSupportedCountries();
+            
+            // Set up form handlers
+            setupFormHandlers();
+            
+            // Refresh data every 30 seconds
+            setInterval(() => {
+                loadExchangeRates();
+            }, 30000);
+        }
+
+        async function loadExchangeRates() {
+            try {
+                const response = await fetch(`${INTERNATIONAL_API}/api/banking/exchange-rates`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    exchangeRates = data.data;
+                    displayExchangeRates();
+                }
+            } catch (error) {
+                console.error('Error loading exchange rates:', error);
+            }
+        }
+
+        function displayExchangeRates() {
+            const container = document.getElementById('exchangeRatesGrid');
+            const majorPairs = ['USD_GBP', 'USD_EUR', 'USD_NGN', 'GBP_EUR', 'EUR_NGN'];
+            
+            container.innerHTML = majorPairs.map(pair => {
+                const rate = exchangeRates[pair];
+                if (!rate) return '';
+                
+                const [from, to] = pair.split('_');
+                return `
+                    <div class="rate-item">
+                        <div class="rate-pair">${from}/${to}</div>
+                        <div class="rate-value">${rate.toFixed(4)}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function selectCountry(country) {
+            currentCountry = country;
+            
+            // Update UI
+            document.querySelectorAll('.country-card').forEach(card => {
+                card.classList.remove('selected');
+            });
+            document.querySelector(`[data-country="${country}"]`).classList.add('selected');
+            
+            // Show relevant payment methods
+            document.querySelectorAll('.method-card').forEach(card => {
+                card.style.display = 'none';
+            });
+            
+            const countryConfigs = {
+                'UK': { currency: 'GBP', methods: 'ukMethods' },
+                'EU': { currency: 'EUR', methods: 'euMethods' },
+                'NG': { currency: 'NGN', methods: 'nigeriaMethods' },
+                'US': { currency: 'USD', methods: 'usMethods' }
+            };
+            
+            const config = countryConfigs[country];
+            if (config) {
+                currentCurrency = config.currency;
+                document.getElementById('selectedCountry').textContent = country;
+                document.getElementById('selectedCurrency').textContent = config.currency;
+                
+                const methodsElement = document.getElementById(config.methods);
+                if (methodsElement) {
+                    methodsElement.style.display = 'block';
+                }
+            }
+            
+            showNotification(`Selected ${country} - ${config.currency}`, 'success');
+        }
+
+        async function convertCurrency() {
+            const amount = parseFloat(document.getElementById('convertAmount').value);
+            const fromCurrency = document.getElementById('fromCurrency').value;
+            const toCurrency = document.getElementById('toCurrency').value;
+            
+            if (!amount || amount <= 0) {
+                showNotification('Please enter a valid amount', 'error');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${INTERNATIONAL_API}/api/banking/convert`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ amount, fromCurrency, toCurrency })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    const result = data.data;
+                    document.getElementById('conversionResult').innerHTML = `
+                        ${result.originalAmount} ${result.fromCurrency} = 
+                        <strong>${result.convertedAmount} ${result.toCurrency}</strong>
+                        <br><small>Rate: ${result.rate}</small>
+                    `;
+                } else {
+                    showNotification(data.error, 'error');
+                }
+            } catch (error) {
+                console.error('Error converting currency:', error);
+                showNotification('Error converting currency', 'error');
+            }
+        }
+
+        function showDepositModal(country, method) {
+            if (!currentCountry) {
+                showNotification('Please select your country first', 'error');
+                return;
+            }
+            
+            currentDepositMethod = { country, method };
+            
+            const methodNames = {
+                'faster_payments': 'Faster Payments',
+                'bank_transfer': 'Bank Transfer',
+                'open_banking': 'Open Banking',
+                'sepa': 'SEPA Transfer',
+                'instant_sepa': 'Instant SEPA',
+                'ussd': 'USSD',
+                'mobile_money': 'Mobile Money',
+                'card': 'Card Payment'
+            };
+            
+            document.getElementById('depositModalTitle').textContent = 
+                `${methodNames[method]} Deposit (${country})`;
+            document.getElementById('depositModal').style.display = 'block';
+            updateDepositFeeInfo();
+        }
+
+        function updateDepositFeeInfo() {
+            const amount = parseFloat(document.getElementById('depositAmount').value) || 0;
+            const feeInfo = document.getElementById('depositFeeInfo');
+            
+            if (!currentDepositMethod) return;
+            
+            const { country, method } = currentDepositMethod;
+            let fee = 0;
+            let message = '';
+            
+            // Calculate fees based on country and method
+            const feeStructures = {
+                'UK': {
+                    'faster_payments': { fee: 0, message: '✅ No fees • Funds available instantly' },
+                    'bank_transfer': { fee: 0, message: '✅ No fees • Funds available in 2 hours' },
+                    'open_banking': { fee: 0, message: '✅ No fees • Funds available instantly' }
+                },
+                'EU': {
+                    'sepa': { fee: 0, message: '✅ No fees • Funds available in 1 day' },
+                    'instant_sepa': { fee: 1.50, message: '💰 Fee: €1.50 • Funds available instantly' },
+                    'bank_transfer': { fee: amount * 0.005, message: `💰 Fee: €${(amount * 0.005).toFixed(2)} (0.5%) • Funds available in 2 days` }
+                },
+                'NG': {
+                    'bank_transfer': { fee: amount * 0.015, message: `💰 Fee: ₦${(amount * 0.015).toFixed(2)} (1.5%) • Funds available in 30 minutes` },
+                    'ussd': { fee: 100, message: '💰 Fee: ₦100 • Funds available in 5 minutes' },
+                    'mobile_money': { fee: amount * 0.02, message: `💰 Fee: ₦${(amount * 0.02).toFixed(2)} (2%) • Funds available in 10 minutes` },
+                    'card': { fee: amount * 0.025, message: `💰 Fee: ₦${(amount * 0.025).toFixed(2)} (2.5%) • Funds available instantly` }
+                }
+            };
+            
+            const feeStructure = feeStructures[country]?.[method];
+            if (feeStructure) {
+                feeInfo.innerHTML = feeStructure.message;
+            }
+        }
+
+        function setupFormHandlers() {
+            document.getElementById('depositForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                await processInternationalDeposit();
+            });
+            
+            document.getElementById('depositAmount').addEventListener('input', updateDepositFeeInfo);
+        }
+
+        async function processInternationalDeposit() {
+            if (!currentDepositMethod) {
+                showNotification('Invalid deposit method', 'error');
+                return;
+            }
+            
+            const { country, method } = currentDepositMethod;
+            const amount = parseFloat(document.getElementById('depositAmount').value);
+            const description = document.getElementById('depositDescription').value;
+            
+            try {
+                const endpoint = `${INTERNATIONAL_API}/api/banking/deposits/${country.toLowerCase()}`;
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        userId: 'demo-user-international',
+                        accountId: 'demo-account-123',
+                        amount,
+                        method,
+                        description
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showNotification(`Deposit initiated successfully! Transaction ID: ${data.data.transactionId}`, 'success');
+                    closeModal('depositModal');
+                    document.getElementById('depositForm').reset();
+                } else {
+                    showNotification(data.error || 'Failed to process deposit', 'error');
+                }
+            } catch (error) {
+                console.error('Error processing deposit:', error);
+                showNotification('Error processing deposit', 'error');
+            }
+        }
+
+        function closeModal(modalId) {
+            document.getElementById(modalId).style.display = 'none';
+        }
+
+        function showNotification(message, type = 'info') {
+            const notification = document.createElement('div');
+            notification.className = `notification ${type}`;
+            notification.textContent = message;
+            
+            document.body.appendChild(notification);
+            
+            setTimeout(() => notification.classList.add('show'), 100);
+            
+            setTimeout(() => {
+                notification.classList.remove('show');
+                setTimeout(() => document.body.removeChild(notification), 300);
+            }, 5000);
+        }
+
+        // Close modals when clicking outside
+        window.onclick = function(event) {
+            const modals = document.querySelectorAll('.modal');
+            modals.forEach(modal => {
+                if (event.target === modal) {
+                    modal.style.display = 'none';
+                }
+            });
+        }
+    </script>
+</body>
+</html>

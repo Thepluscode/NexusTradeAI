@@ -1,0 +1,30 @@
+{
+    "name": "analytics-service",
+    "version": "1.0.0",
+    "description": "Performance analytics and reporting service",
+    "main": "src/app.js",
+    "scripts": {
+      "start": "node src/app.js",
+      "dev": "nodemon src/app.js",
+      "test": "jest",
+      "report-generator": "node src/workers/reportGenerator.js"
+    },
+    "dependencies": {
+      "express": "^4.18.2",
+      "mongoose": "^7.0.3",
+      "redis": "^4.6.5",
+      "kafkajs": "^2.2.4",
+      "uuid": "^9.0.0",
+      "helmet": "^6.1.5",
+      "cors": "^2.8.5",
+      "dotenv": "^16.0.3",
+      "winston": "^3.8.2",
+      "prom-client": "^14.2.0",
+      "bull": "^4.10.4",
+      "lodash": "^4.17.21",
+      "moment": "^2.29.4",
+      "mathjs": "^11.7.0",
+      "simple-statistics": "^7.8.2",
+      "chartjs-node-canvas": "^4.1.6"
+    }
+  }

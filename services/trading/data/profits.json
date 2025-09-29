@@ -1,0 +1,31 @@
+{
+  "totalProfit": 6968930.615317106,
+  "dailyProfits": {
+    "2025-08-07": 2850.25,
+    "2025-08-08": 771722.5908531327,
+    "2025-08-06": 2450.5,
+    "2025-08-05": 4125.8,
+    "2025-08-04": 1875.3,
+    "2025-08-16": 5713408.024463929
+  },
+  "monthlyProfits": {
+    "2025-08": 6968930.615317106,
+    "2025-07": 425380.2,
+    "2025-06": 398750.45
+  },
+  "arbitrageProfits": 6030000.850000101,
+  "tradingProfits": 938929.7653169839,
+  "strategyBreakdown": {
+    "trendFollowing": 185420.3,
+    "meanReversion": 98750.25,
+    "volatilityBreakout": 78050.95,
+    "aiSignals": 125430.25
+  },
+  "riskMetrics": {
+    "sharpeRatio": 2.34,
+    "maxDrawdown": 0.085,
+    "winRate": 0.678,
+    "profitFactor": 2.8
+  },
+  "lastUpdate": "2025-08-16T17:31:44.105Z"
+}

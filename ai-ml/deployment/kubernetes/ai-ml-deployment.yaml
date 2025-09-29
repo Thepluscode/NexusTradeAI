@@ -1,0 +1,143 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus-ai-ml
+  namespace: ai-ml
+  labels:
+    app: nexus-ai-ml
+    component: inference
+    tier: backend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nexus-ai-ml
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: nexus-ai-ml
+        component: inference
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+    spec:
+      containers:
+      - name: inference-service
+        image: nexus-trade-ai/ai-ml-inference:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8000
+          protocol: TCP
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: LOG_LEVEL
+          value: "INFO"
+        - name: REDIS_HOST
+          value: "redis-master.redis.svc.cluster.local"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: MLFLOW_TRACKING_URI
+          value: "http://mlflow.mlflow.svc.cluster.local:5000"
+        - name: MODEL_S3_BUCKET
+          valueFrom:
+            secretKeyRef:
+              name: ai-ml-secrets
+              key: model-s3-bucket
+        resources:
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+            nvidia.com/gpu: 1
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+            nvidia.com/gpu: 1
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+        volumeMounts:
+        - name: models-volume
+          mountPath: /app/models
+          readOnly: true
+        - name: config-volume
+          mountPath: /app/config
+          readOnly: true
+      volumes:
+      - name: models-volume
+        persistentVolumeClaim:
+          claimName: ai-ml-models-pvc
+      - name: config-volume
+        configMap:
+          name: ai-ml-config
+          optional: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus-ai-ml
+  namespace: ai-ml
+  labels:
+    app: nexus-ai-ml
+    component: inference
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8000
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  selector:
+    app: nexus-ai-ml
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: nexus-ai-ml
+  namespace: ai-ml
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nexus-ai-ml
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  - type: External
+    external:
+      metric:
+        name: requests_per_second
+        selector:
+          matchLabels:
+            app: nexus-ai-ml
+      target:
+        type: AverageValue
+        averageValue: 1000

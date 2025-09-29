@@ -1,0 +1,247 @@
+{
+    "crypto": {
+      "major": {
+        "BTCUSDT": {
+          "baseAsset": "BTC",
+          "quoteAsset": "USDT",
+          "exchanges": ["binance", "coinbase", "kraken"],
+          "minPrice": 0.01,
+          "minQuantity": 0.00001,
+          "category": "cryptocurrency"
+        },
+        "ETHUSDT": {
+          "baseAsset": "ETH",
+          "quoteAsset": "USDT",
+          "exchanges": ["binance", "coinbase", "kraken"],
+          "minPrice": 0.01,
+          "minQuantity": 0.0001,
+          "category": "cryptocurrency"
+        },
+        "ADAUSDT": {
+          "baseAsset": "ADA",
+          "quoteAsset": "USDT",
+          "exchanges": ["binance", "coinbase", "kraken"],
+          "minPrice": 0.0001,
+          "minQuantity": 0.1,
+          "category": "cryptocurrency"
+        }
+      },
+      "altcoins": {
+        "DOTUSDT": {
+          "baseAsset": "DOT",
+          "quoteAsset": "USDT",
+          "exchanges": ["binance", "coinbase", "kraken"],
+          "minPrice": 0.001,
+          "minQuantity": 0.01,
+          "category": "cryptocurrency"
+        },
+        "LINKUSDT": {
+          "baseAsset": "LINK",
+          "quoteAsset": "USDT",
+          "exchanges": ["binance", "coinbase"],
+          "minPrice": 0.001,
+          "minQuantity": 0.01,
+          "category": "cryptocurrency"
+        }
+      }
+    },
+    "stocks": {
+      "tech": {
+        "AAPL": {
+          "name": "Apple Inc.",
+          "exchange": "NASDAQ",
+          "sector": "Technology",
+          "currency": "USD",
+          "minPrice": 0.01,
+          "lotSize": 1,
+          "category": "large_cap"
+        },
+        "GOOGL": {
+          "name": "Alphabet Inc.",
+          "exchange": "NASDAQ",
+          "sector": "Technology",
+          "currency": "USD",
+          "minPrice": 0.01,
+          "lotSize": 1,
+          "category": "large_cap"
+        },
+        "MSFT": {
+          "name": "Microsoft Corporation",
+          "exchange": "NASDAQ",
+          "sector": "Technology",
+          "currency": "USD",
+          "minPrice": 0.01,
+          "lotSize": 1,
+          "category": "large_cap"
+        },
+        "TSLA": {
+          "name": "Tesla, Inc.",
+          "exchange": "NASDAQ",
+          "sector": "Consumer Discretionary",
+          "currency": "USD",
+          "minPrice": 0.01,
+          "lotSize": 1,
+          "category": "large_cap"
+        }
+      },
+      "finance": {
+        "JPM": {
+          "name": "JPMorgan Chase & Co.",
+          "exchange": "NYSE",
+          "sector": "Financials",
+          "currency": "USD",
+          "minPrice": 0.01,
+          "lotSize": 1,
+          "category": "large_cap"
+        },
+        "BAC": {
+          "name": "Bank of America Corporation",
+          "exchange": "NYSE",
+          "sector": "Financials",
+          "currency": "USD",
+          "minPrice": 0.01,
+          "lotSize": 1,
+          "category": "large_cap"
+        }
+      }
+    },
+    "forex": {
+      "major_pairs": {
+        "EUR_USD": {
+          "baseCurrency": "EUR",
+          "quoteCurrency": "USD",
+          "pipSize": 0.0001,
+          "minSize": 1000,
+          "category": "major"
+        },
+        "GBP_USD": {
+          "baseCurrency": "GBP",
+          "quoteCurrency": "USD",
+          "pipSize": 0.0001,
+          "minSize": 1000,
+          "category": "major"
+        },
+        "USD_JPY": {
+          "baseCurrency": "USD",
+          "quoteCurrency": "JPY",
+          "pipSize": 0.01,
+          "minSize": 1000,
+          "category": "major"
+        }
+      },
+      "minor_pairs": {
+        "EUR_GBP": {
+          "baseCurrency": "EUR",
+          "quoteCurrency": "GBP",
+          "pipSize": 0.0001,
+          "minSize": 1000,
+          "category": "minor"
+        },
+        "EUR_JPY": {
+          "baseCurrency": "EUR",
+          "quoteCurrency": "JPY",
+          "pipSize": 0.01,
+          "minSize": 1000,
+          "category": "minor"
+        }
+      }
+    },
+    "commodities": {
+      "energy": {
+        "WTI_CRUDE": {
+          "name": "West Texas Intermediate Crude Oil",
+          "symbol": "CL",
+          "exchange": "NYMEX",
+          "unit": "Barrel",
+          "currency": "USD",
+          "contractSize": 1000,
+          "minPriceIncrement": 0.01,
+          "category": "energy"
+        },
+        "BRENT_CRUDE": {
+          "name": "Brent Crude Oil",
+          "symbol": "BZ",
+          "exchange": "ICE",
+          "unit": "Barrel",
+          "currency": "USD",
+          "contractSize": 1000,
+          "minPriceIncrement": 0.01,
+          "category": "energy"
+        },
+        "NATURAL_GAS": {
+          "name": "Natural Gas",
+          "symbol": "NG",
+          "exchange": "NYMEX",
+          "unit": "MMBtu",
+          "currency": "USD",
+          "contractSize": 10000,
+          "minPriceIncrement": 0.001,
+          "category": "energy"
+        }
+      },
+      "metals": {
+        "GOLD": {
+          "name": "Gold",
+          "symbol": "GC",
+          "exchange": "COMEX",
+          "unit": "Troy Ounce",
+          "currency": "USD",
+          "contractSize": 100,
+          "minPriceIncrement": 0.10,
+          "category": "precious_metals"
+        },
+        "SILVER": {
+          "name": "Silver",
+          "symbol": "SI",
+          "exchange": "COMEX",
+          "unit": "Troy Ounce",
+          "currency": "USD",
+          "contractSize": 5000,
+          "minPriceIncrement": 0.005,
+          "category": "precious_metals"
+        },
+        "COPPER": {
+          "name": "Copper",
+          "symbol": "HG",
+          "exchange": "COMEX",
+          "unit": "Pound",
+          "currency": "USD",
+          "contractSize": 25000,
+          "minPriceIncrement": 0.0005,
+          "category": "industrial_metals"
+        }
+      },
+      "agriculture": {
+        "CORN": {
+          "name": "Corn",
+          "symbol": "C",
+          "exchange": "CBOT",
+          "unit": "Bushel",
+          "currency": "USD",
+          "contractSize": 5000,
+          "minPriceIncrement": 0.0025,
+          "category": "grains"
+        },
+        "WHEAT": {
+          "name": "Wheat",
+          "symbol": "W",
+          "exchange": "CBOT",
+          "unit": "Bushel",
+          "currency": "USD",
+          "contractSize": 5000,
+          "minPriceIncrement": 0.0025,
+          "category": "grains"
+        },
+        "SOYBEANS": {
+          "name": "Soybeans",
+          "symbol": "S",
+          "exchange": "CBOT",
+          "unit": "Bushel",
+          "currency": "USD",
+          "contractSize": 5000,
+          "minPriceIncrement": 0.0025,
+          "category": "grains"
+        }
+      }
+    }
+  }
