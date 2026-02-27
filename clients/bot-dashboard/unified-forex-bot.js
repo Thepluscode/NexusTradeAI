@@ -679,8 +679,8 @@ async function executeTrade(signal) {
             metrics.tradingMetrics.tradesTotal?.inc({ strategy: 'forex', tier: signal.tier });
         }
 
-        // Send Entry Alert via Telegram
-        await telegramAlerts.sendForexEntry(
+        // Send Entry Alert via Telegram — fire-and-forget
+        telegramAlerts.sendForexEntry(
             signal.pair,
             signal.direction,
             signal.entry,
@@ -688,7 +688,7 @@ async function executeTrade(signal) {
             signal.takeProfit,
             units,
             signal.tier
-        );
+        ).catch(e => console.warn(`⚠️  Telegram entry alert failed: ${e.message}`));
 
         return true;
     }
@@ -713,19 +713,13 @@ async function closePositionWithReason(pair, reason) {
         console.log(`⏰ Time: ${new Date().toLocaleString()}`);
         console.log('🚨'.repeat(30));
 
-        // Send SMS Alert
-        await smsAlerts.sendForexStopLoss(
-            pair,
-            pos?.entry?.toFixed(5) || 'N/A',
-            reason
-        );
+        // Send SMS Alert — fire-and-forget so network failure never blocks position close
+        smsAlerts.sendForexStopLoss(pair, pos?.entry?.toFixed(5) || 'N/A', reason)
+            .catch(e => console.warn(`⚠️  SMS stop-loss alert failed: ${e.message}`));
 
-        // Send Telegram Alert
-        await telegramAlerts.sendForexStopLoss(
-            pair,
-            pos?.entry?.toFixed(5) || 'N/A',
-            reason
-        );
+        // Send Telegram Alert — fire-and-forget
+        telegramAlerts.sendForexStopLoss(pair, pos?.entry?.toFixed(5) || 'N/A', reason)
+            .catch(e => console.warn(`⚠️  Telegram stop-loss alert failed: ${e.message}`));
 
     } else if (reason.toLowerCase().includes('target') || reason.toLowerCase().includes('profit')) {
         // TAKE PROFIT ALERT
@@ -739,19 +733,13 @@ async function closePositionWithReason(pair, reason) {
         console.log(`⏰ Time: ${new Date().toLocaleString()}`);
         console.log('🎯'.repeat(30));
 
-        // Send SMS Alert
-        await smsAlerts.sendForexTakeProfit(
-            pair,
-            pos?.entry?.toFixed(5) || 'N/A',
-            reason
-        );
+        // Send SMS Alert — fire-and-forget
+        smsAlerts.sendForexTakeProfit(pair, pos?.entry?.toFixed(5) || 'N/A', reason)
+            .catch(e => console.warn(`⚠️  SMS take-profit alert failed: ${e.message}`));
 
-        // Send Telegram Alert
-        await telegramAlerts.sendForexTakeProfit(
-            pair,
-            pos?.entry?.toFixed(5) || 'N/A',
-            reason
-        );
+        // Send Telegram Alert — fire-and-forget
+        telegramAlerts.sendForexTakeProfit(pair, pos?.entry?.toFixed(5) || 'N/A', reason)
+            .catch(e => console.warn(`⚠️  Telegram take-profit alert failed: ${e.message}`));
 
     } else {
         // OTHER EXITS
@@ -761,15 +749,15 @@ async function closePositionWithReason(pair, reason) {
     const result = await closePosition(pair);
 
     if (result) {
-        // Update sim performance stats
-        const pos = positions.get(pair);
+        // Update sim performance stats — use pos captured BEFORE closePosition() since
+        // closePosition() deletes the entry from the Map
         simTotalTrades++;
         if (pos) {
             const isWin = reason.toLowerCase().includes('target') || reason.toLowerCase().includes('profit');
             const isLoss = reason.toLowerCase().includes('stop');
             if (isWin) simWinners++;
             else if (isLoss) simLosers++;
-            // Update daily P&L so the circuit breaker at line 877 has real data
+            // Update daily P&L so the circuit breaker has real data
             const tradePnL = pos.unrealizedPL ?? 0;
             simDailyPnL += tradePnL;
         }
@@ -889,16 +877,20 @@ async function tradingLoop() {
         return;
     }
 
-    // Scan for new signals
-    const signals = await scanForSignals();
-    console.log(`🔍 Signals found: ${signals.length}`);
+    try {
+        // Scan for new signals
+        const signals = await scanForSignals();
+        console.log(`🔍 Signals found: ${signals.length}`);
 
-    // Execute top signals
-    const maxNewPositions = 5 - positions.size;
-    const signalsToExecute = signals.slice(0, Math.min(maxNewPositions, 2));
+        // Execute top signals
+        const maxNewPositions = 5 - positions.size;
+        const signalsToExecute = signals.slice(0, Math.min(maxNewPositions, 2));
 
-    for (const signal of signalsToExecute) {
-        await executeTrade(signal);
+        for (const signal of signalsToExecute) {
+            await executeTrade(signal);
+        }
+    } catch (err) {
+        console.error('❌ Forex trading loop error:', err.message);
     }
 }
 
@@ -1163,12 +1155,12 @@ app.listen(PORT, async () => {
     console.log(`⚠️  Set OANDA_ACCOUNT_ID and OANDA_ACCESS_TOKEN in .env`);
 
     // Initial scan
-    setTimeout(tradingLoop, 5000);
+    setTimeout(() => tradingLoop().catch(e => console.error('❌ Forex loop crashed:', e)), 5000);
 
     // Main loop: every 5 minutes
     setInterval(() => {
         resetDailyCounters();
-        tradingLoop();
+        tradingLoop().catch(e => console.error('❌ Forex loop crashed:', e));
     }, 5 * 60 * 1000);
 
     console.log(`\n✅ Forex bot started - scanning every 5 minutes\n`);

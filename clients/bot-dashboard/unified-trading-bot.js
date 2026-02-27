@@ -1660,14 +1660,18 @@ async function tradingLoop() {
         return;
     }
 
-    if (isGoodTradingTime()) {
-        await scanMomentumBreakouts();
-    } else {
-        const now = getESTDate();
-        const isWeekend = now.getDay() === 0 || now.getDay() === 6;
-        if (!isWeekend) {
-            console.log(`⏸  Market not in optimal trading window (${now.toLocaleTimeString('en-US', { timeZone: 'America/New_York' })} EST) - skipping scan`);
+    try {
+        if (isGoodTradingTime()) {
+            await scanMomentumBreakouts();
+        } else {
+            const now = getESTDate();
+            const isWeekend = now.getDay() === 0 || now.getDay() === 6;
+            if (!isWeekend) {
+                console.log(`⏸  Market not in optimal trading window (${now.toLocaleTimeString('en-US', { timeZone: 'America/New_York' })} EST) - skipping scan`);
+            }
         }
+    } catch (err) {
+        console.error('❌ Stock trading loop error:', err.message);
     }
 
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -1686,7 +1690,7 @@ app.listen(PORT, async () => {
     console.log('╚════════════════════════════════════════════════════════════╝\n');
 
     await tradingLoop();
-    setInterval(tradingLoop, 60000);
+    setInterval(() => tradingLoop().catch(e => console.error('❌ Stock loop crashed:', e)), 60000);
 });
 
 // ===== GRACEFUL SHUTDOWN =====
