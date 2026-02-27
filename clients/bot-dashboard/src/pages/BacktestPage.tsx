@@ -233,38 +233,38 @@ export default function BacktestPage() {
                                             <TableCell align="right">{s.totalTrades}</TableCell>
                                             <TableCell align="right">
                                                 <Chip
-                                                    label={`${(s.overallWinRate * 100).toFixed(0)}%`}
+                                                    label={`${((s.overallWinRate ?? 0) * 100).toFixed(0)}%`}
                                                     size="small"
-                                                    color={s.overallWinRate >= 0.5 ? 'success' : 'warning'}
+                                                    color={(s.overallWinRate ?? 0) >= 0.5 ? 'success' : 'warning'}
                                                     variant="outlined"
                                                 />
                                             </TableCell>
                                             <TableCell align="right">
                                                 <Typography
                                                     variant="body2"
-                                                    color={s.avgSharpe >= 0.5 ? 'success.main' : 'error.main'}
+                                                    color={(s.avgSharpe ?? 0) >= 0.5 ? 'success.main' : 'error.main'}
                                                 >
-                                                    {s.avgSharpe.toFixed(2)}
+                                                    {(s.avgSharpe ?? 0).toFixed(2)}
                                                 </Typography>
                                             </TableCell>
                                             <TableCell align="right">
                                                 <Typography
                                                     variant="body2"
-                                                    color={s.avgDrawdown <= 0.1 ? 'success.main' : 'warning.main'}
+                                                    color={(s.avgDrawdown ?? 0) <= 0.1 ? 'success.main' : 'warning.main'}
                                                 >
-                                                    {(s.avgDrawdown * 100).toFixed(2)}%
+                                                    {((s.avgDrawdown ?? 0) * 100).toFixed(2)}%
                                                 </Typography>
                                             </TableCell>
                                             <TableCell align="right">
                                                 <Typography
                                                     variant="body2"
-                                                    color={s.profitFactor >= 1.2 ? 'success.main' : 'error.main'}
+                                                    color={(s.profitFactor ?? 0) >= 1.2 ? 'success.main' : 'error.main'}
                                                 >
-                                                    {s.profitFactor.toFixed(2)}
+                                                    {(s.profitFactor ?? 0).toFixed(2)}
                                                 </Typography>
                                             </TableCell>
                                             <TableCell align="right">
-                                                {(s.avgReturn * 100).toFixed(3)}%
+                                                {((s.avgReturn ?? 0) * 100).toFixed(3)}%
                                             </TableCell>
                                             <TableCell align="right">
                                                 {s.beatBuyHoldCount}/{s.totalTrades > 0 ? Math.ceil(s.totalTrades / (report.config?.walkForwardWindows || 5)) : 0}
