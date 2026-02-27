@@ -51,6 +51,9 @@ interface BotStatus {
         losers: number;
         totalPnL: number;
         maxDrawdown: number;
+        winRate?: number;
+        profitFactor?: number;
+        totalTradesToday?: number;
     };
     config: {
         symbols: string[];
@@ -141,8 +144,10 @@ export default function StockBotPage() {
         );
     }
 
-    const winRate = status?.stats?.totalTrades
-        ? ((status.stats.winners / status.stats.totalTrades) * 100).toFixed(1)
+    // Bot returns stats.winRate already as a 0-100 number — use it directly
+    // rather than recomputing from winners/totalTrades (which may diverge)
+    const winRate = status?.stats?.winRate != null
+        ? Number(status.stats.winRate).toFixed(1)
         : '0';
 
     return (
@@ -328,11 +333,15 @@ export default function StockBotPage() {
                                                 }}
                                             >
                                                 ${(pos.unrealizedPnL ?? pos.pnl ?? pos.unrealizedPL ?? 0).toFixed(2)}
-                                                {pos.unrealizedPLPct != null
-                                                    ? ` (${(pos.unrealizedPLPct * 100).toFixed(2)}%)`
-                                                    : pos.unrealized_plpc != null
-                                                    ? ` (${(parseFloat(pos.unrealized_plpc) * 100).toFixed(2)}%)`
-                                                    : ''}
+                                                {(() => {
+                                                    // Bot doesn't return a % field — derive it from dollar P&L and cost basis
+                                                    const pnlDollar = pos.unrealizedPnL ?? pos.pnl ?? pos.unrealizedPL ?? null;
+                                                    const cost = (pos.entryPrice ?? 0) * (pos.quantity ?? pos.qty ?? 0);
+                                                    if (pnlDollar != null && cost > 0) {
+                                                        return ` (${((pnlDollar / cost) * 100).toFixed(2)}%)`;
+                                                    }
+                                                    return '';
+                                                })()}
                                             </Typography>
                                         </Box>
                                     </CardContent>
@@ -358,7 +367,7 @@ export default function StockBotPage() {
                             Stop Loss
                         </Typography>
                         <Typography variant="body1" sx={{ fontWeight: 600 }}>
-                            {status?.config?.stopLoss || 4}%
+                            {status?.config?.stopLoss ?? 4}%
                         </Typography>
                     </Grid>
                     <Grid item xs={6} sm={4} md={2}>
@@ -366,7 +375,7 @@ export default function StockBotPage() {
                             Profit Target
                         </Typography>
                         <Typography variant="body1" sx={{ fontWeight: 600, color: '#10b981' }}>
-                            {status?.config?.profitTarget || 8}%
+                            {status?.config?.profitTarget ?? 8}%
                         </Typography>
                     </Grid>
                     <Grid item xs={6} sm={4} md={2}>
@@ -374,7 +383,7 @@ export default function StockBotPage() {
                             Daily Loss Limit
                         </Typography>
                         <Typography variant="body1" sx={{ fontWeight: 600, color: '#ef4444' }}>
-                            ${Math.abs(status?.config?.dailyLossLimit || 500)}
+                            ${Math.abs(status?.config?.dailyLossLimit ?? 500)}
                         </Typography>
                     </Grid>
                     <Grid item xs={12} md={6}>
