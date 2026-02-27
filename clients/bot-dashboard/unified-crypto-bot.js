@@ -586,15 +586,15 @@ class CryptoTradingEngine {
             // Persist daily counters immediately so restart can't bypass limits
             this.saveState();
 
-            // Send Telegram alert
-            await telegramAlerts.sendCryptoEntry(
+            // Send Telegram alert — fire-and-forget so a failure never blocks trade return
+            telegramAlerts.sendCryptoEntry(
                 signal.symbol,
                 signal.price,
                 signal.stopLoss,
                 signal.takeProfit,
                 quantity,
                 signal.tier
-            );
+            ).catch(e => console.warn(`⚠️  Telegram entry alert failed: ${e.message}`));
 
             return position;
         } catch (error) {
@@ -620,14 +620,9 @@ class CryptoTradingEngine {
                 console.log(`🚨 ${symbol}: STOP LOSS HIT at $${currentPrice.toFixed(2)} (${pnlPercent.toFixed(2)}%)`);
                 await this.closePosition(symbol, currentPrice, 'Stop Loss');
 
-                // Send alert
-                await telegramAlerts.sendCryptoStopLoss(
-                    symbol,
-                    position.entry,
-                    currentPrice,
-                    pnlPercent,
-                    position.stopLoss
-                );
+                // Send alert — fire-and-forget so a network failure never blocks the loop
+                telegramAlerts.sendCryptoStopLoss(symbol, position.entry, currentPrice, pnlPercent, position.stopLoss)
+                    .catch(e => console.warn(`⚠️  Telegram stop-loss alert failed: ${e.message}`));
                 continue;
             }
 
@@ -636,14 +631,9 @@ class CryptoTradingEngine {
                 console.log(`🎯 ${symbol}: PROFIT TARGET HIT at $${currentPrice.toFixed(2)} (+${pnlPercent.toFixed(2)}%)`);
                 await this.closePosition(symbol, currentPrice, 'Take Profit');
 
-                // Send alert
-                await telegramAlerts.sendCryptoTakeProfit(
-                    symbol,
-                    position.entry,
-                    currentPrice,
-                    pnlPercent,
-                    position.takeProfit
-                );
+                // Send alert — fire-and-forget
+                telegramAlerts.sendCryptoTakeProfit(symbol, position.entry, currentPrice, pnlPercent, position.takeProfit)
+                    .catch(e => console.warn(`⚠️  Telegram take-profit alert failed: ${e.message}`));
                 continue;
             }
 
@@ -820,7 +810,7 @@ class CryptoTradingEngine {
             this.isRunning = true;
             this.demoMode = true;
             this.saveState();
-            this.tradingLoop();
+            this.tradingLoop().catch(e => console.error('❌ Crypto trading loop crashed:', e));
             return;
         }
 
@@ -831,7 +821,7 @@ class CryptoTradingEngine {
             this.isRunning = true;
             this.demoMode = true;
             this.saveState();
-            this.tradingLoop();
+            this.tradingLoop().catch(e => console.error('❌ Crypto trading loop crashed:', e));
             return;
         }
 
@@ -841,7 +831,7 @@ class CryptoTradingEngine {
         this.isRunning = true;
         this.demoMode = false;
         this.saveState();
-        this.tradingLoop();
+        this.tradingLoop().catch(e => console.error('❌ Crypto trading loop crashed:', e));
     }
 
     saveState() {
@@ -862,7 +852,9 @@ class CryptoTradingEngine {
                 tradesToday: this.tradesToday,
                 savedDate: new Date().toISOString(),
             }));
-        } catch {}
+        } catch (e) {
+            console.error('❌ Failed to save crypto bot state:', e.message);
+        }
     }
 
     loadState() {
@@ -878,8 +870,8 @@ class CryptoTradingEngine {
                 if (saved.totalLoss != null) this.totalLoss = saved.totalLoss;
                 // Restore daily counters only if saved on the same UTC day
                 if (saved.savedDate) {
-                    const savedDay = new Date(saved.savedDate).getUTCDate();
-                    const today = new Date().getUTCDate();
+                    const savedDay = new Date(saved.savedDate).toISOString().slice(0, 10);
+                    const today = new Date().toISOString().slice(0, 10);
                     if (savedDay === today) {
                         if (saved.dailyTradeCount != null) this.dailyTradeCount = saved.dailyTradeCount;
                         if (saved.dailyLoss != null) this.dailyLoss = saved.dailyLoss;
@@ -888,7 +880,9 @@ class CryptoTradingEngine {
                 }
                 return saved.running !== false;
             }
-        } catch {}
+        } catch (e) {
+            console.error('❌ Failed to load crypto bot state:', e.message);
+        }
         return true; // Default: start running
     }
 
