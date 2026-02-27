@@ -106,12 +106,16 @@ function generateResponse(message: string, ctx: any): string {
         if (!forex) {
             return `🔌 Forex bot is offline.\n\nStart it: node unified-forex-bot.js\n\nTrades 12 major/cross pairs on OANDA, 24/5. Optimised for London/NY overlap (best session).`;
         }
-        const fp = forex?.performance || {};
+        // Forex bot sends stats: {}, not performance: {}
+        const fp = forex?.stats || forex?.performance || {};
+        const fxWinRate = fp.totalTrades > 0 && fp.winners != null
+            ? ((fp.winners / fp.totalTrades) * 100).toFixed(1)
+            : null;
         return `💱 Forex Bot\n\n` +
             `• Running: ${forex?.isRunning ? 'Yes' : 'No'}\n` +
             `• Session: ${forex?.session || 'Unknown'}\n` +
             `• Trades: ${fp.totalTrades ?? 0}\n` +
-            `• Win rate: ${fp.winRate != null ? fp.winRate.toFixed(1) + '%' : '—'}\n` +
+            `• Win rate: ${fxWinRate != null ? fxWinRate + '%' : '—'}\n` +
             `• Open positions: ${(forex?.positions?.length ?? 0)}`;
     }
 
@@ -123,7 +127,7 @@ function generateResponse(message: string, ctx: any): string {
             `• Running: ${crypto?.isRunning ? 'Yes' : 'No'}\n` +
             `• Mode: ${crypto?.mode || 'DEMO'}\n` +
             `• Open positions: ${(crypto?.positions?.length ?? 0)}\n` +
-            `• Total trades: ${crypto?.performance?.totalTrades ?? 0}`;
+            `• Total trades: ${crypto?.stats?.totalTrades ?? crypto?.totalTrades ?? 0}`;
     }
 
     if (q.includes('today') || q.includes('daily') || q.includes('this session')) {

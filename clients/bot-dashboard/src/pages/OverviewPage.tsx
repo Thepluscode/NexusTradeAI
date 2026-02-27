@@ -10,6 +10,8 @@ import {
     Skeleton,
     Divider,
 } from '@mui/material';
+import { StrategiesPanel } from '@/components/StrategiesPanel';
+import { AIChat } from '@/components/AIChat';
 import {
     ShowChart,
     CurrencyExchange,
@@ -332,6 +334,20 @@ export default function OverviewPage() {
                     );
                 })}
             </Grid>
+
+            {/* Strategies summary */}
+            <Typography variant="h5" sx={{ fontWeight: 700, mb: 2, mt: 4 }}>
+                Strategy Performance
+            </Typography>
+            <StrategiesPanel />
+
+            {/* AI Assistant */}
+            <Typography variant="h5" sx={{ fontWeight: 700, mb: 2, mt: 4 }}>
+                AI Assistant
+            </Typography>
+            <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid', borderColor: 'divider' }}>
+                <AIChat />
+            </Paper>
         </Box>
     );
 }

@@ -135,7 +135,7 @@ export const ForexPanel: React.FC = () => {
                 <Grid item xs={12} sm={6} md={3}>
                     <MetricCard
                         title="Portfolio Value"
-                        value={status?.portfolioValue?.toLocaleString() || '0'}
+                        value={(status?.equity ?? status?.portfolioValue ?? 0).toLocaleString()}
                         prefix="$"
                         color="primary"
                         icon={<CurrencyExchange />}
@@ -153,14 +153,14 @@ export const ForexPanel: React.FC = () => {
                 <Grid item xs={12} sm={6} md={3}>
                     <MetricCard
                         title="Active Positions"
-                        value={status?.performance?.activePositions || 0}
+                        value={positions.length}
                         color="info"
                     />
                 </Grid>
                 <Grid item xs={12} sm={6} md={3}>
                     <MetricCard
                         title="Trades Today"
-                        value={status?.performance?.totalTrades || 0}
+                        value={status?.stats?.totalTrades ?? status?.performance?.totalTrades ?? 0}
                         suffix="/10"
                         color="primary"
                     />
