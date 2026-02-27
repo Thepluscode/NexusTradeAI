@@ -1078,6 +1078,7 @@ app.get('/api/accounts/summary', async (req, res) => {
         res.json({
             success: true,
             data: {
+                activeAccount: process.env.ACTIVE_ACCOUNT || 'demo',
                 realAccount: {
                     balance: cash,
                     equity,
@@ -1124,6 +1125,84 @@ app.post('/api/trading/stop', (req, res) => {
     botPaused = false;
     saveBotState();
     res.json({ success: true, message: 'Stock trading bot stopped', isRunning: false, isPaused: false });
+});
+
+// Realize profits — close all open positions that are currently profitable
+app.post('/api/trading/realize-profits', async (req, res) => {
+    try {
+        const closed = [];
+        const skipped = [];
+
+        for (const [symbol, pos] of positions) {
+            try {
+                const posUrl = `${alpacaConfig.baseURL}/v2/positions/${symbol}`;
+                const posRes = await axios.get(posUrl, {
+                    headers: {
+                        'APCA-API-KEY-ID': alpacaConfig.apiKey,
+                        'APCA-API-SECRET-KEY': alpacaConfig.secretKey,
+                    },
+                });
+                const currentPrice = parseFloat(posRes.data.current_price);
+                const qty = posRes.data.qty;
+                const unrealizedPnL = parseFloat(posRes.data.unrealized_pl);
+
+                if (unrealizedPnL > 0) {
+                    await closePosition(symbol, qty, 'Realize Profits');
+                    closed.push({ symbol, pnl: unrealizedPnL });
+                } else {
+                    skipped.push({ symbol, pnl: unrealizedPnL });
+                }
+            } catch (err) {
+                skipped.push({ symbol, error: err.message });
+            }
+        }
+
+        res.json({
+            success: true,
+            message: `Closed ${closed.length} profitable position(s), skipped ${skipped.length}`,
+            closed,
+            skipped,
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Switch between real/demo account view
+app.post('/api/accounts/switch', (req, res) => {
+    const { type } = req.body;
+    if (!['real', 'demo'].includes(type)) {
+        return res.status(400).json({ success: false, error: 'type must be "real" or "demo"' });
+    }
+    // For paper trading, both accounts point to the same Alpaca paper account.
+    // We track the preference in memory so the dashboard can reflect it.
+    process.env.ACTIVE_ACCOUNT = type;
+    res.json({ success: true, activeAccount: type });
+});
+
+// Reset demo account — resets local performance stats (does not affect Alpaca paper account)
+app.post('/api/accounts/demo/reset', (req, res) => {
+    try {
+        totalTradesToday = 0;
+        recentTrades.clear();
+
+        // Reset performance file
+        const perfData = {
+            totalTrades: 0, winners: 0, losers: 0,
+            totalPnL: 0, totalWinAmount: 0, totalLossAmount: 0,
+            profitFactor: 0, winRate: 0, maxDrawdown: 0,
+            lastReset: new Date().toISOString(),
+        };
+        fs.writeFileSync(
+            path.join(__dirname, '../../services/trading/data/performance.json'),
+            JSON.stringify(perfData, null, 2)
+        );
+
+        console.log('🔄 Demo account stats reset');
+        res.json({ success: true, message: 'Demo account statistics reset' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
 app.post('/api/trading/pause', (req, res) => {
