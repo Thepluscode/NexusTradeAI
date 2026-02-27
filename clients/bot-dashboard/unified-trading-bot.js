@@ -625,23 +625,11 @@ async function managePositions() {
                 console.log(`⏰ Time: ${new Date().toLocaleString()}`);
                 console.log('🚨'.repeat(30));
 
-                // Send SMS Alert
-                await smsAlerts.sendStockStopLoss(
-                    symbol,
-                    position.entry,
-                    currentPrice,
-                    unrealizedPL,
-                    position.stopLoss
-                );
-
-                // Send Telegram Alert
-                await telegramAlerts.sendStockStopLoss(
-                    symbol,
-                    position.entry,
-                    currentPrice,
-                    unrealizedPL,
-                    position.stopLoss
-                );
+                // Send alerts — fire-and-forget so a network failure never blocks the close
+                smsAlerts.sendStockStopLoss(symbol, position.entry, currentPrice, unrealizedPL, position.stopLoss)
+                    .catch(e => console.warn(`⚠️  SMS stop-loss alert failed: ${e.message}`));
+                telegramAlerts.sendStockStopLoss(symbol, position.entry, currentPrice, unrealizedPL, position.stopLoss)
+                    .catch(e => console.warn(`⚠️  Telegram stop-loss alert failed: ${e.message}`));
 
                 await closePosition(symbol, alpacaPos.qty, 'Stop Loss');
             } else if (currentPrice >= position.target) {
@@ -656,23 +644,11 @@ async function managePositions() {
                 console.log(`⏰ Time: ${new Date().toLocaleString()}`);
                 console.log('🎯'.repeat(30));
 
-                // Send SMS Alert
-                await smsAlerts.sendStockTakeProfit(
-                    symbol,
-                    position.entry,
-                    currentPrice,
-                    unrealizedPL,
-                    position.target
-                );
-
-                // Send Telegram Alert
-                await telegramAlerts.sendStockTakeProfit(
-                    symbol,
-                    position.entry,
-                    currentPrice,
-                    unrealizedPL,
-                    position.target
-                );
+                // Send alerts — fire-and-forget so a network failure never blocks the close
+                smsAlerts.sendStockTakeProfit(symbol, position.entry, currentPrice, unrealizedPL, position.target)
+                    .catch(e => console.warn(`⚠️  SMS take-profit alert failed: ${e.message}`));
+                telegramAlerts.sendStockTakeProfit(symbol, position.entry, currentPrice, unrealizedPL, position.target)
+                    .catch(e => console.warn(`⚠️  Telegram take-profit alert failed: ${e.message}`));
 
                 await closePosition(symbol, alpacaPos.qty, 'Profit Target');
             }
@@ -958,15 +934,9 @@ async function executeTrade(signal, strategy) {
         console.log(`   RSI: ${signal.rsi} | Volume Ratio: ${signal.volumeRatio}x | Momentum: +${signal.percentChange}%`);
         if (signal.vwap) console.log(`   VWAP: $${signal.vwap} (price ${signal.price > parseFloat(signal.vwap) ? 'ABOVE' : 'BELOW'} VWAP)`);
 
-        // Send Entry Alert via Telegram
-        await telegramAlerts.sendStockEntry(
-            signal.symbol,
-            signal.price,
-            parseFloat(stopPrice),
-            parseFloat(targetPrice),
-            shares,
-            tier
-        );
+        // Send entry alert — fire-and-forget so a network failure never aborts the trade record
+        telegramAlerts.sendStockEntry(signal.symbol, signal.price, parseFloat(stopPrice), parseFloat(targetPrice), shares, tier)
+            .catch(e => console.warn(`⚠️  Telegram entry alert failed: ${e.message}`));
 
         return orderResponse.data;
 
@@ -1264,20 +1234,20 @@ app.post('/api/accounts/switch', (req, res) => {
 // Reset demo account — resets local performance stats (does not affect Alpaca paper account)
 app.post('/api/accounts/demo/reset', (req, res) => {
     try {
+        // Reset anti-churning state
         totalTradesToday = 0;
         recentTrades.clear();
+        tradesPerSymbol.clear();      // was missing — prevented new trades after reset
+        stoppedOutSymbols.clear();    // was missing — cooldowns persisted after reset
 
-        // Reset performance file
-        const perfData = {
+        // Reset the global perfData in memory (use Object.assign, not const — don't shadow)
+        Object.assign(perfData, {
             totalTrades: 0, winningTrades: 0, losingTrades: 0,
             totalProfit: 0, totalWinAmount: 0, totalLossAmount: 0,
             profitFactor: 0, winRate: 0, maxDrawdown: 0,
             lastReset: new Date().toISOString(),
-        };
-        fs.writeFileSync(
-            path.join(__dirname, '../../services/trading/data/performance.json'),
-            JSON.stringify(perfData, null, 2)
-        );
+        });
+        fs.writeFileSync(PERF_FILE, JSON.stringify(perfData, null, 2));
 
         console.log('🔄 Demo account stats reset');
         res.json({ success: true, message: 'Demo account statistics reset' });
