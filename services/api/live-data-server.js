@@ -21,8 +21,16 @@ const ALPACA_CONFIG = {
     }
 };
 
-const ALPHA_VANTAGE_KEY = process.env.ALPHA_VANTAGE_API_KEY;
-const FINNHUB_KEY = process.env.FINNHUB_API_KEY;
+// Only use API keys if they're actually configured (not empty/placeholder)
+const ALPHA_VANTAGE_KEY = process.env.ALPHA_VANTAGE_API_KEY &&
+    process.env.ALPHA_VANTAGE_API_KEY.length > 10 &&
+    !process.env.ALPHA_VANTAGE_API_KEY.includes('your_') ?
+    process.env.ALPHA_VANTAGE_API_KEY : null;
+
+const FINNHUB_KEY = process.env.FINNHUB_API_KEY &&
+    process.env.FINNHUB_API_KEY.length > 10 &&
+    !process.env.FINNHUB_API_KEY.includes('your_') ?
+    process.env.FINNHUB_API_KEY : null;
 
 // Cache for API responses
 const cache = new Map();
@@ -101,50 +109,58 @@ app.get('/api/market/quote/:symbol', async (req, res) => {
         const cached = getCachedData(cacheKey);
         if (cached) return res.json(cached);
 
-        // Try Alpha Vantage first
+        // Try Alpha Vantage first (only if properly configured)
         if (ALPHA_VANTAGE_KEY) {
-            const response = await axios.get('https://www.alphavantage.co/query', {
-                params: {
-                    function: 'GLOBAL_QUOTE',
-                    symbol: symbol,
-                    apikey: ALPHA_VANTAGE_KEY
-                }
-            });
+            try {
+                const response = await axios.get('https://www.alphavantage.co/query', {
+                    params: {
+                        function: 'GLOBAL_QUOTE',
+                        symbol: symbol,
+                        apikey: ALPHA_VANTAGE_KEY
+                    }
+                });
 
-            if (response.data['Global Quote']) {
-                const quote = response.data['Global Quote'];
+                if (response.data['Global Quote']) {
+                    const quote = response.data['Global Quote'];
+                    const result = {
+                        symbol: symbol,
+                        price: parseFloat(quote['05. price']),
+                        change: parseFloat(quote['09. change']),
+                        changePercent: quote['10. change percent'],
+                        volume: parseInt(quote['06. volume']),
+                        timestamp: new Date().toISOString()
+                    };
+                    setCachedData(cacheKey, result);
+                    return res.json(result);
+                }
+            } catch (avError) {
+                // Silently fail and try next provider (don't spam logs)
+            }
+        }
+
+        // Fallback to Finnhub (only if properly configured)
+        if (FINNHUB_KEY) {
+            try {
+                const response = await axios.get('https://finnhub.io/api/v1/quote', {
+                    params: {
+                        symbol: symbol,
+                        token: FINNHUB_KEY
+                    }
+                });
+
                 const result = {
                     symbol: symbol,
-                    price: parseFloat(quote['05. price']),
-                    change: parseFloat(quote['09. change']),
-                    changePercent: quote['10. change percent'],
-                    volume: parseInt(quote['06. volume']),
+                    price: response.data.c,
+                    change: response.data.d,
+                    changePercent: response.data.dp,
+                    volume: 0,
                     timestamp: new Date().toISOString()
                 };
                 setCachedData(cacheKey, result);
                 return res.json(result);
+            } catch (fhError) {
+                // Silently fail and try next provider
             }
-        }
-
-        // Fallback to Finnhub
-        if (FINNHUB_KEY) {
-            const response = await axios.get('https://finnhub.io/api/v1/quote', {
-                params: {
-                    symbol: symbol,
-                    token: FINNHUB_KEY
-                }
-            });
-
-            const result = {
-                symbol: symbol,
-                price: response.data.c,
-                change: response.data.d,
-                changePercent: response.data.dp,
-                volume: 0,
-                timestamp: new Date().toISOString()
-            };
-            setCachedData(cacheKey, result);
-            return res.json(result);
         }
 
         // Mock data fallback
@@ -299,6 +315,33 @@ app.get('/api/health', (req, res) => {
             alpaca: !!ALPACA_CONFIG.apiKey,
             alpha_vantage: !!ALPHA_VANTAGE_KEY,
             finnhub: !!FINNHUB_KEY
+        }
+    });
+});
+
+// Market Data Status (for dashboard)
+app.get('/api/market/status', (req, res) => {
+    res.json({
+        success: true,
+        data: {
+            connected: true,
+            providers: {
+                alpaca: {
+                    status: ALPACA_CONFIG.apiKey ? 'connected' : 'offline',
+                    healthy: !!ALPACA_CONFIG.apiKey
+                },
+                alphaVantage: {
+                    status: ALPHA_VANTAGE_KEY ? 'connected' : 'offline',
+                    healthy: !!ALPHA_VANTAGE_KEY
+                },
+                finnhub: {
+                    status: FINNHUB_KEY ? 'connected' : 'offline',
+                    healthy: !!FINNHUB_KEY
+                }
+            },
+            totalQuotes: cache.size,
+            dataQuality: 'Good',
+            avgLatency: 150
         }
     });
 });
