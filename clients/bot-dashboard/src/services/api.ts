@@ -614,6 +614,15 @@ class APIClient {
     const response = await this.dashboardAPI.post('/api/banking/withdraw', { amount, bankId });
     return response.data.data;
   }
+
+  async getBotConfig(): Promise<any> {
+    try {
+      const response = await this.tradingEngine.get('/api/config');
+      return response.data.data;
+    } catch {
+      return null;
+    }
+  }
 }
 
 export const apiClient = new APIClient();

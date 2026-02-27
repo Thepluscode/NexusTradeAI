@@ -1185,6 +1185,38 @@ app.post('/test-telegram', async (req, res) => {
 });
 
 // ===== BACKTEST REPORT ENDPOINT =====
+app.get('/api/config', (req, res) => {
+    res.json({
+        success: true,
+        data: {
+            trading: {
+                maxTradesPerDay: MAX_TRADES_PER_DAY,
+                maxTradesPerSymbol: MAX_TRADES_PER_SYMBOL,
+                minTimeBetweenTradesMins: Math.round(MIN_TIME_BETWEEN_TRADES / 60000),
+                stopOutCooldownMins: 60,
+                realTradingEnabled: process.env.REAL_TRADING_ENABLED === 'true',
+            },
+            broker: {
+                baseURL: alpacaConfig.baseURL,
+                apiKeyConfigured: !!alpacaConfig.apiKey,
+                secretKeyConfigured: !!alpacaConfig.secretKey,
+            },
+            alerts: {
+                telegramEnabled: process.env.TELEGRAM_ALERTS_ENABLED === 'true',
+                telegramConfigured: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
+                smsEnabled: process.env.SMS_ALERTS_ENABLED === 'true',
+            },
+            ports: {
+                stockBot: process.env.TRADING_PORT || 3002,
+                marketData: process.env.MARKET_DATA_PORT || 3001,
+                forexBot: process.env.FOREX_PORT || 3005,
+                cryptoBot: process.env.CRYPTO_PORT || 3006,
+                aiService: process.env.AI_SERVICE_PORT || 5001,
+            },
+        }
+    });
+});
+
 app.get('/api/backtest/report', (req, res) => {
     try {
         const reportPath = path.join(__dirname, '../../services/trading/backtest-report.json');

@@ -34,6 +34,7 @@ import StockBotPage from './pages/StockBotPage';
 import ForexBotPage from './pages/ForexBotPage';
 import CryptoBotPage from './pages/CryptoBotPage';
 import BacktestPage from './pages/BacktestPage';
+import SettingsPage from './pages/SettingsPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -161,7 +162,11 @@ function Navigation() {
       <Divider />
       <List sx={{ px: 1, pb: 2 }}>
         <ListItem disablePadding>
-          <ListItemButton sx={{ borderRadius: 2 }}>
+          <ListItemButton
+            onClick={() => { navigate('/settings'); if (isMobile) setMobileOpen(false); }}
+            selected={location.pathname === '/settings'}
+            sx={{ borderRadius: 2 }}
+          >
             <ListItemIcon sx={{ minWidth: 40 }}>
               <Settings />
             </ListItemIcon>
@@ -257,6 +262,7 @@ function Navigation() {
           <Route path="/forex" element={<ForexBotPage />} />
           <Route path="/crypto" element={<CryptoBotPage />} />
           <Route path="/backtest" element={<BacktestPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Box>
