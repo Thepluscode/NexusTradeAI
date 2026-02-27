@@ -47,7 +47,7 @@ export interface Position {
   pnl?: number;
   profit?: number;
   strategy: string;
-  openTime: number;
+  openTime?: number;
   confidence?: number;
   marketValue?: number;
   changeToday?: number;
