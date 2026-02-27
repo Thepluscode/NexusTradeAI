@@ -139,7 +139,7 @@ let perfData = {
 try {
     const existing = JSON.parse(fs.readFileSync(PERF_FILE, 'utf8'));
     perfData = { ...perfData, ...existing, isRunning: true };
-    console.log(`📊 Loaded performance history: ${perfData.totalTrades} trades, ${perfData.winRate.toFixed(1)}% win rate`);
+    console.log(`📊 Loaded performance history: ${perfData.totalTrades} trades, ${(perfData.winRate ?? 0).toFixed(1)}% win rate`);
 } catch (e) {
     console.log('📊 Starting fresh performance tracking');
 }
@@ -1092,7 +1092,7 @@ app.get('/api/trading/status', async (req, res) => {
             isPaused: botPaused,
             mode: 'PAPER',
             equity,
-            dailyReturn: ((equity - lastEquity) / lastEquity) * 100,
+            dailyReturn: (lastEquity > 0) ? ((equity - lastEquity) / lastEquity) * 100 : 0,
             positions: positionsData,
             stats: {
                 totalTrades: perfData.totalTrades,
@@ -1269,8 +1269,8 @@ app.post('/api/accounts/demo/reset', (req, res) => {
 
         // Reset performance file
         const perfData = {
-            totalTrades: 0, winners: 0, losers: 0,
-            totalPnL: 0, totalWinAmount: 0, totalLossAmount: 0,
+            totalTrades: 0, winningTrades: 0, losingTrades: 0,
+            totalProfit: 0, totalWinAmount: 0, totalLossAmount: 0,
             profitFactor: 0, winRate: 0, maxDrawdown: 0,
             lastReset: new Date().toISOString(),
         };
