@@ -1253,6 +1253,35 @@ app.post('/api/config/risk', (req, res) => {
 
 // ===== BROKER CREDENTIALS ENDPOINT =====
 // Writes keys to .env file on the local machine. Never logs key values.
+app.post('/api/config/mode', (req, res) => {
+    try {
+        const { mode } = req.body; // 'paper' | 'live'
+        if (!['paper', 'live'].includes(mode)) {
+            return res.status(400).json({ success: false, error: 'mode must be "paper" or "live"' });
+        }
+
+        const value = mode === 'live' ? 'true' : 'false';
+        const envPath = path.join(__dirname, '../../.env');
+        let envContent = '';
+        try { envContent = fs.readFileSync(envPath, 'utf8'); } catch { envContent = ''; }
+
+        const regex = /^REAL_TRADING_ENABLED=.*$/m;
+        if (regex.test(envContent)) {
+            envContent = envContent.replace(regex, `REAL_TRADING_ENABLED=${value}`);
+        } else {
+            envContent += `\nREAL_TRADING_ENABLED=${value}`;
+        }
+
+        fs.writeFileSync(envPath, envContent);
+        process.env.REAL_TRADING_ENABLED = value;
+        console.log(`⚙️  Trading mode switched to: ${mode.toUpperCase()}`);
+
+        res.json({ success: true, mode });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 app.post('/api/config/credentials', (req, res) => {
     try {
         const { broker, credentials, fields } = req.body;

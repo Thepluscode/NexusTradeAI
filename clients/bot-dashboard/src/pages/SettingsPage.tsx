@@ -37,12 +37,12 @@ import {
     AccountBalanceWallet,
     AddCircleOutline,
     RemoveCircleOutline,
-    LockOutlined,
     OpenInNew,
     Visibility,
     VisibilityOff,
     Save,
     Send,
+    WarningAmber,
 } from '@mui/icons-material';
 import axios from 'axios';
 import toast from 'react-hot-toast';
@@ -63,6 +63,11 @@ async function updateRisk(payload: { tier: string; stopLoss?: number; profitTarg
 
 async function saveCredentials(payload: { broker: string; credentials: Record<string, string> }) {
     const res = await axios.post(`${API_BASE}/api/config/credentials`, payload);
+    return res.data;
+}
+
+async function setTradingMode(mode: 'paper' | 'live') {
+    const res = await axios.post(`${API_BASE}/api/config/mode`, { mode });
     return res.data;
 }
 
@@ -674,6 +679,17 @@ export default function SettingsPage() {
         onError: () => { toast.error('Failed to update — is the Stock Bot running?'); },
     });
 
+    const [confirmLive, setConfirmLive] = useState(false);
+
+    const { mutate: switchMode, isLoading: switchingMode } = useMutation(setTradingMode, {
+        onSuccess: (_, mode) => {
+            toast.success(`Switched to ${mode === 'live' ? 'Live' : 'Paper'} trading`);
+            setConfirmLive(false);
+            void queryClient.invalidateQueries('botConfig');
+        },
+        onError: () => { toast.error('Failed to switch mode — is the Stock Bot running?'); },
+    });
+
     const { mutate: saveCreds, isLoading: savingCreds, variables: savingFor } = useMutation(saveCredentials, {
         onSuccess: (_, vars) => {
             toast.success(`${vars.broker.charAt(0).toUpperCase() + vars.broker.slice(1)} credentials saved`);
@@ -735,8 +751,27 @@ export default function SettingsPage() {
                             sub="Switch between paper trading (simulated) and live trading with real capital."
                         />
                         <Stack spacing={3}>
-                            <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid', borderColor: 'divider' }}>
-                                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+
+                            {/* Mode toggle card */}
+                            <Paper
+                                sx={{
+                                    p: 3,
+                                    borderRadius: 3,
+                                    border: '1px solid',
+                                    borderColor: isPaper ? 'divider' : '#ef444440',
+                                    position: 'relative',
+                                    overflow: 'hidden',
+                                    '&::before': !isPaper ? {
+                                        content: '""',
+                                        position: 'absolute',
+                                        top: 0, left: 0, right: 0,
+                                        height: 3,
+                                        background: 'linear-gradient(90deg, #ef4444, transparent)',
+                                    } : {},
+                                }}
+                            >
+                                {/* Current status */}
+                                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2.5 }}>
                                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                                         <Avatar sx={{ bgcolor: isPaper ? '#3b82f620' : '#ef444420', color: isPaper ? '#3b82f6' : '#ef4444', width: 48, height: 48 }}>
                                             {isPaper ? <ScienceOutlined /> : <FlashOn />}
@@ -748,7 +783,7 @@ export default function SettingsPage() {
                                             <Typography variant="body2" color="text.secondary">
                                                 {isPaper
                                                     ? 'Simulated trades — no real money at risk'
-                                                    : 'Real capital deployed — trades execute on your broker account'}
+                                                    : 'Real capital deployed — orders execute on your broker account'}
                                             </Typography>
                                         </Box>
                                     </Box>
@@ -759,33 +794,142 @@ export default function SettingsPage() {
                                     />
                                 </Box>
 
-                                <Divider sx={{ my: 2.5 }} />
+                                <Divider sx={{ mb: 2.5 }} />
 
-                                <Alert severity={isPaper ? 'info' : 'warning'} sx={{ borderRadius: 2, mb: 2 }}>
-                                    {isPaper
-                                        ? 'Paper trading is the safe default. All bots use virtual capital. Switching to live requires a funded broker account and changes REAL_TRADING_ENABLED in your .env file.'
-                                        : '⚠️ Live trading is active. Real money is at risk. Ensure your risk parameters and position sizes are correct before running the bot.'}
-                                </Alert>
+                                {!isPaper && (
+                                    <Alert severity="error" sx={{ borderRadius: 2, mb: 2.5 }}>
+                                        <strong>Live trading is active.</strong> Real money is at risk. Ensure your risk parameters and broker credentials are correct before running any bot.
+                                    </Alert>
+                                )}
 
-                                <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'background.default' }}>
-                                    <Typography variant="body2" color="text.secondary" gutterBottom>
-                                        To toggle trading mode, update <code style={{ background: '#ffffff12', padding: '2px 6px', borderRadius: 4 }}>REAL_TRADING_ENABLED</code> in your <code style={{ background: '#ffffff12', padding: '2px 6px', borderRadius: 4 }}>.env</code> file, then restart the bot.
-                                    </Typography>
-                                    <Box sx={{ mt: 1.5, display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                                        <Chip icon={<LockOutlined sx={{ fontSize: 14 }} />} label="Paper: REAL_TRADING_ENABLED=false" size="small" variant="outlined" />
-                                        <Chip icon={<FlashOn sx={{ fontSize: 14 }} />} label="Live: REAL_TRADING_ENABLED=true" size="small" variant="outlined" color="error" />
+                                {/* Mode selector */}
+                                <Grid container spacing={2} sx={{ mb: 2.5 }}>
+                                    {([
+                                        {
+                                            mode: 'paper' as const,
+                                            label: 'Paper Trading',
+                                            description: 'Simulated orders — no real capital at risk. Best for testing and development.',
+                                            icon: <ScienceOutlined />,
+                                            color: '#3b82f6',
+                                            recommended: true,
+                                        },
+                                        {
+                                            mode: 'live' as const,
+                                            label: 'Live Trading',
+                                            description: 'Real orders on your funded broker accounts. Only enable when consistently profitable.',
+                                            icon: <FlashOn />,
+                                            color: '#ef4444',
+                                            recommended: false,
+                                        },
+                                    ]).map(opt => {
+                                        const isActive = isPaper ? opt.mode === 'paper' : opt.mode === 'live';
+                                        return (
+                                            <Grid item xs={12} sm={6} key={opt.mode}>
+                                                <Box
+                                                    onClick={() => {
+                                                        if (isActive) return;
+                                                        if (opt.mode === 'live') {
+                                                            setConfirmLive(true);
+                                                        } else {
+                                                            switchMode('paper');
+                                                        }
+                                                    }}
+                                                    sx={{
+                                                        p: 2.5,
+                                                        borderRadius: 3,
+                                                        border: '2px solid',
+                                                        borderColor: isActive ? opt.color : 'divider',
+                                                        bgcolor: isActive ? `${opt.color}10` : 'background.default',
+                                                        cursor: isActive ? 'default' : 'pointer',
+                                                        transition: 'all 0.15s',
+                                                        '&:hover': !isActive ? { borderColor: opt.color, bgcolor: `${opt.color}08` } : {},
+                                                    }}
+                                                >
+                                                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                                            <Avatar sx={{ bgcolor: `${opt.color}20`, color: opt.color, width: 32, height: 32 }}>
+                                                                {opt.icon}
+                                                            </Avatar>
+                                                            <Typography fontWeight={700}>{opt.label}</Typography>
+                                                        </Box>
+                                                        <Box sx={{ display: 'flex', gap: 0.5 }}>
+                                                            {opt.recommended && <Chip label="Recommended" size="small" color="primary" sx={{ height: 18, fontSize: 10 }} />}
+                                                            {isActive && <Chip label="Active" size="small" color={opt.mode === 'paper' ? 'primary' : 'error'} sx={{ height: 18, fontSize: 10, fontWeight: 700 }} />}
+                                                        </Box>
+                                                    </Box>
+                                                    <Typography variant="caption" color="text.secondary">
+                                                        {opt.description}
+                                                    </Typography>
+                                                </Box>
+                                            </Grid>
+                                        );
+                                    })}
+                                </Grid>
+
+                                {/* Live confirmation panel */}
+                                {confirmLive && (
+                                    <Box
+                                        sx={{
+                                            p: 2.5,
+                                            borderRadius: 3,
+                                            border: '1px solid',
+                                            borderColor: '#ef444460',
+                                            bgcolor: '#ef444408',
+                                        }}
+                                    >
+                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
+                                            <WarningAmber sx={{ color: '#ef4444', fontSize: 20 }} />
+                                            <Typography fontWeight={700} color="error.main">Confirm switch to Live Trading</Typography>
+                                        </Box>
+                                        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                                            Real money will be deployed on your next bot run. Make sure you have:
+                                        </Typography>
+                                        <Stack spacing={0.5} sx={{ mb: 2 }}>
+                                            {[
+                                                'Tested the strategy in paper mode for at least 2 weeks',
+                                                'Connected a funded broker account in the Brokers section',
+                                                'Reviewed your risk parameters (stop losses, position sizes)',
+                                                'Set a daily loss limit you are comfortable with',
+                                            ].map((item, i) => (
+                                                <Box key={i} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+                                                    <CheckCircle sx={{ fontSize: 14, color: 'text.disabled', mt: 0.3, flexShrink: 0 }} />
+                                                    <Typography variant="caption" color="text.secondary">{item}</Typography>
+                                                </Box>
+                                            ))}
+                                        </Stack>
+                                        <Box sx={{ display: 'flex', gap: 1 }}>
+                                            <Button
+                                                variant="contained"
+                                                color="error"
+                                                size="small"
+                                                disabled={switchingMode}
+                                                startIcon={switchingMode ? <CircularProgress size={13} color="inherit" /> : <FlashOn fontSize="small" />}
+                                                onClick={() => switchMode('live')}
+                                                sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 700 }}
+                                            >
+                                                Yes, switch to Live
+                                            </Button>
+                                            <Button
+                                                variant="outlined"
+                                                size="small"
+                                                onClick={() => setConfirmLive(false)}
+                                                sx={{ borderRadius: 2, textTransform: 'none', color: 'text.secondary' }}
+                                            >
+                                                Cancel
+                                            </Button>
+                                        </Box>
                                     </Box>
-                                </Box>
+                                )}
                             </Paper>
 
-                            {/* Trading hours summary */}
+                            {/* Trading schedule */}
                             <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid', borderColor: 'divider' }}>
                                 <Typography fontWeight={600} gutterBottom>Trading Schedule</Typography>
-                                <Grid container spacing={2} sx={{ mt: 0.5 }}>
+                                <Grid container spacing={1.5} sx={{ mt: 0.5 }}>
                                     {[
                                         { label: 'Stock Bot', hours: 'Mon–Fri  9:30 AM – 4:00 PM EST', color: '#10b981', active: true },
-                                        { label: 'Forex Bot', hours: 'Sun 5 PM – Fri 5 PM EST (24/5)', color: '#3b82f6', active: config?.brokers?.oanda?.configured },
-                                        { label: 'Crypto Bot', hours: '24 hours · 7 days a week', color: '#f59e0b', active: config?.brokers?.crypto?.configured },
+                                        { label: 'Forex Bot', hours: 'Sun 5 PM – Fri 5 PM EST (24/5)', color: '#3b82f6', active: !!config?.brokers?.oanda?.configured },
+                                        { label: 'Crypto Bot', hours: '24 hours · 7 days a week', color: '#f59e0b', active: !!config?.brokers?.crypto?.configured },
                                     ].map(s => (
                                         <Grid item xs={12} key={s.label}>
                                             <Box
@@ -805,12 +949,13 @@ export default function SettingsPage() {
                                                         <Typography variant="caption" color="text.secondary">{s.hours}</Typography>
                                                     </Box>
                                                 </Box>
-                                                <Chip label={s.active ? 'Active' : 'Inactive'} color={s.active ? 'success' : 'default'} size="small" variant="outlined" />
+                                                <Chip label={s.active ? 'Configured' : 'Not configured'} color={s.active ? 'success' : 'default'} size="small" variant="outlined" />
                                             </Box>
                                         </Grid>
                                     ))}
                                 </Grid>
                             </Paper>
+
                         </Stack>
                     </Box>
                 )}
