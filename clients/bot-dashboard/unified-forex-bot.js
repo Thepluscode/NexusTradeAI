@@ -787,11 +787,14 @@ async function managePositions() {
 
         if (!localPos) continue;
 
-        const currentPrice = oandaPos.long?.units > 0
-            ? parseFloat(oandaPos.long.averagePrice)
-            : parseFloat(oandaPos.short?.averagePrice || 0);
-
+        const isLong = oandaPos.long?.units > 0;
+        const units = Math.abs(parseInt(oandaPos.long?.units || oandaPos.short?.units || 0));
+        const entryPrice = parseFloat(isLong ? oandaPos.long?.averagePrice : oandaPos.short?.averagePrice || 0);
         const unrealizedPL = parseFloat(oandaPos.unrealizedPL || 0);
+        // Derive current price from unrealizedPL so trailing stops use real market movement
+        const currentPrice = (entryPrice > 0 && units > 0)
+            ? entryPrice + (isLong ? 1 : -1) * (unrealizedPL / units)
+            : entryPrice;
         const holdDays = (Date.now() - new Date(localPos.entryTime).getTime()) / (1000 * 60 * 60 * 24);
 
         // Update trailing stop
@@ -806,7 +809,8 @@ async function managePositions() {
         // Check profit target by day
         const dayIndex = Math.min(Math.floor(holdDays), 5);
         const targetPct = EXIT_CONFIG.profitTargetByDay[dayIndex];
-        const plPct = unrealizedPL / parseFloat((await getAccount())?.balance || 10000);
+        // plPct = P/L as fraction of position notional value (entryPrice × units)
+        const plPct = (entryPrice > 0 && units > 0) ? unrealizedPL / (entryPrice * units) : 0;
 
         if (plPct >= targetPct) {
             await closePositionWithReason(pair, `Day-${dayIndex} target hit (+${(plPct * 100).toFixed(2)}%)`);
@@ -881,6 +885,8 @@ function resetDailyCounters() {
         totalTradesToday = 0;
         tradesPerPair.clear();
         stoppedOutPairs.clear();
+        simDailyPnL = 0;
+        lastEquity = null; // reset daily baseline for LIVE mode too
         console.log('🔄 Daily counters reset');
     }
 }
@@ -945,13 +951,17 @@ app.get('/api/forex/status', async (req, res) => {
         const account = await getAccount();
         const oandaPositions = await getOpenPositions();
 
-        let longTrades = 0, shortTrades = 0, winners = 0, losers = 0;
+        let longTrades = 0, shortTrades = 0;
         for (const [, trades] of recentTrades) {
             for (const trade of trades) {
                 if (trade.side === 'long') longTrades++;
                 else if (trade.side === 'short') shortTrades++;
             }
         }
+        // Use persistent sim counters — they are incremented in closePositionWithReason
+        // for both DEMO and LIVE modes, and survive restarts via forex-performance.json
+        const winners = simWinners;
+        const losers = simLosers;
 
         const balance = account ? parseFloat(account.balance) : simEquity;
         if (account && lastEquity === null) lastEquity = balance;
