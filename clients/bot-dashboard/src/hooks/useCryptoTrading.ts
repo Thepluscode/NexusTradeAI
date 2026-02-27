@@ -61,10 +61,10 @@ export function useCryptoTrading() {
                 ? rawPositions.map((p: any) => ({
                     symbol: p.symbol,
                     side: p.side || (p.direction === 'short' ? 'short' : 'long'),
-                    quantity: p.quantity || p.qty || p.amount || 0,
-                    entryPrice: p.entryPrice || p.entry || 0,
-                    currentPrice: p.currentPrice || p.current_price || 0,
-                    unrealizedPnL: p.unrealizedPnL || p.unrealized_pl || p.pnl || 0,
+                    quantity: p.quantity ?? p.qty ?? p.amount ?? 0,
+                    entryPrice: p.entryPrice ?? p.entry ?? 0,
+                    currentPrice: p.currentPrice ?? p.current_price ?? 0,
+                    unrealizedPnL: p.unrealizedPnL ?? p.unrealized_pl ?? p.pnl ?? 0,
                     strategy: p.strategy || 'crypto-momentum',
                     tier: p.tier,
                 }))

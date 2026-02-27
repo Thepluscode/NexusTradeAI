@@ -8,16 +8,7 @@ export const useTradingEngine = () => {
     'tradingEngineStatus',
     () => apiClient.getTradingEngineStatus(),
     {
-      refetchInterval: 5000,
-      retry: 3,
-    }
-  );
-
-  const positionsQuery = useQuery(
-    'activePositions',
-    () => apiClient.getActivePositions(),
-    {
-      refetchInterval: 5000,
+      refetchInterval: 10000,
       retry: 3,
     }
   );
@@ -54,9 +45,11 @@ export const useTradingEngine = () => {
 
   return {
     status: statusQuery.data,
-    positions: positionsQuery.data,
-    isLoading: statusQuery.isLoading || positionsQuery.isLoading,
-    error: statusQuery.error || positionsQuery.error,
+    // Positions are embedded in the status response — derive them directly
+    // to avoid a second redundant fetch to the same endpoint
+    positions: statusQuery.data?.positions ?? [],
+    isLoading: statusQuery.isLoading,
+    error: statusQuery.error,
     startEngine: startMutation.mutate,
     stopEngine: stopMutation.mutate,
     realizeProfits: realizeProfitsMutation.mutate,
