@@ -30,10 +30,12 @@ async function fetchAllBotStats() {
     ]);
 
     return {
-        stock: results[0].status === 'fulfilled' ? results[0].value.data?.data || results[0].value.data : null,
+        // Stock/forex/crypto bots return flat JSON directly
+        stock: results[0].status === 'fulfilled' ? results[0].value.data : null,
+        // /api/config wraps in { success, data: {...} }
         config: results[1].status === 'fulfilled' ? results[1].value.data?.data : null,
-        forex: results[2].status === 'fulfilled' ? results[2].value.data?.data || results[2].value.data : null,
-        crypto: results[3].status === 'fulfilled' ? results[3].value.data?.data || results[3].value.data : null,
+        forex: results[2].status === 'fulfilled' ? results[2].value.data : null,
+        crypto: results[3].status === 'fulfilled' ? results[3].value.data : null,
     };
 }
 
