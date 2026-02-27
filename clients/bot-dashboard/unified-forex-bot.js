@@ -668,9 +668,11 @@ async function executeTrade(signal) {
         trades.push({ time: Date.now(), side: signal.direction });
         recentTrades.set(signal.pair, trades);
 
-        // Update long/short counters
+        // Update long/short counters and persist immediately so a crash between
+        // entry and close doesn't lose the counter increment
         if (signal.direction === 'long') simLongTrades++;
         else simShortTrades++;
+        saveForexPerf();
 
         // Update metrics
         if (metrics.tradingMetrics) {
