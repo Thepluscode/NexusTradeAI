@@ -24,12 +24,18 @@ import toast from 'react-hot-toast';
 
 interface Position {
     symbol: string;
-    qty: number;
+    qty?: number;
+    quantity?: number;
     side: string;
-    entryPrice: number;
-    currentPrice: number;
-    unrealizedPL: number;
-    unrealizedPLPct: number;
+    entryPrice?: number;
+    avg_entry_price?: string;
+    currentPrice?: number;
+    current_price?: string;
+    unrealizedPL?: number;
+    unrealizedPnL?: number;
+    pnl?: number;
+    unrealizedPLPct?: number;
+    unrealized_plpc?: string;
 }
 
 interface BotStatus {
@@ -156,7 +162,7 @@ export default function StockBotPage() {
                             📈 Stock Bot
                         </Typography>
                         <Typography variant="body1" sx={{ color: 'rgba(255,255,255,0.8)' }}>
-                            LONG Only • Market Hours (10AM-3:30PM EST) • MA Crossover Strategy
+                            LONG Only • Market Hours (9:30AM-4PM EST) • 3-Tier Momentum Strategy
                         </Typography>
                     </Box>
                     <Box sx={{ display: 'flex', gap: 1 }}>
@@ -203,7 +209,7 @@ export default function StockBotPage() {
                                     color: (status?.dailyReturn || 0) >= 0 ? '#10b981' : '#ef4444',
                                 }}
                             >
-                                {((status?.dailyReturn || 0) * 100).toFixed(2)}%
+                                {(status?.dailyReturn || 0).toFixed(2)}%
                             </Typography>
                         </CardContent>
                     </Card>
@@ -291,7 +297,7 @@ export default function StockBotPage() {
                                 <Card
                                     sx={{
                                         border: '1px solid',
-                                        borderColor: pos.unrealizedPL >= 0 ? '#10b981' : '#ef4444',
+                                        borderColor: (pos.unrealizedPnL ?? pos.pnl ?? pos.unrealizedPL ?? 0) >= 0 ? '#10b981' : '#ef4444',
                                     }}
                                 >
                                     <CardContent>
@@ -306,10 +312,10 @@ export default function StockBotPage() {
                                             />
                                         </Box>
                                         <Typography variant="body2" color="text.secondary">
-                                            {pos.qty} shares @ ${pos.entryPrice.toFixed(2)}
+                                            {(pos.qty ?? pos.quantity ?? 0)} shares @ ${(pos.entryPrice ?? parseFloat(pos.avg_entry_price || '0')).toFixed(2)}
                                         </Typography>
                                         <Box sx={{ display: 'flex', alignItems: 'center', mt: 1 }}>
-                                            {pos.unrealizedPL >= 0 ? (
+                                            {(pos.unrealizedPnL ?? pos.pnl ?? pos.unrealizedPL ?? 0) >= 0 ? (
                                                 <TrendingUp sx={{ color: '#10b981', mr: 0.5 }} />
                                             ) : (
                                                 <TrendingDown sx={{ color: '#ef4444', mr: 0.5 }} />
@@ -318,10 +324,15 @@ export default function StockBotPage() {
                                                 variant="h6"
                                                 sx={{
                                                     fontWeight: 700,
-                                                    color: pos.unrealizedPL >= 0 ? '#10b981' : '#ef4444',
+                                                    color: (pos.unrealizedPnL ?? pos.pnl ?? pos.unrealizedPL ?? 0) >= 0 ? '#10b981' : '#ef4444',
                                                 }}
                                             >
-                                                ${pos.unrealizedPL.toFixed(2)} ({(pos.unrealizedPLPct * 100).toFixed(2)}%)
+                                                ${(pos.unrealizedPnL ?? pos.pnl ?? pos.unrealizedPL ?? 0).toFixed(2)}
+                                                {pos.unrealizedPLPct != null
+                                                    ? ` (${(pos.unrealizedPLPct * 100).toFixed(2)}%)`
+                                                    : pos.unrealized_plpc != null
+                                                    ? ` (${(parseFloat(pos.unrealized_plpc) * 100).toFixed(2)}%)`
+                                                    : ''}
                                             </Typography>
                                         </Box>
                                     </CardContent>
@@ -347,7 +358,7 @@ export default function StockBotPage() {
                             Stop Loss
                         </Typography>
                         <Typography variant="body1" sx={{ fontWeight: 600 }}>
-                            {((status?.config?.stopLoss || 0.1) * 100).toFixed(0)}%
+                            {status?.config?.stopLoss || 4}%
                         </Typography>
                     </Grid>
                     <Grid item xs={6} sm={4} md={2}>
@@ -355,7 +366,7 @@ export default function StockBotPage() {
                             Profit Target
                         </Typography>
                         <Typography variant="body1" sx={{ fontWeight: 600, color: '#10b981' }}>
-                            {((status?.config?.profitTarget || 0.15) * 100).toFixed(0)}%
+                            {status?.config?.profitTarget || 8}%
                         </Typography>
                     </Grid>
                     <Grid item xs={6} sm={4} md={2}>
@@ -363,7 +374,7 @@ export default function StockBotPage() {
                             Daily Loss Limit
                         </Typography>
                         <Typography variant="body1" sx={{ fontWeight: 600, color: '#ef4444' }}>
-                            {((status?.config?.dailyLossLimit || -0.02) * 100).toFixed(0)}%
+                            ${Math.abs(status?.config?.dailyLossLimit || 500)}
                         </Typography>
                     </Grid>
                     <Grid item xs={12} md={6}>

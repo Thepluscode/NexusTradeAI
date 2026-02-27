@@ -26,12 +26,20 @@ import toast from 'react-hot-toast';
 
 interface Position {
     symbol: string;
-    qty: number;
-    side: string;
-    entryPrice: number;
-    currentPrice: number;
-    unrealizedPL: number;
-    unrealizedPLPct: number;
+    // crypto bot fields
+    entry?: number;
+    quantity?: number;
+    positionSize?: number;
+    stopLoss?: number;
+    takeProfit?: number;
+    tier?: string;
+    // generic fields (forex-style)
+    qty?: number;
+    side?: string;
+    entryPrice?: number;
+    currentPrice?: number;
+    unrealizedPL?: number;
+    unrealizedPLPct?: number;
 }
 
 interface BotStatus {
@@ -336,7 +344,7 @@ export default function CryptoBotPage() {
                                 <Card
                                     sx={{
                                         border: '1px solid',
-                                        borderColor: pos.unrealizedPL >= 0 ? '#10b981' : '#ef4444',
+                                        borderColor: '#10b981',
                                     }}
                                 >
                                     <CardContent>
@@ -345,29 +353,30 @@ export default function CryptoBotPage() {
                                                 {pos.symbol}
                                             </Typography>
                                             <Chip
-                                                label={pos.side.toUpperCase()}
+                                                label={pos.tier?.toUpperCase() ?? pos.side?.toUpperCase() ?? 'LONG'}
                                                 size="small"
-                                                color={pos.side === 'long' ? 'success' : 'error'}
+                                                color="success"
                                             />
                                         </Box>
                                         <Typography variant="body2" color="text.secondary">
-                                            {pos.qty.toFixed(4)} @ ${pos.entryPrice.toFixed(2)}
+                                            {(pos.quantity ?? pos.qty ?? 0).toFixed(4)} @ ${(pos.entry ?? pos.entryPrice ?? 0).toFixed(2)}
                                         </Typography>
-                                        <Box sx={{ display: 'flex', alignItems: 'center', mt: 1 }}>
-                                            {pos.unrealizedPL >= 0 ? (
-                                                <TrendingUp sx={{ color: '#10b981', mr: 0.5 }} />
-                                            ) : (
-                                                <TrendingDown sx={{ color: '#ef4444', mr: 0.5 }} />
+                                        <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
+                                            {pos.stopLoss != null && (
+                                                <Typography variant="caption" sx={{ color: '#ef4444' }}>
+                                                    SL: ${pos.stopLoss.toFixed(2)}
+                                                </Typography>
                                             )}
-                                            <Typography
-                                                variant="h6"
-                                                sx={{
-                                                    fontWeight: 700,
-                                                    color: pos.unrealizedPL >= 0 ? '#10b981' : '#ef4444',
-                                                }}
-                                            >
-                                                ${pos.unrealizedPL.toFixed(2)} ({(pos.unrealizedPLPct * 100).toFixed(2)}%)
-                                            </Typography>
+                                            {pos.takeProfit != null && (
+                                                <Typography variant="caption" sx={{ color: '#10b981' }}>
+                                                    TP: ${pos.takeProfit.toFixed(2)}
+                                                </Typography>
+                                            )}
+                                            {pos.positionSize != null && (
+                                                <Typography variant="caption" color="text.secondary">
+                                                    Size: ${pos.positionSize.toFixed(0)}
+                                                </Typography>
+                                            )}
                                         </Box>
                                     </CardContent>
                                 </Card>
