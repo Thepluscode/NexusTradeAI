@@ -89,8 +89,8 @@ export default function BacktestPage() {
         );
     }
 
-    const { summary = {}, validation, symbolResults = [], results = [] } = report;
-    const recentTrades = results.slice(-20);
+    const { summary = {}, validation, symbolResults = [], trades = [] } = report;
+    const recentTrades = trades.slice(-20);
 
     return (
         <Box sx={{ p: 2 }}>
@@ -317,17 +317,17 @@ export default function BacktestPage() {
                                                 <TableCell align="right">
                                                     <Typography
                                                         variant="body2"
-                                                        color={(t.return || 0) >= 0 ? 'success.main' : 'error.main'}
+                                                        color={(t.returnPct || 0) >= 0 ? 'success.main' : 'error.main'}
                                                     >
-                                                        {((t.return || 0) * 100).toFixed(2)}%
+                                                        {((t.returnPct || 0) * 100).toFixed(2)}%
                                                     </Typography>
                                                 </TableCell>
                                                 <TableCell align="right">
                                                     <Typography
                                                         variant="body2"
-                                                        color={(t.pnl || 0) >= 0 ? 'success.main' : 'error.main'}
+                                                        color={(t.profit || 0) >= 0 ? 'success.main' : 'error.main'}
                                                     >
-                                                        ${(t.pnl || 0).toFixed(2)}
+                                                        ${(t.profit || 0).toFixed(2)}
                                                     </Typography>
                                                 </TableCell>
                                             </TableRow>
