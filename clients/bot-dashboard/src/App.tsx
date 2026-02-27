@@ -26,7 +26,7 @@ import {
   Menu as MenuIcon,
   Settings,
 } from '@mui/icons-material';
-import toast, { Toaster } from 'react-hot-toast';
+import { Toaster } from 'react-hot-toast';
 
 // Pages
 import OverviewPage from './pages/OverviewPage';
@@ -40,10 +40,9 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
+      // No global onError — individual bots handle offline gracefully with fallback data.
+      // A global handler would fire a toast every 5s for every offline bot.
       retry: 1,
-      onError: (error) => {
-        toast.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      },
     },
   },
 });

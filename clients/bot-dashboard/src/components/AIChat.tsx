@@ -109,7 +109,7 @@ function generateResponse(message: string, ctx: any): string {
         const fp = forex?.performance || {};
         return `💱 Forex Bot\n\n` +
             `• Running: ${forex?.isRunning ? 'Yes' : 'No'}\n` +
-            `• Session: ${forex?.session?.name || 'Unknown'}\n` +
+            `• Session: ${forex?.session || 'Unknown'}\n` +
             `• Trades: ${fp.totalTrades ?? 0}\n` +
             `• Win rate: ${fp.winRate != null ? fp.winRate.toFixed(1) + '%' : '—'}\n` +
             `• Open positions: ${(forex?.positions?.length ?? 0)}`;

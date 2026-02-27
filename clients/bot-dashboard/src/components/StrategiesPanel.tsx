@@ -183,8 +183,10 @@ export const StrategiesPanel: React.FC = () => {
     const crypto = data?.crypto;
 
     const stockStats = stock?.stats || stock?.performance || {};
-    const forexPerf = forex?.performance || {};
-    const cryptoPerf = crypto?.performance || {};
+    // Forex bot returns stats: {}, not performance: {}
+    const forexPerf = forex?.stats || forex?.performance || {};
+    // Crypto bot stats are top-level fields, not nested under performance
+    const cryptoPerf = crypto?.stats || crypto?.performance || {};
 
     const stockWinRate = stockStats.totalTrades > 0
         ? ((stockStats.winners ?? stockStats.winningTrades ?? 0) / stockStats.totalTrades) * 100
@@ -259,7 +261,7 @@ export const StrategiesPanel: React.FC = () => {
                         running={!!forex?.isRunning}
                         trades={forexPerf.totalTrades ?? 0}
                         winRate={forexWinRate}
-                        pnl={forexPerf.totalPnL ?? forexPerf.totalProfit ?? null}
+                        pnl={forexPerf.totalPnL ?? forexPerf.totalProfit ?? forex?.dailyPnL ?? null}
                         positions={forex?.positions?.length ?? 0}
                         mode={forex?.mode || 'PAPER'}
                     >
@@ -267,8 +269,8 @@ export const StrategiesPanel: React.FC = () => {
                             <Box sx={{ mt: 0.5 }}>
                                 <StatRow
                                     label="Session"
-                                    value={forex?.session?.name || 'Unknown'}
-                                    color={forex?.session?.quality === 'best' ? '#10b981' : undefined}
+                                    value={forex?.session || 'Unknown'}
+                                    color={forex?.session === 'OVERLAP' ? '#10b981' : undefined}
                                 />
                                 <StatRow label="Pairs" value="12 major/cross" />
                             </Box>
