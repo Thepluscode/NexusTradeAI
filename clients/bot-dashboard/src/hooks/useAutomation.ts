@@ -10,8 +10,8 @@ export function useAutomationStatus() {
         'automationStatus',
         () => apiClient.getAutomationStatus(),
         {
-            refetchInterval: 5000,
-            staleTime: 2500,
+            refetchInterval: 10000,
+            staleTime: 5000,
         }
     );
 }

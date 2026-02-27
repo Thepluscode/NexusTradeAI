@@ -102,7 +102,7 @@ class APIClient {
     try {
       const response = await this.tradingEngine.get('/api/trading/status');
       // Stock bot sends flat response — no {data:} wrapper
-      const data = response.data.data || response.data;
+      const data = response.data;
       return {
         isRunning: data?.isRunning || false,
         mode: data?.mode || (data?.isRunning ? 'Paper' : 'Offline'),
@@ -144,10 +144,14 @@ class APIClient {
     return { realTradingEnabled: false, confirmation: 'Switched to paper trading' };
   }
 
-  // Alpaca positions — same bot, different endpoints
+  // Alpaca positions — derived from the status endpoint (no dedicated /api/positions route)
   async getAlpacaPositions(): Promise<AlpacaPosition[]> {
-    const response = await this.tradingEngine.get('/api/positions');
-    return response.data.positions || [];
+    try {
+      const response = await this.tradingEngine.get('/api/trading/status');
+      return response.data?.positions ?? [];
+    } catch {
+      return [];
+    }
   }
 
   // ── Forex Bot (port 3005) ─────────────────────────────────────────────────
@@ -203,7 +207,7 @@ class APIClient {
   async getCryptoStatus(): Promise<any> {
     try {
       const response = await this.cryptoService.get('/api/crypto/status');
-      return response.data.data || response.data;
+      return response.data;
     } catch {
       return {
         isRunning: false, positions: [],
