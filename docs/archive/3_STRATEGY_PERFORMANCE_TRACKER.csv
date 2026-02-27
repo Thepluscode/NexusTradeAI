@@ -1,0 +1,14 @@
+Date,Time,Strategy,Symbol,Direction,Entry_Price,Exit_Price,Shares,Hold_Duration_Hours,PnL_Percent,PnL_Dollars,Win_Loss,Exit_Reason,Notes
+# ORB Strategy: Opening Range Breakout (1-3 trades/week, target 55-60% win rate)
+# GAP_FADE Strategy: Mean Reversion Short (2-5 trades/week, target 50-55% win rate)
+# HVB Strategy: High-Volume Breakout (3-7 trades/week, target 48-52% win rate)
+#
+# Instructions:
+# 1. Check Telegram alerts for trade notifications
+# 2. Log each trade manually in this file
+# 3. After 30 trades PER STRATEGY, calculate metrics:
+#    - Win Rate = (Wins / Total Trades) * 100
+#    - Profit Factor = Total Wins / Total Losses
+#    - Average Win = Total Win $ / Number of Wins
+#    - Average Loss = Total Loss $ / Number of Losses
+# 4. Compare which strategy performs best
