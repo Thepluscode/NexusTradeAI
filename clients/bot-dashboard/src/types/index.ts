@@ -329,6 +329,7 @@ export interface ServiceHealth {
   latency?: number;
   lastCheck: string;
   endpoints?: string[];
+  optional?: boolean;  // if true, offline status doesn't count against required service count
 }
 
 export interface SystemStatus {

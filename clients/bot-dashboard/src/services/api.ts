@@ -35,15 +35,13 @@ class APIClient {
 
   async getTradingEngineStatus(): Promise<TradingEngineStatus> {
     const response = await this.tradingEngine.get('/api/trading/status');
-    // Stock bot sends a flat response (no {data:} wrapper)
-    return response.data.data || response.data;
+    // Bot sends a flat JSON response (no {data:} wrapper)
+    return response.data;
   }
 
   async getActivePositions(): Promise<Position[]> {
     const response = await this.tradingEngine.get('/api/trading/status');
-    // Stock bot sends positions at top level, not nested under data
-    const payload = response.data.data || response.data;
-    return payload?.positions || [];
+    return response.data?.positions || [];
   }
 
   async startTradingEngine(): Promise<void> {
@@ -157,8 +155,8 @@ class APIClient {
   async getForexStatus(): Promise<any> {
     try {
       const response = await this.forexService.get('/api/forex/status');
-      // Forex bot sends flat JSON (no {data:} wrapper), handle both shapes
-      return response.data.data || response.data;
+      // Forex bot sends flat JSON (no {data:} wrapper)
+      return response.data;
     } catch {
       return {
         isRunning: false, marketOpen: false,
@@ -172,8 +170,7 @@ class APIClient {
   async getForexPositions(): Promise<any[]> {
     try {
       const response = await this.forexService.get('/api/forex/status');
-      const data = response.data.data || response.data;
-      return data?.positions || [];
+      return response.data?.positions || [];
     } catch {
       return [];
     }
@@ -278,21 +275,22 @@ class APIClient {
 
   async getAllServicesHealth(): Promise<ServiceHealth[]> {
     const services = [
-      { name: 'Stock Bot',   port: 3002 },
-      { name: 'Forex Bot',   port: 3005 },
-      { name: 'Crypto Bot',  port: 3006 },
-      { name: 'Market Data', port: 3001 },
-      { name: 'AI Service',  port: 5001 },
+      { name: 'Stock Bot',   port: 3002, optional: false },
+      { name: 'Forex Bot',   port: 3005, optional: false },
+      { name: 'Crypto Bot',  port: 3006, optional: false },
+      { name: 'Market Data', port: 3001, optional: true },
+      { name: 'AI Service',  port: 5001, optional: true },
     ];
     // allSettled so one unreachable service doesn't reject the whole batch
     const results = await Promise.allSettled(
       services.map(s => this.checkServiceHealth(s.name, s.port))
     );
-    return results.map((r, i) =>
-      r.status === 'fulfilled'
+    return results.map((r, i) => {
+      const base = r.status === 'fulfilled'
         ? r.value
-        : { name: services[i].name, status: 'offline' as const, port: services[i].port, latency: 0, lastCheck: new Date().toISOString() }
-    );
+        : { name: services[i].name, status: 'offline' as const, port: services[i].port, latency: 0, lastCheck: new Date().toISOString() };
+      return { ...base, optional: services[i].optional };
+    });
   }
 }
 

@@ -69,8 +69,9 @@ export const ServiceStatus: React.FC = () => {
         );
     }
 
-    const onlineCount = services?.filter(s => s.status === 'online').length || 0;
-    const totalCount = services?.length || 0;
+    const required = services?.filter(s => !s.optional) ?? [];
+    const onlineCount = required.filter(s => s.status === 'online').length;
+    const totalCount = required.length;
 
     return (
         <Card sx={{ bgcolor: 'background.paper', mb: 2 }}>
@@ -103,6 +104,7 @@ export const ServiceStatus: React.FC = () => {
                                     alignItems: 'center',
                                     gap: 1.5,
                                     transition: 'all 0.2s',
+                                    opacity: service.optional && service.status === 'offline' ? 0.45 : 1,
                                     '&:hover': {
                                         transform: 'translateY(-2px)',
                                         boxShadow: 3,
@@ -113,6 +115,11 @@ export const ServiceStatus: React.FC = () => {
                                 <Box flex={1}>
                                     <Typography variant="body2" fontWeight={500}>
                                         {service.name}
+                                        {service.optional && (
+                                            <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 0.5 }}>
+                                                (optional)
+                                            </Typography>
+                                        )}
                                     </Typography>
                                     <Typography variant="caption" color="text.secondary">
                                         Port: {service.port}

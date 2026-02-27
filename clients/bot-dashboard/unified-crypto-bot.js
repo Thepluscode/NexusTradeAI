@@ -918,7 +918,7 @@ class CryptoTradingEngine {
 
         const profitFactor = this.totalLoss > 0
             ? parseFloat((this.totalProfit / this.totalLoss).toFixed(2))
-            : 0;
+            : this.totalProfit > 0 ? null : 0; // null = all winners (undefined metric), 0 = no trades
 
         const netPnL = this.totalProfit - this.totalLoss;
 
@@ -962,7 +962,6 @@ class CryptoTradingEngine {
             },
             scanCount: this.scanCount,
             dailyTrades: this.dailyTradeCount,
-            totalTrades: this.totalTrades,
             winRate: `${winRate}%`,
             profitFactor,
             netPnL: netPnL.toFixed(2)
