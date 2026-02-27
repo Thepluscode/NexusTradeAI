@@ -40,6 +40,7 @@ const SERVICE_CONFIG = {
   brokerAPI: { baseURL: 'http://localhost:3003', timeout: 10000 },
   bankingService: { baseURL: 'http://localhost:3012', timeout: 10000 },
   forexService: { baseURL: 'http://localhost:3005', timeout: 10000 },  // Forex Bot
+  cryptoService: { baseURL: 'http://localhost:3006', timeout: 10000 }, // Crypto Bot
 };
 
 class APIClient {
@@ -52,6 +53,7 @@ class APIClient {
   private brokerAPI: AxiosInstance;
   private bankingService: AxiosInstance;
   private forexService: AxiosInstance;
+  private cryptoService: AxiosInstance;
 
   constructor() {
     this.tradingEngine = axios.create(SERVICE_CONFIG.tradingEngine);
@@ -63,6 +65,7 @@ class APIClient {
     this.brokerAPI = axios.create(SERVICE_CONFIG.brokerAPI);
     this.bankingService = axios.create(SERVICE_CONFIG.bankingService);
     this.forexService = axios.create(SERVICE_CONFIG.forexService);
+    this.cryptoService = axios.create(SERVICE_CONFIG.cryptoService);
   }
 
   // ==================================================
@@ -398,6 +401,36 @@ class APIClient {
   }
 
   // ==================================================
+  // Crypto Trading API (port 3006)
+  // ==================================================
+  async getCryptoStatus(): Promise<any> {
+    try {
+      const response = await this.cryptoService.get('/api/crypto/status');
+      return response.data.data || response.data;
+    } catch {
+      return {
+        isRunning: false,
+        positions: [],
+        portfolioValue: 0,
+        equity: 0,
+        performance: { totalTrades: 0, activePositions: 0 },
+      };
+    }
+  }
+
+  // ==================================================
+  // Backtest Report API
+  // ==================================================
+  async getBacktestReport(): Promise<any> {
+    try {
+      const response = await this.tradingEngine.get('/api/backtest/report');
+      return response.data.data;
+    } catch {
+      return null;
+    }
+  }
+
+  // ==================================================
   // Broker API (port 3003)
   // ==================================================
   async getBrokerStatus(): Promise<BrokerStatus> {
@@ -486,14 +519,11 @@ class APIClient {
 
     // Different services use different health endpoints
     const healthEndpoints: Record<string, string[]> = {
-      'Trading Engine': ['/api/health', '/health', '/api/trading/status'],
+      'Stock Bot': ['/api/trading/status', '/health', '/api/health'],
+      'Forex Bot': ['/api/forex/status', '/health', '/api/health'],
+      'Crypto Bot': ['/api/crypto/status', '/health', '/api/health'],
       'Market Data': ['/api/health', '/health', '/api/market/quote/SPY'],
-      'Risk Manager': ['/health', '/api/health', '/api/risk/report'],
       'AI Service': ['/health', '/api/health'],
-      'Dashboard API': ['/api/health', '/health'],
-      'Unified Positions': ['/api/positions', '/api/dashboard', '/api/account'],
-      'Broker API': ['/api/health', '/health', '/api/broker/status'],
-      'Banking Service': ['/api/banking/accounts', '/banking-dashboard.html', '/api/health'],
     };
 
     const endpoints = healthEndpoints[serviceName] || ['/health', '/api/health'];
@@ -526,14 +556,11 @@ class APIClient {
 
   async getAllServicesHealth(): Promise<ServiceHealth[]> {
     const services = [
-      { name: 'Trading Engine', port: 3002 },  // Updated: Trading Bot is on 3002
+      { name: 'Stock Bot',   port: 3002 },
+      { name: 'Forex Bot',   port: 3005 },
+      { name: 'Crypto Bot',  port: 3006 },
       { name: 'Market Data', port: 3001 },
-      { name: 'Risk Manager', port: 3004 },
-      { name: 'AI Service', port: 5001 },
-      { name: 'Dashboard API', port: 8080 },
-      { name: 'Unified Positions', port: 3005 },
-      { name: 'Broker API', port: 3003 },
-      { name: 'Banking Service', port: 3012 },
+      { name: 'AI Service',  port: 5001 },
     ];
 
     const results = await Promise.all(

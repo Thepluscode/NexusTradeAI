@@ -1184,6 +1184,17 @@ app.post('/test-telegram', async (req, res) => {
     }
 });
 
+// ===== BACKTEST REPORT ENDPOINT =====
+app.get('/api/backtest/report', (req, res) => {
+    try {
+        const reportPath = path.join(__dirname, '../../services/trading/backtest-report.json');
+        const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+        res.json({ success: true, data: report });
+    } catch {
+        res.status(404).json({ success: false, error: 'No backtest report found' });
+    }
+});
+
 // ===== PROMETHEUS METRICS ENDPOINT =====
 app.get('/metrics', async (req, res) => {
     try {
@@ -1221,6 +1232,34 @@ function resetDailyCounters() {
     }
 }
 
+async function checkEndOfDay() {
+    const now = getESTDate();
+    const hour = now.getHours();
+    const minute = now.getMinutes();
+    // Close all positions between 3:50 PM and 4:00 PM EST
+    if (hour === 15 && minute >= 50) {
+        if (positions.size > 0) {
+            console.log(`\n⚠️  [EOD] Market closing soon (${hour}:${String(minute).padStart(2, '0')} EST) - closing all ${positions.size} positions`);
+            for (const [symbol, pos] of positions) {
+                try {
+                    // Get current qty from Alpaca
+                    const posUrl = `${alpacaConfig.baseURL}/v2/positions/${symbol}`;
+                    const posRes = await axios.get(posUrl, {
+                        headers: {
+                            'APCA-API-KEY-ID': alpacaConfig.apiKey,
+                            'APCA-API-SECRET-KEY': alpacaConfig.secretKey
+                        }
+                    });
+                    const qty = posRes.data.qty;
+                    await closePosition(symbol, qty, 'End of Day');
+                } catch (err) {
+                    console.error(`❌ [EOD] Failed to close ${symbol}:`, err.message);
+                }
+            }
+        }
+    }
+}
+
 async function tradingLoop() {
     console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log(`⏰ Trading Loop #${scanCount + 1} - ${new Date().toLocaleTimeString()} | Trades today: ${totalTradesToday}/${MAX_TRADES_PER_DAY} | Positions: ${positions.size}`);
@@ -1229,6 +1268,7 @@ async function tradingLoop() {
     scanCount++;
     lastScanTime = new Date();
 
+    await checkEndOfDay();
     await managePositions();
 
     if (isGoodTradingTime()) {

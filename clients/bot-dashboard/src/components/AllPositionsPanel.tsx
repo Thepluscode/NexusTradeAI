@@ -22,14 +22,16 @@ import {
     AccountBalance,
     TrendingUp,
     TrendingDown,
+    CurrencyBitcoin,
 } from '@mui/icons-material';
 import { useTradingEngine } from '@/hooks/useTradingEngine';
 import { useForexTrading } from '@/hooks/useForexTrading';
+import { useCryptoTrading } from '@/hooks/useCryptoTrading';
 import { MetricCard } from '@/components/MetricCard';
 
 interface UnifiedPosition {
     symbol: string;
-    market: 'stocks' | 'forex';
+    market: 'stocks' | 'forex' | 'crypto';
     side: string;
     quantity: number;
     entryPrice: number;
@@ -42,11 +44,12 @@ interface UnifiedPosition {
 export const AllPositionsPanel: React.FC = () => {
     const { status: stockStatus, positions: stockPositions, isLoading: stockLoading } = useTradingEngine();
     const { status: forexStatus, positions: forexPositions, isLoading: forexLoading } = useForexTrading();
-    const [filter, setFilter] = useState<'all' | 'stocks' | 'forex'>('all');
+    const { status: cryptoStatus, positions: cryptoPositions, isLoading: cryptoLoading } = useCryptoTrading();
+    const [filter, setFilter] = useState<'all' | 'stocks' | 'forex' | 'crypto'>('all');
 
-    const isLoading = stockLoading || forexLoading;
+    const isLoading = stockLoading || forexLoading || cryptoLoading;
 
-    // Combine positions from both markets
+    // Combine positions from all markets
     const allPositions: UnifiedPosition[] = [
         // Stock positions
         ...(stockPositions || []).map((pos: any) => ({
@@ -72,6 +75,18 @@ export const AllPositionsPanel: React.FC = () => {
             unrealizedPnLPercent: 0,
             strategy: pos.strategy || 'forex-trend',
         })),
+        // Crypto positions
+        ...(cryptoPositions || []).map((pos: any) => ({
+            symbol: pos.symbol,
+            market: 'crypto' as const,
+            side: pos.side || 'long',
+            quantity: pos.quantity || 0,
+            entryPrice: pos.entryPrice || 0,
+            currentPrice: pos.currentPrice || 0,
+            unrealizedPnL: pos.unrealizedPnL || 0,
+            unrealizedPnLPercent: 0,
+            strategy: pos.strategy || 'crypto-momentum',
+        })),
     ];
 
     // Filter positions
@@ -88,18 +103,22 @@ export const AllPositionsPanel: React.FC = () => {
     const forexPnL = allPositions
         .filter(p => p.market === 'forex')
         .reduce((sum, pos) => sum + (pos.unrealizedPnL || 0), 0);
+    const cryptoPnL = allPositions
+        .filter(p => p.market === 'crypto')
+        .reduce((sum, pos) => sum + (pos.unrealizedPnL || 0), 0);
 
     const stockPortfolio = stockStatus?.portfolioValue || 0; // USD
     const forexPortfolio = forexStatus?.portfolioValue || 0; // GBP or USD
     const forexCurrency = forexStatus?.currency || 'USD'; // Get currency from API
     const forexCurrencySymbol = forexCurrency === 'GBP' ? '£' : '$';
+    const cryptoPortfolio = cryptoStatus?.portfolioValue || cryptoStatus?.equity || 0; // USD
 
     // Convert GBP to USD for total calculation (GBP/USD rate ~1.27)
     const GBP_TO_USD_RATE = 1.27;
     const forexPortfolioUSD = forexCurrency === 'GBP'
         ? forexPortfolio * GBP_TO_USD_RATE
         : forexPortfolio;
-    const totalPortfolio = stockPortfolio + forexPortfolioUSD;
+    const totalPortfolio = stockPortfolio + forexPortfolioUSD + cryptoPortfolio;
 
     if (isLoading && allPositions.length === 0) {
         return (
@@ -154,6 +173,15 @@ export const AllPositionsPanel: React.FC = () => {
                             icon={<CurrencyExchange />}
                         />
                     </Grid>
+                    <Grid item xs={12} sm={6} md={3}>
+                        <MetricCard
+                            title="Crypto Positions"
+                            value={(cryptoPositions?.length || 0).toString()}
+                            suffix={` ($${cryptoPnL.toFixed(0)})`}
+                            color="primary"
+                            icon={<CurrencyBitcoin />}
+                        />
+                    </Grid>
                 </Grid>
             </Paper>
 
@@ -176,13 +204,17 @@ export const AllPositionsPanel: React.FC = () => {
                         <CurrencyExchange sx={{ mr: 0.5 }} />
                         Forex ({forexPositions?.length || 0})
                     </ToggleButton>
+                    <ToggleButton value="crypto">
+                        <CurrencyBitcoin sx={{ mr: 0.5 }} />
+                        Crypto ({cryptoPositions?.length || 0})
+                    </ToggleButton>
                 </ToggleButtonGroup>
             </Box>
 
             {/* Positions Table */}
             <Paper sx={{ p: 2 }}>
                 <Typography variant="h6" sx={{ mb: 2 }}>
-                    {filter === 'all' ? 'All Positions' : filter === 'stocks' ? 'Stock Positions' : 'Forex Positions'}
+                    {filter === 'all' ? 'All Positions' : filter === 'stocks' ? 'Stock Positions' : filter === 'forex' ? 'Forex Positions' : 'Crypto Positions'}
                 </Typography>
 
                 {filteredPositions.length === 0 ? (
@@ -214,9 +246,9 @@ export const AllPositionsPanel: React.FC = () => {
                                         </TableCell>
                                         <TableCell>
                                             <Chip
-                                                icon={pos.market === 'stocks' ? <ShowChart /> : <CurrencyExchange />}
+                                                icon={pos.market === 'stocks' ? <ShowChart /> : pos.market === 'forex' ? <CurrencyExchange /> : <CurrencyBitcoin />}
                                                 label={pos.market.toUpperCase()}
-                                                color={pos.market === 'stocks' ? 'info' : 'warning'}
+                                                color={pos.market === 'stocks' ? 'info' : pos.market === 'forex' ? 'warning' : 'primary'}
                                                 size="small"
                                                 variant="outlined"
                                             />
@@ -303,6 +335,30 @@ export const AllPositionsPanel: React.FC = () => {
                         />
                         <Typography variant="body2" color="text.secondary">
                             OANDA • {forexStatus?.performance?.totalTrades || 0} trades today
+                        </Typography>
+                    </Paper>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                    <Paper sx={{ p: 2 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                            <CurrencyBitcoin color="secondary" />
+                            <Typography variant="subtitle1">Crypto Market</Typography>
+                        </Box>
+                        <Chip
+                            label={cryptoStatus?.isRunning ? 'Bot Running' : 'Bot Stopped'}
+                            color={cryptoStatus?.isRunning ? 'success' : 'default'}
+                            size="small"
+                            sx={{ mr: 1 }}
+                        />
+                        <Chip
+                            label={cryptoStatus?.mode || 'DEMO'}
+                            color="secondary"
+                            size="small"
+                            variant="outlined"
+                            sx={{ mr: 1 }}
+                        />
+                        <Typography variant="body2" color="text.secondary">
+                            Crypto.com • {cryptoStatus?.performance?.totalTrades || 0} trades total
                         </Typography>
                     </Paper>
                 </Grid>

@@ -695,6 +695,9 @@ class CryptoTradingEngine {
 
             // Remove position
             this.positions.delete(symbol);
+
+            // Persist performance data so it survives restarts
+            this.saveState();
         } catch (error) {
             console.error(`❌ Error closing position:`, error);
         }
@@ -802,7 +805,14 @@ class CryptoTradingEngine {
             const fs = require('fs');
             const dir = require('path').dirname(this.stateFile);
             if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-            fs.writeFileSync(this.stateFile, JSON.stringify({ running: this.isRunning }));
+            fs.writeFileSync(this.stateFile, JSON.stringify({
+                running: this.isRunning,
+                totalTrades: this.totalTrades,
+                winningTrades: this.winningTrades,
+                losingTrades: this.losingTrades,
+                totalProfit: this.totalProfit,
+                totalLoss: this.totalLoss,
+            }));
         } catch {}
     }
 
@@ -811,6 +821,12 @@ class CryptoTradingEngine {
             const fs = require('fs');
             if (fs.existsSync(this.stateFile)) {
                 const saved = JSON.parse(fs.readFileSync(this.stateFile, 'utf8'));
+                // Restore performance counters
+                if (saved.totalTrades != null) this.totalTrades = saved.totalTrades;
+                if (saved.winningTrades != null) this.winningTrades = saved.winningTrades;
+                if (saved.losingTrades != null) this.losingTrades = saved.losingTrades;
+                if (saved.totalProfit != null) this.totalProfit = saved.totalProfit;
+                if (saved.totalLoss != null) this.totalLoss = saved.totalLoss;
                 return saved.running !== false;
             }
         } catch {}

@@ -122,6 +122,43 @@ let simLongTrades = 0;
 let simShortTrades = 0;
 let simDailyPnL = 0;
 
+// ===== FOREX PERFORMANCE PERSISTENCE =====
+const fs = require('fs');
+const FOREX_PERF_FILE = path.join(__dirname, 'data/forex-performance.json');
+
+function loadForexPerf() {
+    try {
+        if (fs.existsSync(FOREX_PERF_FILE)) {
+            const saved = JSON.parse(fs.readFileSync(FOREX_PERF_FILE, 'utf8'));
+            simTotalTrades = saved.totalTrades || 0;
+            simWinners = saved.winners || 0;
+            simLosers = saved.losers || 0;
+            simLongTrades = saved.longTrades || 0;
+            simShortTrades = saved.shortTrades || 0;
+            // Don't restore equity or dailyPnL — those are session-specific
+            console.log(`📊 Forex perf restored: ${simTotalTrades} trades, ${simWinners}W/${simLosers}L`);
+        }
+    } catch {}
+}
+
+function saveForexPerf() {
+    try {
+        const dir = require('path').dirname(FOREX_PERF_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(FOREX_PERF_FILE, JSON.stringify({
+            totalTrades: simTotalTrades,
+            winners: simWinners,
+            losers: simLosers,
+            longTrades: simLongTrades,
+            shortTrades: simShortTrades,
+            lastUpdate: new Date().toISOString()
+        }));
+    } catch {}
+}
+
+// Load on startup
+loadForexPerf();
+
 // ===== REGISTER WITH MEMORY MANAGER =====
 memoryManager.register('forex_positions', positions, { maxSize: 50, maxAge: 7 * 24 * 60 * 60 * 1000 });
 memoryManager.register('forex_recentTrades', recentTrades, { maxSize: 500, maxAge: 24 * 60 * 60 * 1000 });
@@ -714,6 +751,17 @@ async function closePositionWithReason(pair, reason) {
     const result = await closePosition(pair);
 
     if (result) {
+        // Update sim performance stats
+        const pos = positions.get(pair);
+        simTotalTrades++;
+        if (pos) {
+            const isWin = reason.toLowerCase().includes('target') || reason.toLowerCase().includes('profit');
+            const isLoss = reason.toLowerCase().includes('stop');
+            if (isWin) simWinners++;
+            else if (isLoss) simLosers++;
+        }
+        saveForexPerf();
+
         positions.delete(pair);
 
         if (reason.toLowerCase().includes('stop')) {

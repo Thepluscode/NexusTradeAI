@@ -26,6 +26,7 @@ import {
   Storage,
   Policy,
   Psychology,
+  CurrencyBitcoin,
 } from '@mui/icons-material';
 import { useTradingEngine } from '@/hooks/useTradingEngine';
 import { useAIService } from '@/hooks/useAIService';
@@ -46,6 +47,7 @@ import { AIChat } from '@/components/AIChat';
 import { AutomationControl } from '@/components/AutomationControl';
 import { ForexPanel } from '@/components/ForexPanel';
 import { AllPositionsPanel } from '@/components/AllPositionsPanel';
+import CryptoBotPage from '@/pages/CryptoBotPage';
 
 import { apiClient } from '@/services/api';
 
@@ -193,6 +195,7 @@ export const Dashboard: React.FC = () => {
         >
           <Tab icon={<DashboardIcon />} iconPosition="start" label="Stocks" />
           <Tab icon={<Assessment />} iconPosition="start" label="Forex" />
+          <Tab icon={<CurrencyBitcoin />} iconPosition="start" label="Crypto" />
           <Tab icon={<TrendingUp />} iconPosition="start" label="All Positions" />
           <Tab icon={<Storage />} iconPosition="start" label="Services" />
           <Tab icon={<AccountBalance />} iconPosition="start" label="Banking" />
@@ -375,28 +378,33 @@ export const Dashboard: React.FC = () => {
           <ForexPanel />
         </TabPanel>
 
-        {/* --- Tab 2: All Positions --- */}
+        {/* --- Tab 2: Crypto --- */}
         <TabPanel value={tabValue} index={2}>
+          <CryptoBotPage />
+        </TabPanel>
+
+        {/* --- Tab 3: All Positions --- */}
+        <TabPanel value={tabValue} index={3}>
           <AllPositionsPanel />
         </TabPanel>
 
-        {/* --- Tab 3: Services --- */}
-        <TabPanel value={tabValue} index={3}>
+        {/* --- Tab 4: Services --- */}
+        <TabPanel value={tabValue} index={4}>
           <ServiceStatus />
         </TabPanel>
 
-        {/* --- Tab 4: Banking --- */}
-        <TabPanel value={tabValue} index={4}>
+        {/* --- Tab 5: Banking --- */}
+        <TabPanel value={tabValue} index={5}>
           <BankingPanel />
         </TabPanel>
 
-        {/* --- Tab 5: Compliance --- */}
-        <TabPanel value={tabValue} index={5}>
+        {/* --- Tab 6: Compliance --- */}
+        <TabPanel value={tabValue} index={6}>
           <CompliancePanel />
         </TabPanel>
 
-        {/* --- Tab 6: AI Assistant --- */}
-        <TabPanel value={tabValue} index={6}>
+        {/* --- Tab 7: AI Assistant --- */}
+        <TabPanel value={tabValue} index={7}>
           <Grid container spacing={3}>
             <Grid item xs={12} md={6}>
               <AIChat />
