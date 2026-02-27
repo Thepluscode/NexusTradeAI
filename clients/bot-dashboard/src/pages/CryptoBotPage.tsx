@@ -40,7 +40,7 @@ interface Position {
     currentPrice?: number;
     unrealizedPnL?: number;   // crypto bot field name
     unrealizedPL?: number;
-    unrealizedPLPct?: number;
+    unrealizedPnLPct?: number;
 }
 
 interface BotStatus {
@@ -52,6 +52,7 @@ interface BotStatus {
     btcTrend: string | null;
     equity: number;
     dailyReturn: number;
+    winRate?: string;   // "55.3%" — sent at root level by getStatus()
     positions: Position[];
     stats: {
         totalTrades: number;
