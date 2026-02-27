@@ -359,7 +359,7 @@ export const AllPositionsPanel: React.FC = () => {
                             sx={{ mr: 1 }}
                         />
                         <Typography variant="body2" color="text.secondary">
-                            Crypto.com • {cryptoStatus?.performance?.totalTrades || 0} trades total
+                            Crypto.com • {cryptoStatus?.stats?.totalTrades ?? cryptoStatus?.totalTrades ?? 0} trades total
                         </Typography>
                     </Paper>
                 </Grid>

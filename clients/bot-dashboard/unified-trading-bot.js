@@ -1018,19 +1018,25 @@ app.get('/api/trading/status', async (req, res) => {
         const equity = parseFloat(account.equity);
         const lastEquity = parseFloat(account.last_equity);
 
-        const positionsData = positionsResponse.data.map(pos => ({
-            id: pos.asset_id || pos.symbol,
-            symbol: pos.symbol,
-            side: pos.side || 'long',
-            quantity: parseFloat(pos.qty),
-            entryPrice: parseFloat(pos.avg_entry_price),
-            currentPrice: parseFloat(pos.current_price),
-            unrealizedPnL: parseFloat(pos.unrealized_pl),
-            pnl: parseFloat(pos.unrealized_pl),
-            strategy: 'improved-unified',
-            openTime: Date.now(),
-            confidence: 0.85
-        }));
+        const positionsData = positionsResponse.data.map(pos => {
+            const tracked = positions.get(pos.symbol);
+            const entryTime = tracked?.entryTime instanceof Date
+                ? tracked.entryTime.getTime()
+                : (tracked?.entryTime ? new Date(tracked.entryTime).getTime() : null);
+            return {
+                id: pos.asset_id || pos.symbol,
+                symbol: pos.symbol,
+                side: pos.side || 'long',
+                quantity: parseFloat(pos.qty),
+                entryPrice: parseFloat(pos.avg_entry_price),
+                currentPrice: parseFloat(pos.current_price),
+                unrealizedPnL: parseFloat(pos.unrealized_pl),
+                pnl: parseFloat(pos.unrealized_pl),
+                strategy: 'improved-unified',
+                openTime: entryTime,
+                confidence: 0.85
+            };
+        });
 
         // Update perf data with live equity
         perfData.activePositions = positionsData.length;

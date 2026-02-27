@@ -17,16 +17,32 @@ export interface CryptoStatus {
     isPaused: boolean;
     demoMode: boolean;
     mode: string;
+    tradingMode?: string;
+    btcTrend?: string | null;
+    isVolatilityPaused?: boolean;
     positions: CryptoPosition[];
-    portfolioValue: number;
+    portfolioValue?: number;
     equity: number;
-    performance: {
+    dailyReturn?: number;
+    // Crypto bot sends stats, not performance
+    stats?: {
+        totalTrades: number;
+        longTrades?: number;
+        shortTrades?: number;
+        winners?: number;
+        losers?: number;
+        totalPnL?: number;
+    };
+    performance?: {
         totalTrades: number;
         activePositions: number;
         winRate?: number;
         profitFactor?: number;
     };
     dailyPnL?: number;
+    winRate?: string | number;
+    totalTrades?: number;
+    scanCount?: number;
 }
 
 export function useCryptoTrading() {
