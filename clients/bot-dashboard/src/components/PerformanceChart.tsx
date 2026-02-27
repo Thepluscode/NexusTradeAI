@@ -21,9 +21,9 @@ interface PerformanceChartProps {
 
 export const PerformanceChart: React.FC<PerformanceChartProps> = ({ data }) => {
   const formattedData = (data ?? []).map((item) => ({
-    time: new Date(item.timestamp).toLocaleTimeString(),
-    'P&L': item.pnl,
-    Equity: item.equity,
+    time: item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : '—',
+    'P&L': item.pnl ?? 0,
+    Equity: item.equity ?? 0,
   }));
 
   return (

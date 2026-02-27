@@ -51,7 +51,7 @@ function StatRow({ label, value, color }: { label: string; value: React.ReactNod
 }
 
 function TierBar({ label, stopLoss, profitTarget, color }: { label: string; stopLoss: number; profitTarget: number; color: string }) {
-    const rr = profitTarget / stopLoss;
+    const rr = stopLoss > 0 ? profitTarget / stopLoss : 0;
     const fillPct = Math.min((rr / 4) * 100, 100); // max display at 4:1
 
     return (
