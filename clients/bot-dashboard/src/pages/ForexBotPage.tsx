@@ -211,7 +211,7 @@ export default function ForexBotPage() {
                                 EQUITY
                             </Typography>
                             <Typography variant="h5" sx={{ fontWeight: 700, mt: 0.5 }}>
-                                ${status?.equity?.toLocaleString() ?? '0'}
+                                ${(status?.equity ?? 0).toLocaleString()}
                             </Typography>
                         </CardContent>
                     </Card>
