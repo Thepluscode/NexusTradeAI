@@ -110,7 +110,7 @@ class APIClient {
         mode: data?.mode || (data?.isRunning ? 'Paper' : 'Offline'),
         strategiesActive: data?.stats?.totalTrades > 0 ? 3 : 0,  // 3 tiers active when trading
         symbolsMonitored: data?.config?.symbols?.length || 0,
-        dailyPnL: data?.dailyReturn || 0,
+        dailyPnL: data?.dailyPnL || 0,
         tradesExecutedToday: data?.stats?.totalTradesToday || data?.stats?.totalTrades || 0,
         activePositions: data?.positions?.length || 0,
         realTradingEnabled: import.meta.env.VITE_REAL_TRADING_ENABLED === 'true',
