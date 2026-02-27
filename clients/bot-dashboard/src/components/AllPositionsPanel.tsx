@@ -59,7 +59,7 @@ export const AllPositionsPanel: React.FC = () => {
             quantity: pos.quantity || pos.qty || 0,
             entryPrice: pos.avg_entry_price || pos.entry || pos.entryPrice || 0,
             currentPrice: pos.current_price || pos.currentPrice || 0,
-            unrealizedPnL: pos.unrealized_pl || pos.unrealizedPnL || pos.pnl || 0,
+            unrealizedPnL: pos.unrealized_pl ?? pos.unrealizedPnL ?? pos.pnl ?? 0,
             unrealizedPnLPercent: (pos.unrealized_plpc != null ? pos.unrealized_plpc * 100 : null) ?? pos.pnlPercent ?? 0,
             strategy: pos.strategy || 'momentum',
         })),
@@ -87,7 +87,7 @@ export const AllPositionsPanel: React.FC = () => {
             quantity: pos.quantity || pos.qty || 0,
             entryPrice: pos.entry ?? pos.entryPrice ?? 0,
             currentPrice: pos.currentPrice || 0,
-            unrealizedPnL: pos.unrealizedPnL || 0,
+            unrealizedPnL: pos.unrealizedPnL ?? 0,
             unrealizedPnLPercent: pos.unrealizedPnLPct != null
                 ? pos.unrealizedPnLPct
                 : (pos.entry ?? pos.entryPrice ?? 0) > 0 && (pos.quantity ?? pos.qty ?? 0) > 0
@@ -104,23 +104,23 @@ export const AllPositionsPanel: React.FC = () => {
     });
 
     // Calculate totals
-    const totalPnL = allPositions.reduce((sum, pos) => sum + (pos.unrealizedPnL || 0), 0);
+    const totalPnL = allPositions.reduce((sum, pos) => sum + (pos.unrealizedPnL ?? 0), 0);
     const stockPnL = allPositions
         .filter(p => p.market === 'stocks')
-        .reduce((sum, pos) => sum + (pos.unrealizedPnL || 0), 0);
+        .reduce((sum, pos) => sum + (pos.unrealizedPnL ?? 0), 0);
     const forexPnL = allPositions
         .filter(p => p.market === 'forex')
-        .reduce((sum, pos) => sum + (pos.unrealizedPnL || 0), 0);
+        .reduce((sum, pos) => sum + (pos.unrealizedPnL ?? 0), 0);
     const cryptoPnL = allPositions
         .filter(p => p.market === 'crypto')
-        .reduce((sum, pos) => sum + (pos.unrealizedPnL || 0), 0);
+        .reduce((sum, pos) => sum + (pos.unrealizedPnL ?? 0), 0);
 
-    const stockPortfolio = stockStatus?.equity || stockStatus?.portfolioValue || 0; // USD — stock bot sends `equity`
+    const stockPortfolio = stockStatus?.equity ?? stockStatus?.portfolioValue ?? 0; // USD — stock bot sends `equity`
     // Forex bot sends `equity`, not `portfolioValue`
-    const forexPortfolio = forexStatus?.equity || forexStatus?.portfolioValue || 0; // GBP or USD
-    const forexCurrency = forexStatus?.currency || 'USD'; // Get currency from API
+    const forexPortfolio = forexStatus?.equity ?? forexStatus?.portfolioValue ?? 0; // GBP or USD
+    const forexCurrency = forexStatus?.currency ?? 'USD'; // Get currency from API
     const forexCurrencySymbol = forexCurrency === 'GBP' ? '£' : '$';
-    const cryptoPortfolio = cryptoStatus?.portfolioValue || cryptoStatus?.equity || 0; // USD
+    const cryptoPortfolio = cryptoStatus?.portfolioValue ?? cryptoStatus?.equity ?? 0; // USD
 
     // Convert GBP to USD for total calculation (GBP/USD rate ~1.27)
     const GBP_TO_USD_RATE = 1.27;
