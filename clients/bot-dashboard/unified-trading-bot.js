@@ -170,10 +170,12 @@ memoryManager.on('critical', (data) => {
     console.error(`🚨 CRITICAL MEMORY: ${data.heapUsedMB}MB - forcing cleanup`);
 });
 
-const MAX_TRADES_PER_DAY = 15;
+let MAX_TRADES_PER_DAY = parseInt(process.env.MAX_TRADES_PER_DAY || '15');
 const MAX_TRADES_PER_SYMBOL = 3;
 const MIN_TIME_BETWEEN_TRADES = 10 * 60 * 1000;
 const MIN_TIME_AFTER_STOP = 60 * 60 * 1000;
+let MAX_DAILY_LOSS = parseFloat(process.env.MAX_DAILY_LOSS || '500');   // $ amount
+let MAX_DRAWDOWN_PCT = parseFloat(process.env.MAX_DRAWDOWN_PCT || '10'); // percent
 
 // ===== NEW: TIME-BASED EXIT CONFIGURATION =====
 const EXIT_CONFIG = {
@@ -1229,6 +1231,11 @@ app.get('/api/config', (req, res) => {
                     phone: process.env.ALERT_PHONE_NUMBER ? `***${process.env.ALERT_PHONE_NUMBER.slice(-4)}` : null,
                 },
             },
+            riskLimits: {
+                maxDailyLoss: MAX_DAILY_LOSS,
+                maxDrawdown: MAX_DRAWDOWN_PCT,
+                maxTradesPerDay: MAX_TRADES_PER_DAY,
+            },
         }
     });
 });
@@ -1277,6 +1284,48 @@ app.post('/api/config/mode', (req, res) => {
         console.log(`⚙️  Trading mode switched to: ${mode.toUpperCase()}`);
 
         res.json({ success: true, mode });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+app.post('/api/config/risk-limits', (req, res) => {
+    try {
+        const { maxDailyLoss, maxDrawdown, maxTradesPerDay } = req.body;
+        if (maxDailyLoss !== undefined && typeof maxDailyLoss === 'number' && maxDailyLoss > 0) {
+            MAX_DAILY_LOSS = maxDailyLoss;
+        }
+        if (maxDrawdown !== undefined && typeof maxDrawdown === 'number' && maxDrawdown > 0 && maxDrawdown <= 100) {
+            MAX_DRAWDOWN_PCT = maxDrawdown;
+        }
+        if (maxTradesPerDay !== undefined && typeof maxTradesPerDay === 'number' && maxTradesPerDay > 0) {
+            MAX_TRADES_PER_DAY = maxTradesPerDay;
+        }
+
+        // Persist to .env
+        const envPath = path.join(__dirname, '../../.env');
+        let envContent = '';
+        try { envContent = fs.readFileSync(envPath, 'utf8'); } catch { envContent = ''; }
+
+        const updates = {
+            MAX_DAILY_LOSS: String(MAX_DAILY_LOSS),
+            MAX_DRAWDOWN_PCT: String(MAX_DRAWDOWN_PCT),
+            MAX_TRADES_PER_DAY: String(MAX_TRADES_PER_DAY),
+        };
+        for (const [key, value] of Object.entries(updates)) {
+            const regex = new RegExp(`^${key}=.*$`, 'm');
+            const line = `${key}=${value}`;
+            if (regex.test(envContent)) {
+                envContent = envContent.replace(regex, line);
+            } else {
+                envContent += `\n${line}`;
+            }
+            process.env[key] = value;
+        }
+        fs.writeFileSync(envPath, envContent);
+
+        console.log(`⚙️  Risk limits updated: maxDailyLoss=$${MAX_DAILY_LOSS} maxDrawdown=${MAX_DRAWDOWN_PCT}% maxTrades=${MAX_TRADES_PER_DAY}`);
+        res.json({ success: true, riskLimits: { maxDailyLoss: MAX_DAILY_LOSS, maxDrawdown: MAX_DRAWDOWN_PCT, maxTradesPerDay: MAX_TRADES_PER_DAY } });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }

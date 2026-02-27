@@ -485,116 +485,135 @@ function RiskTierCard({
 
 // ─── FUND MANAGEMENT ────────────────────────────────────────────────────────
 
-function FundManagement({ config }: { config: any }) {
-    const [depositAmt, setDepositAmt] = useState('');
-    const [withdrawAmt, setWithdrawAmt] = useState('');
+async function fetchAllBalances() {
+    const [stock, forex, crypto] = await Promise.allSettled([
+        axios.get('http://localhost:3002/api/accounts/summary', { timeout: 4000 }),
+        axios.get('http://localhost:3005/api/forex/status', { timeout: 4000 }),
+        axios.get('http://localhost:3006/api/crypto/status', { timeout: 4000 }),
+    ]);
 
+    const stockData = stock.status === 'fulfilled' ? stock.value.data?.data : null;
+    const forexData = forex.status === 'fulfilled' ? forex.value.data?.data || forex.value.data : null;
+    const cryptoData = crypto.status === 'fulfilled' ? crypto.value.data?.data || crypto.value.data : null;
+
+    return { stock: stockData, forex: forexData, crypto: cryptoData };
+}
+
+async function saveRiskLimits(payload: { maxDailyLoss: number; maxDrawdown: number; maxTradesPerDay: number }) {
+    const res = await axios.post('http://localhost:3002/api/config/risk-limits', payload);
+    return res.data;
+}
+
+function FundManagement({ config }: { config: any }) {
+    const queryClient = useQueryClient();
     const isPaper = config?.trading?.mode !== 'live';
+
+    // Risk limit state — initialise from config when it loads
+    const [maxDailyLoss, setMaxDailyLoss] = useState<number>(config?.riskLimits?.maxDailyLoss ?? 500);
+    const [maxDrawdown, setMaxDrawdown] = useState<number>(config?.riskLimits?.maxDrawdown ?? 10);
+    const [maxTrades, setMaxTrades] = useState<number>(config?.riskLimits?.maxTradesPerDay ?? 15);
+
+    // Sync slider values when config first loads
+    React.useEffect(() => {
+        if (config?.riskLimits) {
+            setMaxDailyLoss(config.riskLimits.maxDailyLoss ?? 500);
+            setMaxDrawdown(config.riskLimits.maxDrawdown ?? 10);
+            setMaxTrades(config.riskLimits.maxTradesPerDay ?? 15);
+        }
+    }, [config?.riskLimits?.maxDailyLoss, config?.riskLimits?.maxDrawdown, config?.riskLimits?.maxTradesPerDay]);
+
+    const { data: balances, isLoading: balLoading } = useQuery('allBalances', fetchAllBalances, {
+        refetchInterval: 15000,
+    });
+
+    const { mutate: applyLimits, isLoading: savingLimits } = useMutation(saveRiskLimits, {
+        onSuccess: () => {
+            toast.success('Risk limits updated');
+            void queryClient.invalidateQueries('botConfig');
+        },
+        onError: () => { toast.error('Failed — is the Stock Bot running?'); },
+    });
+
+    const stockBalance = balances?.stock?.realAccount?.balance ?? balances?.stock?.demoAccount?.balance ?? null;
+    const stockEquity  = balances?.stock?.realAccount?.equity  ?? balances?.stock?.demoAccount?.equity  ?? null;
+    const stockPnL     = balances?.stock?.realAccount?.pnl     ?? null;
+    const forexBalance = balances?.forex?.account?.balance ?? balances?.forex?.equity ?? null;
+    const cryptoBalance = balances?.crypto?.portfolioValue ?? balances?.crypto?.equity ?? null;
+
+    const totalPortfolio = [stockEquity, forexBalance, cryptoBalance]
+        .filter((v): v is number => v !== null)
+        .reduce((a, b) => a + b, 0);
+
+    const brokers = [
+        {
+            icon: <ShowChart />,
+            name: 'Alpaca',
+            label: isPaper ? 'Paper Account' : 'Live Account',
+            color: '#10b981',
+            configured: !!config?.brokers?.alpaca?.configured,
+            balance: stockBalance,
+            equity: stockEquity,
+            pnl: stockPnL,
+            depositUrl: 'https://app.alpaca.markets/account/transfers',
+            depositLabel: 'Deposit via Alpaca',
+        },
+        {
+            icon: <CurrencyExchange />,
+            name: 'OANDA',
+            label: 'Forex Account',
+            color: '#3b82f6',
+            configured: !!config?.brokers?.oanda?.configured,
+            balance: forexBalance,
+            equity: null,
+            pnl: null,
+            depositUrl: 'https://www.oanda.com/account/funds',
+            depositLabel: 'Deposit via OANDA',
+        },
+        {
+            icon: <CurrencyBitcoin />,
+            name: config?.brokers?.crypto?.exchange
+                ? config.brokers.crypto.exchange.charAt(0).toUpperCase() + config.brokers.crypto.exchange.slice(1)
+                : 'Crypto Exchange',
+            label: config?.brokers?.crypto?.testnet ? 'Testnet' : 'Live Exchange',
+            color: '#f59e0b',
+            configured: !!config?.brokers?.crypto?.configured,
+            balance: cryptoBalance,
+            equity: null,
+            pnl: null,
+            depositUrl: null,
+            depositLabel: null,
+        },
+    ];
 
     return (
         <Stack spacing={3}>
-            {isPaper && (
-                <Alert
-                    severity="info"
-                    icon={<ScienceOutlined />}
-                    sx={{ borderRadius: 2 }}
-                >
-                    You are in <strong>Paper Trading</strong> mode. No real funds are at risk. Switch to Live mode and connect a funded broker account to trade with real capital.
-                </Alert>
-            )}
 
-            <Grid container spacing={2}>
-                <Grid item xs={12} sm={6}>
-                    <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid', borderColor: 'divider' }}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-                            <AddCircleOutline sx={{ color: 'success.main' }} />
-                            <Typography fontWeight={600}>Deposit Funds</Typography>
-                        </Box>
-                        <TextField
-                            fullWidth
-                            size="small"
-                            label="Amount"
-                            value={depositAmt}
-                            onChange={e => setDepositAmt(e.target.value)}
-                            InputProps={{
-                                startAdornment: <InputAdornment position="start">$</InputAdornment>,
-                            }}
-                            sx={{ mb: 2 }}
-                        />
-                        <Stack spacing={1} sx={{ mb: 2 }}>
-                            {['100', '500', '1000', '5000'].map(amt => (
-                                <Button
-                                    key={amt}
-                                    variant="outlined"
-                                    size="small"
-                                    onClick={() => setDepositAmt(amt)}
-                                    sx={{ borderRadius: 2, textTransform: 'none', justifyContent: 'flex-start' }}
-                                >
-                                    ${parseInt(amt).toLocaleString()}
-                                </Button>
-                            ))}
-                        </Stack>
-                        <Button
-                            variant="contained"
-                            fullWidth
-                            disabled={!depositAmt || isPaper}
-                            sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
-                            onClick={() => toast.error('Connect a live broker account to deposit funds')}
-                        >
-                            {isPaper ? 'Requires Live Mode' : 'Deposit'}
-                        </Button>
-                    </Paper>
-                </Grid>
-
-                <Grid item xs={12} sm={6}>
-                    <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid', borderColor: 'divider' }}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-                            <RemoveCircleOutline sx={{ color: 'warning.main' }} />
-                            <Typography fontWeight={600}>Withdraw Funds</Typography>
-                        </Box>
-                        <TextField
-                            fullWidth
-                            size="small"
-                            label="Amount"
-                            value={withdrawAmt}
-                            onChange={e => setWithdrawAmt(e.target.value)}
-                            InputProps={{
-                                startAdornment: <InputAdornment position="start">$</InputAdornment>,
-                            }}
-                            sx={{ mb: 2 }}
-                        />
-                        <Box sx={{ mb: 2, p: 2, borderRadius: 2, bgcolor: 'background.default' }}>
-                            <Typography variant="caption" color="text.secondary">
-                                Withdrawals route through your connected broker. Processing time: 1–3 business days.
-                            </Typography>
-                        </Box>
-                        <Button
-                            variant="outlined"
-                            color="warning"
-                            fullWidth
-                            disabled={!withdrawAmt || isPaper}
-                            sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
-                            onClick={() => toast.error('Connect a live broker account to withdraw funds')}
-                        >
-                            {isPaper ? 'Requires Live Mode' : 'Withdraw'}
-                        </Button>
-                    </Paper>
-                </Grid>
-            </Grid>
-
+            {/* Portfolio summary */}
             <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid', borderColor: 'divider' }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-                    <AccountBalanceWallet sx={{ color: 'primary.main' }} />
-                    <Typography fontWeight={600}>Linked Broker Accounts</Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2.5 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <AccountBalanceWallet sx={{ color: 'primary.main' }} />
+                        <Typography fontWeight={700}>Portfolio Overview</Typography>
+                    </Box>
+                    {balLoading && <CircularProgress size={16} />}
                 </Box>
+
+                <Box sx={{ p: 2.5, borderRadius: 2, bgcolor: 'background.default', mb: 2.5 }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                        Total across all accounts
+                    </Typography>
+                    <Typography variant="h4" fontWeight={800}>
+                        ${totalPortfolio > 0 ? totalPortfolio.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
+                    </Typography>
+                    {isPaper && (
+                        <Chip label="Paper mode — simulated capital" size="small" color="primary" variant="outlined" sx={{ mt: 1, fontSize: 11 }} />
+                    )}
+                </Box>
+
                 <Stack spacing={1.5}>
-                    {[
-                        { name: 'Alpaca Paper Account', balance: null, configured: config?.brokers?.alpaca?.configured, color: '#10b981' },
-                        { name: 'OANDA Practice Account', balance: null, configured: config?.brokers?.oanda?.configured, color: '#3b82f6' },
-                        { name: 'Crypto Exchange (Binance)', balance: null, configured: config?.brokers?.crypto?.configured, color: '#f59e0b' },
-                    ].map(acct => (
+                    {brokers.map(b => (
                         <Box
-                            key={acct.name}
+                            key={b.name}
                             sx={{
                                 display: 'flex',
                                 alignItems: 'center',
@@ -602,22 +621,185 @@ function FundManagement({ config }: { config: any }) {
                                 p: 2,
                                 borderRadius: 2,
                                 bgcolor: 'background.default',
+                                border: '1px solid',
+                                borderColor: b.configured ? `${b.color}30` : 'transparent',
                             }}
                         >
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                                <StatusDot ok={!!acct.configured} />
-                                <Typography variant="body2" fontWeight={500}>{acct.name}</Typography>
+                                <Avatar sx={{ bgcolor: `${b.color}20`, color: b.color, width: 34, height: 34 }}>
+                                    {b.icon}
+                                </Avatar>
+                                <Box>
+                                    <Typography variant="body2" fontWeight={600}>{b.name}</Typography>
+                                    <Typography variant="caption" color="text.secondary">{b.label}</Typography>
+                                </Box>
                             </Box>
-                            <Chip
-                                label={acct.configured ? 'Connected' : 'Not configured'}
-                                color={acct.configured ? 'success' : 'default'}
-                                size="small"
-                                variant={acct.configured ? 'filled' : 'outlined'}
-                            />
+                            <Box sx={{ textAlign: 'right' }}>
+                                {b.configured && b.balance !== null ? (
+                                    <>
+                                        <Typography variant="body2" fontWeight={700}>
+                                            ${b.balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                        </Typography>
+                                        {b.pnl !== null && (
+                                            <Typography variant="caption" color={b.pnl >= 0 ? 'success.main' : 'error.main'}>
+                                                {b.pnl >= 0 ? '+' : ''}${b.pnl.toFixed(2)} P&L
+                                            </Typography>
+                                        )}
+                                    </>
+                                ) : (
+                                    <Chip
+                                        label={b.configured ? 'Fetching…' : 'Not configured'}
+                                        size="small"
+                                        color={b.configured ? 'default' : 'default'}
+                                        variant="outlined"
+                                        sx={{ fontSize: 11 }}
+                                    />
+                                )}
+                            </Box>
                         </Box>
                     ))}
                 </Stack>
             </Paper>
+
+            {/* Deposit / Withdraw */}
+            <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid', borderColor: 'divider' }}>
+                <Typography fontWeight={700} sx={{ mb: 2 }}>Deposit & Withdrawal</Typography>
+
+                {isPaper ? (
+                    <Alert severity="info" icon={<ScienceOutlined />} sx={{ borderRadius: 2 }}>
+                        You are in <strong>Paper Trading</strong> mode — no real funds involved. Switch to Live mode in the Trading Mode section, then connect a funded broker account to deposit real capital.
+                    </Alert>
+                ) : (
+                    <Stack spacing={1.5}>
+                        {brokers.filter(b => b.configured && b.depositUrl).map(b => (
+                            <Box
+                                key={b.name}
+                                sx={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    p: 2,
+                                    borderRadius: 2,
+                                    bgcolor: 'background.default',
+                                }}
+                            >
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                                    <Avatar sx={{ bgcolor: `${b.color}20`, color: b.color, width: 32, height: 32 }}>
+                                        {b.icon}
+                                    </Avatar>
+                                    <Box>
+                                        <Typography variant="body2" fontWeight={600}>{b.name}</Typography>
+                                        <Typography variant="caption" color="text.secondary">
+                                            Balance: {b.balance !== null ? `$${b.balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
+                                        </Typography>
+                                    </Box>
+                                </Box>
+                                <Button
+                                    variant="outlined"
+                                    size="small"
+                                    endIcon={<OpenInNew sx={{ fontSize: 13 }} />}
+                                    href={b.depositUrl!}
+                                    target="_blank"
+                                    rel="noopener"
+                                    sx={{ borderRadius: 2, textTransform: 'none', fontSize: 12 }}
+                                >
+                                    {b.depositLabel}
+                                </Button>
+                            </Box>
+                        ))}
+                        {brokers.filter(b => b.configured && b.depositUrl).length === 0 && (
+                            <Alert severity="warning" sx={{ borderRadius: 2 }}>
+                                No broker accounts configured yet. Add credentials in the Brokers section.
+                            </Alert>
+                        )}
+                        <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'background.default' }}>
+                            <Typography variant="caption" color="text.secondary">
+                                Deposits and withdrawals are processed directly through your broker's platform. NexusTradeAI does not hold or transfer funds.
+                            </Typography>
+                        </Box>
+                    </Stack>
+                )}
+            </Paper>
+
+            {/* Risk limits */}
+            <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid', borderColor: 'divider' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                    <WarningAmber sx={{ color: 'warning.main', fontSize: 20 }} />
+                    <Typography fontWeight={700}>Risk Limits</Typography>
+                </Box>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2.5 }}>
+                    The bot automatically stops trading when these thresholds are hit.
+                </Typography>
+
+                <Stack spacing={3}>
+                    <Box>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                            <Typography variant="body2" color="text.secondary">Max daily loss</Typography>
+                            <Typography variant="body2" fontWeight={700} color="error.main">
+                                ${maxDailyLoss.toLocaleString()}
+                            </Typography>
+                        </Box>
+                        <Slider
+                            value={maxDailyLoss}
+                            min={100} max={5000} step={100}
+                            onChange={(_, v) => setMaxDailyLoss(v as number)}
+                            sx={{ color: '#ef4444' }}
+                            size="small"
+                        />
+                        <Typography variant="caption" color="text.secondary">
+                            Bot pauses for the day once cumulative losses reach this amount.
+                        </Typography>
+                    </Box>
+
+                    <Box>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                            <Typography variant="body2" color="text.secondary">Max drawdown kill switch</Typography>
+                            <Typography variant="body2" fontWeight={700} color="warning.main">
+                                {maxDrawdown}%
+                            </Typography>
+                        </Box>
+                        <Slider
+                            value={maxDrawdown}
+                            min={5} max={30} step={1}
+                            onChange={(_, v) => setMaxDrawdown(v as number)}
+                            sx={{ color: '#f59e0b' }}
+                            size="small"
+                        />
+                        <Typography variant="caption" color="text.secondary">
+                            All bots halt and close positions if portfolio drawdown exceeds this level.
+                        </Typography>
+                    </Box>
+
+                    <Box>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                            <Typography variant="body2" color="text.secondary">Max trades per day</Typography>
+                            <Typography variant="body2" fontWeight={700}>{maxTrades}</Typography>
+                        </Box>
+                        <Slider
+                            value={maxTrades}
+                            min={1} max={30} step={1}
+                            onChange={(_, v) => setMaxTrades(v as number)}
+                            sx={{ color: 'primary.main' }}
+                            size="small"
+                        />
+                        <Typography variant="caption" color="text.secondary">
+                            Anti-churning guard. Recommended: 10–15 trades per day.
+                        </Typography>
+                    </Box>
+
+                    <Button
+                        variant="contained"
+                        size="small"
+                        startIcon={savingLimits ? <CircularProgress size={13} color="inherit" /> : <Save fontSize="small" />}
+                        disabled={savingLimits}
+                        onClick={() => applyLimits({ maxDailyLoss, maxDrawdown, maxTradesPerDay: maxTrades })}
+                        sx={{ alignSelf: 'flex-start', borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
+                    >
+                        Apply Limits
+                    </Button>
+                </Stack>
+            </Paper>
+
         </Stack>
     );
 }
