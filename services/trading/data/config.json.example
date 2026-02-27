@@ -1,0 +1,26 @@
+{
+  "symbols": [
+    "SPY", "QQQ", "IWM", "DIA", "VOO", "VTI",
+    "AAPL", "MSFT", "GOOGL", "TSLA", "NVDA", "AMZN", "META", "NFLX",
+    "AMD", "INTC", "QCOM", "AVGO", "MU", "TSM",
+    "V", "MA", "PYPL", "JPM", "BAC", "GS", "MS",
+    "CRM", "ADBE", "ORCL", "NOW", "SNOW", "PLTR",
+    "XLK", "VGT", "XLF", "XLV", "XLE", "XLY", "XLI", "XLB", "XLRE", "XLU", "XLP",
+    "SOXX", "SMH", "ARKK", "ARKW", "ARKG",
+    "COIN", "SQ", "HOOD", "MARA", "RIOT",
+    "UBER", "LYFT", "DASH", "ABNB",
+    "DIS", "CMCSA", "T", "VZ",
+    "WMT", "TGT", "COST", "HD", "LOW",
+    "PFE", "JNJ", "UNH", "LLY", "MRNA",
+    "XOM", "CVX", "SLB", "OXY",
+    "GLD", "SLV", "TLT", "IEF", "HYG", "LQD",
+    "EEM", "EFA", "VWO", "FXI", "EWJ",
+    "TQQQ"
+  ],
+  "strategies": [
+    "trendFollowing"
+  ],
+  "riskPerTrade": 0.02,
+  "maxPositionSize": 10000,
+  "lastUpdate": "2025-11-18T21:00:00.000Z"
+}

@@ -1,0 +1,7 @@
+# Runtime data files - not tracked in git
+*.json
+*.json.icloud
+*.csv
+
+# Keep the example config
+!config.json.example
