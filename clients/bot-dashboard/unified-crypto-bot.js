@@ -935,7 +935,7 @@ class CryptoTradingEngine {
                 maxPositions: this.config.maxTotalPositions,
                 stopLoss: this.config.tiers.tier1.stopLoss,
                 profitTarget: this.config.tiers.tier1.profitTarget,
-                dailyLossLimit: this.config.maxTradesPerDay
+                dailyLossLimit: parseFloat(process.env.MAX_DAILY_LOSS || '500')
             },
             scanCount: this.scanCount,
             dailyTrades: this.dailyTradeCount,

@@ -38,6 +38,7 @@ interface Position {
     side?: string;
     entryPrice?: number;
     currentPrice?: number;
+    unrealizedPnL?: number;   // crypto bot field name
     unrealizedPL?: number;
     unrealizedPLPct?: number;
 }
@@ -361,6 +362,24 @@ export default function CryptoBotPage() {
                                         <Typography variant="body2" color="text.secondary">
                                             {(pos.quantity ?? pos.qty ?? 0).toFixed(4)} @ ${(pos.entry ?? pos.entryPrice ?? 0).toFixed(2)}
                                         </Typography>
+                                        {(pos.unrealizedPnL ?? pos.unrealizedPL) != null && (
+                                            <Typography
+                                                variant="body2"
+                                                sx={{
+                                                    fontWeight: 600,
+                                                    color: (pos.unrealizedPnL ?? pos.unrealizedPL ?? 0) >= 0 ? '#10b981' : '#ef4444',
+                                                    mt: 0.5,
+                                                }}
+                                            >
+                                                {(pos.unrealizedPnL ?? pos.unrealizedPL ?? 0) >= 0 ? '+' : ''}
+                                                ${(pos.unrealizedPnL ?? pos.unrealizedPL ?? 0).toFixed(2)}
+                                                {pos.currentPrice != null && (
+                                                    <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                                                        @ ${pos.currentPrice.toFixed(2)}
+                                                    </Typography>
+                                                )}
+                                            </Typography>
+                                        )}
                                         <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
                                             {pos.stopLoss != null && (
                                                 <Typography variant="caption" sx={{ color: '#ef4444' }}>
