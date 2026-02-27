@@ -550,7 +550,8 @@ class CryptoTradingEngine {
                 return null;
             }
 
-            // Create position
+            // Create position — include currentPrice/unrealizedPnL so status
+            // endpoint returns valid values before the first managePositions() cycle
             const position = {
                 symbol: signal.symbol,
                 tier: signal.tier,
@@ -562,7 +563,10 @@ class CryptoTradingEngine {
                 orderId: order.orderId,
                 openTime: new Date(),
                 momentum: signal.momentum,
-                rsi: signal.rsi
+                rsi: signal.rsi,
+                currentPrice: signal.price,
+                unrealizedPnL: 0,
+                unrealizedPnLPct: 0,
             };
 
             this.positions.set(signal.symbol, position);
@@ -578,6 +582,9 @@ class CryptoTradingEngine {
             });
 
             console.log(`✅ Position opened: ${signal.symbol}`);
+
+            // Persist daily counters immediately so restart can't bypass limits
+            this.saveState();
 
             // Send Telegram alert
             await telegramAlerts.sendCryptoEntry(
@@ -646,6 +653,7 @@ class CryptoTradingEngine {
             // Write live price and P&L back into the position so getStatus() returns current values
             position.currentPrice = currentPrice;
             position.unrealizedPnL = pnlUSD;
+            position.unrealizedPnLPct = pnlPercent / 100;
 
             console.log(`   ${symbol}: $${currentPrice.toFixed(2)} (${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%) | Stop: $${position.stopLoss.toFixed(2)}`);
         }
@@ -848,6 +856,11 @@ class CryptoTradingEngine {
                 losingTrades: this.losingTrades,
                 totalProfit: this.totalProfit,
                 totalLoss: this.totalLoss,
+                // Persist daily counters so restart doesn't reset anti-churn limits
+                dailyTradeCount: this.dailyTradeCount,
+                dailyLoss: this.dailyLoss,
+                tradesToday: this.tradesToday,
+                savedDate: new Date().toISOString(),
             }));
         } catch {}
     }
@@ -863,6 +876,16 @@ class CryptoTradingEngine {
                 if (saved.losingTrades != null) this.losingTrades = saved.losingTrades;
                 if (saved.totalProfit != null) this.totalProfit = saved.totalProfit;
                 if (saved.totalLoss != null) this.totalLoss = saved.totalLoss;
+                // Restore daily counters only if saved on the same UTC day
+                if (saved.savedDate) {
+                    const savedDay = new Date(saved.savedDate).getUTCDate();
+                    const today = new Date().getUTCDate();
+                    if (savedDay === today) {
+                        if (saved.dailyTradeCount != null) this.dailyTradeCount = saved.dailyTradeCount;
+                        if (saved.dailyLoss != null) this.dailyLoss = saved.dailyLoss;
+                        if (saved.tradesToday != null) this.tradesToday = saved.tradesToday;
+                    }
+                }
                 return saved.running !== false;
             }
         } catch {}

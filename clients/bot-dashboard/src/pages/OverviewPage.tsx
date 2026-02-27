@@ -92,12 +92,19 @@ async function fetchBotStatus(bot: typeof BOTS[0]): Promise<BotHealth> {
             d?.performance?.activePositions ??
             d?.positions?.length ??
             (Array.isArray(d?.positions) ? d.positions.length : 0);
-        // dailyPnL: stock/forex bots send dollars directly; crypto bot sends dailyReturn as
-        // a decimal ratio (e.g. 0.025) — convert to dollars using equity
+        // dailyPnL: stock bot sends dailyReturn as a percentage (e.g. 1.5 = 1.5%),
+        // forex/crypto bots send dailyReturn as a decimal ratio (e.g. 0.015 = 1.5%).
+        // Detect by magnitude: |value| > 1 → percentage, divide by 100 first.
+        const dailyPnLFromReturn = (() => {
+            const r = d?.dailyReturn;
+            if (r == null || !equity) return null;
+            const ratio = Math.abs(r) > 1 ? r / 100 : r;
+            return ratio * equity;
+        })();
         const dailyPnL =
             d?.dailyPnL ??
             d?.performance?.dailyPnL ??
-            (d?.dailyReturn != null && equity ? d.dailyReturn * equity : null) ??
+            dailyPnLFromReturn ??
             (d?.stats?.totalPnL ?? 0);
         const totalTrades =
             d?.performance?.totalTrades ??
@@ -128,8 +135,8 @@ export default function OverviewPage() {
         { refetchInterval: 10000 }
     );
 
-    const totalEquity = (status?.stock?.equity || 0) + (status?.forex?.equity || 0) + (status?.crypto?.equity || 0);
-    const totalDailyPnL = (status?.stock?.dailyPnL || 0) + (status?.forex?.dailyPnL || 0) + (status?.crypto?.dailyPnL || 0);
+    const totalEquity = (status?.stock?.equity ?? 0) + (status?.forex?.equity ?? 0) + (status?.crypto?.equity ?? 0);
+    const totalDailyPnL = (status?.stock?.dailyPnL ?? 0) + (status?.forex?.dailyPnL ?? 0) + (status?.crypto?.dailyPnL ?? 0);
     const runningBots = [status?.stock, status?.forex, status?.crypto].filter(b => b?.isRunning).length;
     const onlineBots = [status?.stock, status?.forex, status?.crypto].filter(b => b?.online).length;
 
@@ -289,10 +296,10 @@ export default function OverviewPage() {
                                                         <Typography
                                                             variant="body2"
                                                             fontWeight={600}
-                                                            sx={{ color: (s.dailyPnL || 0) >= 0 ? 'success.main' : 'error.main', display: 'flex', alignItems: 'center', gap: 0.3 }}
+                                                            sx={{ color: (s.dailyPnL ?? 0) >= 0 ? 'success.main' : 'error.main', display: 'flex', alignItems: 'center', gap: 0.3 }}
                                                         >
-                                                            {(s.dailyPnL || 0) >= 0 ? <TrendingUp fontSize="inherit" /> : <TrendingDown fontSize="inherit" />}
-                                                            ${Math.abs(s.dailyPnL || 0).toFixed(2)}
+                                                            {(s.dailyPnL ?? 0) >= 0 ? <TrendingUp fontSize="inherit" /> : <TrendingDown fontSize="inherit" />}
+                                                            ${Math.abs(isNaN(s.dailyPnL) ? 0 : (s.dailyPnL ?? 0)).toFixed(2)}
                                                         </Typography>
                                                     </Grid>
                                                     <Grid item xs={6}>
