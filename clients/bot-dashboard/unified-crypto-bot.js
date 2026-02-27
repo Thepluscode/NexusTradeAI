@@ -885,8 +885,8 @@ class CryptoTradingEngine {
             positions: Array.from(this.positions.values()),
             stats: {
                 totalTrades: this.totalTrades,
-                longTrades: Math.ceil(this.totalTrades * 0.6),
-                shortTrades: Math.floor(this.totalTrades * 0.4),
+                longTrades: this.totalTrades,  // Bot only goes long
+                shortTrades: 0,
                 winners: this.winningTrades,
                 losers: this.losingTrades,
                 totalPnL: netPnL,
