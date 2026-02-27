@@ -1251,6 +1251,85 @@ app.post('/api/config/risk', (req, res) => {
     }
 });
 
+// ===== BROKER CREDENTIALS ENDPOINT =====
+// Writes keys to .env file on the local machine. Never logs key values.
+app.post('/api/config/credentials', (req, res) => {
+    try {
+        const { broker, credentials, fields } = req.body;
+        const creds = credentials || fields; // support both field names
+        // creds: { KEY_NAME: 'value', ... } — only whitelisted keys accepted
+        const ALLOWED_KEYS = {
+            alpaca:  ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_BASE_URL'],
+            oanda:   ['OANDA_ACCOUNT_ID', 'OANDA_ACCESS_TOKEN', 'OANDA_PRACTICE'],
+            crypto:  ['CRYPTO_API_KEY', 'CRYPTO_API_SECRET', 'CRYPTO_EXCHANGE', 'CRYPTO_TESTNET'],
+            telegram:['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_ALERTS_ENABLED'],
+            sms:     ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'ALERT_PHONE_NUMBER', 'SMS_ALERTS_ENABLED'],
+        };
+
+        const allowed = ALLOWED_KEYS[broker];
+        if (!allowed) return res.status(400).json({ success: false, error: 'Unknown broker' });
+        if (!creds || typeof creds !== 'object') return res.status(400).json({ success: false, error: 'No credentials provided' });
+
+        const envPath = path.join(__dirname, '../../.env');
+        let envContent = '';
+        try { envContent = fs.readFileSync(envPath, 'utf8'); } catch { envContent = ''; }
+
+        let updated = 0;
+        for (const [key, value] of Object.entries(creds)) {
+            if (!allowed.includes(key)) continue; // silently skip disallowed keys
+            if (typeof value !== 'string' || value === '') continue;
+
+            const line = `${key}=${value}`;
+            const regex = new RegExp(`^${key}=.*$`, 'm');
+            if (regex.test(envContent)) {
+                envContent = envContent.replace(regex, line);
+            } else {
+                envContent += `\n${line}`;
+            }
+            // Update process.env so bot picks up new values immediately
+            process.env[key] = value;
+            updated++;
+        }
+
+        fs.writeFileSync(envPath, envContent);
+        console.log(`⚙️  Credentials updated for broker: ${broker} (${updated} keys)`);
+
+        // Update alpacaConfig in memory if Alpaca keys changed
+        if (broker === 'alpaca') {
+            if (creds.ALPACA_API_KEY) alpacaConfig.apiKey = creds.ALPACA_API_KEY;
+            if (creds.ALPACA_SECRET_KEY) alpacaConfig.secretKey = creds.ALPACA_SECRET_KEY;
+            if (creds.ALPACA_BASE_URL) alpacaConfig.baseURL = creds.ALPACA_BASE_URL;
+        }
+
+        res.json({ success: true, updated });
+    } catch (err) {
+        console.error('Credentials update error:', err.message);
+        res.status(500).json({ success: false, error: 'Failed to save credentials' });
+    }
+});
+
+app.post('/api/config/test-notification', async (req, res) => {
+    const { channel } = req.body;
+    try {
+        if (channel === 'telegram') {
+            const token = process.env.TELEGRAM_BOT_TOKEN;
+            const chatId = process.env.TELEGRAM_CHAT_ID;
+            if (!token || !chatId) {
+                return res.status(400).json({ success: false, error: 'Telegram not configured' });
+            }
+            const axios = require('axios');
+            await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
+                chat_id: chatId,
+                text: '✅ NexusTradeAI: Test notification — Telegram alerts are working.',
+            }, { timeout: 8000 });
+            return res.json({ success: true });
+        }
+        res.status(400).json({ success: false, error: 'Unknown channel' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 app.get('/api/backtest/report', (req, res) => {
     try {
         const reportPath = path.join(__dirname, '../../services/trading/backtest-report.json');

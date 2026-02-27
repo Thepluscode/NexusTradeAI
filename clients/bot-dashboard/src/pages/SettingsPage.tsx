@@ -16,6 +16,13 @@ import {
     TextField,
     InputAdornment,
     LinearProgress,
+    IconButton,
+    Select,
+    MenuItem,
+    FormControl,
+    InputLabel,
+    Switch,
+    FormControlLabel,
 } from '@mui/material';
 import {
     FlashOn,
@@ -32,6 +39,10 @@ import {
     RemoveCircleOutline,
     LockOutlined,
     OpenInNew,
+    Visibility,
+    VisibilityOff,
+    Save,
+    Send,
 } from '@mui/icons-material';
 import axios from 'axios';
 import toast from 'react-hot-toast';
@@ -47,6 +58,11 @@ async function fetchConfig() {
 
 async function updateRisk(payload: { tier: string; stopLoss?: number; profitTarget?: number; positionSize?: number; maxPositions?: number }) {
     const res = await axios.post(`${API_BASE}/api/config/risk`, payload);
+    return res.data;
+}
+
+async function saveCredentials(payload: { broker: string; credentials: Record<string, string> }) {
+    const res = await axios.post(`${API_BASE}/api/config/credentials`, payload);
     return res.data;
 }
 
@@ -83,24 +99,69 @@ function StatusDot({ ok }: { ok: boolean }) {
     );
 }
 
-function BrokerCard({
+// ─── CREDENTIAL FIELD ───────────────────────────────────────────────────────
+
+function CredentialField({
+    label,
+    value,
+    onChange,
+    secret,
+    placeholder,
+}: {
+    label: string;
+    value: string;
+    onChange: (v: string) => void;
+    secret?: boolean;
+    placeholder?: string;
+}) {
+    const [show, setShow] = useState(false);
+    return (
+        <TextField
+            fullWidth
+            size="small"
+            label={label}
+            type={secret && !show ? 'password' : 'text'}
+            value={value}
+            onChange={e => onChange(e.target.value)}
+            placeholder={placeholder}
+            InputProps={secret ? {
+                endAdornment: (
+                    <InputAdornment position="end">
+                        <IconButton size="small" onClick={() => setShow(p => !p)} edge="end" tabIndex={-1}>
+                            {show ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
+                        </IconButton>
+                    </InputAdornment>
+                ),
+            } : undefined}
+            sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
+        />
+    );
+}
+
+// ─── BROKER FORM ────────────────────────────────────────────────────────────
+
+function BrokerForm({
     icon,
     name,
-    mode,
-    configured,
+    description,
     accentColor,
+    configured,
     setupUrl,
     setupLabel,
     children,
+    onSave,
+    isSaving,
 }: {
     icon: React.ReactElement;
     name: string;
-    mode: string;
-    configured: boolean;
+    description: string;
     accentColor: string;
+    configured: boolean;
     setupUrl?: string;
     setupLabel?: string;
-    children?: React.ReactNode;
+    children: React.ReactNode;
+    onSave: () => void;
+    isSaving: boolean;
 }) {
     return (
         <Paper
@@ -114,71 +175,96 @@ function BrokerCard({
                 '&::before': configured ? {
                     content: '""',
                     position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    right: 0,
+                    top: 0, left: 0, right: 0,
                     height: 3,
                     background: `linear-gradient(90deg, ${accentColor}, transparent)`,
                 } : {},
             }}
         >
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2.5 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                    <Avatar sx={{ bgcolor: `${accentColor}20`, color: accentColor, width: 40, height: 40 }}>
+                    <Avatar sx={{ bgcolor: `${accentColor}20`, color: accentColor, width: 42, height: 42 }}>
                         {icon}
                     </Avatar>
                     <Box>
-                        <Typography fontWeight={600}>{name}</Typography>
-                        <Typography variant="caption" color="text.secondary">{mode}</Typography>
+                        <Typography fontWeight={700}>{name}</Typography>
+                        <Typography variant="caption" color="text.secondary">{description}</Typography>
                     </Box>
                 </Box>
-                <Chip
-                    icon={configured ? <CheckCircle sx={{ fontSize: '14px !important' }} /> : <ErrorOutline sx={{ fontSize: '14px !important' }} />}
-                    label={configured ? 'Connected' : 'Not configured'}
-                    color={configured ? 'success' : 'default'}
-                    size="small"
-                    sx={{ fontWeight: 600 }}
-                />
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Chip
+                        icon={configured ? <CheckCircle sx={{ fontSize: '14px !important' }} /> : <ErrorOutline sx={{ fontSize: '14px !important' }} />}
+                        label={configured ? 'Connected' : 'Not configured'}
+                        color={configured ? 'success' : 'default'}
+                        size="small"
+                        sx={{ fontWeight: 600 }}
+                    />
+                    {setupUrl && (
+                        <Button
+                            size="small"
+                            endIcon={<OpenInNew sx={{ fontSize: 12 }} />}
+                            href={setupUrl}
+                            target="_blank"
+                            rel="noopener"
+                            sx={{ textTransform: 'none', fontSize: 12, color: 'text.secondary', minWidth: 0 }}
+                        >
+                            {setupLabel}
+                        </Button>
+                    )}
+                </Box>
             </Box>
 
-            {children}
+            <Divider sx={{ mb: 2.5 }} />
 
-            {!configured && setupUrl && (
+            <Stack spacing={2}>
+                {children}
+            </Stack>
+
+            <Box sx={{ mt: 2.5 }}>
                 <Button
-                    variant="outlined"
+                    variant="contained"
                     size="small"
-                    endIcon={<OpenInNew sx={{ fontSize: 14 }} />}
-                    href={setupUrl}
-                    target="_blank"
-                    rel="noopener"
-                    sx={{ mt: 2, borderRadius: 2, textTransform: 'none', fontSize: 13 }}
+                    startIcon={isSaving ? <CircularProgress size={13} color="inherit" /> : <Save fontSize="small" />}
+                    disabled={isSaving}
+                    onClick={onSave}
+                    sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
                 >
-                    {setupLabel ?? 'Set up credentials'}
+                    Save Credentials
                 </Button>
-            )}
+                <Typography variant="caption" color="text.secondary" sx={{ ml: 1.5 }}>
+                    Keys saved to <code style={{ background: '#ffffff12', padding: '1px 5px', borderRadius: 3 }}>.env</code> — never transmitted externally
+                </Typography>
+            </Box>
         </Paper>
     );
 }
 
-function NotifCard({
+function NotifForm({
     icon,
     name,
     description,
+    accentColor,
     enabled,
     configured,
-    accentColor,
     detail,
-    setupSteps,
+    children,
+    onSave,
+    isSaving,
+    helpSteps,
 }: {
     icon: React.ReactElement;
     name: string;
     description: string;
+    accentColor: string;
     enabled: boolean;
     configured: boolean;
-    accentColor: string;
     detail?: string | null;
-    setupSteps?: string[];
+    children: React.ReactNode;
+    onSave: () => void;
+    isSaving: boolean;
+    helpSteps: string[];
 }) {
+    const [showHelp, setShowHelp] = useState(false);
     return (
         <Paper
             sx={{
@@ -189,47 +275,69 @@ function NotifCard({
                 transition: 'border-color 0.2s',
             }}
         >
-            <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2.5 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                    <Avatar sx={{ bgcolor: `${accentColor}20`, color: accentColor, width: 40, height: 40 }}>
+                    <Avatar sx={{ bgcolor: `${accentColor}20`, color: accentColor, width: 42, height: 42 }}>
                         {icon}
                     </Avatar>
                     <Box>
-                        <Typography fontWeight={600}>{name}</Typography>
+                        <Typography fontWeight={700}>{name}</Typography>
                         <Typography variant="caption" color="text.secondary">{description}</Typography>
                     </Box>
                 </Box>
-                <Chip
-                    label={enabled ? 'Active' : 'Off'}
-                    color={enabled ? 'success' : 'default'}
-                    size="small"
-                    sx={{ fontWeight: 600 }}
-                />
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    {configured && detail && (
+                        <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>
+                            <StatusDot ok /> {detail}
+                        </Typography>
+                    )}
+                    <Chip
+                        label={enabled ? 'Active' : 'Off'}
+                        color={enabled ? 'success' : 'default'}
+                        size="small"
+                        sx={{ fontWeight: 600 }}
+                    />
+                </Box>
             </Box>
 
-            {configured && detail && (
-                <Box sx={{ mt: 2, p: 1.5, borderRadius: 2, bgcolor: 'background.default' }}>
-                    <Typography variant="caption" color="text.secondary">
-                        <StatusDot ok /> Credentials on file · {detail}
-                    </Typography>
-                </Box>
-            )}
+            <Divider sx={{ mb: 2.5 }} />
 
-            {!configured && setupSteps && (
-                <Box sx={{ mt: 2 }}>
-                    <Typography variant="caption" color="text.secondary" fontWeight={500}>
-                        How to set up:
+            <Stack spacing={2}>
+                {children}
+            </Stack>
+
+            <Box sx={{ mt: 2.5, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+                <Button
+                    variant="contained"
+                    size="small"
+                    startIcon={isSaving ? <CircularProgress size={13} color="inherit" /> : <Save fontSize="small" />}
+                    disabled={isSaving}
+                    onClick={onSave}
+                    sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
+                >
+                    Save
+                </Button>
+                <Button
+                    size="small"
+                    onClick={() => setShowHelp(p => !p)}
+                    sx={{ textTransform: 'none', fontSize: 12, color: 'text.secondary', borderRadius: 2 }}
+                >
+                    {showHelp ? 'Hide setup guide' : 'How to set up'}
+                </Button>
+            </Box>
+
+            {showHelp && (
+                <Box sx={{ mt: 2, p: 2, borderRadius: 2, bgcolor: 'background.default' }}>
+                    <Typography variant="caption" color="text.secondary" fontWeight={600} sx={{ display: 'block', mb: 1 }}>
+                        Setup guide:
                     </Typography>
-                    <Stack spacing={0.5} sx={{ mt: 0.5 }}>
-                        {setupSteps.map((step, i) => (
+                    <Stack spacing={0.5}>
+                        {helpSteps.map((step, i) => (
                             <Typography key={i} variant="caption" color="text.secondary">
                                 {i + 1}. {step}
                             </Typography>
                         ))}
                     </Stack>
-                    <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                        Then add to your <code style={{ background: '#ffffff12', padding: '1px 4px', borderRadius: 3 }}>.env</code> file and restart.
-                    </Typography>
                 </Box>
             )}
         </Paper>
@@ -525,6 +633,34 @@ export default function SettingsPage() {
     const [activeSection, setActiveSection] = useState<Section>('mode');
     const queryClient = useQueryClient();
 
+    // ── Alpaca credentials state ──
+    const [alpacaKey, setAlpacaKey] = useState('');
+    const [alpacaSecret, setAlpacaSecret] = useState('');
+    const [alpacaMode, setAlpacaMode] = useState<'paper' | 'live'>('paper');
+
+    // ── OANDA credentials state ──
+    const [oandaAccount, setOandaAccount] = useState('');
+    const [oandaToken, setOandaToken] = useState('');
+    const [oandaPractice, setOandaPractice] = useState(true);
+
+    // ── Crypto credentials state ──
+    const [cryptoKey, setCryptoKey] = useState('');
+    const [cryptoSecret, setCryptoSecret] = useState('');
+    const [cryptoExchange, setCryptoExchange] = useState('binance');
+    const [cryptoTestnet, setCryptoTestnet] = useState(true);
+
+    // ── Telegram credentials state ──
+    const [telegramToken, setTelegramToken] = useState('');
+    const [telegramChatId, setTelegramChatId] = useState('');
+    const [telegramEnabled, setTelegramEnabled] = useState(false);
+
+    // ── SMS credentials state ──
+    const [smsSid, setSmsSid] = useState('');
+    const [smsAuth, setSmsAuth] = useState('');
+    const [smsFrom, setSmsFrom] = useState('');
+    const [smsTo, setSmsTo] = useState('');
+    const [smsEnabled, setSmsEnabled] = useState(false);
+
     const { data: config, isLoading } = useQuery('botConfig', fetchConfig, {
         refetchInterval: 30000,
         retry: 1,
@@ -536,6 +672,14 @@ export default function SettingsPage() {
             void queryClient.invalidateQueries('botConfig');
         },
         onError: () => { toast.error('Failed to update — is the Stock Bot running?'); },
+    });
+
+    const { mutate: saveCreds, isLoading: savingCreds, variables: savingFor } = useMutation(saveCredentials, {
+        onSuccess: (_, vars) => {
+            toast.success(`${vars.broker.charAt(0).toUpperCase() + vars.broker.slice(1)} credentials saved`);
+            void queryClient.invalidateQueries('botConfig');
+        },
+        onError: () => { toast.error('Failed to save — is the Stock Bot running?'); },
     });
 
     const isPaper = config?.trading?.mode !== 'live';
@@ -707,76 +851,186 @@ export default function SettingsPage() {
                     <Box>
                         <SectionTitle
                             label="Brokers"
-                            sub="Manage API credentials for each trading venue. Keys are stored in your .env file and never transmitted to third parties."
+                            sub="Enter API credentials for each trading venue. Keys are stored in your local .env file and never transmitted to third parties."
                         />
                         <Stack spacing={2.5}>
-                            <BrokerCard
+
+                            {/* Alpaca */}
+                            <BrokerForm
                                 icon={<ShowChart />}
                                 name="Alpaca Markets"
-                                mode={config?.brokers?.alpaca?.mode === 'live' ? 'Live Trading' : 'Paper Trading'}
-                                configured={!!config?.brokers?.alpaca?.configured}
+                                description="US Stocks & ETFs · Paper and Live trading"
                                 accentColor="#10b981"
+                                configured={!!config?.brokers?.alpaca?.configured}
                                 setupUrl="https://alpaca.markets"
-                                setupLabel="Open Alpaca account"
+                                setupLabel="Get API keys"
+                                onSave={() => {
+                                    const creds: Record<string, string> = {
+                                        ALPACA_BASE_URL: alpacaMode === 'live'
+                                            ? 'https://api.alpaca.markets'
+                                            : 'https://paper-api.alpaca.markets',
+                                    };
+                                    if (alpacaKey) creds.ALPACA_API_KEY = alpacaKey;
+                                    if (alpacaSecret) creds.ALPACA_SECRET_KEY = alpacaSecret;
+                                    saveCreds({ broker: 'alpaca', credentials: creds });
+                                }}
+                                isSaving={savingCreds && (savingFor as any)?.broker === 'alpaca'}
                             >
                                 {config?.brokers?.alpaca?.configured && (
-                                    <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'background.default', mt: 1 }}>
-                                        <Typography variant="caption" color="text.secondary">
-                                            Endpoint: <code>{config.brokers.alpaca.baseURL}</code>
-                                        </Typography>
-                                    </Box>
+                                    <Alert severity="success" sx={{ borderRadius: 2, py: 0.5 }}>
+                                        Credentials on file — endpoint: {config.brokers.alpaca.baseURL ?? 'paper'}. Enter new keys below to replace.
+                                    </Alert>
                                 )}
-                                {!config?.brokers?.alpaca?.configured && (
-                                    <Box sx={{ mt: 1.5 }}>
-                                        <Typography variant="caption" color="text.secondary">Add to .env:</Typography>
-                                        <Box sx={{ mt: 0.5, p: 1.5, borderRadius: 2, bgcolor: 'background.default', fontFamily: 'monospace', fontSize: 12, color: 'text.secondary' }}>
-                                            ALPACA_API_KEY=your_key<br />
-                                            ALPACA_SECRET_KEY=your_secret
-                                        </Box>
-                                    </Box>
-                                )}
-                            </BrokerCard>
+                                <CredentialField
+                                    label="API Key"
+                                    value={alpacaKey}
+                                    onChange={setAlpacaKey}
+                                    secret
+                                    placeholder={config?.brokers?.alpaca?.configured ? '••••••••  (leave blank to keep existing)' : 'PKTEST...'}
+                                />
+                                <CredentialField
+                                    label="Secret Key"
+                                    value={alpacaSecret}
+                                    onChange={setAlpacaSecret}
+                                    secret
+                                    placeholder={config?.brokers?.alpaca?.configured ? '••••••••  (leave blank to keep existing)' : 'Your secret...'}
+                                />
+                                <FormControl size="small" fullWidth>
+                                    <InputLabel>Account Type</InputLabel>
+                                    <Select
+                                        value={alpacaMode}
+                                        label="Account Type"
+                                        onChange={e => setAlpacaMode(e.target.value as 'paper' | 'live')}
+                                        sx={{ borderRadius: 2 }}
+                                    >
+                                        <MenuItem value="paper">Paper Trading (recommended)</MenuItem>
+                                        <MenuItem value="live">Live Trading (real money)</MenuItem>
+                                    </Select>
+                                </FormControl>
+                            </BrokerForm>
 
-                            <BrokerCard
+                            {/* OANDA */}
+                            <BrokerForm
                                 icon={<CurrencyExchange />}
                                 name="OANDA"
-                                mode={config?.brokers?.oanda?.mode === 'live' ? 'Live Forex' : 'Practice Account'}
-                                configured={!!config?.brokers?.oanda?.configured}
+                                description="Forex & CFDs · 12 currency pairs · 24/5"
                                 accentColor="#3b82f6"
+                                configured={!!config?.brokers?.oanda?.configured}
                                 setupUrl="https://www.oanda.com/register/#/sign-up/demo"
-                                setupLabel="Open OANDA practice account"
+                                setupLabel="Open free practice account"
+                                onSave={() => {
+                                    const creds: Record<string, string> = {
+                                        OANDA_PRACTICE: oandaPractice ? 'true' : 'false',
+                                    };
+                                    if (oandaAccount) creds.OANDA_ACCOUNT_ID = oandaAccount;
+                                    if (oandaToken) creds.OANDA_ACCESS_TOKEN = oandaToken;
+                                    saveCreds({ broker: 'oanda', credentials: creds });
+                                }}
+                                isSaving={savingCreds && (savingFor as any)?.broker === 'oanda'}
                             >
-                                {!config?.brokers?.oanda?.configured && (
-                                    <Box sx={{ mt: 1.5 }}>
-                                        <Typography variant="caption" color="text.secondary">Add to .env:</Typography>
-                                        <Box sx={{ mt: 0.5, p: 1.5, borderRadius: 2, bgcolor: 'background.default', fontFamily: 'monospace', fontSize: 12, color: 'text.secondary' }}>
-                                            OANDA_ACCOUNT_ID=your_account_id<br />
-                                            OANDA_ACCESS_TOKEN=your_token
-                                        </Box>
-                                    </Box>
+                                {config?.brokers?.oanda?.configured && (
+                                    <Alert severity="success" sx={{ borderRadius: 2, py: 0.5 }}>
+                                        Credentials on file. Enter new values to replace.
+                                    </Alert>
                                 )}
-                            </BrokerCard>
+                                <CredentialField
+                                    label="Account ID"
+                                    value={oandaAccount}
+                                    onChange={setOandaAccount}
+                                    placeholder={config?.brokers?.oanda?.configured ? '••••  (leave blank to keep existing)' : '001-001-1234567-001'}
+                                />
+                                <CredentialField
+                                    label="Access Token"
+                                    value={oandaToken}
+                                    onChange={setOandaToken}
+                                    secret
+                                    placeholder={config?.brokers?.oanda?.configured ? '••••••••  (leave blank to keep existing)' : 'Your personal access token...'}
+                                />
+                                <FormControlLabel
+                                    control={
+                                        <Switch
+                                            checked={oandaPractice}
+                                            onChange={e => setOandaPractice(e.target.checked)}
+                                            size="small"
+                                        />
+                                    }
+                                    label={
+                                        <Typography variant="body2">
+                                            Practice account {oandaPractice ? <Chip label="Recommended" size="small" color="primary" sx={{ ml: 0.5, height: 18, fontSize: 10 }} /> : null}
+                                        </Typography>
+                                    }
+                                />
+                            </BrokerForm>
 
-                            <BrokerCard
+                            {/* Crypto Exchange */}
+                            <BrokerForm
                                 icon={<CurrencyBitcoin />}
-                                name={`${config?.brokers?.crypto?.exchange ? config.brokers.crypto.exchange.charAt(0).toUpperCase() + config.brokers.crypto.exchange.slice(1) : 'Crypto Exchange'}`}
-                                mode={config?.brokers?.crypto?.testnet ? 'Testnet (Paper)' : 'Live Exchange'}
-                                configured={!!config?.brokers?.crypto?.configured}
+                                name="Crypto Exchange"
+                                description="Crypto pairs · BTC-correlated momentum · 24/7"
                                 accentColor="#f59e0b"
+                                configured={!!config?.brokers?.crypto?.configured}
                                 setupUrl="https://testnet.binance.vision/"
-                                setupLabel="Open Binance Testnet"
+                                setupLabel="Binance Testnet"
+                                onSave={() => {
+                                    const creds: Record<string, string> = {
+                                        CRYPTO_EXCHANGE: cryptoExchange,
+                                        CRYPTO_TESTNET: cryptoTestnet ? 'true' : 'false',
+                                    };
+                                    if (cryptoKey) creds.CRYPTO_API_KEY = cryptoKey;
+                                    if (cryptoSecret) creds.CRYPTO_API_SECRET = cryptoSecret;
+                                    saveCreds({ broker: 'crypto', credentials: creds });
+                                }}
+                                isSaving={savingCreds && (savingFor as any)?.broker === 'crypto'}
                             >
-                                {!config?.brokers?.crypto?.configured && (
-                                    <Box sx={{ mt: 1.5 }}>
-                                        <Typography variant="caption" color="text.secondary">Add to .env:</Typography>
-                                        <Box sx={{ mt: 0.5, p: 1.5, borderRadius: 2, bgcolor: 'background.default', fontFamily: 'monospace', fontSize: 12, color: 'text.secondary' }}>
-                                            CRYPTO_API_KEY=your_api_key<br />
-                                            CRYPTO_API_SECRET=your_secret<br />
-                                            CRYPTO_TESTNET=true
-                                        </Box>
-                                    </Box>
+                                {config?.brokers?.crypto?.configured && (
+                                    <Alert severity="success" sx={{ borderRadius: 2, py: 0.5 }}>
+                                        Credentials on file — {config.brokers.crypto.exchange ?? 'exchange'}{config.brokers.crypto.testnet ? ' (testnet)' : ''}. Enter new values to replace.
+                                    </Alert>
                                 )}
-                            </BrokerCard>
+                                <FormControl size="small" fullWidth>
+                                    <InputLabel>Exchange</InputLabel>
+                                    <Select
+                                        value={cryptoExchange}
+                                        label="Exchange"
+                                        onChange={e => setCryptoExchange(e.target.value)}
+                                        sx={{ borderRadius: 2 }}
+                                    >
+                                        <MenuItem value="binance">Binance</MenuItem>
+                                        <MenuItem value="coinbase">Coinbase Advanced</MenuItem>
+                                        <MenuItem value="kraken">Kraken</MenuItem>
+                                        <MenuItem value="bybit">Bybit</MenuItem>
+                                    </Select>
+                                </FormControl>
+                                <CredentialField
+                                    label="API Key"
+                                    value={cryptoKey}
+                                    onChange={setCryptoKey}
+                                    secret
+                                    placeholder={config?.brokers?.crypto?.configured ? '••••••••  (leave blank to keep existing)' : 'Your API key...'}
+                                />
+                                <CredentialField
+                                    label="API Secret"
+                                    value={cryptoSecret}
+                                    onChange={setCryptoSecret}
+                                    secret
+                                    placeholder={config?.brokers?.crypto?.configured ? '••••••••  (leave blank to keep existing)' : 'Your API secret...'}
+                                />
+                                <FormControlLabel
+                                    control={
+                                        <Switch
+                                            checked={cryptoTestnet}
+                                            onChange={e => setCryptoTestnet(e.target.checked)}
+                                            size="small"
+                                        />
+                                    }
+                                    label={
+                                        <Typography variant="body2">
+                                            Use testnet {cryptoTestnet ? <Chip label="Recommended" size="small" color="primary" sx={{ ml: 0.5, height: 18, fontSize: 10 }} /> : null}
+                                        </Typography>
+                                    }
+                                />
+                            </BrokerForm>
+
                         </Stack>
                     </Box>
                 )}
@@ -789,41 +1043,151 @@ export default function SettingsPage() {
                             sub="Get alerted on trade entries, exits, stop losses, and daily summaries."
                         />
                         <Stack spacing={2.5}>
-                            <NotifCard
+
+                            {/* Telegram */}
+                            <NotifForm
                                 icon={<Notifications />}
                                 name="Telegram"
                                 description="Free instant alerts via Telegram bot · Unlimited messages"
+                                accentColor="#3b82f6"
                                 enabled={!!config?.notifications?.telegram?.enabled}
                                 configured={!!config?.notifications?.telegram?.configured}
-                                accentColor="#3b82f6"
-                                detail={config?.notifications?.telegram?.chatId ? `Chat ID ···${config.notifications.telegram.chatId}` : null}
-                                setupSteps={[
-                                    'Open Telegram and search @BotFather',
-                                    'Send /newbot and follow the prompts',
-                                    'Copy your bot token',
-                                    'Search @userinfobot to get your Chat ID',
-                                    'Add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to .env',
-                                    'Set TELEGRAM_ALERTS_ENABLED=true',
+                                detail={config?.notifications?.telegram?.chatId ? `Chat ID ···${String(config.notifications.telegram.chatId).slice(-4)}` : null}
+                                onSave={() => {
+                                    const creds: Record<string, string> = {
+                                        TELEGRAM_ALERTS_ENABLED: telegramEnabled ? 'true' : 'false',
+                                    };
+                                    if (telegramToken) creds.TELEGRAM_BOT_TOKEN = telegramToken;
+                                    if (telegramChatId) creds.TELEGRAM_CHAT_ID = telegramChatId;
+                                    saveCreds({ broker: 'telegram', credentials: creds });
+                                }}
+                                isSaving={savingCreds && (savingFor as any)?.broker === 'telegram'}
+                                helpSteps={[
+                                    'Open Telegram and search for @BotFather',
+                                    'Send /newbot — BotFather will ask for a name and username',
+                                    'Copy the bot token it gives you (format: 123456789:AABBcc...)',
+                                    'Search @userinfobot in Telegram and send /start to get your Chat ID',
+                                    'Enter both below and enable alerts',
                                 ]}
-                            />
+                            >
+                                {config?.notifications?.telegram?.configured && (
+                                    <Alert severity="success" sx={{ borderRadius: 2, py: 0.5 }}>
+                                        Telegram is configured. Enter new values below to update credentials.
+                                    </Alert>
+                                )}
+                                <CredentialField
+                                    label="Bot Token"
+                                    value={telegramToken}
+                                    onChange={setTelegramToken}
+                                    secret
+                                    placeholder={config?.notifications?.telegram?.configured ? '••••••••  (leave blank to keep existing)' : '123456789:AABBccDDee...'}
+                                />
+                                <CredentialField
+                                    label="Chat ID"
+                                    value={telegramChatId}
+                                    onChange={setTelegramChatId}
+                                    placeholder={config?.notifications?.telegram?.configured ? '  (leave blank to keep existing)' : '-1001234567890'}
+                                />
+                                <FormControlLabel
+                                    control={
+                                        <Switch
+                                            checked={telegramEnabled}
+                                            onChange={e => setTelegramEnabled(e.target.checked)}
+                                            size="small"
+                                        />
+                                    }
+                                    label={<Typography variant="body2">Enable Telegram alerts</Typography>}
+                                />
+                                {config?.notifications?.telegram?.configured && (
+                                    <Button
+                                        variant="outlined"
+                                        size="small"
+                                        startIcon={<Send fontSize="small" />}
+                                        sx={{ borderRadius: 2, textTransform: 'none', alignSelf: 'flex-start' }}
+                                        onClick={async () => {
+                                            try {
+                                                await axios.post(`${API_BASE}/api/config/test-notification`, { channel: 'telegram' });
+                                                toast.success('Test message sent to Telegram');
+                                            } catch {
+                                                toast.error('Failed to send test message — check bot token and chat ID');
+                                            }
+                                        }}
+                                    >
+                                        Send test message
+                                    </Button>
+                                )}
+                            </NotifForm>
 
-                            <NotifCard
+                            {/* SMS */}
+                            <NotifForm
                                 icon={<PhoneAndroid />}
                                 name="SMS via Twilio"
                                 description="Text message alerts for critical events (stop losses, circuit breakers)"
+                                accentColor="#10b981"
                                 enabled={!!config?.notifications?.sms?.enabled}
                                 configured={!!config?.notifications?.sms?.configured}
-                                accentColor="#10b981"
-                                detail={config?.notifications?.sms?.phone ? `Sending to ···${config.notifications.sms.phone}` : null}
-                                setupSteps={[
-                                    'Sign up at twilio.com (free trial available)',
-                                    'Get a Twilio phone number',
-                                    'Copy Account SID and Auth Token from the console',
-                                    'Add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER, ALERT_PHONE_NUMBER to .env',
-                                    'Set SMS_ALERTS_ENABLED=true',
+                                detail={config?.notifications?.sms?.phone ? `Alerts to ···${String(config.notifications.sms.phone).slice(-4)}` : null}
+                                onSave={() => {
+                                    const creds: Record<string, string> = {
+                                        SMS_ALERTS_ENABLED: smsEnabled ? 'true' : 'false',
+                                    };
+                                    if (smsSid) creds.TWILIO_ACCOUNT_SID = smsSid;
+                                    if (smsAuth) creds.TWILIO_AUTH_TOKEN = smsAuth;
+                                    if (smsFrom) creds.TWILIO_PHONE_NUMBER = smsFrom;
+                                    if (smsTo) creds.ALERT_PHONE_NUMBER = smsTo;
+                                    saveCreds({ broker: 'sms', credentials: creds });
+                                }}
+                                isSaving={savingCreds && (savingFor as any)?.broker === 'sms'}
+                                helpSteps={[
+                                    'Sign up at twilio.com — free trial credits included',
+                                    'Create a Twilio phone number (free trial number available)',
+                                    'From the Twilio Console, copy your Account SID and Auth Token',
+                                    'Enter the Twilio number as "From number" and your mobile as "Alert number"',
                                 ]}
-                            />
+                            >
+                                {config?.notifications?.sms?.configured && (
+                                    <Alert severity="success" sx={{ borderRadius: 2, py: 0.5 }}>
+                                        SMS is configured. Enter new values below to update.
+                                    </Alert>
+                                )}
+                                <CredentialField
+                                    label="Twilio Account SID"
+                                    value={smsSid}
+                                    onChange={setSmsSid}
+                                    placeholder={config?.notifications?.sms?.configured ? '  (leave blank to keep existing)' : 'ACxxxxxxxxxx'}
+                                />
+                                <CredentialField
+                                    label="Auth Token"
+                                    value={smsAuth}
+                                    onChange={setSmsAuth}
+                                    secret
+                                    placeholder={config?.notifications?.sms?.configured ? '••••••••  (leave blank to keep existing)' : 'Your auth token...'}
+                                />
+                                <CredentialField
+                                    label="From number (Twilio)"
+                                    value={smsFrom}
+                                    onChange={setSmsFrom}
+                                    placeholder="+15550001234"
+                                />
+                                <CredentialField
+                                    label="Alert number (your mobile)"
+                                    value={smsTo}
+                                    onChange={setSmsTo}
+                                    placeholder="+15559876543"
+                                />
+                                <FormControlLabel
+                                    control={
+                                        <Switch
+                                            checked={smsEnabled}
+                                            onChange={e => setSmsEnabled(e.target.checked)}
+                                            size="small"
+                                        />
+                                    }
+                                    label={<Typography variant="body2">Enable SMS alerts</Typography>}
+                                />
+                            </NotifForm>
 
+                            {/* Alert events reference */}
                             <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid', borderColor: 'divider' }}>
                                 <Typography fontWeight={600} gutterBottom>What triggers alerts?</Typography>
                                 <Grid container spacing={1} sx={{ mt: 0.5 }}>
@@ -844,6 +1208,7 @@ export default function SettingsPage() {
                                     ))}
                                 </Grid>
                             </Paper>
+
                         </Stack>
                     </Box>
                 )}
