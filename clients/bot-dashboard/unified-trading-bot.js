@@ -1064,9 +1064,9 @@ app.get('/api/trading/status', async (req, res) => {
             },
             config: {
                 symbols: popularStocks.getAllSymbols(),
-                maxPositions: 8,
-                stopLoss: 4,
-                profitTarget: 8,
+                maxPositions: MOMENTUM_CONFIG.tier1.maxPositions,
+                stopLoss: MOMENTUM_CONFIG.tier1.stopLoss * 100,
+                profitTarget: MOMENTUM_CONFIG.tier1.profitTarget * 100,
                 dailyLossLimit: MAX_DAILY_LOSS
             },
             portfolioValue: equity,

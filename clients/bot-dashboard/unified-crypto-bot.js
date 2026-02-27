@@ -708,8 +708,19 @@ class CryptoTradingEngine {
     // ========================================================================
 
     async tradingLoop() {
+        let lastResetDay = new Date().getUTCDate();
+
         while (this.isRunning) {
             try {
+                // Reset daily counters at UTC midnight
+                const currentDay = new Date().getUTCDate();
+                if (currentDay !== lastResetDay) {
+                    this.dailyTradeCount = 0;
+                    this.tradesToday = [];
+                    lastResetDay = currentDay;
+                    console.log('🔄 Daily trade counters reset (UTC midnight)');
+                }
+
                 this.scanCount++;
 
                 console.log(`\n${'='.repeat(60)}`);
@@ -845,7 +856,7 @@ class CryptoTradingEngine {
             : 0;
 
         const profitFactor = this.totalLoss > 0
-            ? (this.totalProfit / this.totalLoss).toFixed(2)
+            ? parseFloat((this.totalProfit / this.totalLoss).toFixed(2))
             : 0;
 
         const netPnL = this.totalProfit - this.totalLoss;

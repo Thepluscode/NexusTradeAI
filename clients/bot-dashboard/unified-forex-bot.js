@@ -953,13 +953,21 @@ app.get('/api/forex/status', async (req, res) => {
             const units = Math.abs(parseInt(pos.long?.units || pos.short?.units || 0));
             const entryPrice = parseFloat(isLong ? pos.long?.averagePrice : pos.short?.averagePrice || 0);
             const unrealizedPL = parseFloat(pos.unrealizedPL || 0);
-            const unrealizedPLPct = entryPrice !== 0 ? unrealizedPL / (entryPrice * units) : 0;
+            // Derive approximate current price from unrealized P/L
+            // For long:  currentPrice = entryPrice + (unrealizedPL / units)
+            // For short: currentPrice = entryPrice - (unrealizedPL / units)
+            const currentPrice = (entryPrice > 0 && units > 0)
+                ? entryPrice + (isLong ? 1 : -1) * (unrealizedPL / units)
+                : entryPrice;
+            const unrealizedPLPct = (entryPrice > 0 && units > 0)
+                ? unrealizedPL / (entryPrice * units)
+                : 0;
             return {
                 symbol: pos.instrument,
                 qty: units,
                 side: isLong ? 'long' : 'short',
                 entryPrice,
-                currentPrice: entryPrice,
+                currentPrice,
                 unrealizedPL,
                 unrealizedPLPct
             };
