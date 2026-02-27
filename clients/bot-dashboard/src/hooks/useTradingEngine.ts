@@ -44,7 +44,10 @@ export const useTradingEngine = () => {
     () => apiClient.realizeProfits(),
     {
       onSuccess: () => {
-        queryClient.invalidateQueries(['tradingEngineStatus', 'activePositions']);
+        // Invalidate each key separately — passing an array treats it as a
+        // compound key prefix, not two separate string keys
+        queryClient.invalidateQueries('tradingEngineStatus');
+        queryClient.invalidateQueries('activePositions');
       },
     }
   );

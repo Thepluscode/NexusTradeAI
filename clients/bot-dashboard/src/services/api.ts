@@ -3,7 +3,6 @@ import type {
   TradingEngineStatus,
   AIServiceHealth,
   MarketDataStatus,
-  APIResponse,
   Position,
   AutomationStatus,
   ServiceHealth,
@@ -35,13 +34,16 @@ class APIClient {
   // ── Stock Bot (port 3002) ─────────────────────────────────────────────────
 
   async getTradingEngineStatus(): Promise<TradingEngineStatus> {
-    const response = await this.tradingEngine.get<APIResponse<TradingEngineStatus>>('/api/trading/status');
-    return response.data.data;
+    const response = await this.tradingEngine.get('/api/trading/status');
+    // Stock bot sends a flat response (no {data:} wrapper)
+    return response.data.data || response.data;
   }
 
   async getActivePositions(): Promise<Position[]> {
-    const response = await this.tradingEngine.get<APIResponse<{ positions: Position[] }>>('/api/trading/status');
-    return response.data?.data?.positions || [];
+    const response = await this.tradingEngine.get('/api/trading/status');
+    // Stock bot sends positions at top level, not nested under data
+    const payload = response.data.data || response.data;
+    return payload?.positions || [];
   }
 
   async startTradingEngine(): Promise<void> {
@@ -101,15 +103,16 @@ class APIClient {
   async getAutomationStatus(): Promise<AutomationStatus> {
     try {
       const response = await this.tradingEngine.get('/api/trading/status');
-      const data = response.data.data;
+      // Stock bot sends flat response — no {data:} wrapper
+      const data = response.data.data || response.data;
       return {
         isRunning: data?.isRunning || false,
         mode: data?.mode || (data?.isRunning ? 'Paper' : 'Offline'),
-        strategiesActive: data?.performance?.activeStrategies || 0,
-        symbolsMonitored: data?.performance?.symbolsMonitored || 0,
-        dailyPnL: data?.dailyPnL || 0,
-        tradesExecutedToday: data?.performance?.totalTrades || 0,
-        activePositions: data?.performance?.activePositions || 0,
+        strategiesActive: data?.stats?.totalTrades > 0 ? 3 : 0,  // 3 tiers active when trading
+        symbolsMonitored: data?.config?.symbols?.length || 0,
+        dailyPnL: data?.dailyReturn || 0,
+        tradesExecutedToday: data?.stats?.totalTradesToday || data?.stats?.totalTrades || 0,
+        activePositions: data?.positions?.length || 0,
         realTradingEnabled: import.meta.env.VITE_REAL_TRADING_ENABLED === 'true',
         paperTradingMode: import.meta.env.VITE_REAL_TRADING_ENABLED !== 'true',
         systemUptime: 0,
@@ -281,7 +284,15 @@ class APIClient {
       { name: 'Market Data', port: 3001 },
       { name: 'AI Service',  port: 5001 },
     ];
-    return Promise.all(services.map(s => this.checkServiceHealth(s.name, s.port)));
+    // allSettled so one unreachable service doesn't reject the whole batch
+    const results = await Promise.allSettled(
+      services.map(s => this.checkServiceHealth(s.name, s.port))
+    );
+    return results.map((r, i) =>
+      r.status === 'fulfilled'
+        ? r.value
+        : { name: services[i].name, status: 'offline' as const, port: services[i].port, latency: 0, lastCheck: new Date().toISOString() }
+    );
   }
 }
 
