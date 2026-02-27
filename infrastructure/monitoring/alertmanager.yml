@@ -1,0 +1,218 @@
+# Alertmanager Configuration
+# =========================
+# Routes alerts to appropriate notification channels based on severity
+
+global:
+  # Default SMTP settings
+  smtp_smarthost: 'smtp.gmail.com:587'
+  smtp_from: 'nexustradeai-alerts@example.com'
+  smtp_auth_username: 'nexustradeai-alerts@example.com'
+  smtp_auth_password: 'your-app-password'
+  smtp_require_tls: true
+
+  # Slack webhook (configure in .env)
+  slack_api_url: 'https://hooks.slack.com/services/YOUR/WEBHOOK/URL'
+
+# Define templates for alert messages
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# Routing tree
+route:
+  # Default receiver
+  receiver: 'default'
+
+  # Group alerts by these labels
+  group_by: ['alertname', 'component', 'severity']
+
+  # Wait before sending first notification
+  group_wait: 10s
+
+  # Wait before sending notification about new alerts in group
+  group_interval: 10s
+
+  # Minimum time between notifications about same alert
+  repeat_interval: 3h
+
+  # Route based on severity
+  routes:
+    # Critical alerts (P0) - Immediate notification
+    - match:
+        severity: critical
+      receiver: 'critical-alerts'
+      group_wait: 0s
+      group_interval: 5m
+      repeat_interval: 15m
+      continue: true  # Also send to default
+
+    # Warning alerts (P1) - Standard notification
+    - match:
+        severity: warning
+      receiver: 'warning-alerts'
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 1h
+
+    # Memory-related alerts
+    - match:
+        component: memory
+      receiver: 'infrastructure-team'
+      group_by: ['alertname']
+
+    # Trading-related alerts
+    - match:
+        component: risk
+      receiver: 'trading-team'
+      group_by: ['alertname', 'account_id']
+
+    # After-hours: Critical only
+    - match:
+        severity: critical
+      active_time_intervals:
+        - after-hours
+      receiver: 'on-call'
+
+# Notification receivers
+receivers:
+  # Default receiver (all alerts)
+  - name: 'default'
+    email_configs:
+      - to: 'team@example.com'
+        headers:
+          Subject: '[NexusTradeAI] {{ .GroupLabels.alertname }}'
+        html: '{{ template "email.default.html" . }}'
+
+  # Critical alerts (P0)
+  - name: 'critical-alerts'
+    # Email
+    email_configs:
+      - to: 'on-call@example.com'
+        send_resolved: true
+        headers:
+          Subject: '[CRITICAL] {{ .GroupLabels.alertname }}'
+        html: '{{ template "email.critical.html" . }}'
+
+    # Slack
+    slack_configs:
+      - channel: '#trading-alerts-critical'
+        username: 'NexusTradeAI Bot'
+        icon_emoji: ':rotating_light:'
+        color: 'danger'
+        title: 'CRITICAL: {{ .GroupLabels.alertname }}'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        send_resolved: true
+
+    # PagerDuty (optional, requires configuration)
+    # pagerduty_configs:
+    #   - service_key: 'your-pagerduty-key'
+
+  # Warning alerts (P1)
+  - name: 'warning-alerts'
+    email_configs:
+      - to: 'team@example.com'
+        headers:
+          Subject: '[WARNING] {{ .GroupLabels.alertname }}'
+        html: '{{ template "email.warning.html" . }}'
+
+    slack_configs:
+      - channel: '#trading-alerts'
+        username: 'NexusTradeAI Bot'
+        icon_emoji: ':warning:'
+        color: 'warning'
+        title: 'Warning: {{ .GroupLabels.alertname }}'
+        text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+
+  # Infrastructure team
+  - name: 'infrastructure-team'
+    email_configs:
+      - to: 'infra-team@example.com'
+        headers:
+          Subject: '[Infrastructure] {{ .GroupLabels.alertname }}'
+    slack_configs:
+      - channel: '#infrastructure-alerts'
+        color: 'warning'
+
+  # Trading team
+  - name: 'trading-team'
+    email_configs:
+      - to: 'trading-team@example.com'
+        headers:
+          Subject: '[Trading] {{ .GroupLabels.alertname }}'
+    slack_configs:
+      - channel: '#trading-alerts'
+        color: 'danger'
+
+  # On-call (after hours)
+  - name: 'on-call'
+    email_configs:
+      - to: 'on-call@example.com'
+        headers:
+          Subject: '[ON-CALL] {{ .GroupLabels.alertname }}'
+    # SMS via email gateway (example: Twilio, AWS SNS)
+    # email_configs:
+    #   - to: '+1234567890@txt.att.net'
+
+# Time intervals for routing
+time_intervals:
+  # Business hours: Mon-Fri 9:30 AM - 4:00 PM EST
+  - name: business-hours
+    time_intervals:
+      - weekdays: ['monday:friday']
+        times:
+          - start_time: '09:30'
+            end_time: '16:00'
+        location: 'America/New_York'
+
+  # After hours: Everything else
+  - name: after-hours
+    time_intervals:
+      - weekdays: ['monday:friday']
+        times:
+          - start_time: '00:00'
+            end_time: '09:30'
+          - start_time: '16:00'
+            end_time: '23:59'
+        location: 'America/New_York'
+      - weekdays: ['saturday', 'sunday']
+        location: 'America/New_York'
+
+  # Market closed: After 4 PM and weekends
+  - name: market-closed
+    time_intervals:
+      - weekdays: ['monday:friday']
+        times:
+          - start_time: '16:00'
+            end_time: '23:59'
+        location: 'America/New_York'
+      - weekdays: ['saturday', 'sunday']
+        location: 'America/New_York'
+
+# Inhibition rules (suppress certain alerts when others fire)
+inhibit_rules:
+  # If bot is down, don't alert on API issues (expected)
+  - source_match:
+      alertname: 'BotDown'
+    target_match:
+      alertname: 'APIDown'
+    equal: ['instance']
+
+  # If critical memory, don't alert on high memory (redundant)
+  - source_match:
+      alertname: 'CriticalMemoryUsage'
+    target_match:
+      alertname: 'HighMemoryUsage'
+    equal: ['instance']
+
+  # If database is down, don't alert on slow queries
+  - source_match:
+      alertname: 'DatabaseDown'
+    target_match_re:
+      alertname: 'SlowDatabaseQueries|HighDatabaseLatency'
+    equal: ['instance']
+
+  # During market close, suppress trading alerts
+  - source_match:
+      alertname: 'MarketClosed'
+    target_match:
+      component: 'trading'
+    equal: ['instance']

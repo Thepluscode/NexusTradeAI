@@ -1,0 +1,260 @@
+{
+  "dashboard": {
+    "title": "NexusTradeAI - System Health",
+    "tags": ["system", "health", "infrastructure"],
+    "timezone": "browser",
+    "refresh": "30s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Memory Usage",
+        "type": "graph",
+        "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "trading_bot_memory_heap_used_bytes / 1024 / 1024",
+            "legendFormat": "Heap Used (MB)"
+          },
+          {
+            "expr": "trading_bot_memory_heap_total_bytes / 1024 / 1024",
+            "legendFormat": "Heap Total (MB)"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "decmbytes",
+            "label": "Memory"
+          }
+        ],
+        "alert": {
+          "name": "High Memory Usage",
+          "conditions": [
+            {
+              "evaluator": {
+                "params": [300],
+                "type": "gt"
+              },
+              "operator": {
+                "type": "and"
+              },
+              "query": {
+                "params": ["A", "5m", "now"]
+              },
+              "reducer": {
+                "params": [],
+                "type": "avg"
+              },
+              "type": "query"
+            }
+          ]
+        }
+      },
+      {
+        "id": 2,
+        "title": "Memory Usage %",
+        "type": "gauge",
+        "gridPos": { "x": 12, "y": 0, "w": 6, "h": 8 },
+        "targets": [
+          {
+            "expr": "trading_bot_memory_heap_usage_percent"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 75, "color": "yellow" },
+                { "value": 90, "color": "red" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 3,
+        "title": "Garbage Collection Count",
+        "type": "stat",
+        "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+        "targets": [
+          {
+            "expr": "trading_bot_memory_gc_total"
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Memory Warnings",
+        "type": "stat",
+        "gridPos": { "x": 18, "y": 4, "w": 3, "h": 4 },
+        "targets": [
+          {
+            "expr": "trading_bot_memory_warnings_total"
+          }
+        ],
+        "options": {
+          "colorMode": "background"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 1, "color": "yellow" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 5,
+        "title": "Memory Criticals",
+        "type": "stat",
+        "gridPos": { "x": 21, "y": 4, "w": 3, "h": 4 },
+        "targets": [
+          {
+            "expr": "trading_bot_memory_criticals_total"
+          }
+        ],
+        "options": {
+          "colorMode": "background"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 1, "color": "red" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 6,
+        "title": "API Health Status",
+        "type": "stat",
+        "gridPos": { "x": 0, "y": 8, "w": 12, "h": 4 },
+        "targets": [
+          {
+            "expr": "trading_bot_api_health",
+            "legendFormat": "{{api_name}}"
+          }
+        ],
+        "options": {
+          "colorMode": "background"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "mappings": [
+              {
+                "type": "value",
+                "options": {
+                  "0": { "text": "DOWN", "color": "red" },
+                  "1": { "text": "UP", "color": "green" }
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": 7,
+        "title": "API Latency",
+        "type": "graph",
+        "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(trading_bot_api_latency_ms_bucket[5m]))",
+            "legendFormat": "{{api_name}} - {{endpoint}}"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "ms",
+            "label": "Latency (95th percentile)"
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "title": "Database Query Duration",
+        "type": "graph",
+        "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(trading_bot_db_query_duration_ms_bucket[5m]))",
+            "legendFormat": "{{query_type}}"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "ms",
+            "label": "Duration (95th percentile)"
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "title": "Error Rate",
+        "type": "graph",
+        "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "rate(trading_bot_errors_total[5m])",
+            "legendFormat": "{{error_type}} - {{severity}}"
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "title": "Uptime",
+        "type": "stat",
+        "gridPos": { "x": 0, "y": 20, "w": 6, "h": 4 },
+        "targets": [
+          {
+            "expr": "trading_bot_uptime_seconds / 3600"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "h",
+            "decimals": 1
+          }
+        }
+      },
+      {
+        "id": 11,
+        "title": "Risk Limit Breaches",
+        "type": "stat",
+        "gridPos": { "x": 6, "y": 20, "w": 6, "h": 4 },
+        "targets": [
+          {
+            "expr": "trading_bot_risk_limit_breaches_total"
+          }
+        ],
+        "options": {
+          "colorMode": "background"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 1, "color": "red" }
+              ]
+            }
+          }
+        }
+      }
+    ]
+  }
+}

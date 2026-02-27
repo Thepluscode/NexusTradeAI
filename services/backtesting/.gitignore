@@ -1,0 +1,9 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Runtime outputs
+backtest_results/
+
+# Historical data (large binary files)
+data/historical/*.parquet
