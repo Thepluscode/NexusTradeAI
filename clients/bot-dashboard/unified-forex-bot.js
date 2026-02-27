@@ -89,6 +89,10 @@ let totalTradesToday = 0;
 let scanCount = 0;
 let lastScanTime = null;
 let lastEquity = null; // null means not initialized yet
+let cachedLiveDailyPnL = 0; // updated by status endpoint for circuit breaker
+
+// Daily loss circuit breaker — halt new entries once this is exceeded
+const MAX_DAILY_LOSS_FOREX = parseFloat(process.env.MAX_DAILY_LOSS || '500');
 
 // Persistent bot state (survives restarts)
 const BOT_STATE_FILE = path.join(__dirname, 'data/forex-bot-state.json');
@@ -865,6 +869,13 @@ async function tradingLoop() {
         return;
     }
 
+    // Daily loss circuit breaker — check both demo and live P&L
+    const dailyLoss = oandaConfig.isPractice ? simDailyPnL : cachedLiveDailyPnL;
+    if (dailyLoss < -MAX_DAILY_LOSS_FOREX) {
+        console.log(`🛑 [CIRCUIT BREAKER] Forex daily loss $${Math.abs(dailyLoss).toFixed(2)} exceeds limit $${MAX_DAILY_LOSS_FOREX} — no new entries today`);
+        return;
+    }
+
     // Scan for new signals
     const signals = await scanForSignals();
     console.log(`🔍 Signals found: ${signals.length}`);
@@ -941,7 +952,7 @@ app.get('/api/forex/status', async (req, res) => {
                     maxPositions: 5,
                     stopLoss: MOMENTUM_CONFIG.tier1.stopLoss,
                     profitTarget: MOMENTUM_CONFIG.tier1.profitTarget,
-                    dailyLossLimit: -500
+                    dailyLossLimit: -MAX_DAILY_LOSS_FOREX
                 }
             });
             return;
@@ -967,6 +978,7 @@ app.get('/api/forex/status', async (req, res) => {
         if (account && lastEquity === null) lastEquity = balance;
         const dailyPnL = lastEquity !== null ? balance - lastEquity : 0;
         const dailyReturn = lastEquity !== null && lastEquity !== 0 ? dailyPnL / lastEquity : 0;
+        cachedLiveDailyPnL = dailyPnL; // update circuit breaker cache
 
         const positionsData = oandaPositions.map(pos => {
             const isLong = pos.long?.units > 0;
@@ -1003,7 +1015,7 @@ app.get('/api/forex/status', async (req, res) => {
             dailyReturn,
             positions: positionsData,
             stats: {
-                totalTrades: totalTradesToday,
+                totalTrades: simTotalTrades,  // persistent cumulative count, not daily
                 longTrades,
                 shortTrades,
                 winners,

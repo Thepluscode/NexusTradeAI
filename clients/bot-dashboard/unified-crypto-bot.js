@@ -281,6 +281,7 @@ class CryptoTradingEngine {
         this.tradesToday = [];
         this.lastTradeTime = new Map();
         this.dailyTradeCount = 0;
+        this.dailyLoss = 0; // circuit breaker — resets at UTC midnight
 
         // Performance tracking
         this.totalTrades = 0;
@@ -689,6 +690,7 @@ class CryptoTradingEngine {
             } else {
                 this.losingTrades++;
                 this.totalLoss += Math.abs(pnlUSD);
+                this.dailyLoss += Math.abs(pnlUSD); // circuit breaker accumulator
             }
 
             console.log(`✅ Position closed: ${symbol} - ${reason}`);
@@ -718,6 +720,7 @@ class CryptoTradingEngine {
                 if (currentDay !== lastResetDay) {
                     this.dailyTradeCount = 0;
                     this.tradesToday = [];
+                    this.dailyLoss = 0;
                     lastResetDay = currentDay;
                     console.log('🔄 Daily trade counters reset (UTC midnight)');
                 }
@@ -739,6 +742,15 @@ class CryptoTradingEngine {
                 // Manage existing positions even when paused (exits still run)
                 if (this.isPaused) {
                     console.log('⏸  Crypto bot paused — managing existing positions only, no new entries');
+                    if (this.positions.size > 0) await this.managePositions();
+                    await new Promise(resolve => setTimeout(resolve, this.config.scanInterval));
+                    continue;
+                }
+
+                // Daily loss circuit breaker
+                const maxDailyLoss = parseFloat(process.env.MAX_DAILY_LOSS || '500');
+                if (this.dailyLoss >= maxDailyLoss) {
+                    console.log(`🛑 [CIRCUIT BREAKER] Crypto daily loss $${this.dailyLoss.toFixed(2)} exceeds limit $${maxDailyLoss} — no new entries today`);
                     if (this.positions.size > 0) await this.managePositions();
                     await new Promise(resolve => setTimeout(resolve, this.config.scanInterval));
                     continue;
