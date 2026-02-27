@@ -110,7 +110,7 @@ async function fetchBotStatus(bot: typeof BOTS[0]): Promise<BotHealth> {
             d?.performance?.totalTrades ??
             d?.stats?.totalTrades ??
             d?.totalTrades ?? 0;
-        // winRate may be a number (stock bot: 55.3), or a "55.3%" string (crypto bot), or missing
+        // winRate may be a number (stock bot: 55.3), a "55.3" string (crypto bot), or missing
         const rawWinRate = d?.performance?.winRate ?? d?.stats?.winRate ?? d?.winRate ?? 0;
         const winRate = typeof rawWinRate === 'string'
             ? parseFloat(rawWinRate)
