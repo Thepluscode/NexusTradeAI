@@ -277,6 +277,25 @@ class TradingDatabase {
         return await this.safeRead(this.files.performance, this.getInitialData('performance'));
     }
 
+    // Config Management
+    async loadConfig() {
+        return await this.safeRead(this.files.config, this.getInitialData('config'));
+    }
+
+    async saveConfig(configData) {
+        try {
+            const config = {
+                ...configData,
+                lastUpdate: new Date().toISOString()
+            };
+            await this.atomicWrite(this.files.config, config);
+            console.log(`⚙️  Updated config: ${config.symbols?.length || 0} symbols, ${config.strategies?.length || 0} strategies`);
+            return config;
+        } catch (error) {
+            console.error('❌ Error saving config:', error);
+        }
+    }
+
     // Get comprehensive status
     async getStatus() {
         try {
@@ -289,16 +308,17 @@ class TradingDatabase {
 
             return {
                 positions: {
-                    active: Object.keys(positions.active).length,
-                    closed: positions.closed.length,
-                    total: Object.keys(positions.active).length + positions.closed.length
+                    active: Object.keys(positions?.active || {}).length,
+                    closed: (positions?.closed || []).length,
+                    total: Object.keys(positions?.active || {}).length + (positions?.closed || []).length
                 },
                 profits: {
                     total: this.calculateRealisticProfits(trades), // Use realistic calculation
-                    reported: profits.totalProfit, // Keep original for comparison
+                    reported: profits?.totalProfit || 0, // Keep original for comparison
                     arbitrage: 0, // Remove fake arbitrage profits
                     trading: this.calculateRealisticProfits(trades),
-                    today: profits.dailyProfits[new Date().toISOString().split('T')[0]] || 0,
+                    today: (profits?.dailyProfits || {})[new Date().toISOString().split('T')[0]] || 0,
+                    dailyProfits: profits?.dailyProfits || {},
                     isRealistic: true
                 },
                 trades: {

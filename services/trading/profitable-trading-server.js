@@ -1,9 +1,11 @@
 const express = require('express');
 const cors = require('cors');
 const { spawn } = require('child_process');
-const ProfitableTradeEngine = require('./profitable-strategies');
+const WinningStrategy = require('./winning-strategy');
 const TradingDatabase = require('./database');
-require('dotenv').config();
+const AccountManager = require('./account-manager');
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 const app = express();
 const PORT = process.env.TRADING_PORT || 3002;
@@ -19,20 +21,99 @@ let aiPredictor = null;
 // Initialize persistent database
 const db = new TradingDatabase();
 
+// Initialize Account Manager
+const accountMgr = new AccountManager();
+
 // Realistic Trading Configuration
 const TRADING_CONFIG = {
-    symbols: process.env.TRADING_SYMBOLS ? process.env.TRADING_SYMBOLS.split(',') : ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'NVDA'],
-    basePositionSize: 12500, // $12.5K base position (realistic for $2.8M account)
-    riskPerTrade: parseFloat(process.env.RISK_PER_TRADE) || 0.02, // 2% risk per trade
-    maxDailyLoss: parseFloat(process.env.MAX_DAILY_LOSS) || -25000, // $25K max daily loss (realistic)
-    maxPositionSize: parseFloat(process.env.MAX_POSITION_SIZE) || 50000, // $50K max position (realistic)
-    enabledStrategies: process.env.ENABLED_STRATEGIES ? process.env.ENABLED_STRATEGIES.split(',') : ['trendFollowing', 'meanReversion', 'volatilityBreakout', 'aiSignals'],
+    symbols: process.env.TRADING_SYMBOLS ? process.env.TRADING_SYMBOLS.split(',') : [
+        // Focus on LIQUID ETFs for better execution and trends
+        'SPY', 'QQQ', 'IWM', 'DIA', // Major index ETFs
+        // Mega-cap tech (VERY HIGH VOLUME)
+        'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'NFLX',
+        // Semiconductors (high volume)
+        'AMD', 'INTC', 'QCOM', 'AVGO', 'SMCI', 'MU', 'AMAT', 'LRCX', 'KLAC', 'ASML',
+        // Financial tech & Fintech
+        'V', 'MA', 'PYPL', 'SQ', 'JPM', 'BAC', 'WFC', 'GS', 'MS', 'C',
+        // Cloud/SaaS/Enterprise
+        'CRM', 'ADBE', 'ORCL', 'NOW', 'SNOW', 'WDAY', 'DDOG', 'NET', 'ZS',
+        // E-commerce & Retail
+        'SHOP', 'BABA', 'WMT', 'TGT', 'COST', 'HD', 'LOW', 'AMZN',
+        // Communication & Streaming
+        'DIS', 'NFLX', 'CMCSA', 'T', 'VZ', 'TMUS',
+        // Transportation & Industrials
+        'BA', 'CAT', 'DE', 'UPS', 'FDX', 'LMT', 'RTX',
+        // Crypto-related stocks (high volatility)
+        'COIN', 'MARA', 'RIOT', 'HOOD',
+        // Growth & Momentum
+        'UBER', 'LYFT', 'ABNB', 'DASH', 'PLTR', 'SNOW',
+        // Healthcare & Pharma
+        'JNJ', 'PFE', 'MRNA', 'LLY', 'UNH', 'ABBV', 'TMO',
+        // Energy (trending sector)
+        'XOM', 'CVX', 'COP', 'SLB', 'EOG',
+        // Consumer Brands
+        'KO', 'PEP', 'NKE', 'SBUX', 'MCD', 'PG', 'KMB',
+        // Utilities & REITs
+        'NEE', 'O', 'ADP', 'GD',
+        // Biotech & Healthcare
+        'AMGN', 'IBM',
+        // User-requested stocks (original batch)
+        'RDDT', 'AGM', 'PSTV', 'BINI', 'CLRS', 'GCT', 'CYN', 'HMI', 'FFAI',
+        // User-requested stocks (new batch - high volume US stocks)
+        'ROKU', 'RBLX', 'IRBT', 'OKLO', 'RKLB', 'HIMS', 'QUBT', 'RGTI', 'QBTS',
+        'PLTK', 'BGS', 'SXP', 'NHTC', 'ULTP', 'CLTP', 'ARBB', 'RBOT', 'OUST',
+        'ARBE', 'ARCI', 'TEM', 'FLGC', 'AIXC', 'KDNC', 'CJET', 'PGY', 'ABEC',
+        'MITQ', 'ELE', 'PQAS', 'BNS', 'TSLX', 'OUT', 'FIV', 'AIIO', 'QMCO',
+        'ZOOZ', 'TOON', 'ARKI', 'KRKNF',
+        // International/Non-US symbols (may not work with Alpaca)
+        'QDVF', 'BWMX', 'QWTM', 'VUAG',
+        // Major ETFs - Broad Market
+        'SPY', 'QQQ', 'DIA', 'IWM', 'VTI', 'VOO',
+        // Sector ETFs - Technology
+        'XLK', 'VGT', 'SOXX', 'SMH', 'ARKK', 'ARKW',
+        // Sector ETFs - Finance
+        'XLF', 'VFH', 'KBE', 'KRE',
+        // Sector ETFs - Healthcare
+        'XLV', 'VHT', 'IBB', 'XBI',
+        // Sector ETFs - Energy
+        'XLE', 'VDE', 'XOP', 'OIH',
+        // Sector ETFs - Consumer
+        'XLY', 'XLP', 'VCR', 'VDC',
+        // Sector ETFs - Industrial & Materials
+        'XLI', 'VIS', 'XLB', 'VAW',
+        // Sector ETFs - Real Estate & Utilities
+        'XLRE', 'VNQ', 'XLU', 'VPU',
+        // Bond & Fixed Income ETFs
+        'TLT', 'IEF', 'SHY', 'AGG', 'BND', 'LQD', 'HYG',
+        // Commodity ETFs
+        'GLD', 'SLV', 'USO', 'UNG', 'DBA',
+        // International ETFs
+        'EFA', 'VEA', 'EEM', 'VWO', 'FXI', 'EWJ',
+        // Leveraged LONG ETFs only (removed inverse/volatility ETFs)
+        'TQQQ' // 3x NASDAQ Bull (LONG only, no SQQQ/VXX/etc)
+        // NOTE: Forex and Crypto removed - use separate specialized bots
+        // See: forex-trading-server.js and crypto-trading-server.js
+    ],
+    // CRITICAL: Position Limits (ADDED)
+    maxTotalPositions: 10, // Maximum 10 positions at once
+    maxPositionsPerSymbol: 1, // Only 1 position per symbol
+    maxPositionsPerStrategy: 5, // Maximum 5 per strategy
+
+    basePositionSize: 10000, // $10K base position
+    riskPerTrade: parseFloat(process.env.RISK_PER_TRADE) || 0.015, // 1.5% risk per trade
+    maxDailyLoss: parseFloat(process.env.MAX_DAILY_LOSS) || -3000, // $3K max daily loss
+    maxPositionSize: parseFloat(process.env.MAX_POSITION_SIZE) || 15000, // $15K max position
+    enabledStrategies: process.env.ENABLED_STRATEGIES ? process.env.ENABLED_STRATEGIES.split(',') : ['trendFollowing'], // Focus on trend following
     aiEnabled: process.env.AI_ENABLED === 'true',
     realTradingEnabled: process.env.REAL_TRADING_ENABLED === 'true',
+
     // Realistic performance targets
-    targetWinRate: 0.678, // 67.8% target win rate
-    targetSharpeRatio: 2.34, // 2.34 target Sharpe ratio
-    maxDrawdown: 0.085 // 8.5% max drawdown limit
+    targetWinRate: 0.50, // 50% target win rate (REALISTIC)
+    targetSharpeRatio: 1.5, // 1.5 target Sharpe ratio (REALISTIC)
+    maxDrawdown: 0.10, // 10% max drawdown limit
+
+    // Minimum wait between trades (ADDED)
+    minTimeBetweenTrades: 30000 // 30 seconds
 };
 
 // Initialize AI Predictor
@@ -72,8 +153,23 @@ app.post('/api/trading/start', async (req, res) => {
             return res.json({ success: false, message: 'Trading engine already running' });
         }
 
-        // Initialize trading engine
-        tradingEngine = new ProfitableTradeEngine(TRADING_CONFIG);
+        // Load REAL config from database (not hardcoded!)
+        const dbConfig = await db.loadConfig();
+        const realConfig = {
+            ...TRADING_CONFIG,
+            symbols: dbConfig.symbols || TRADING_CONFIG.symbols,
+            enabledStrategies: dbConfig.strategies || TRADING_CONFIG.enabledStrategies,
+            riskPerTrade: dbConfig.riskPerTrade || TRADING_CONFIG.riskPerTrade,
+            maxPositionSize: dbConfig.maxPositionSize || TRADING_CONFIG.maxPositionSize
+        };
+
+        console.log(`🔄 Loading config from database:`);
+        console.log(`   Symbols: ${realConfig.symbols.length} symbols`);
+        console.log(`   Strategies: ${realConfig.enabledStrategies.join(', ')}`);
+        console.log(`   Max Position: $${realConfig.maxPositionSize}`);
+
+        // Initialize winning strategy engine with REAL config
+        tradingEngine = new WinningStrategy(realConfig);
         
         // Set up event listeners with database persistence
         tradingEngine.on('positionOpened', async (position) => {
@@ -206,24 +302,118 @@ app.get('/api/trading/status', async (req, res) => {
         // Engine is running - combine live and persistent data
         const livePerformance = tradingEngine.getPerformanceMetrics();
         const combinedProfit = (dbStatus?.profits?.total || 0) + (livePerformance.totalProfit || 0);
+        const combinedTotalTrades = (dbStatus?.trades?.total || 0) + (livePerformance.totalTrades || 0);
+        const combinedWinningTrades = (dbStatus?.trades?.winning || 0) + (livePerformance.winningTrades || 0);
+
+        // Calculate daily P&L (realized + unrealized), Portfolio VaR, and Leverage
+        let dailyPnL = 0;
+        let totalExposure = 0;
+        let portfolioValue = 100000; // Default to initial capital
+
+        // Add unrealized P&L from open positions
+        if (tradingEngine && tradingEngine.positions) {
+            for (const [id, position] of tradingEngine.positions) {
+                // Calculate unrealized P&L on-demand
+                const currentPrice = position.currentPrice || position.entry;
+                const unrealizedProfit = tradingEngine.calculateProfit(position, currentPrice);
+                dailyPnL += unrealizedProfit;
+
+                // Calculate exposure (position value)
+                const positionValue = currentPrice * (position.size || position.shares || 0);
+                totalExposure += positionValue;
+            }
+        }
+
+        // Add realized profits from today (from database)
+        const today = new Date().toISOString().split('T')[0];
+        const todaysRealizedProfit = dbStatus?.profits?.dailyProfits?.[today] || 0;
+        dailyPnL += todaysRealizedProfit;
+
+        // Get account balance from AccountManager (already synced with Alpaca)
+        try {
+            const realAccount = accountMgr.getAccount('real');
+            portfolioValue = parseFloat(realAccount.balance || 100000);
+        } catch (err) {
+            console.warn('⚠️  Failed to get account balance:', err.message);
+            // Use default if account manager fails
+            portfolioValue = 100000;
+        }
+
+        // Calculate leverage: total exposure / portfolio value
+        const leverage = portfolioValue > 0 ? totalExposure / portfolioValue : 0;
+
+        // Calculate Portfolio VaR (95% confidence, 1-day horizon)
+        // Simple VaR calculation: 1.65 * 2% (assumed daily volatility) * portfolio value
+        const dailyVolatility = 0.02; // 2% daily volatility assumption
+        const confidenceLevel = 1.65; // 95% confidence (z-score)
+        const portfolioVaR = portfolioValue * dailyVolatility * confidenceLevel;
+
+        // Calculate profit factor
+        const losingTrades = combinedTotalTrades - combinedWinningTrades;
+        const avgProfit = livePerformance.avgProfit || 0;
+        const avgLoss = Math.abs(livePerformance.avgLoss || 0);
+        const grossProfit = combinedWinningTrades * avgProfit;
+        const grossLoss = losingTrades * avgLoss;
+        const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : 0;
 
         const performance = {
             ...livePerformance,
             totalProfit: combinedProfit,
-            totalTrades: (dbStatus?.trades?.total || 0) + (livePerformance.totalTrades || 0),
-            winningTrades: (dbStatus?.trades?.winning || 0) + (livePerformance.winningTrades || 0),
+            totalTrades: combinedTotalTrades,
+            winningTrades: combinedWinningTrades,
+            winRate: combinedTotalTrades > 0 ? (combinedWinningTrades / combinedTotalTrades) * 100 : 0,
+            sharpeRatio: combinedTotalTrades > 0 ? combinedProfit / (combinedTotalTrades * 100) : 0,
+            profitFactor: profitFactor,
             activePositions: livePerformance.activePositions || 0,
+            maxDrawdown: livePerformance.maxDrawdown || 0,
             isRunning: true
         };
 
+        // Get active positions details with real-time prices
+        const positions = [];
+        if (tradingEngine && tradingEngine.positions) {
+            for (const [id, position] of tradingEngine.positions) {
+                // Fetch current price in real-time
+                const currentPrice = await tradingEngine.getCurrentPrice(position.symbol).catch(() => position.entry);
+                const unrealizedProfit = tradingEngine.calculateProfit(position, currentPrice);
+
+                positions.push({
+                    id: id,
+                    symbol: position.symbol,
+                    side: position.direction.toUpperCase(),
+                    quantity: position.size || position.shares || 0,
+                    entry: position.entry,
+                    current: currentPrice,
+                    pnl: unrealizedProfit,
+                    strategy: position.strategy,
+                    openTime: position.openedAt || position.timestamp || Date.now()
+                });
+            }
+        }
+
         // Update database with current performance
         await db.updatePerformance(performance);
+
+        // Calculate risk metrics
+        const riskMetrics = {
+            consecutiveLosses: livePerformance.consecutiveLosses || 0,
+            maxConsecutiveLosses: livePerformance.maxConsecutiveLosses || 0,
+            portfolioCVaR: portfolioVaR * 1.5, // CVaR is typically higher than VaR
+            marginUtilization: leverage > 0 ? Math.min(leverage / 4, 1) : 0 // Assuming 4x is max leverage
+        };
 
         res.json({
             success: true,
             data: {
                 isRunning: tradingEngine.isRunning,
                 performance,
+                dailyPnL: dailyPnL, // Unrealized P&L from open positions
+                portfolioVaR: portfolioVaR, // Value at Risk (95% confidence)
+                leverage: leverage, // Current leverage ratio
+                portfolioValue: portfolioValue, // Total account equity
+                totalExposure: totalExposure, // Total position value
+                riskMetrics: riskMetrics, // Risk metrics including consecutive losses
+                positions,
                 config: TRADING_CONFIG,
                 lastUpdate: new Date().toISOString(),
                 dataSource: 'live_and_persistent'
@@ -614,7 +804,7 @@ app.post('/api/trading/config', (req, res) => {
         if (tradingEngine && tradingEngine.isRunning) {
             tradingEngine.stop();
             setTimeout(() => {
-                tradingEngine = new ProfitableTradeEngine(TRADING_CONFIG);
+                tradingEngine = new WinningStrategy(TRADING_CONFIG);
                 tradingEngine.start();
             }, 1000);
         }
@@ -656,8 +846,84 @@ app.use((error, req, res, next) => {
     });
 });
 
+// ============= ACCOUNT MANAGEMENT ENDPOINTS =============
+
+// Get account summary
+app.get('/api/accounts/summary', async (req, res) => {
+    try {
+        const summary = accountMgr.getAccountSummary();
+        res.json({ success: true, data: summary });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Switch account (real/demo)
+app.post('/api/accounts/switch', async (req, res) => {
+    try {
+        const { type } = req.body;
+        const account = await accountMgr.switchAccount(type);
+        res.json({ success: true, data: account });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Get specific account
+app.get('/api/accounts/:type', async (req, res) => {
+    try {
+        const { type } = req.params;
+        const account = accountMgr.getAccount(type);
+        res.json({ success: true, data: account });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Reset demo account
+app.post('/api/accounts/demo/reset', async (req, res) => {
+    try {
+        const account = await accountMgr.resetDemoAccount();
+        res.json({ success: true, data: account });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Withdraw from real account
+app.post('/api/accounts/withdraw', async (req, res) => {
+    try {
+        const { amount, bankId } = req.body;
+        const withdrawal = await accountMgr.withdraw(amount, bankId, 'real');
+        res.json({ success: true, data: withdrawal });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Add bank account
+app.post('/api/accounts/banks/add', async (req, res) => {
+    try {
+        const bankDetails = req.body;
+        const bank = await accountMgr.addBankAccount(bankDetails);
+        res.json({ success: true, data: bank });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Sync with Alpaca on startup
+app.post('/api/accounts/sync-alpaca', async (req, res) => {
+    try {
+        const account = await accountMgr.syncWithAlpaca();
+        res.json({ success: true, data: account });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
     console.log(`🚀 Profitable Trading Server running on port ${PORT}`);
     console.log('Configuration:');
     console.log(`- Symbols: ${TRADING_CONFIG.symbols.join(', ')}`);
@@ -665,7 +931,11 @@ app.listen(PORT, () => {
     console.log(`- AI Enabled: ${TRADING_CONFIG.aiEnabled}`);
     console.log(`- Real Trading: ${TRADING_CONFIG.realTradingEnabled}`);
     console.log(`- Risk Per Trade: ${(TRADING_CONFIG.riskPerTrade * 100).toFixed(1)}%`);
-    
+
+    // Sync with Alpaca account on startup
+    console.log('\n💰 Syncing with Alpaca account...');
+    await accountMgr.syncWithAlpaca();
+
     // Initialize AI if enabled
     if (TRADING_CONFIG.aiEnabled) {
         initializeAIPredictor();
