@@ -71,12 +71,12 @@ class APIClient {
 
   async switchAccount(type: 'real' | 'demo') {
     const response = await this.tradingEngine.post('/api/accounts/switch', { type });
-    return response.data.data;
+    return response.data; // flat: { success, activeAccount }
   }
 
   async resetDemoAccount() {
     const response = await this.tradingEngine.post('/api/accounts/demo/reset');
-    return response.data.data;
+    return response.data; // flat: { success, message }
   }
 
   async getBotConfig(): Promise<any> {

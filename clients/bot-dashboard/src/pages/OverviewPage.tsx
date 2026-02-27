@@ -98,7 +98,7 @@ async function fetchBotStatus(bot: typeof BOTS[0]): Promise<BotHealth> {
         const dailyPnLFromReturn = (() => {
             const r = d?.dailyReturn;
             if (r == null || !equity) return null;
-            const ratio = Math.abs(r) > 1 ? r / 100 : r;
+            const ratio = typeof r === 'number' && Math.abs(r) > 1 ? r / 100 : r;
             return ratio * equity;
         })();
         const dailyPnL =

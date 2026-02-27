@@ -368,7 +368,7 @@ function RiskTierCard({
     const [vals, setVals] = useState(data);
     const dirty = JSON.stringify(vals) !== JSON.stringify(data);
 
-    const rr = vals.profitTarget / vals.stopLoss;
+    const rr = vals.stopLoss > 0 ? vals.profitTarget / vals.stopLoss : 0;
 
     return (
         <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid', borderColor: 'divider' }}>
