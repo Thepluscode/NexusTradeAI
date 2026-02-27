@@ -199,8 +199,8 @@ export const Dashboard: React.FC = () => {
           <Tab icon={<TrendingUp />} iconPosition="start" label="All Positions" />
           <Tab icon={<Storage />} iconPosition="start" label="Services" />
           <Tab icon={<AccountBalance />} iconPosition="start" label="Banking" />
-          <Tab icon={<Policy />} iconPosition="start" label="Compliance" />
-          <Tab icon={<Psychology />} iconPosition="start" label="AI Assistant" />
+          <Tab icon={<Policy />} iconPosition="start" label="Trade Journal" />
+          <Tab icon={<Psychology />} iconPosition="start" label="Intelligence" />
         </Tabs>
       </Paper>
 
@@ -403,13 +403,13 @@ export const Dashboard: React.FC = () => {
           <CompliancePanel />
         </TabPanel>
 
-        {/* --- Tab 7: AI Assistant --- */}
+        {/* --- Tab 7: Intelligence --- */}
         <TabPanel value={tabValue} index={7}>
           <Grid container spacing={3}>
-            <Grid item xs={12} md={6}>
+            <Grid item xs={12} md={5}>
               <AIChat />
             </Grid>
-            <Grid item xs={12} md={6}>
+            <Grid item xs={12} md={7}>
               <StrategiesPanel />
             </Grid>
           </Grid>

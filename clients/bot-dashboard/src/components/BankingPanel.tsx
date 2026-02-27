@@ -6,265 +6,447 @@ import {
     Typography,
     Grid,
     Button,
-    TextField,
-    CircularProgress,
-    Table,
-    TableBody,
-    TableCell,
-    TableContainer,
-    TableHead,
-    TableRow,
     Chip,
+    Divider,
+    Stack,
+    Avatar,
+    LinearProgress,
+    Alert,
     Dialog,
     DialogTitle,
     DialogContent,
     DialogActions,
+    TextField,
+    InputAdornment,
     IconButton,
     Tooltip,
 } from '@mui/material';
-import RefreshIcon from '@mui/icons-material/Refresh';
-import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
-import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
-import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import {
-    useBankAccounts,
-    useTradingAccountBalance,
-    useTransactions,
-    useDeposit,
-    useWithdraw,
-} from '@/hooks/useBanking';
+    AccountBalanceWallet,
+    TrendingUp,
+    TrendingDown,
+    ShowChart,
+    CurrencyExchange,
+    CurrencyBitcoin,
+    Refresh,
+    AddCircleOutline,
+    RemoveCircleOutline,
+    ScienceOutlined,
+    OpenInNew,
+} from '@mui/icons-material';
+import axios from 'axios';
+import { useQuery } from 'react-query';
 import toast from 'react-hot-toast';
 
+// ── Data fetching ──────────────────────────────────────────────────────────
+
+async function fetchStockAccount() {
+    const res = await axios.get('http://localhost:3002/api/accounts/summary', { timeout: 5000 });
+    return res.data?.data || res.data;
+}
+
+async function fetchForexAccount() {
+    try {
+        const res = await axios.get('http://localhost:3005/api/accounts/summary', { timeout: 3000 });
+        return res.data?.data || res.data;
+    } catch {
+        return null;
+    }
+}
+
+async function fetchCryptoAccount() {
+    try {
+        const res = await axios.get('http://localhost:3006/api/crypto/status', { timeout: 3000 });
+        const d = res.data?.data || res.data;
+        return { equity: d?.equity || d?.portfolioValue || 0, mode: d?.mode || 'DEMO' };
+    } catch {
+        return null;
+    }
+}
+
+// ── Sub-components ─────────────────────────────────────────────────────────
+
+function StatBox({ label, value, color }: { label: string; value: React.ReactNode; color?: string }) {
+    return (
+        <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'background.default', textAlign: 'center' }}>
+            <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
+                {label}
+            </Typography>
+            <Typography variant="h6" fontWeight={700} color={color || 'text.primary'}>
+                {value}
+            </Typography>
+        </Box>
+    );
+}
+
+function BrokerRow({
+    icon,
+    name,
+    mode,
+    equity,
+    pnl,
+    pnlPercent,
+    accentColor,
+    online,
+    infoUrl,
+}: {
+    icon: React.ReactElement;
+    name: string;
+    mode: string;
+    equity: number | null;
+    pnl?: number | null;
+    pnlPercent?: number | null;
+    accentColor: string;
+    online: boolean;
+    infoUrl?: string;
+}) {
+    return (
+        <Box
+            sx={{
+                p: 2.5,
+                borderRadius: 3,
+                border: '1px solid',
+                borderColor: online ? `${accentColor}40` : 'divider',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 2,
+                position: 'relative',
+                overflow: 'hidden',
+                '&::before': online ? {
+                    content: '""',
+                    position: 'absolute',
+                    left: 0, top: 0, bottom: 0,
+                    width: 3,
+                    bgcolor: accentColor,
+                    borderRadius: '3px 0 0 3px',
+                } : {},
+            }}
+        >
+            <Avatar sx={{ bgcolor: `${accentColor}20`, color: accentColor, width: 44, height: 44 }}>
+                {icon}
+            </Avatar>
+
+            <Box sx={{ flex: 1 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography fontWeight={600}>{name}</Typography>
+                    <Chip
+                        label={mode}
+                        size="small"
+                        sx={{
+                            bgcolor: `${accentColor}20`,
+                            color: accentColor,
+                            fontWeight: 700,
+                            fontSize: 10,
+                            height: 20,
+                        }}
+                    />
+                    {!online && (
+                        <Chip label="Offline" size="small" color="default" sx={{ height: 20, fontSize: 10 }} />
+                    )}
+                </Box>
+                {online && equity != null && (
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.3 }}>
+                        Equity: <strong style={{ color: '#fff' }}>${equity.toLocaleString(undefined, { maximumFractionDigits: 2 })}</strong>
+                    </Typography>
+                )}
+                {!online && (
+                    <Typography variant="caption" color="text.secondary">Bot not running</Typography>
+                )}
+            </Box>
+
+            <Box sx={{ textAlign: 'right' }}>
+                {online && pnl != null ? (
+                    <>
+                        <Typography
+                            variant="h6"
+                            fontWeight={700}
+                            color={pnl >= 0 ? 'success.main' : 'error.main'}
+                        >
+                            {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+                        </Typography>
+                        {pnlPercent != null && (
+                            <Typography variant="caption" color={pnl >= 0 ? 'success.main' : 'error.main'}>
+                                {pnlPercent >= 0 ? '+' : ''}{pnlPercent.toFixed(2)}%
+                            </Typography>
+                        )}
+                    </>
+                ) : online ? (
+                    <Typography variant="body2" color="text.secondary">—</Typography>
+                ) : null}
+                {infoUrl && (
+                    <Tooltip title="Open broker dashboard">
+                        <IconButton size="small" href={infoUrl} target="_blank" rel="noopener" sx={{ ml: 0.5 }}>
+                            <OpenInNew sx={{ fontSize: 14 }} />
+                        </IconButton>
+                    </Tooltip>
+                )}
+            </Box>
+        </Box>
+    );
+}
+
+// ── Main component ─────────────────────────────────────────────────────────
+
 export const BankingPanel: React.FC = () => {
-    const { isLoading: loadingAccounts, refetch: refetchAccounts } = useBankAccounts();
-    const { data: tradingAccount, isLoading: loadingTrading, refetch: refetchTrading } = useTradingAccountBalance();
-    const { data: transactions, isLoading: loadingTx, refetch: refetchTx } = useTransactions(10);
-
-    const depositMutation = useDeposit();
-    const withdrawMutation = useWithdraw();
-
     const [depositOpen, setDepositOpen] = useState(false);
     const [withdrawOpen, setWithdrawOpen] = useState(false);
     const [amount, setAmount] = useState('');
-    const [selectedAccount] = useState('default');
 
-    const handleDeposit = async () => {
-        try {
-            await depositMutation.mutateAsync({ amount: parseFloat(amount), fromAccountId: selectedAccount });
-            toast.success(`Successfully deposited $${amount}`);
-            setDepositOpen(false);
-            setAmount('');
-        } catch {
-            toast.error('Deposit failed');
+    const {
+        data: stockAcct,
+        isLoading: stockLoading,
+        refetch: refetchStock,
+    } = useQuery('bankingStockAcct', fetchStockAccount, { refetchInterval: 15000 });
+
+    const {
+        data: forexAcct,
+        refetch: refetchForex,
+    } = useQuery('bankingForexAcct', fetchForexAccount, { refetchInterval: 15000 });
+
+    const {
+        data: cryptoAcct,
+        refetch: refetchCrypto,
+    } = useQuery('bankingCryptoAcct', fetchCryptoAccount, { refetchInterval: 15000 });
+
+    const refetchAll = () => { refetchStock(); refetchForex(); refetchCrypto(); };
+
+    const stockEquity = stockAcct?.realAccount?.equity ?? stockAcct?.demoAccount?.equity ?? 0;
+    const stockPnl = stockAcct?.realAccount?.pnl ?? 0;
+    const stockPnlPct = stockAcct?.realAccount?.pnlPercent ?? 0;
+    const forexEquity = forexAcct?.balance ?? forexAcct?.equity ?? null;
+    const cryptoEquity = cryptoAcct?.equity ?? null;
+
+    const totalEquity = stockEquity + (forexEquity ?? 0) + (cryptoEquity ?? 0);
+    const drawdownPct = stockEquity > 0 ? ((100000 - stockEquity) / 100000) * 100 : 0;
+
+    const isPaper = true; // Always paper until REAL_TRADING_ENABLED=true
+
+    const handleAction = (type: 'deposit' | 'withdraw') => {
+        if (!amount || isNaN(parseFloat(amount))) {
+            toast.error('Enter a valid amount');
+            return;
         }
+        toast.error(`Connect a live broker account to ${type} funds. Currently in Paper Trading mode.`);
+        type === 'deposit' ? setDepositOpen(false) : setWithdrawOpen(false);
+        setAmount('');
     };
-
-    const handleWithdraw = async () => {
-        try {
-            await withdrawMutation.mutateAsync({ amount: parseFloat(amount), toAccountId: selectedAccount });
-            toast.success(`Successfully withdrew $${amount}`);
-            setWithdrawOpen(false);
-            setAmount('');
-        } catch {
-            toast.error('Withdrawal failed');
-        }
-    };
-
-    const isLoading = loadingAccounts || loadingTrading || loadingTx;
-
-    if (isLoading) {
-        return (
-            <Card sx={{ bgcolor: 'background.paper', mb: 2 }}>
-                <CardContent>
-                    <Box display="flex" justifyContent="center" alignItems="center" p={3}>
-                        <CircularProgress size={40} />
-                    </Box>
-                </CardContent>
-            </Card>
-        );
-    }
 
     return (
-        <Card sx={{ bgcolor: 'background.paper', mb: 2 }}>
-            <CardContent>
-                <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-                    <Box display="flex" alignItems="center" gap={1}>
-                        <AccountBalanceIcon color="primary" />
-                        <Typography variant="h6" fontWeight={600}>
-                            Banking & Funds
-                        </Typography>
-                    </Box>
-                    <Box>
-                        <Button
-                            variant="contained"
-                            color="success"
+        <Box>
+            {/* Header */}
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                    <AccountBalanceWallet color="primary" />
+                    <Typography variant="h6" fontWeight={700}>Banking & Funds</Typography>
+                    {isPaper && (
+                        <Chip
+                            icon={<ScienceOutlined sx={{ fontSize: '14px !important' }} />}
+                            label="Paper Mode"
+                            color="primary"
                             size="small"
-                            startIcon={<ArrowDownwardIcon />}
-                            onClick={() => setDepositOpen(true)}
-                            sx={{ mr: 1 }}
-                        >
-                            Deposit
-                        </Button>
-                        <Button
-                            variant="outlined"
-                            color="warning"
-                            size="small"
-                            startIcon={<ArrowUpwardIcon />}
-                            onClick={() => setWithdrawOpen(true)}
-                        >
-                            Withdraw
-                        </Button>
-                        <Tooltip title="Refresh">
-                            <IconButton onClick={() => { refetchAccounts(); refetchTrading(); refetchTx(); }} size="small" sx={{ ml: 1 }}>
-                                <RefreshIcon />
-                            </IconButton>
-                        </Tooltip>
-                    </Box>
+                            sx={{ fontWeight: 600 }}
+                        />
+                    )}
                 </Box>
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                    <Button
+                        variant="contained"
+                        size="small"
+                        color="success"
+                        startIcon={<AddCircleOutline />}
+                        onClick={() => setDepositOpen(true)}
+                        sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
+                    >
+                        Deposit
+                    </Button>
+                    <Button
+                        variant="outlined"
+                        size="small"
+                        color="warning"
+                        startIcon={<RemoveCircleOutline />}
+                        onClick={() => setWithdrawOpen(true)}
+                        sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
+                    >
+                        Withdraw
+                    </Button>
+                    <Tooltip title="Refresh">
+                        <IconButton onClick={refetchAll} size="small">
+                            <Refresh />
+                        </IconButton>
+                    </Tooltip>
+                </Box>
+            </Box>
 
-                <Grid container spacing={2} mb={3}>
-                    <Grid item xs={12} sm={6} md={3}>
-                        <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'background.default' }}>
-                            <Typography variant="body2" color="text.secondary">Equity</Typography>
-                            <Typography variant="h5" fontWeight={600} color="primary.main">
-                                ${tradingAccount?.equity?.toLocaleString() || '0'}
-                            </Typography>
-                        </Box>
-                    </Grid>
-                    <Grid item xs={12} sm={6} md={3}>
-                        <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'background.default' }}>
-                            <Typography variant="body2" color="text.secondary">Cash</Typography>
-                            <Typography variant="h5" fontWeight={600}>
-                                ${tradingAccount?.cash?.toLocaleString() || '0'}
-                            </Typography>
-                        </Box>
-                    </Grid>
-                    <Grid item xs={12} sm={6} md={3}>
-                        <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'background.default' }}>
-                            <Typography variant="body2" color="text.secondary">Buying Power</Typography>
-                            <Typography variant="h5" fontWeight={600} color="success.main">
-                                ${tradingAccount?.buyingPower?.toLocaleString() || '0'}
-                            </Typography>
-                        </Box>
-                    </Grid>
-                    <Grid item xs={12} sm={6} md={3}>
-                        <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'background.default' }}>
-                            <Typography variant="body2" color="text.secondary">Today's P&L</Typography>
-                            <Typography
-                                variant="h5"
-                                fontWeight={600}
-                                color={(tradingAccount?.profitToday ?? 0) >= 0 ? 'success.main' : 'error.main'}
-                            >
-                                {tradingAccount?.profitToday != null
-                                    ? `${tradingAccount.profitToday >= 0 ? '+' : ''}$${tradingAccount.profitToday.toFixed(2)}`
-                                    : '—'}
-                            </Typography>
-                        </Box>
-                    </Grid>
-                </Grid>
+            {/* Paper mode alert */}
+            {isPaper && (
+                <Alert severity="info" sx={{ mb: 3, borderRadius: 2 }}>
+                    All accounts are in <strong>paper trading mode</strong>. No real capital is at risk. Enable live trading in Settings → Trading Mode to trade with real funds.
+                </Alert>
+            )}
 
-                <Typography variant="subtitle2" gutterBottom>
-                    Recent Transactions
-                </Typography>
-                <TableContainer>
-                    <Table size="small">
-                        <TableHead>
-                            <TableRow>
-                                <TableCell>Type</TableCell>
-                                <TableCell align="right">Amount</TableCell>
-                                <TableCell>Status</TableCell>
-                                <TableCell>Date</TableCell>
-                            </TableRow>
-                        </TableHead>
-                        <TableBody>
-                            {transactions?.length ? (
-                                transactions.map((tx) => (
-                                    <TableRow key={tx.id} hover>
-                                        <TableCell>
-                                            <Chip
-                                                label={tx.type}
-                                                size="small"
-                                                color={tx.type === 'deposit' ? 'success' : tx.type === 'withdrawal' ? 'warning' : 'default'}
-                                                sx={{ textTransform: 'capitalize' }}
-                                            />
-                                        </TableCell>
-                                        <TableCell align="right">
-                                            <Typography
-                                                variant="body2"
-                                                color={tx.type === 'deposit' ? 'success.main' : 'warning.main'}
-                                            >
-                                                {tx.type === 'deposit' ? '+' : '-'}${tx.amount.toLocaleString()}
-                                            </Typography>
-                                        </TableCell>
-                                        <TableCell>
-                                            <Chip
-                                                label={tx.status}
-                                                size="small"
-                                                color={tx.status === 'completed' ? 'success' : tx.status === 'pending' ? 'warning' : 'error'}
-                                            />
-                                        </TableCell>
-                                        <TableCell>{new Date(tx.timestamp).toLocaleDateString()}</TableCell>
-                                    </TableRow>
-                                ))
-                            ) : (
-                                <TableRow>
-                                    <TableCell colSpan={4} align="center">
-                                        <Typography variant="body2" color="text.secondary">
-                                            No recent transactions
-                                        </Typography>
-                                    </TableCell>
-                                </TableRow>
-                            )}
-                        </TableBody>
-                    </Table>
-                </TableContainer>
-            </CardContent>
+            {/* Portfolio summary */}
+            <Card sx={{ mb: 3, background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)' }}>
+                <CardContent>
+                    <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: 1.5 }}>
+                        Total Portfolio Value
+                    </Typography>
+                    <Typography variant="h3" fontWeight={800} sx={{ mt: 0.5, mb: 2 }}>
+                        ${stockLoading ? '—' : totalEquity.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                    </Typography>
+                    {stockLoading && <LinearProgress sx={{ mb: 2, borderRadius: 1 }} />}
+                    <Grid container spacing={2}>
+                        <Grid item xs={6} sm={3}>
+                            <StatBox
+                                label="Stock Equity"
+                                value={`$${stockEquity.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+                                color="#10b981"
+                            />
+                        </Grid>
+                        <Grid item xs={6} sm={3}>
+                            <StatBox
+                                label="Total P&L"
+                                value={`${stockPnl >= 0 ? '+' : ''}$${stockPnl.toFixed(2)}`}
+                                color={stockPnl >= 0 ? '#10b981' : '#ef4444'}
+                            />
+                        </Grid>
+                        <Grid item xs={6} sm={3}>
+                            <StatBox
+                                label="Return"
+                                value={`${stockPnlPct >= 0 ? '+' : ''}${stockPnlPct.toFixed(2)}%`}
+                                color={stockPnlPct >= 0 ? '#10b981' : '#ef4444'}
+                            />
+                        </Grid>
+                        <Grid item xs={6} sm={3}>
+                            <StatBox
+                                label="Drawdown"
+                                value={`${drawdownPct.toFixed(2)}%`}
+                                color={drawdownPct > 10 ? '#ef4444' : drawdownPct > 5 ? '#f59e0b' : '#10b981'}
+                            />
+                        </Grid>
+                    </Grid>
+                </CardContent>
+            </Card>
 
-            {/* Deposit Dialog */}
-            <Dialog open={depositOpen} onClose={() => setDepositOpen(false)}>
+            {/* Broker accounts */}
+            <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1.5, textTransform: 'uppercase', letterSpacing: 1 }}>
+                Connected Accounts
+            </Typography>
+            <Stack spacing={1.5} sx={{ mb: 3 }}>
+                <BrokerRow
+                    icon={<ShowChart />}
+                    name="Alpaca Markets"
+                    mode={stockAcct?.realAccount ? 'Paper' : 'Paper'}
+                    equity={stockEquity}
+                    pnl={stockPnl}
+                    pnlPercent={stockPnlPct}
+                    accentColor="#10b981"
+                    online={!!stockAcct}
+                    infoUrl="https://app.alpaca.markets/paper/dashboard/"
+                />
+                <BrokerRow
+                    icon={<CurrencyExchange />}
+                    name="OANDA"
+                    mode={forexAcct ? 'Practice' : 'Not configured'}
+                    equity={forexEquity}
+                    accentColor="#3b82f6"
+                    online={!!forexAcct}
+                />
+                <BrokerRow
+                    icon={<CurrencyBitcoin />}
+                    name="Crypto Exchange"
+                    mode={cryptoAcct?.mode || 'Demo'}
+                    equity={cryptoEquity}
+                    accentColor="#f59e0b"
+                    online={!!cryptoAcct}
+                />
+            </Stack>
+
+            {/* Starting capital reference */}
+            <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider' }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                    <Typography variant="body2" color="text.secondary">Starting capital</Typography>
+                    <Typography variant="body2" fontWeight={600}>$100,000.00</Typography>
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                    <Typography variant="body2" color="text.secondary">Current equity</Typography>
+                    <Typography variant="body2" fontWeight={600}>${stockEquity.toLocaleString(undefined, { maximumFractionDigits: 2 })}</Typography>
+                </Box>
+                <Divider sx={{ my: 1 }} />
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Typography variant="body2" color="text.secondary">Net P&L</Typography>
+                    <Typography
+                        variant="body1"
+                        fontWeight={700}
+                        color={stockPnl >= 0 ? 'success.main' : 'error.main'}
+                        sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}
+                    >
+                        {stockPnl >= 0 ? <TrendingUp fontSize="small" /> : <TrendingDown fontSize="small" />}
+                        {stockPnl >= 0 ? '+' : ''}${stockPnl.toFixed(2)}
+                    </Typography>
+                </Box>
+            </Box>
+
+            {/* Deposit dialog */}
+            <Dialog open={depositOpen} onClose={() => setDepositOpen(false)} maxWidth="xs" fullWidth>
                 <DialogTitle>Deposit Funds</DialogTitle>
                 <DialogContent>
+                    <Alert severity="info" sx={{ mb: 2, borderRadius: 2 }}>
+                        In paper trading mode. Deposits are simulated.
+                    </Alert>
                     <TextField
                         autoFocus
-                        margin="dense"
+                        fullWidth
                         label="Amount"
                         type="number"
-                        fullWidth
                         value={amount}
-                        onChange={(e) => setAmount(e.target.value)}
-                        InputProps={{ startAdornment: '$' }}
+                        onChange={e => setAmount(e.target.value)}
+                        InputProps={{ startAdornment: <InputAdornment position="start">$</InputAdornment> }}
+                        sx={{ mt: 1 }}
                     />
+                    <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
+                        {['1000', '5000', '10000', '25000'].map(a => (
+                            <Button key={a} size="small" variant="outlined" onClick={() => setAmount(a)}
+                                sx={{ borderRadius: 2, textTransform: 'none', flex: 1 }}>
+                                ${parseInt(a).toLocaleString()}
+                            </Button>
+                        ))}
+                    </Stack>
                 </DialogContent>
-                <DialogActions>
-                    <Button onClick={() => setDepositOpen(false)}>Cancel</Button>
-                    <Button onClick={handleDeposit} variant="contained" color="success">
+                <DialogActions sx={{ px: 3, pb: 2 }}>
+                    <Button onClick={() => setDepositOpen(false)} sx={{ borderRadius: 2, textTransform: 'none' }}>Cancel</Button>
+                    <Button onClick={() => handleAction('deposit')} variant="contained" color="success"
+                        sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}>
                         Deposit
                     </Button>
                 </DialogActions>
             </Dialog>
 
-            {/* Withdraw Dialog */}
-            <Dialog open={withdrawOpen} onClose={() => setWithdrawOpen(false)}>
+            {/* Withdraw dialog */}
+            <Dialog open={withdrawOpen} onClose={() => setWithdrawOpen(false)} maxWidth="xs" fullWidth>
                 <DialogTitle>Withdraw Funds</DialogTitle>
                 <DialogContent>
+                    <Alert severity="warning" sx={{ mb: 2, borderRadius: 2 }}>
+                        Withdrawals require a live broker account with real funds.
+                    </Alert>
                     <TextField
                         autoFocus
-                        margin="dense"
+                        fullWidth
                         label="Amount"
                         type="number"
-                        fullWidth
                         value={amount}
-                        onChange={(e) => setAmount(e.target.value)}
-                        InputProps={{ startAdornment: '$' }}
+                        onChange={e => setAmount(e.target.value)}
+                        InputProps={{ startAdornment: <InputAdornment position="start">$</InputAdornment> }}
+                        sx={{ mt: 1 }}
                     />
                 </DialogContent>
-                <DialogActions>
-                    <Button onClick={() => setWithdrawOpen(false)}>Cancel</Button>
-                    <Button onClick={handleWithdraw} variant="contained" color="warning">
+                <DialogActions sx={{ px: 3, pb: 2 }}>
+                    <Button onClick={() => setWithdrawOpen(false)} sx={{ borderRadius: 2, textTransform: 'none' }}>Cancel</Button>
+                    <Button onClick={() => handleAction('withdraw')} variant="contained" color="warning"
+                        sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}>
                         Withdraw
                     </Button>
                 </DialogActions>
             </Dialog>
-        </Card>
+        </Box>
     );
 };

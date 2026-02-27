@@ -6,181 +6,347 @@ import {
     Typography,
     Grid,
     Chip,
-    CircularProgress,
     LinearProgress,
+    Divider,
+    Table,
+    TableBody,
+    TableCell,
+    TableContainer,
+    TableHead,
+    TableRow,
+    Alert,
+    Stack,
     IconButton,
     Tooltip,
 } from '@mui/material';
-import RefreshIcon from '@mui/icons-material/Refresh';
-import SecurityIcon from '@mui/icons-material/Security';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import WarningIcon from '@mui/icons-material/Warning';
-import { useComplianceStatus } from '@/hooks/useCompliance';
+import {
+    Assessment,
+    TrendingUp,
+    TrendingDown,
+    Refresh,
+    EmojiEvents,
+    BarChart,
+    Timeline,
+} from '@mui/icons-material';
+import axios from 'axios';
+import { useQuery } from 'react-query';
+
+// ── Data fetching ──────────────────────────────────────────────────────────
+
+async function fetchTradingStatus() {
+    const res = await axios.get('http://localhost:3002/api/trading/status', { timeout: 5000 });
+    return res.data?.data || res.data;
+}
+
+async function fetchBacktestReport() {
+    try {
+        const res = await axios.get('http://localhost:3002/api/backtest/report', { timeout: 5000 });
+        return res.data?.data || null;
+    } catch {
+        return null;
+    }
+}
+
+// ── Sub-components ─────────────────────────────────────────────────────────
+
+function MetricTile({
+    label,
+    value,
+    sub,
+    color,
+    icon,
+}: {
+    label: string;
+    value: React.ReactNode;
+    sub?: string;
+    color?: string;
+    icon?: React.ReactElement;
+}) {
+    return (
+        <Box
+            sx={{
+                p: 2.5,
+                borderRadius: 3,
+                bgcolor: 'background.default',
+                border: '1px solid',
+                borderColor: 'divider',
+                height: '100%',
+            }}
+        >
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                {icon && React.cloneElement(icon, { sx: { fontSize: 16, color: color || 'text.secondary' } })}
+                <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 0.8 }}>
+                    {label}
+                </Typography>
+            </Box>
+            <Typography variant="h5" fontWeight={700} color={color || 'text.primary'}>
+                {value}
+            </Typography>
+            {sub && (
+                <Typography variant="caption" color="text.secondary" sx={{ mt: 0.3, display: 'block' }}>
+                    {sub}
+                </Typography>
+            )}
+        </Box>
+    );
+}
+
+function WinRateBar({ winRate, total }: { winRate: number; total: number }) {
+    const color = winRate >= 55 ? '#10b981' : winRate >= 45 ? '#f59e0b' : '#ef4444';
+    return (
+        <Box>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                <Typography variant="body2" color="text.secondary">Win Rate</Typography>
+                <Typography variant="body2" fontWeight={700} color={color}>
+                    {winRate.toFixed(1)}%
+                </Typography>
+            </Box>
+            <LinearProgress
+                variant="determinate"
+                value={Math.min(winRate, 100)}
+                sx={{
+                    height: 8,
+                    borderRadius: 4,
+                    bgcolor: '#ffffff15',
+                    '& .MuiLinearProgress-bar': { bgcolor: color, borderRadius: 4 },
+                }}
+            />
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                {total} total trades · min 30 required for statistical validity
+            </Typography>
+        </Box>
+    );
+}
+
+// ── Main component ─────────────────────────────────────────────────────────
 
 export const CompliancePanel: React.FC = () => {
-    const { gdpr, aml, isLoading, isError, refetch } = useComplianceStatus();
+    const {
+        data: status,
+        isLoading,
+        refetch,
+    } = useQuery('tradeJournalStatus', fetchTradingStatus, { refetchInterval: 30000 });
 
-    if (isLoading) {
-        return (
-            <Card sx={{ bgcolor: 'background.paper', mb: 2 }}>
-                <CardContent>
-                    <Box display="flex" justifyContent="center" alignItems="center" p={3}>
-                        <CircularProgress size={40} />
-                    </Box>
-                </CardContent>
-            </Card>
-        );
-    }
+    const { data: backtest } = useQuery('tradeJournalBacktest', fetchBacktestReport, {
+        staleTime: 5 * 60 * 1000,
+    });
 
-    if (isError) {
-        return (
-            <Card sx={{ bgcolor: 'background.paper', mb: 2 }}>
-                <CardContent>
-                    <Typography color="error">Failed to fetch compliance status</Typography>
-                </CardContent>
-            </Card>
-        );
-    }
+    const stats = status?.stats || status?.performance || {};
+    const totalTrades = stats.totalTrades ?? 0;
+    const winners = stats.winners ?? stats.winningTrades ?? 0;
+    const losers = stats.losers ?? stats.losingTrades ?? 0;
+    const totalPnL = stats.totalPnL ?? stats.totalProfit ?? 0;
+    const winRate = totalTrades > 0 ? (winners / totalTrades) * 100 : 0;
+    const profitFactor = stats.profitFactor ?? 0;
+    const maxDrawdown = stats.maxDrawdown ?? 0;
+    const avgWin = winners > 0 && stats.totalWinAmount ? stats.totalWinAmount / winners : 0;
+    const avgLoss = losers > 0 && stats.totalLossAmount ? stats.totalLossAmount / losers : 0;
+    const expectancy = winners > 0 && losers > 0
+        ? (winRate / 100) * avgWin - ((100 - winRate) / 100) * avgLoss
+        : 0;
 
-    const getStatusIcon = (status: string) => {
-        const isCompliant = status.toLowerCase().includes('compliant');
-        return isCompliant ? (
-            <CheckCircleIcon sx={{ color: '#66bb6a' }} />
-        ) : (
-            <WarningIcon sx={{ color: '#ffa726' }} />
-        );
-    };
+    // Risk thresholds
+    const riskFlags: { label: string; ok: boolean }[] = [
+        { label: 'Win rate ≥ 45%', ok: winRate >= 45 || totalTrades < 10 },
+        { label: 'Profit factor ≥ 1.2', ok: profitFactor >= 1.2 || totalTrades < 10 },
+        { label: 'Max drawdown < 15%', ok: maxDrawdown < 0.15 },
+        { label: 'Positive expectancy', ok: expectancy >= 0 || totalTrades < 10 },
+        { label: 'Daily limit respected (≤15 trades)', ok: (stats.totalTradesToday ?? 0) <= 15 },
+    ];
+
+    const passCount = riskFlags.filter(f => f.ok).length;
 
     return (
-        <Card sx={{ bgcolor: 'background.paper', mb: 2 }}>
-            <CardContent>
-                <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-                    <Box display="flex" alignItems="center" gap={1}>
-                        <SecurityIcon color="primary" />
-                        <Typography variant="h6" fontWeight={600}>
-                            Compliance Status
-                        </Typography>
-                    </Box>
-                    <Tooltip title="Refresh">
-                        <IconButton onClick={refetch} size="small">
-                            <RefreshIcon />
-                        </IconButton>
-                    </Tooltip>
+        <Box>
+            {/* Header */}
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                    <Assessment color="primary" />
+                    <Typography variant="h6" fontWeight={700}>Trade Journal</Typography>
+                    <Chip
+                        label={`${passCount}/${riskFlags.length} checks passed`}
+                        color={passCount === riskFlags.length ? 'success' : passCount >= 3 ? 'warning' : 'error'}
+                        size="small"
+                        sx={{ fontWeight: 600 }}
+                    />
                 </Box>
+                <Tooltip title="Refresh">
+                    <IconButton onClick={() => refetch()} size="small">
+                        <Refresh />
+                    </IconButton>
+                </Tooltip>
+            </Box>
 
-                <Grid container spacing={2}>
-                    {/* GDPR */}
-                    <Grid item xs={12} md={6}>
-                        <Box
-                            sx={{
-                                p: 2,
-                                borderRadius: 2,
-                                bgcolor: 'background.default',
-                                border: '1px solid',
-                                borderColor: gdpr?.status === 'compliant' ? 'success.main' : 'warning.main',
-                            }}
-                        >
-                            <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-                                <Typography variant="subtitle1" fontWeight={600}>
-                                    GDPR
-                                </Typography>
-                                {getStatusIcon(gdpr?.status || '')}
-                            </Box>
-                            <Box display="flex" justifyContent="space-between" mb={1}>
-                                <Typography variant="body2" color="text.secondary">Status</Typography>
-                                <Chip
-                                    label={gdpr?.status?.toUpperCase() || 'Unknown'}
-                                    size="small"
-                                    color={gdpr?.status === 'compliant' ? 'success' : 'warning'}
-                                />
-                            </Box>
-                            <Box display="flex" justifyContent="space-between" mb={1}>
-                                <Typography variant="body2" color="text.secondary">Last Audit</Typography>
-                                <Typography variant="body2">
-                                    {gdpr?.lastAudit ? new Date(gdpr.lastAudit).toLocaleDateString() : 'N/A'}
-                                </Typography>
-                            </Box>
-                            <Box display="flex" justifyContent="space-between" mb={1}>
-                                <Typography variant="body2" color="text.secondary">Violations</Typography>
-                                <Typography
-                                    variant="body2"
-                                    color={(gdpr?.violations || 0) === 0 ? 'success.main' : 'error.main'}
-                                >
-                                    {gdpr?.violations || 0}
-                                </Typography>
-                            </Box>
-                            <Box display="flex" justifyContent="space-between">
-                                <Typography variant="body2" color="text.secondary">Data Retention</Typography>
-                                <Chip
-                                    label={gdpr?.dataRetentionCompliance ? 'Compliant' : 'Non-Compliant'}
-                                    size="small"
-                                    color={gdpr?.dataRetentionCompliance ? 'success' : 'error'}
-                                />
-                            </Box>
-                        </Box>
-                    </Grid>
+            {isLoading && <LinearProgress sx={{ mb: 3, borderRadius: 1 }} />}
 
-                    {/* AML */}
-                    <Grid item xs={12} md={6}>
-                        <Box
-                            sx={{
-                                p: 2,
-                                borderRadius: 2,
-                                bgcolor: 'background.default',
-                                border: '1px solid',
-                                borderColor: aml?.status === 'Compliant' ? 'success.main' : 'warning.main',
-                            }}
-                        >
-                            <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-                                <Typography variant="subtitle1" fontWeight={600}>
-                                    AML
-                                </Typography>
-                                {getStatusIcon(aml?.status || '')}
-                            </Box>
-                            <Box display="flex" justifyContent="space-between" mb={1}>
-                                <Typography variant="body2" color="text.secondary">Status</Typography>
-                                <Chip
-                                    label={aml?.status || 'Unknown'}
-                                    size="small"
-                                    color={aml?.status === 'Compliant' ? 'success' : 'warning'}
-                                />
-                            </Box>
-                            <Box display="flex" justifyContent="space-between" mb={1}>
-                                <Typography variant="body2" color="text.secondary">Risk Score</Typography>
-                                <Chip
-                                    label={aml?.riskScore || 'N/A'}
-                                    size="small"
-                                    color={
-                                        aml?.riskScore === 'Low' ? 'success' :
-                                            aml?.riskScore === 'Medium' ? 'warning' : 'error'
-                                    }
-                                />
-                            </Box>
-                            <Box display="flex" justifyContent="space-between" mb={1}>
-                                <Typography variant="body2" color="text.secondary">Flagged Transactions</Typography>
-                                <Typography
-                                    variant="body2"
-                                    color={(aml?.flaggedTransactions || 0) === 0 ? 'success.main' : 'error.main'}
-                                >
-                                    {aml?.flaggedTransactions || 0}
-                                </Typography>
-                            </Box>
-                            <Box>
-                                <Box display="flex" justifyContent="space-between" mb={0.5}>
-                                    <Typography variant="body2" color="text.secondary">Compliance Rate</Typography>
-                                    <Typography variant="body2">{aml?.complianceRate?.toFixed(1) || 0}%</Typography>
-                                </Box>
-                                <LinearProgress
-                                    variant="determinate"
-                                    value={aml?.complianceRate || 0}
-                                    sx={{ height: 6, borderRadius: 3 }}
-                                    color={(aml?.complianceRate || 0) >= 95 ? 'success' : 'warning'}
-                                />
-                            </Box>
-                        </Box>
-                    </Grid>
+            {totalTrades === 0 && !isLoading && (
+                <Alert severity="info" sx={{ mb: 3, borderRadius: 2 }}>
+                    No closed trades yet. The trade journal will populate as the bot executes and closes positions.
+                </Alert>
+            )}
+
+            {/* Performance metrics */}
+            <Grid container spacing={2} sx={{ mb: 3 }}>
+                <Grid item xs={6} sm={4} md={2}>
+                    <MetricTile
+                        label="Total Trades"
+                        value={totalTrades}
+                        icon={<BarChart />}
+                        color="#3b82f6"
+                    />
                 </Grid>
-            </CardContent>
-        </Card>
+                <Grid item xs={6} sm={4} md={2}>
+                    <MetricTile
+                        label="Winners"
+                        value={winners}
+                        color="#10b981"
+                        icon={<TrendingUp />}
+                    />
+                </Grid>
+                <Grid item xs={6} sm={4} md={2}>
+                    <MetricTile
+                        label="Losers"
+                        value={losers}
+                        color="#ef4444"
+                        icon={<TrendingDown />}
+                    />
+                </Grid>
+                <Grid item xs={6} sm={4} md={2}>
+                    <MetricTile
+                        label="Net P&L"
+                        value={`${totalPnL >= 0 ? '+' : ''}$${totalPnL.toFixed(2)}`}
+                        color={totalPnL >= 0 ? '#10b981' : '#ef4444'}
+                        icon={<Timeline />}
+                    />
+                </Grid>
+                <Grid item xs={6} sm={4} md={2}>
+                    <MetricTile
+                        label="Profit Factor"
+                        value={totalTrades > 0 ? profitFactor.toFixed(2) : '—'}
+                        sub="target ≥ 1.2"
+                        color={profitFactor >= 1.5 ? '#10b981' : profitFactor >= 1.2 ? '#f59e0b' : '#ef4444'}
+                        icon={<EmojiEvents />}
+                    />
+                </Grid>
+                <Grid item xs={6} sm={4} md={2}>
+                    <MetricTile
+                        label="Expectancy"
+                        value={totalTrades >= 5 ? `${expectancy >= 0 ? '+' : ''}$${expectancy.toFixed(2)}` : '—'}
+                        sub="per trade avg"
+                        color={expectancy >= 0 ? '#10b981' : '#ef4444'}
+                    />
+                </Grid>
+            </Grid>
+
+            {/* Win rate bar */}
+            <Card sx={{ mb: 3 }}>
+                <CardContent>
+                    <WinRateBar winRate={winRate} total={totalTrades} />
+                    {totalTrades > 0 && (
+                        <>
+                            <Divider sx={{ my: 2 }} />
+                            <Grid container spacing={3}>
+                                <Grid item xs={6}>
+                                    <Typography variant="body2" color="text.secondary" gutterBottom>
+                                        Avg Win
+                                    </Typography>
+                                    <Typography variant="h6" fontWeight={700} color="success.main">
+                                        {avgWin > 0 ? `+$${avgWin.toFixed(2)}` : '—'}
+                                    </Typography>
+                                </Grid>
+                                <Grid item xs={6}>
+                                    <Typography variant="body2" color="text.secondary" gutterBottom>
+                                        Avg Loss
+                                    </Typography>
+                                    <Typography variant="h6" fontWeight={700} color="error.main">
+                                        {avgLoss > 0 ? `-$${avgLoss.toFixed(2)}` : '—'}
+                                    </Typography>
+                                </Grid>
+                            </Grid>
+                        </>
+                    )}
+                </CardContent>
+            </Card>
+
+            {/* Risk checks */}
+            <Card sx={{ mb: 3 }}>
+                <CardContent>
+                    <Typography variant="subtitle2" fontWeight={600} gutterBottom>
+                        Risk Health Checks
+                    </Typography>
+                    <Stack spacing={1} sx={{ mt: 1 }}>
+                        {riskFlags.map(flag => (
+                            <Box
+                                key={flag.label}
+                                sx={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    p: 1.5,
+                                    borderRadius: 2,
+                                    bgcolor: 'background.default',
+                                }}
+                            >
+                                <Typography variant="body2">{flag.label}</Typography>
+                                <Chip
+                                    label={flag.ok ? 'Pass' : 'Fail'}
+                                    color={flag.ok ? 'success' : 'error'}
+                                    size="small"
+                                    sx={{ fontWeight: 600, minWidth: 52 }}
+                                />
+                            </Box>
+                        ))}
+                    </Stack>
+                </CardContent>
+            </Card>
+
+            {/* Backtest results summary if available */}
+            {backtest?.symbolResults?.length > 0 && (
+                <Card>
+                    <CardContent>
+                        <Typography variant="subtitle2" fontWeight={600} gutterBottom>
+                            Backtest — Per Symbol Results
+                        </Typography>
+                        <TableContainer>
+                            <Table size="small">
+                                <TableHead>
+                                    <TableRow>
+                                        <TableCell>Symbol</TableCell>
+                                        <TableCell align="right">Trades</TableCell>
+                                        <TableCell align="right">Win Rate</TableCell>
+                                        <TableCell align="right">Sharpe</TableCell>
+                                        <TableCell align="right">P. Factor</TableCell>
+                                    </TableRow>
+                                </TableHead>
+                                <TableBody>
+                                    {backtest.symbolResults.slice(0, 10).map((row: any) => (
+                                        <TableRow key={row.symbol} hover>
+                                            <TableCell>
+                                                <Typography variant="body2" fontWeight={600}>{row.symbol}</Typography>
+                                            </TableCell>
+                                            <TableCell align="right">{row.totalTrades ?? '—'}</TableCell>
+                                            <TableCell align="right">
+                                                <Typography
+                                                    variant="body2"
+                                                    color={row.winRate >= 50 ? 'success.main' : 'error.main'}
+                                                >
+                                                    {row.winRate != null ? `${(row.winRate * 100).toFixed(1)}%` : '—'}
+                                                </Typography>
+                                            </TableCell>
+                                            <TableCell align="right">
+                                                {row.sharpeRatio != null ? row.sharpeRatio.toFixed(2) : '—'}
+                                            </TableCell>
+                                            <TableCell align="right">
+                                                {row.profitFactor != null ? row.profitFactor.toFixed(2) : '—'}
+                                            </TableCell>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        </TableContainer>
+                    </CardContent>
+                </Card>
+            )}
+        </Box>
     );
 };
