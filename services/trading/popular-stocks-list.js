@@ -1,54 +1,72 @@
 /**
  * Comprehensive list of stocks that frequently make big moves
  * Includes mega-caps, mid-caps, small-caps, meme stocks, biotech, crypto-related, etc.
+ *
+ * Last audited: 2026-02-27
+ * Removed: delisted/bankrupt tickers, all SPACs, leveraged/inverse ETFs,
+ *          sub-volume penny stocks
  */
 
 module.exports = {
     // Mega Cap Tech (can still have 5-10% moves)
-    megaCap: ['AAPL', 'MSFT', 'GOOGL', 'GOOG', 'AMZN', 'META', 'TSLA', 'NVDA', 'AMD', 'INTC'],
+    megaCap: ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'TSLA', 'NVDA', 'AMD', 'INTC'],
 
     // High Volatility Large Caps
     volatileLargeCaps: ['SHOP', 'COIN', 'MARA', 'RIOT', 'PLTR', 'SNOW', 'DDOG', 'NET', 'ZS', 'CRWD'],
 
-    // Meme Stocks / Reddit Favorites
-    memeStocks: ['GME', 'AMC', 'BBBY', 'BB', 'NOK', 'CLOV', 'WISH', 'SOFI', 'HOOD', 'LCID'],
+    // Meme Stocks / Reddit Favorites (active, liquid)
+    // Removed: BBBY (bankrupt/delisted), WISH (effectively delisted), CLOV (sub-volume)
+    memeStocks: ['GME', 'AMC', 'BB', 'NOK', 'SOFI', 'HOOD', 'LCID'],
 
     // Small Cap Runners (frequent 20-50%+ moves)
+    // Removed: SMX (churning incident + erratic volume), ULTP/CLTP/ARBB/FLGC/AIXC/KDNC/CJET/PGY/PSTV/RBOT
+    //          (delisted, sub-volume, or penny-stock territory)
     smallCapRunners: [
-        'SMX', 'SMCI', 'QUBT', 'RGTI', 'IONQ', 'OKLO', 'RKLB', 'HIMS', 'RBLX', 'ROKU',
-        'RDDT', 'AGM', 'PSTV', 'PLTK', 'BGS', 'SXP', 'NHTC', 'ULTP', 'CLTP', 'ARBB',
-        'RBOT', 'OUST', 'ARBE', 'ARCI', 'TEM', 'FLGC', 'AIXC', 'KDNC', 'CJET', 'PGY'
+        'SMCI', 'QUBT', 'RGTI', 'IONQ', 'OKLO', 'RKLB', 'HIMS', 'RBLX', 'ROKU',
+        'RDDT', 'PLTK', 'BGS', 'SXP', 'NHTC', 'OUST', 'ARBE', 'TEM',
     ],
 
     // Biotech (explosive on FDA news)
-    biotech: ['MRNA', 'BNTX', 'NVAX', 'SAVA', 'OCGN', 'INO', 'VXRT', 'ATOS', 'CYDY', 'SRNE'],
+    // Removed: CYDY (SEC enforcement, sub-penny OTC), SRNE (bankrupt/delisted)
+    biotech: ['MRNA', 'BNTX', 'NVAX', 'SAVA', 'OCGN', 'INO', 'VXRT', 'ATOS'],
 
     // Energy / Oil (volatile sector)
     energy: ['XOM', 'CVX', 'OXY', 'SLB', 'HAL', 'COP', 'EOG', 'MRO', 'DVN', 'FANG'],
 
     // EV / Clean Energy
-    ev: ['TSLA', 'RIVN', 'LCID', 'NIO', 'XPEV', 'LI', 'PLUG', 'BLNK', 'CHPT', 'QS'],
-
-    // SPACs / Recent IPOs
-    spacs: ['DWAC', 'PSTH', 'IPOF', 'IPOD', 'CCIV', 'CLII', 'ACTC', 'SOAC', 'SRAC', 'HZON'],
+    // Removed duplicate TSLA (already in megaCap), LCID (already in memeStocks)
+    ev: ['RIVN', 'NIO', 'XPEV', 'LI', 'PLUG', 'BLNK', 'CHPT', 'QS'],
 
     // Chinese Tech ADRs
-    chinese: ['BABA', 'JD', 'PDD', 'BIDU', 'NIO', 'XPEV', 'LI', 'BILI', 'IQ', 'DIDI'],
+    // Removed: DIDI (delisted from NYSE in 2022, now OTC only)
+    // Removed duplicates NIO/XPEV/LI (already in ev)
+    chinese: ['BABA', 'JD', 'PDD', 'BIDU', 'BILI', 'IQ'],
 
-    // Financial/Fintech
-    fintech: ['SQ', 'PYPL', 'SOFI', 'AFRM', 'UPST', 'LC', 'COIN', 'HOOD', 'NU', 'OPEN'],
+    // Financial / Fintech
+    // Removed duplicates SOFI/HOOD/COIN (already in other categories)
+    fintech: ['SQ', 'PYPL', 'AFRM', 'UPST', 'LC', 'NU', 'OPEN'],
 
     // Semiconductor
-    semiconductor: ['NVDA', 'AMD', 'INTC', 'AVGO', 'QCOM', 'MU', 'AMAT', 'LRCX', 'KLAC', 'ASML'],
+    // Removed duplicates NVDA/AMD/INTC (already in megaCap)
+    semiconductor: ['AVGO', 'QCOM', 'MU', 'AMAT', 'LRCX', 'KLAC', 'ASML'],
 
-    // Cloud/SaaS
-    cloud: ['CRM', 'NOW', 'SNOW', 'DDOG', 'NET', 'ZS', 'OKTA', 'ESTC', 'MDB', 'PATH'],
+    // Cloud / SaaS
+    // Removed duplicates SNOW/DDOG/NET/ZS (already in volatileLargeCaps)
+    cloud: ['CRM', 'NOW', 'OKTA', 'ESTC', 'MDB', 'PATH'],
 
-    // ETFs that move
-    etfs: ['SPY', 'QQQ', 'IWM', 'DIA', 'TQQQ', 'SQQQ', 'UPRO', 'SPXU', 'TNA', 'TZA'],
+    // ETFs (non-leveraged only — leveraged ETFs have daily rebalancing decay
+    // that destroys multi-day hold P&L, incompatible with trailing stop system)
+    // Removed: TQQQ, SQQQ, UPRO, SPXU, TNA, TZA
+    etfs: ['SPY', 'QQQ', 'IWM', 'DIA'],
+
+    // High-Growth / New Momentum Names (added 2026-02-27)
+    highGrowth: ['MSTR', 'ARM', 'CELH', 'APP', 'DUOL', 'CAVA', 'SPOT', 'UBER', 'ABNB', 'TTWO'],
+
+    // Crypto-adjacent (Bitcoin proxies, high volatility)
+    cryptoAdjacent: ['GBTC', 'MARA', 'RIOT'],
 
     /**
-     * Get all symbols as a flat array
+     * Get all symbols as a flat array (deduped)
      */
     getAllSymbols() {
         const all = [];
