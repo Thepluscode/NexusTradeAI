@@ -29,17 +29,3 @@ export function useServiceHealth(serviceName: string, port: number) {
         }
     );
 }
-
-/**
- * Hook for system status
- */
-export function useSystemStatus() {
-    return useQuery(
-        'systemStatus',
-        () => apiClient.getSystemStatus(),
-        {
-            refetchInterval: 10000,
-            staleTime: 5000,
-        }
-    );
-}
