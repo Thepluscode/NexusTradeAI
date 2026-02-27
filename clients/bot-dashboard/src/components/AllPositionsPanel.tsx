@@ -108,7 +108,8 @@ export const AllPositionsPanel: React.FC = () => {
         .reduce((sum, pos) => sum + (pos.unrealizedPnL || 0), 0);
 
     const stockPortfolio = stockStatus?.portfolioValue || 0; // USD
-    const forexPortfolio = forexStatus?.portfolioValue || 0; // GBP or USD
+    // Forex bot sends `equity`, not `portfolioValue`
+    const forexPortfolio = forexStatus?.equity || forexStatus?.portfolioValue || 0; // GBP or USD
     const forexCurrency = forexStatus?.currency || 'USD'; // Get currency from API
     const forexCurrencySymbol = forexCurrency === 'GBP' ? '£' : '$';
     const cryptoPortfolio = cryptoStatus?.portfolioValue || cryptoStatus?.equity || 0; // USD
@@ -334,7 +335,7 @@ export const AllPositionsPanel: React.FC = () => {
                             sx={{ mr: 1 }}
                         />
                         <Typography variant="body2" color="text.secondary">
-                            OANDA • {forexStatus?.performance?.totalTrades || 0} trades today
+                            OANDA • {forexStatus?.stats?.totalTrades || 0} trades today
                         </Typography>
                     </Paper>
                 </Grid>

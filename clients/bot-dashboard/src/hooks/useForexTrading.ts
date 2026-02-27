@@ -6,16 +6,30 @@ export interface ForexStatus {
     marketOpen: boolean;
     // Forex bot returns session as a plain string e.g. "OVERLAP", "LONDON", "OFF_PEAK"
     session: string;
-    performance: {
+    // Forex bot sends stats, not performance
+    stats?: {
+        totalTrades: number;
+        longTrades?: number;
+        shortTrades?: number;
+        winners?: number;
+        losers?: number;
+        totalPnL?: number;
+    };
+    performance?: {
         totalTrades: number;
         activePositions: number;
         scanCount?: number;
     };
     positions: ForexPosition[];
-    portfolioValue: number;
-    currency?: string; // 'GBP' for OANDA accounts
+    equity?: number;       // forex bot sends equity, not portfolioValue
+    portfolioValue?: number;
+    currency?: string;     // 'GBP' for OANDA accounts
     dailyPnL: number;
+    dailyReturn?: number;
     lastUpdate?: string;
+    mode?: string;
+    tradingMode?: string;
+    isPaused?: boolean;
 }
 
 export interface ForexPosition {
