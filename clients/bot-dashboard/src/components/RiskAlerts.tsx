@@ -20,22 +20,24 @@ interface RiskAlertsProps {
 export const RiskAlerts: React.FC<RiskAlertsProps> = ({ alerts }) => {
   const getIcon = (severity: RiskAlert['severity']) => {
     switch (severity) {
+      case 'critical':
       case 'error':
         return <Error color="error" />;
       case 'warning':
         return <Warning color="warning" />;
-      case 'info':
+      default:
         return <Info color="info" />;
     }
   };
 
-  const getSeverityColor = (severity: RiskAlert['severity']) => {
+  const getSeverityColor = (severity: RiskAlert['severity']): 'error' | 'warning' | 'info' | 'success' => {
     switch (severity) {
+      case 'critical':
       case 'error':
         return 'error';
       case 'warning':
         return 'warning';
-      case 'info':
+      default:
         return 'info';
     }
   };
