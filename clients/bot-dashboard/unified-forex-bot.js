@@ -801,6 +801,10 @@ async function managePositions() {
             : entryPrice;
         const holdDays = (Date.now() - new Date(localPos.entryTime).getTime()) / (1000 * 60 * 60 * 24);
 
+        // Write live market values back so status endpoint returns them for demo positions
+        localPos.currentPrice = currentPrice;
+        localPos.unrealizedPL = unrealizedPL;
+
         // Update trailing stop
         updateTrailingStop(localPos, currentPrice);
 

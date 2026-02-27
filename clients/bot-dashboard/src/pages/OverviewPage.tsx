@@ -92,9 +92,12 @@ async function fetchBotStatus(bot: typeof BOTS[0]): Promise<BotHealth> {
             d?.performance?.activePositions ??
             d?.positions?.length ??
             (Array.isArray(d?.positions) ? d.positions.length : 0);
+        // dailyPnL: stock/forex bots send dollars directly; crypto bot sends dailyReturn as
+        // a decimal ratio (e.g. 0.025) — convert to dollars using equity
         const dailyPnL =
             d?.dailyPnL ??
             d?.performance?.dailyPnL ??
+            (d?.dailyReturn != null && equity ? d.dailyReturn * equity : null) ??
             (d?.stats?.totalPnL ?? 0);
         const totalTrades =
             d?.performance?.totalTrades ??
