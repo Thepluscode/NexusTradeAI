@@ -26,8 +26,10 @@ export const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => 
     }).format(value);
   };
 
-  const formatTime = (timestamp: number) => {
-    return new Date(timestamp).toLocaleString();
+  const formatTime = (timestamp: number | undefined) => {
+    if (timestamp == null) return '—';
+    const d = new Date(timestamp);
+    return isNaN(d.getTime()) ? '—' : d.toLocaleString();
   };
 
   if (!positions || positions.length === 0) {

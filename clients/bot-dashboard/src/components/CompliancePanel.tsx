@@ -328,13 +328,13 @@ export const CompliancePanel: React.FC = () => {
                                             <TableCell align="right">
                                                 <Typography
                                                     variant="body2"
-                                                    color={row.winRate >= 50 ? 'success.main' : 'error.main'}
+                                                    color={row.overallWinRate >= 0.5 ? 'success.main' : 'error.main'}
                                                 >
-                                                    {row.winRate != null ? `${(row.winRate * 100).toFixed(1)}%` : '—'}
+                                                    {row.overallWinRate != null ? `${(row.overallWinRate * 100).toFixed(1)}%` : '—'}
                                                 </Typography>
                                             </TableCell>
                                             <TableCell align="right">
-                                                {row.sharpeRatio != null ? row.sharpeRatio.toFixed(2) : '—'}
+                                                {row.avgSharpe != null ? row.avgSharpe.toFixed(2) : '—'}
                                             </TableCell>
                                             <TableCell align="right">
                                                 {row.profitFactor != null ? row.profitFactor.toFixed(2) : '—'}
