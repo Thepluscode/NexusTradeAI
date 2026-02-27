@@ -1622,8 +1622,22 @@ async function tradingLoop() {
     scanCount++;
     lastScanTime = new Date();
 
+    // Always manage existing positions (stop losses / trailing stops / EOD) even when
+    // stopped or paused — we never want to be stuck in a position we can't exit.
     await checkEndOfDay();
     await managePositions();
+
+    // Only scan for NEW entries when the bot is running and not paused.
+    if (!botRunning) {
+        console.log('⛔ Bot stopped — skipping new entry scan');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        return;
+    }
+    if (botPaused) {
+        console.log('⏸  Bot paused — skipping new entry scan');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        return;
+    }
 
     if (isGoodTradingTime()) {
         await scanMomentumBreakouts();

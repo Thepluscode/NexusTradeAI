@@ -825,6 +825,11 @@ async function managePositions() {
 // ===== MAIN TRADING LOOP =====
 
 async function tradingLoop() {
+    if (!botRunning) {
+        console.log('⛔ Forex bot stopped — skipping loop');
+        return;
+    }
+
     if (!isMarketOpen()) {
         console.log('🌙 Forex market closed');
         return;
@@ -848,8 +853,13 @@ async function tradingLoop() {
     console.log(`📊 Session: ${session.name} (${session.quality})`);
     console.log(`📈 Positions: ${positions.size} | Trades today: ${totalTradesToday}/${MAX_TRADES_PER_DAY}`);
 
-    // Manage existing positions
+    // Manage existing positions (always runs when market open, even if paused)
     await managePositions();
+
+    if (botPaused) {
+        console.log('⏸  Forex bot paused — skipping new entry scan');
+        return;
+    }
 
     // Scan for new signals
     const signals = await scanForSignals();
