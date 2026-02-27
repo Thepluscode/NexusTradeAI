@@ -69,10 +69,14 @@ export const AllPositionsPanel: React.FC = () => {
             market: 'forex' as const,
             side: pos.side || 'long',
             quantity: Math.abs(pos.units ?? pos.qty ?? 0),
-            entryPrice: pos.entryPrice || 0,
+            entryPrice: pos.entryPrice ?? pos.entry ?? 0,
             currentPrice: pos.currentPrice || 0,
             unrealizedPnL: pos.unrealizedPL ?? pos.unrealizedPnL ?? 0,
-            unrealizedPnLPercent: pos.unrealizedPLPct ?? 0,
+            unrealizedPnLPercent: pos.unrealizedPLPct != null
+                ? pos.unrealizedPLPct
+                : (pos.entryPrice ?? pos.entry ?? 0) > 0 && Math.abs(pos.units ?? pos.qty ?? 0) > 0
+                    ? ((pos.unrealizedPL ?? pos.unrealizedPnL ?? 0) / ((pos.entryPrice ?? pos.entry ?? 0) * Math.abs(pos.units ?? pos.qty ?? 0))) * 100
+                    : 0,
             strategy: pos.strategy || 'forex-trend',
         })),
         // Crypto positions — bot sends `quantity` (not `qty`)
@@ -84,7 +88,11 @@ export const AllPositionsPanel: React.FC = () => {
             entryPrice: pos.entry ?? pos.entryPrice ?? 0,
             currentPrice: pos.currentPrice || 0,
             unrealizedPnL: pos.unrealizedPnL || 0,
-            unrealizedPnLPercent: pos.unrealizedPnLPct ?? 0,
+            unrealizedPnLPercent: pos.unrealizedPnLPct != null
+                ? pos.unrealizedPnLPct
+                : (pos.entry ?? pos.entryPrice ?? 0) > 0 && (pos.quantity ?? pos.qty ?? 0) > 0
+                    ? ((pos.unrealizedPnL ?? 0) / ((pos.entry ?? pos.entryPrice ?? 0) * (pos.quantity ?? pos.qty ?? 0))) * 100
+                    : 0,
             strategy: pos.strategy || 'crypto-momentum',
         })),
     ];
