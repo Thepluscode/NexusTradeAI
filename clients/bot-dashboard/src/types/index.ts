@@ -4,15 +4,33 @@
 
 export interface TradingEngineStatus {
   isRunning: boolean;
-  circuitBreakerActive: boolean;
-  activePositions: number;
-  dailyPnL: number;
-  portfolioVaR: number;
-  leverage: number;
-  portfolioValue: number;
+  circuitBreakerActive?: boolean;
+  activePositions?: number;
+  dailyPnL?: number;
+  dailyReturn?: number;
+  portfolioVaR?: number;
+  leverage?: number;
+  portfolioValue?: number;
   equity?: number;          // Stock bot sends `equity` (actual Alpaca account equity)
-  totalExposure: number;
-  performance: {
+  totalExposure?: number;
+  mode?: string;
+  // Stock bot sends performance counters under `stats` (not `performance`)
+  stats?: {
+    totalTrades: number;
+    winners?: number;
+    winningTrades?: number;
+    losers?: number;
+    losingTrades?: number;
+    totalPnL?: number;
+    totalProfit?: number;
+    totalLossAmount?: number;
+    totalWinAmount?: number;
+    winRate?: number;
+    profitFactor?: number;
+    maxDrawdown?: number;
+    totalTradesToday?: number;
+  };
+  performance?: {
     totalTrades: number;
     winningTrades: number;
     winRate: number;
@@ -24,7 +42,7 @@ export interface TradingEngineStatus {
     expectancy?: number;
     activePositions: number;
   };
-  riskMetrics: {
+  riskMetrics?: {
     consecutiveLosses: number;
     maxDrawdown: number;
     dailyVolume: number;

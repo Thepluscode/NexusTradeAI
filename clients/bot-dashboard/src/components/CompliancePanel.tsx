@@ -28,25 +28,19 @@ import {
     BarChart,
     Timeline,
 } from '@mui/icons-material';
-import axios from 'axios';
 import { useQuery } from 'react-query';
+import { apiClient } from '@/services/api';
 
 // ── Data fetching ──────────────────────────────────────────────────────────
 
 async function fetchTradingStatus() {
-    const res = await axios.get('http://localhost:3002/api/trading/status', { timeout: 5000 });
-    // Return the flat top-level response so stats{} (totalWinAmount, totalLossAmount,
+    // Returns the flat top-level response so stats{} (totalWinAmount, totalLossAmount,
     // totalTradesToday, maxDrawdown) is accessible alongside performance{}.
-    return res.data;
+    return apiClient.getTradingEngineStatus();
 }
 
 async function fetchBacktestReport() {
-    try {
-        const res = await axios.get('http://localhost:3002/api/backtest/report', { timeout: 5000 });
-        return res.data?.data || null;
-    } catch {
-        return null;
-    }
+    return apiClient.getBacktestReport();
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────
@@ -133,7 +127,8 @@ export const CompliancePanel: React.FC = () => {
         staleTime: 5 * 60 * 1000,
     });
 
-    const stats = status?.stats || status?.performance || {};
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const stats: Record<string, any> = status?.stats || status?.performance || {};
     const totalTrades = stats.totalTrades ?? 0;
     const winners = stats.winners ?? stats.winningTrades ?? 0;
     const losers = stats.losers ?? stats.losingTrades ?? 0;
