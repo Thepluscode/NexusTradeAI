@@ -69,6 +69,40 @@ const _initState = loadBotState();
 let botRunning = _initState.running;
 let botPaused = _initState.paused;
 
+// Persist open positions so entry params survive a restart
+const POSITIONS_FILE = path.join(__dirname, 'data/positions-state.json');
+function savePositions() {
+    try {
+        const dir = require('path').dirname(POSITIONS_FILE);
+        if (!require('fs').existsSync(dir)) require('fs').mkdirSync(dir, { recursive: true });
+        const snapshot = {};
+        for (const [symbol, pos] of positions) {
+            snapshot[symbol] = {
+                ...pos,
+                entryTime: pos.entryTime instanceof Date ? pos.entryTime.toISOString() : pos.entryTime,
+            };
+        }
+        require('fs').writeFileSync(POSITIONS_FILE, JSON.stringify(snapshot, null, 2));
+    } catch {}
+}
+function loadPositions() {
+    try {
+        if (require('fs').existsSync(POSITIONS_FILE)) {
+            const saved = JSON.parse(require('fs').readFileSync(POSITIONS_FILE, 'utf8'));
+            for (const [symbol, pos] of Object.entries(saved)) {
+                positions.set(symbol, {
+                    ...pos,
+                    entryTime: pos.entryTime ? new Date(pos.entryTime) : new Date(),
+                });
+            }
+            if (positions.size > 0) {
+                console.log(`📂 Restored ${positions.size} position(s) from disk: ${[...positions.keys()].join(', ')}`);
+            }
+        }
+    } catch {}
+}
+loadPositions();
+
 // Anti-churning protection
 const recentTrades = new Map();
 const stoppedOutSymbols = new Map();
@@ -542,6 +576,9 @@ async function managePositions() {
 
             let position = positions.get(symbol);
             if (!position) {
+                // Position exists on Alpaca but not in our Map (e.g. after restart).
+                // Reconstruct with sensible defaults; real entry params are persisted
+                // to positions-state.json so this fallback should rarely fire.
                 position = {
                     symbol,
                     entry: avgEntry,
@@ -552,6 +589,7 @@ async function managePositions() {
                     entryTime: new Date()
                 };
                 positions.set(symbol, position);
+                savePositions();
             }
 
             // Calculate hold time
@@ -894,6 +932,7 @@ async function executeTrade(signal, strategy) {
             volumeRatio: signal.volumeRatio,
             percentChange: signal.percentChange
         });
+        savePositions();
 
         const tradeRecord = {
             time: Date.now(),
@@ -957,7 +996,7 @@ async function closePosition(symbol, qty, reason = 'Manual') {
         const orderUrl = `${alpacaConfig.baseURL}/v2/orders`;
         await axios.post(orderUrl, {
             symbol,
-            qty,
+            qty: parseFloat(qty),   // Alpaca requires a number, not a string
             side: 'sell',
             type: 'market',
             time_in_force: isCrypto ? 'gtc' : 'day'
@@ -988,6 +1027,7 @@ async function closePosition(symbol, qty, reason = 'Manual') {
         }
 
         positions.delete(symbol);
+        savePositions();
         savePerfData();
 
     } catch (error) {
