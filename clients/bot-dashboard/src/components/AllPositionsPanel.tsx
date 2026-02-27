@@ -51,40 +51,40 @@ export const AllPositionsPanel: React.FC = () => {
 
     // Combine positions from all markets
     const allPositions: UnifiedPosition[] = [
-        // Stock positions
+        // Stock positions — bot sends `quantity` (not `qty`)
         ...(stockPositions || []).map((pos: any) => ({
             symbol: pos.symbol,
             market: 'stocks' as const,
             side: pos.side || 'long',
-            quantity: pos.qty || pos.quantity || 0,
+            quantity: pos.quantity || pos.qty || 0,
             entryPrice: pos.avg_entry_price || pos.entry || pos.entryPrice || 0,
             currentPrice: pos.current_price || pos.currentPrice || 0,
             unrealizedPnL: pos.unrealized_pl || pos.unrealizedPnL || pos.pnl || 0,
             unrealizedPnLPercent: (pos.unrealized_plpc != null ? pos.unrealized_plpc * 100 : null) ?? pos.pnlPercent ?? 0,
             strategy: pos.strategy || 'momentum',
         })),
-        // Forex positions
+        // Forex positions — bot sends `unrealizedPL` (no lowercase n) and `qty`
         ...(forexPositions || []).map((pos: any) => ({
             symbol: pos.symbol?.replace('_', '/') || pos.symbol,
             market: 'forex' as const,
             side: pos.side || 'long',
-            quantity: Math.abs(pos.units) || 0,
+            quantity: Math.abs(pos.units ?? pos.qty ?? 0),
             entryPrice: pos.entryPrice || 0,
             currentPrice: pos.currentPrice || 0,
-            unrealizedPnL: pos.unrealizedPnL || 0,
-            unrealizedPnLPercent: 0,
+            unrealizedPnL: pos.unrealizedPL ?? pos.unrealizedPnL ?? 0,
+            unrealizedPnLPercent: pos.unrealizedPLPct ?? 0,
             strategy: pos.strategy || 'forex-trend',
         })),
-        // Crypto positions
+        // Crypto positions — bot sends `qty` (not `quantity`)
         ...(cryptoPositions || []).map((pos: any) => ({
             symbol: pos.symbol,
             market: 'crypto' as const,
             side: pos.side || 'long',
-            quantity: pos.quantity || 0,
-            entryPrice: pos.entryPrice || 0,
+            quantity: pos.qty || pos.quantity || 0,
+            entryPrice: pos.entry ?? pos.entryPrice ?? 0,
             currentPrice: pos.currentPrice || 0,
             unrealizedPnL: pos.unrealizedPnL || 0,
-            unrealizedPnLPercent: 0,
+            unrealizedPnLPercent: pos.unrealizedPnLPct ?? 0,
             strategy: pos.strategy || 'crypto-momentum',
         })),
     ];
@@ -311,7 +311,7 @@ export const AllPositionsPanel: React.FC = () => {
                             sx={{ mr: 1 }}
                         />
                         <Typography variant="body2" color="text.secondary">
-                            Alpaca Paper Trading • {stockStatus?.performance?.totalTrades || 0} trades today
+                            Alpaca Paper Trading • {(stockStatus as any)?.stats?.totalTrades ?? stockStatus?.performance?.totalTrades ?? 0} trades today
                         </Typography>
                     </Paper>
                 </Grid>

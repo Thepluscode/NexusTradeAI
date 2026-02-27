@@ -36,8 +36,13 @@ export interface ForexPosition {
     symbol: string;
     side: 'long' | 'short';
     units: number;
-    unrealizedPnL: number;
+    qty?: number;
+    entryPrice?: number;
+    currentPrice?: number;
+    unrealizedPL: number;         // forex bot sends unrealizedPL (no lowercase n)
+    unrealizedPLPct?: number;
     strategy?: string;
+    tradeId?: string;
 }
 
 export function useForexTrading() {

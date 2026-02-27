@@ -209,10 +209,10 @@ export const ForexPanel: React.FC = () => {
                                         </TableCell>
                                         <TableCell align="right">
                                             <Typography
-                                                color={(pos.unrealizedPnL ?? 0) >= 0 ? 'success.main' : 'error.main'}
+                                                color={(pos.unrealizedPL ?? 0) >= 0 ? 'success.main' : 'error.main'}
                                                 fontWeight="bold"
                                             >
-                                                ${(pos.unrealizedPnL ?? 0).toFixed(2)}
+                                                ${(pos.unrealizedPL ?? 0).toFixed(2)}
                                             </Typography>
                                         </TableCell>
                                         <TableCell>
