@@ -137,7 +137,7 @@ export const AllPositionsPanel: React.FC = () => {
                 </Typography>
 
                 <Grid container spacing={3}>
-                    <Grid item xs={12} sm={6} md={3}>
+                    <Grid item xs={12} sm={4} md={2.4}>
                         <MetricCard
                             title="Total Portfolio"
                             value={totalPortfolio.toLocaleString()}
@@ -146,7 +146,7 @@ export const AllPositionsPanel: React.FC = () => {
                             icon={<AccountBalance />}
                         />
                     </Grid>
-                    <Grid item xs={12} sm={6} md={3}>
+                    <Grid item xs={12} sm={4} md={2.4}>
                         <MetricCard
                             title="Total Unrealized P&L"
                             value={totalPnL.toFixed(2)}
@@ -155,7 +155,7 @@ export const AllPositionsPanel: React.FC = () => {
                             icon={totalPnL >= 0 ? <TrendingUp /> : <TrendingDown />}
                         />
                     </Grid>
-                    <Grid item xs={12} sm={6} md={3}>
+                    <Grid item xs={12} sm={4} md={2.4}>
                         <MetricCard
                             title="Stock Positions"
                             value={(stockPositions?.length || 0).toString()}
@@ -164,7 +164,7 @@ export const AllPositionsPanel: React.FC = () => {
                             icon={<ShowChart />}
                         />
                     </Grid>
-                    <Grid item xs={12} sm={6} md={3}>
+                    <Grid item xs={12} sm={4} md={2.4}>
                         <MetricCard
                             title="Forex Positions"
                             value={(forexPositions?.length || 0).toString()}
@@ -173,7 +173,7 @@ export const AllPositionsPanel: React.FC = () => {
                             icon={<CurrencyExchange />}
                         />
                     </Grid>
-                    <Grid item xs={12} sm={6} md={3}>
+                    <Grid item xs={12} sm={4} md={2.4}>
                         <MetricCard
                             title="Crypto Positions"
                             value={(cryptoPositions?.length || 0).toString()}
