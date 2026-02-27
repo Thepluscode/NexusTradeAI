@@ -643,6 +643,10 @@ class CryptoTradingEngine {
             // Update trailing stop
             this.updateTrailingStop(symbol, currentPrice, pnlPercent);
 
+            // Write live price and P&L back into the position so getStatus() returns current values
+            position.currentPrice = currentPrice;
+            position.unrealizedPnL = pnlUSD;
+
             console.log(`   ${symbol}: $${currentPrice.toFixed(2)} (${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%) | Stop: $${position.stopLoss.toFixed(2)}`);
         }
     }
