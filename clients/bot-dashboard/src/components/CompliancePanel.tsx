@@ -35,7 +35,9 @@ import { useQuery } from 'react-query';
 
 async function fetchTradingStatus() {
     const res = await axios.get('http://localhost:3002/api/trading/status', { timeout: 5000 });
-    return res.data?.data || res.data;
+    // Return the flat top-level response so stats{} (totalWinAmount, totalLossAmount,
+    // totalTradesToday, maxDrawdown) is accessible alongside performance{}.
+    return res.data;
 }
 
 async function fetchBacktestReport() {
