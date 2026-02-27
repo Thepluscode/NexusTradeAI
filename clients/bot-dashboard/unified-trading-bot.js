@@ -78,6 +78,7 @@ let totalTradesToday = 0;
 // Performance tracking (in-memory, persisted to performance.json)
 const fs = require('fs');
 const PERF_FILE = path.join(__dirname, '../../services/trading/data/performance.json');
+const RISK_CONFIG_FILE = path.join(__dirname, 'data/risk-config.json');
 let perfData = {
     totalTrades: 0,
     winningTrades: 0,
@@ -247,6 +248,34 @@ const MOMENTUM_CONFIG = {
         maxPositions: 2
     }
 };
+
+// Load persisted risk config overrides (survives restarts)
+try {
+    if (fs.existsSync(RISK_CONFIG_FILE)) {
+        const saved = JSON.parse(fs.readFileSync(RISK_CONFIG_FILE, 'utf8'));
+        ['tier1', 'tier2', 'tier3'].forEach(tier => {
+            if (saved[tier]) Object.assign(MOMENTUM_CONFIG[tier], saved[tier]);
+        });
+        console.log('⚙️  Loaded persisted risk config overrides');
+    }
+} catch (e) {
+    console.log('⚙️  No persisted risk config found, using defaults');
+}
+
+function saveRiskConfig() {
+    try {
+        const dir = path.dirname(RISK_CONFIG_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        const snapshot = {
+            tier1: { stopLoss: MOMENTUM_CONFIG.tier1.stopLoss, profitTarget: MOMENTUM_CONFIG.tier1.profitTarget, positionSize: MOMENTUM_CONFIG.tier1.positionSize, maxPositions: MOMENTUM_CONFIG.tier1.maxPositions },
+            tier2: { stopLoss: MOMENTUM_CONFIG.tier2.stopLoss, profitTarget: MOMENTUM_CONFIG.tier2.profitTarget, positionSize: MOMENTUM_CONFIG.tier2.positionSize, maxPositions: MOMENTUM_CONFIG.tier2.maxPositions },
+            tier3: { stopLoss: MOMENTUM_CONFIG.tier3.stopLoss, profitTarget: MOMENTUM_CONFIG.tier3.profitTarget, positionSize: MOMENTUM_CONFIG.tier3.positionSize, maxPositions: MOMENTUM_CONFIG.tier3.maxPositions },
+        };
+        fs.writeFileSync(RISK_CONFIG_FILE, JSON.stringify(snapshot, null, 2));
+    } catch (e) {
+        console.error('Failed to save risk config:', e.message);
+    }
+}
 
 const TRADING_HOURS = {
     marketOpen: { hour: 9, minute: 30 },
@@ -1020,6 +1049,8 @@ app.get('/api/trading/status', async (req, res) => {
                 winners: perfData.winningTrades,
                 losers: perfData.losingTrades,
                 totalPnL: perfData.totalProfit,
+                totalWinAmount: perfData.totalWinAmount,
+                totalLossAmount: perfData.totalLossAmount,
                 maxDrawdown: perfData.maxDrawdown,
                 winRate: parseFloat(perfData.winRate.toFixed(1)),
                 profitFactor: parseFloat(perfData.profitFactor.toFixed(2)),
@@ -1030,7 +1061,7 @@ app.get('/api/trading/status', async (req, res) => {
                 maxPositions: 8,
                 stopLoss: 4,
                 profitTarget: 8,
-                dailyLossLimit: MAX_TRADES_PER_DAY
+                dailyLossLimit: MAX_DAILY_LOSS
             },
             portfolioValue: equity,
             dailyPnL: equity - lastEquity,
@@ -1330,6 +1361,7 @@ app.post('/api/config/risk', (req, res) => {
         if (profitTarget != null) MOMENTUM_CONFIG[tier].profitTarget = Math.max(0.01, Math.min(0.50, profitTarget));
         if (positionSize != null) MOMENTUM_CONFIG[tier].positionSize = Math.max(0.001, Math.min(0.05, positionSize));
         if (maxPositions != null) MOMENTUM_CONFIG[tier].maxPositions = Math.max(1, Math.min(10, Math.round(maxPositions)));
+        saveRiskConfig();
         console.log(`⚙️  Config updated: ${tier} → stopLoss=${MOMENTUM_CONFIG[tier].stopLoss} profitTarget=${MOMENTUM_CONFIG[tier].profitTarget}`);
         res.json({ success: true, data: MOMENTUM_CONFIG[tier] });
     } catch (err) {
@@ -1474,11 +1506,25 @@ app.post('/api/config/test-notification', async (req, res) => {
             if (!token || !chatId) {
                 return res.status(400).json({ success: false, error: 'Telegram not configured' });
             }
-            const axios = require('axios');
             await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
                 chat_id: chatId,
                 text: '✅ NexusTradeAI: Test notification — Telegram alerts are working.',
             }, { timeout: 8000 });
+            return res.json({ success: true });
+        }
+        if (channel === 'sms') {
+            const sid  = process.env.TWILIO_ACCOUNT_SID;
+            const auth = process.env.TWILIO_AUTH_TOKEN;
+            const from = process.env.TWILIO_PHONE_NUMBER;
+            const to   = process.env.ALERT_PHONE_NUMBER;
+            if (!sid || !auth || !from || !to) {
+                return res.status(400).json({ success: false, error: 'SMS not fully configured' });
+            }
+            await axios.post(
+                `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`,
+                new URLSearchParams({ From: from, To: to, Body: 'NexusTradeAI: Test SMS — alerts are working.' }).toString(),
+                { auth: { username: sid, password: auth }, timeout: 8000 }
+            );
             return res.json({ success: true });
         }
         res.status(400).json({ success: false, error: 'Unknown channel' });

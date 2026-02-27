@@ -853,6 +853,32 @@ export default function SettingsPage() {
         retry: 1,
     });
 
+    // Seed broker/notification state from config on first load (bugs #4, #7, #8)
+    React.useEffect(() => {
+        if (!config) return;
+        // OANDA practice toggle (#8)
+        if (config.brokers?.oanda?.mode) {
+            setOandaPractice(config.brokers.oanda.mode === 'practice');
+        }
+        // Crypto exchange dropdown (#7)
+        if (config.brokers?.crypto?.exchange) {
+            setCryptoExchange(config.brokers.crypto.exchange);
+        }
+        // Crypto testnet toggle
+        if (config.brokers?.crypto?.testnet !== undefined) {
+            setCryptoTestnet(config.brokers.crypto.testnet);
+        }
+        // Telegram enabled toggle (#4)
+        if (config.notifications?.telegram?.enabled !== undefined) {
+            setTelegramEnabled(config.notifications.telegram.enabled);
+        }
+        // SMS enabled toggle (#4)
+        if (config.notifications?.sms?.enabled !== undefined) {
+            setSmsEnabled(config.notifications.sms.enabled);
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [!!config]);
+
     const { mutate: saveRisk, isLoading: savingRisk } = useMutation(updateRisk, {
         onSuccess: () => {
             toast.success('Risk parameters updated');
@@ -1512,6 +1538,24 @@ export default function SettingsPage() {
                                     }
                                     label={<Typography variant="body2">Enable SMS alerts</Typography>}
                                 />
+                                {config?.notifications?.sms?.configured && (
+                                    <Button
+                                        variant="outlined"
+                                        size="small"
+                                        startIcon={<Send fontSize="small" />}
+                                        sx={{ borderRadius: 2, textTransform: 'none', alignSelf: 'flex-start' }}
+                                        onClick={async () => {
+                                            try {
+                                                await axios.post(`${API_BASE}/api/config/test-notification`, { channel: 'sms' });
+                                                toast.success('Test SMS sent');
+                                            } catch {
+                                                toast.error('Failed to send SMS — check Twilio credentials');
+                                            }
+                                        }}
+                                    >
+                                        Send test SMS
+                                    </Button>
+                                )}
                             </NotifForm>
 
                             {/* Alert events reference */}
