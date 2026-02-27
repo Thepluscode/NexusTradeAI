@@ -89,7 +89,7 @@ export default function BacktestPage() {
         );
     }
 
-    const { summary, validation, symbolResults = [], results = [] } = report;
+    const { summary = {}, validation, symbolResults = [], results = [] } = report;
     const recentTrades = results.slice(-20);
 
     return (
@@ -117,43 +117,43 @@ export default function BacktestPage() {
                 <Grid item xs={12} sm={6} md={2.4}>
                     <MetricCard
                         title="Win Rate"
-                        value={(summary.overallWinRate * 100).toFixed(1)}
+                        value={((summary.overallWinRate ?? 0) * 100).toFixed(1)}
                         suffix="%"
-                        color={summary.overallWinRate >= 0.5 ? 'success' : 'warning'}
+                        color={(summary.overallWinRate ?? 0) >= 0.5 ? 'success' : 'warning'}
                         icon={<TrendingUp />}
                     />
                 </Grid>
                 <Grid item xs={12} sm={6} md={2.4}>
                     <MetricCard
                         title="Profit Factor"
-                        value={summary.profitFactor.toFixed(2)}
-                        color={summary.profitFactor >= 1.5 ? 'success' : summary.profitFactor >= 1.2 ? 'warning' : 'error'}
+                        value={(summary.profitFactor ?? 0).toFixed(2)}
+                        color={(summary.profitFactor ?? 0) >= 1.5 ? 'success' : (summary.profitFactor ?? 0) >= 1.2 ? 'warning' : 'error'}
                         icon={<Assessment />}
                     />
                 </Grid>
                 <Grid item xs={12} sm={6} md={2.4}>
                     <MetricCard
                         title="Avg Sharpe"
-                        value={summary.avgSharpe.toFixed(2)}
-                        color={summary.avgSharpe >= 1.0 ? 'success' : summary.avgSharpe >= 0.5 ? 'warning' : 'error'}
+                        value={(summary.avgSharpe ?? 0).toFixed(2)}
+                        color={(summary.avgSharpe ?? 0) >= 1.0 ? 'success' : (summary.avgSharpe ?? 0) >= 0.5 ? 'warning' : 'error'}
                         icon={<Assessment />}
                     />
                 </Grid>
                 <Grid item xs={12} sm={6} md={2.4}>
                     <MetricCard
                         title="Max Drawdown"
-                        value={(summary.avgDrawdown * 100).toFixed(2)}
+                        value={((summary.avgDrawdown ?? 0) * 100).toFixed(2)}
                         suffix="%"
-                        color={summary.avgDrawdown <= 0.1 ? 'success' : summary.avgDrawdown <= 0.2 ? 'warning' : 'error'}
+                        color={(summary.avgDrawdown ?? 0) <= 0.1 ? 'success' : (summary.avgDrawdown ?? 0) <= 0.2 ? 'warning' : 'error'}
                         icon={<TrendingDown />}
                     />
                 </Grid>
                 <Grid item xs={12} sm={6} md={2.4}>
                     <MetricCard
                         title="Expectancy"
-                        value={(summary.expectancy * 100).toFixed(2)}
+                        value={((summary.expectancy ?? 0) * 100).toFixed(2)}
                         suffix="%"
-                        color={summary.expectancy > 0 ? 'success' : 'error'}
+                        color={(summary.expectancy ?? 0) > 0 ? 'success' : 'error'}
                         icon={<Assessment />}
                     />
                 </Grid>

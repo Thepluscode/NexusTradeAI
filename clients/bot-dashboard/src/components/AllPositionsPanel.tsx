@@ -327,8 +327,8 @@ export const AllPositionsPanel: React.FC = () => {
                             sx={{ mr: 1 }}
                         />
                         <Chip
-                            label={forexStatus?.session?.name || 'Session Unknown'}
-                            color={forexStatus?.session?.quality === 'best' ? 'success' : 'default'}
+                            label={forexStatus?.session || 'Session Unknown'}
+                            color={forexStatus?.session === 'OVERLAP' ? 'success' : 'default'}
                             size="small"
                             variant="outlined"
                             sx={{ mr: 1 }}

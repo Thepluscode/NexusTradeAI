@@ -48,16 +48,14 @@ export const ForexPanel: React.FC = () => {
         );
     }
 
-    const sessionQualityColor = (quality: string) => {
-        switch (quality) {
-            case 'best':
-                return 'success';
-            case 'good':
-                return 'primary';
-            case 'fair':
-                return 'warning';
-            default:
-                return 'error';
+    // session is a plain string: "OVERLAP", "LONDON", "NEW_YORK", "TOKYO", "OFF_PEAK"
+    const sessionColor = (session: string) => {
+        switch (session) {
+            case 'OVERLAP': return 'success';
+            case 'LONDON':
+            case 'NEW_YORK': return 'primary';
+            case 'TOKYO': return 'warning';
+            default: return 'default';
         }
     };
 
@@ -85,8 +83,8 @@ export const ForexPanel: React.FC = () => {
                     <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
                         <Chip
                             icon={<AccessTime />}
-                            label={status?.session?.name || 'Unknown'}
-                            color={sessionQualityColor(status?.session?.quality || 'offline') as any}
+                            label={status?.session || 'Unknown'}
+                            color={sessionColor(status?.session || '') as any}
                             variant="filled"
                         />
                         <Chip

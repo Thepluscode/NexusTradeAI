@@ -154,11 +154,12 @@ class APIClient {
   async getForexStatus(): Promise<any> {
     try {
       const response = await this.forexService.get('/api/forex/status');
-      return response.data.data;
+      // Forex bot sends flat JSON (no {data:} wrapper), handle both shapes
+      return response.data.data || response.data;
     } catch {
       return {
         isRunning: false, marketOpen: false,
-        session: { name: 'Offline', quality: 'offline' },
+        session: 'OFF_PEAK',
         positions: [], performance: { totalTrades: 0, activePositions: 0 },
         portfolioValue: 0, dailyPnL: 0,
       };
@@ -168,7 +169,8 @@ class APIClient {
   async getForexPositions(): Promise<any[]> {
     try {
       const response = await this.forexService.get('/api/forex/status');
-      return response.data.data?.positions || [];
+      const data = response.data.data || response.data;
+      return data?.positions || [];
     } catch {
       return [];
     }

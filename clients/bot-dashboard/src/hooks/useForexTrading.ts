@@ -4,11 +4,8 @@ import { apiClient } from '@/services/api';
 export interface ForexStatus {
     isRunning: boolean;
     marketOpen: boolean;
-    session: {
-        name: string;
-        quality: string;
-        isBest?: boolean;
-    };
+    // Forex bot returns session as a plain string e.g. "OVERLAP", "LONDON", "OFF_PEAK"
+    session: string;
     performance: {
         totalTrades: number;
         activePositions: number;
