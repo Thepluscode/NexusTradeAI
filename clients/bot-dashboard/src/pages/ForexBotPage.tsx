@@ -24,13 +24,20 @@ import { useQuery, useMutation, useQueryClient } from 'react-query';
 import toast from 'react-hot-toast';
 
 interface Position {
-    symbol: string;
-    qty: number;
-    side: string;
-    entryPrice: number;
-    currentPrice: number;
-    unrealizedPL: number;
-    unrealizedPLPct: number;
+    symbol?: string;
+    instrument?: string;    // demo mode field name
+    qty?: number;
+    units?: number;         // demo mode field name
+    side?: string;
+    direction?: string;     // demo mode field name
+    entryPrice?: number;
+    entry?: number;         // demo mode field name
+    currentPrice?: number;
+    unrealizedPL?: number;
+    unrealizedPLPct?: number;
+    stopLoss?: number;
+    takeProfit?: number;
+    tier?: string;
 }
 
 interface BotStatus {
@@ -308,30 +315,39 @@ export default function ForexBotPage() {
                 </Typography>
                 {status?.positions && status.positions.length > 0 ? (
                     <Grid container spacing={2}>
-                        {status.positions.map((pos) => (
-                            <Grid item xs={12} sm={6} md={4} key={pos.symbol}>
+                        {status.positions.map((pos, idx) => {
+                            // Normalise across live (symbol/qty/side/entryPrice/unrealizedPL) and
+                            // demo mode (instrument/units/direction/entry) response shapes
+                            const sym = pos.symbol ?? pos.instrument ?? '—';
+                            const qty = pos.qty ?? pos.units ?? 0;
+                            const side = pos.side ?? pos.direction ?? 'long';
+                            const ep = pos.entryPrice ?? pos.entry ?? 0;
+                            const pnl = pos.unrealizedPL ?? 0;
+                            const pnlPct = pos.unrealizedPLPct ?? 0;
+                            return (
+                            <Grid item xs={12} sm={6} md={4} key={`${sym}-${idx}`}>
                                 <Card
                                     sx={{
                                         border: '1px solid',
-                                        borderColor: pos.unrealizedPL >= 0 ? '#10b981' : '#ef4444',
+                                        borderColor: pnl >= 0 ? '#10b981' : '#ef4444',
                                     }}
                                 >
                                     <CardContent>
                                         <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
                                             <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                                                {pos.symbol}
+                                                {sym}
                                             </Typography>
                                             <Chip
-                                                label={pos.side.toUpperCase()}
+                                                label={side.toUpperCase()}
                                                 size="small"
-                                                color={pos.side === 'long' ? 'success' : 'error'}
+                                                color={side === 'long' ? 'success' : 'error'}
                                             />
                                         </Box>
                                         <Typography variant="body2" color="text.secondary">
-                                            {pos.qty} units @ {pos.entryPrice.toFixed(5)}
+                                            {qty} units @ {ep.toFixed(5)}
                                         </Typography>
                                         <Box sx={{ display: 'flex', alignItems: 'center', mt: 1 }}>
-                                            {pos.unrealizedPL >= 0 ? (
+                                            {pnl >= 0 ? (
                                                 <TrendingUp sx={{ color: '#10b981', mr: 0.5 }} />
                                             ) : (
                                                 <TrendingDown sx={{ color: '#ef4444', mr: 0.5 }} />
@@ -340,16 +356,22 @@ export default function ForexBotPage() {
                                                 variant="h6"
                                                 sx={{
                                                     fontWeight: 700,
-                                                    color: pos.unrealizedPL >= 0 ? '#10b981' : '#ef4444',
+                                                    color: pnl >= 0 ? '#10b981' : '#ef4444',
                                                 }}
                                             >
-                                                ${pos.unrealizedPL.toFixed(2)} ({(pos.unrealizedPLPct * 100).toFixed(2)}%)
+                                                ${pnl.toFixed(2)} ({(pnlPct * 100).toFixed(2)}%)
                                             </Typography>
                                         </Box>
+                                        {pos.stopLoss != null && (
+                                            <Typography variant="caption" color="text.secondary">
+                                                SL: {pos.stopLoss.toFixed(5)} · TP: {pos.takeProfit?.toFixed(5) ?? '—'}
+                                            </Typography>
+                                        )}
                                     </CardContent>
                                 </Card>
                             </Grid>
-                        ))}
+                            );
+                        })}
                     </Grid>
                 ) : (
                     <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
