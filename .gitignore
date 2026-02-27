@@ -9,3 +9,10 @@ mongosh-*/
 .DS_Store
 **/.env*
 reset HEAD clients/web-app/.env.local*/.env.example
+
+# Bot dashboard runtime artifacts
+clients/bot-dashboard/logs/
+clients/bot-dashboard/data/
+
+# Next.js build cache
+clients/web-app/.next/
