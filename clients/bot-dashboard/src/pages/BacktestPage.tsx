@@ -102,7 +102,7 @@ export default function BacktestPage() {
                         Backtest Report
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
-                        Generated: {new Date(report.timestamp).toLocaleString()}
+                        Generated: {report.timestamp ? new Date(report.timestamp).toLocaleString() : 'Unknown'}
                     </Typography>
                 </Box>
                 <Chip
@@ -184,12 +184,12 @@ export default function BacktestPage() {
                                 ['Total Trades', summary.totalTrades],
                                 ['Fast MA', report.config?.fastMA],
                                 ['Slow MA', report.config?.slowMA],
-                                ['Stop Loss', `${(report.config?.stopLossPct * 100).toFixed(0)}%`],
-                                ['Profit Target', `${(report.config?.profitTargetPct * 100).toFixed(0)}%`],
-                                ['Position Size', `${(report.config?.positionSizePct * 100).toFixed(0)}%`],
+                                ['Stop Loss', report.config?.stopLossPct != null ? `${(report.config.stopLossPct * 100).toFixed(0)}%` : '—'],
+                                ['Profit Target', report.config?.profitTargetPct != null ? `${(report.config.profitTargetPct * 100).toFixed(0)}%` : '—'],
+                                ['Position Size', report.config?.positionSizePct != null ? `${(report.config.positionSizePct * 100).toFixed(0)}%` : '—'],
                                 ['Initial Capital', `$${(report.config?.initialCapital || 0).toLocaleString()}`],
-                                ['Walk-Forward Windows', report.config?.walkForwardWindows],
-                                ['In-Sample Ratio', `${(report.config?.inSampleRatio * 100).toFixed(0)}%`],
+                                ['Walk-Forward Windows', report.config?.walkForwardWindows ?? '—'],
+                                ['In-Sample Ratio', report.config?.inSampleRatio != null ? `${(report.config.inSampleRatio * 100).toFixed(0)}%` : '—'],
                             ].map(([label, value]) => (
                                 <Grid item xs={6} sm={4} md={3} key={String(label)}>
                                     <Typography variant="caption" color="text.secondary">
