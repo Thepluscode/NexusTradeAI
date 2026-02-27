@@ -10,6 +10,7 @@ export interface TradingEngineStatus {
   portfolioVaR: number;
   leverage: number;
   portfolioValue: number;
+  equity?: number;          // Stock bot sends `equity` (actual Alpaca account equity)
   totalExposure: number;
   performance: {
     totalTrades: number;

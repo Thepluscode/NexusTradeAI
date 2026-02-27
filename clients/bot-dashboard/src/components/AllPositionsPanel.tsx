@@ -75,12 +75,12 @@ export const AllPositionsPanel: React.FC = () => {
             unrealizedPnLPercent: pos.unrealizedPLPct ?? 0,
             strategy: pos.strategy || 'forex-trend',
         })),
-        // Crypto positions — bot sends `qty` (not `quantity`)
+        // Crypto positions — bot sends `quantity` (not `qty`)
         ...(cryptoPositions || []).map((pos: any) => ({
             symbol: pos.symbol,
             market: 'crypto' as const,
             side: pos.side || 'long',
-            quantity: pos.qty || pos.quantity || 0,
+            quantity: pos.quantity || pos.qty || 0,
             entryPrice: pos.entry ?? pos.entryPrice ?? 0,
             currentPrice: pos.currentPrice || 0,
             unrealizedPnL: pos.unrealizedPnL || 0,
@@ -107,7 +107,7 @@ export const AllPositionsPanel: React.FC = () => {
         .filter(p => p.market === 'crypto')
         .reduce((sum, pos) => sum + (pos.unrealizedPnL || 0), 0);
 
-    const stockPortfolio = stockStatus?.portfolioValue || 0; // USD
+    const stockPortfolio = stockStatus?.equity || stockStatus?.portfolioValue || 0; // USD — stock bot sends `equity`
     // Forex bot sends `equity`, not `portfolioValue`
     const forexPortfolio = forexStatus?.equity || forexStatus?.portfolioValue || 0; // GBP or USD
     const forexCurrency = forexStatus?.currency || 'USD'; // Get currency from API
@@ -273,7 +273,7 @@ export const AllPositionsPanel: React.FC = () => {
                                         <TableCell align="right">
                                             <Box>
                                                 <Typography
-                                                    color={pos.unrealizedPnL >= 0 ? 'success.main' : 'error.main'}
+                                                    color={(pos.unrealizedPnL ?? 0) >= 0 ? 'success.main' : 'error.main'}
                                                     fontWeight="bold"
                                                 >
                                                     ${pos.unrealizedPnL?.toFixed(2)}

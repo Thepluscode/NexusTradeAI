@@ -274,6 +274,7 @@ class CryptoTradingEngine {
         this.positions = new Map();
         this.priceHistory = new Map();
         this.isRunning = false;
+        this.isPaused = false;
         this.scanCount = 0;
 
         // Anti-churning tracking
@@ -735,6 +736,14 @@ class CryptoTradingEngine {
                     continue;
                 }
 
+                // Manage existing positions even when paused (exits still run)
+                if (this.isPaused) {
+                    console.log('⏸  Crypto bot paused — managing existing positions only, no new entries');
+                    if (this.positions.size > 0) await this.managePositions();
+                    await new Promise(resolve => setTimeout(resolve, this.config.scanInterval));
+                    continue;
+                }
+
                 // Manage existing positions
                 if (this.positions.size > 0) {
                     console.log(`\n📊 Managing ${this.positions.size} position(s)...`);
@@ -847,6 +856,19 @@ class CryptoTradingEngine {
     stop() {
         console.log('🛑 Stopping Crypto Trading Engine...');
         this.isRunning = false;
+        this.isPaused = false;
+        this.saveState();
+    }
+
+    pause() {
+        console.log('⏸  Pausing Crypto Trading Engine (existing positions still managed)...');
+        this.isPaused = true;
+        this.saveState();
+    }
+
+    resume() {
+        console.log('▶️  Resuming Crypto Trading Engine...');
+        this.isPaused = false;
         this.saveState();
     }
 
@@ -874,7 +896,7 @@ class CryptoTradingEngine {
         // Flat response matching CryptoBotPage BotStatus interface
         return {
             isRunning: this.isRunning,
-            isPaused: !this.isRunning,
+            isPaused: this.isPaused,
             isVolatilityPaused: false,
             demoMode: this.demoMode || false,
             mode: this.demoMode ? 'DEMO' : (this.config.exchange.testnet ? 'TESTNET' : 'LIVE'),
@@ -971,7 +993,7 @@ app.post('/api/crypto/stop', (req, res) => {
     res.json({ success: true, message: 'Crypto trading engine stopped' });
 });
 app.post('/api/crypto/pause', (req, res) => {
-    engine.stop();
+    engine.pause();
     res.json({ success: true, message: 'Crypto trading engine paused' });
 });
 
