@@ -8,11 +8,14 @@ import {
     Grid,
     Chip,
     Skeleton,
+    Divider,
 } from '@mui/material';
 import {
     ShowChart,
     CurrencyExchange,
     CurrencyBitcoin,
+    TrendingUp,
+    TrendingDown,
 } from '@mui/icons-material';
 import axios from 'axios';
 import { useQuery } from 'react-query';
@@ -22,9 +25,11 @@ interface BotHealth {
     online: boolean;
     isRunning: boolean;
     mode: string;
-    equity?: number;
-    positions?: number;
-    dailyReturn?: number;
+    equity: number;
+    positions: number;
+    dailyPnL: number;
+    totalTrades: number;
+    winRate: number;
 }
 
 interface AllBotsStatus {
@@ -38,36 +43,72 @@ const BOTS = [
         key: 'stock',
         name: 'Stock Bot',
         icon: <ShowChart sx={{ fontSize: 40 }} />,
-        description: 'LONG Only • Market Hours',
+        description: 'Momentum • Market Hours (9:30–4 PM EST)',
         gradient: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
         port: 3002,
         path: '/stock',
-        features: ['MA Crossover Strategy', '10% Kelly Sizing', '10% Stop Loss', '15% Profit Target'],
-        pricing: '$29/month',
+        statusPath: '/api/trading/status',
+        features: ['3-Tier Momentum', 'Anti-Churning (15/day)', 'EOD Close-All', 'Trailing Stops'],
     },
     {
         key: 'forex',
         name: 'Forex Bot',
         icon: <CurrencyExchange sx={{ fontSize: 40 }} />,
-        description: 'LONG + SHORT • 24/5',
+        description: 'Trend Following • 24/5',
         gradient: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
         port: 3005,
         path: '/forex',
-        features: ['Bidirectional Trading', 'Session Optimization', '1.5% Stop Loss', '1:3 Risk/Reward'],
-        pricing: '$49/month',
+        statusPath: '/api/forex/status',
+        features: ['12 Forex Pairs', 'Session-Optimized', 'Correlation Filter', 'OANDA Integration'],
     },
     {
         key: 'crypto',
         name: 'Crypto Bot',
         icon: <CurrencyBitcoin sx={{ fontSize: 40 }} />,
-        description: 'LONG + SHORT • 24/7/365',
+        description: 'BTC-Correlation • 24/7/365',
         gradient: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
         port: 3006,
         path: '/crypto',
-        features: ['BTC Correlation', 'Volatility Filter', '5% Stop Loss', '15% Profit Target'],
-        pricing: '$39/month',
+        statusPath: '/api/crypto/status',
+        features: ['12 Crypto Pairs', 'BTC Trend Filter', 'Volatility Pause', '5% Stop Loss'],
     },
 ];
+
+async function fetchBotStatus(bot: typeof BOTS[0]): Promise<BotHealth> {
+    try {
+        const res = await axios.get(`http://localhost:${bot.port}${bot.statusPath}`, { timeout: 3000 });
+        const d = res.data?.data || res.data;
+
+        // Normalise across the three different response shapes
+        const isRunning = d?.isRunning ?? false;
+        const equity =
+            d?.account?.equity ??
+            d?.equity ??
+            d?.portfolioValue ??
+            d?.performance?.equity ?? 0;
+        const positions =
+            d?.performance?.activePositions ??
+            d?.positions?.length ??
+            (Array.isArray(d?.positions) ? d.positions.length : 0);
+        const dailyPnL =
+            d?.dailyPnL ??
+            d?.performance?.dailyPnL ??
+            (d?.stats?.totalPnL ?? 0);
+        const totalTrades =
+            d?.performance?.totalTrades ??
+            d?.stats?.totalTrades ??
+            d?.totalTrades ?? 0;
+        const winRate =
+            d?.performance?.winRate ??
+            d?.stats?.winRate ??
+            d?.winRate ?? 0;
+        const mode = d?.mode ?? d?.tradingMode ?? (isRunning ? 'PAPER' : 'STOPPED');
+
+        return { online: true, isRunning, mode, equity, positions, dailyPnL, totalTrades, winRate };
+    } catch {
+        return { online: false, isRunning: false, mode: 'OFFLINE', equity: 0, positions: 0, dailyPnL: 0, totalTrades: 0, winRate: 0 };
+    }
+}
 
 export default function OverviewPage() {
     const navigate = useNavigate();
@@ -75,41 +116,25 @@ export default function OverviewPage() {
     const { data: status, isLoading } = useQuery<AllBotsStatus>(
         'allBotsStatus',
         async () => {
-            const results: any = {};
-            for (const bot of BOTS) {
-                try {
-                    const res = await axios.get(`http://localhost:${bot.port}/health`, { timeout: 2000 });
-                    results[bot.key] = { ...res.data, online: true };
-                } catch {
-                    results[bot.key] = { online: false };
-                }
-            }
-            return results;
+            const [stock, forex, crypto] = await Promise.all(BOTS.map(fetchBotStatus));
+            return { stock, forex, crypto };
         },
-        { refetchInterval: 5000 }
+        { refetchInterval: 10000 }
     );
 
-    // Calculate totals
-    const totalEquity = status?.stock?.equity || status?.forex?.equity || status?.crypto?.equity || 0;
-    const runningBots = [
-        status?.stock?.isRunning,
-        status?.forex?.isRunning,
-        status?.crypto?.isRunning,
-    ].filter(Boolean).length;
-    const onlineBots = [
-        status?.stock?.online,
-        status?.forex?.online,
-        status?.crypto?.online,
-    ].filter(Boolean).length;
+    const totalEquity = (status?.stock?.equity || 0) + (status?.forex?.equity || 0) + (status?.crypto?.equity || 0);
+    const totalDailyPnL = (status?.stock?.dailyPnL || 0) + (status?.forex?.dailyPnL || 0) + (status?.crypto?.dailyPnL || 0);
+    const runningBots = [status?.stock, status?.forex, status?.crypto].filter(b => b?.isRunning).length;
+    const onlineBots = [status?.stock, status?.forex, status?.crypto].filter(b => b?.online).length;
 
     if (isLoading) {
         return (
             <Box sx={{ p: 3 }}>
-                <Skeleton variant="rectangular" height={200} sx={{ mb: 3, borderRadius: 2 }} />
+                <Skeleton variant="rectangular" height={160} sx={{ mb: 3, borderRadius: 2 }} />
                 <Grid container spacing={3}>
                     {[1, 2, 3].map((i) => (
                         <Grid item xs={12} md={4} key={i}>
-                            <Skeleton variant="rectangular" height={300} sx={{ borderRadius: 2 }} />
+                            <Skeleton variant="rectangular" height={280} sx={{ borderRadius: 2 }} />
                         </Grid>
                     ))}
                 </Grid>
@@ -119,7 +144,7 @@ export default function OverviewPage() {
 
     return (
         <Box sx={{ p: 3 }}>
-            {/* Header */}
+            {/* Header summary */}
             <Paper
                 sx={{
                     p: 4,
@@ -129,121 +154,176 @@ export default function OverviewPage() {
                     border: '1px solid rgba(255,255,255,0.1)',
                 }}
             >
-                <Typography variant="h3" sx={{ fontWeight: 800, mb: 1 }}>
+                <Typography variant="h4" sx={{ fontWeight: 800, mb: 0.5 }}>
                     🎯 NexusTradeAI
                 </Typography>
-                <Typography variant="h6" sx={{ color: 'rgba(255,255,255,0.7)', mb: 3 }}>
-                    Automated Trading Bots for Stocks, Forex & Crypto
+                <Typography variant="body1" sx={{ color: 'rgba(255,255,255,0.6)', mb: 3 }}>
+                    Automated trading bots — Stocks, Forex &amp; Crypto
                 </Typography>
                 <Grid container spacing={3}>
-                    <Grid item xs={12} sm={4}>
+                    <Grid item xs={6} sm={3}>
                         <Box sx={{ textAlign: 'center' }}>
                             <Typography variant="h4" sx={{ fontWeight: 700, color: '#10b981' }}>
-                                ${totalEquity.toLocaleString()}
+                                ${totalEquity.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                             </Typography>
-                            <Typography variant="body2" color="text.secondary">
-                                Account Equity
-                            </Typography>
+                            <Typography variant="body2" color="text.secondary">Total Equity</Typography>
                         </Box>
                     </Grid>
-                    <Grid item xs={12} sm={4}>
+                    <Grid item xs={6} sm={3}>
+                        <Box sx={{ textAlign: 'center' }}>
+                            <Typography
+                                variant="h4"
+                                sx={{ fontWeight: 700, color: totalDailyPnL >= 0 ? '#10b981' : '#ef4444' }}
+                            >
+                                {totalDailyPnL >= 0 ? '+' : ''}${totalDailyPnL.toFixed(2)}
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary">Daily P&amp;L</Typography>
+                        </Box>
+                    </Grid>
+                    <Grid item xs={6} sm={3}>
                         <Box sx={{ textAlign: 'center' }}>
                             <Typography variant="h4" sx={{ fontWeight: 700, color: '#3b82f6' }}>
                                 {runningBots} / 3
                             </Typography>
-                            <Typography variant="body2" color="text.secondary">
-                                Bots Running
-                            </Typography>
+                            <Typography variant="body2" color="text.secondary">Bots Running</Typography>
                         </Box>
                     </Grid>
-                    <Grid item xs={12} sm={4}>
+                    <Grid item xs={6} sm={3}>
                         <Box sx={{ textAlign: 'center' }}>
                             <Typography variant="h4" sx={{ fontWeight: 700, color: '#f59e0b' }}>
                                 {onlineBots} / 3
                             </Typography>
-                            <Typography variant="body2" color="text.secondary">
-                                Bots Online
-                            </Typography>
+                            <Typography variant="body2" color="text.secondary">Bots Online</Typography>
                         </Box>
                     </Grid>
                 </Grid>
             </Paper>
 
-            {/* Bot Cards */}
-            <Typography variant="h5" sx={{ fontWeight: 700, mb: 3 }}>
-                Choose Your Trading Bot
+            {/* Bot cards */}
+            <Typography variant="h5" sx={{ fontWeight: 700, mb: 2 }}>
+                Trading Bots
             </Typography>
             <Grid container spacing={3}>
                 {BOTS.map((bot) => {
-                    const botStatus = status?.[bot.key as keyof AllBotsStatus];
+                    const s = status?.[bot.key as keyof AllBotsStatus];
                     return (
                         <Grid item xs={12} md={4} key={bot.key}>
                             <Card
                                 sx={{
                                     height: '100%',
-                                    transition: 'all 0.3s ease',
+                                    transition: 'transform 0.2s ease, box-shadow 0.2s ease',
                                     '&:hover': {
-                                        transform: 'translateY(-8px)',
-                                        boxShadow: '0 20px 40px rgba(0,0,0,0.4)',
+                                        transform: 'translateY(-6px)',
+                                        boxShadow: '0 16px 32px rgba(0,0,0,0.4)',
                                     },
                                 }}
                             >
                                 <CardActionArea onClick={() => navigate(bot.path)} sx={{ height: '100%' }}>
+                                    {/* Coloured header */}
                                     <Box sx={{ background: bot.gradient, p: 3 }}>
-                                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                            <Box sx={{ color: 'white' }}>
-                                                {bot.icon}
-                                            </Box>
-                                            <Box sx={{ display: 'flex', gap: 1 }}>
+                                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                            <Box sx={{ color: 'white' }}>{bot.icon}</Box>
+                                            <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                                                 <Chip
-                                                    label={botStatus?.online ? 'ONLINE' : 'OFFLINE'}
+                                                    label={s?.online ? 'ONLINE' : 'OFFLINE'}
                                                     size="small"
                                                     sx={{
-                                                        bgcolor: botStatus?.online ? 'rgba(16,185,129,0.8)' : 'rgba(239,68,68,0.8)',
+                                                        bgcolor: s?.online ? 'rgba(16,185,129,0.85)' : 'rgba(239,68,68,0.85)',
                                                         color: 'white',
-                                                        fontWeight: 600,
+                                                        fontWeight: 700,
+                                                        fontSize: '0.65rem',
                                                     }}
                                                 />
-                                                {botStatus?.isRunning && (
+                                                {s?.online && (
                                                     <Chip
-                                                        label="RUNNING"
+                                                        label={s.isRunning ? 'RUNNING' : 'STOPPED'}
                                                         size="small"
                                                         sx={{
-                                                            bgcolor: 'rgba(255,255,255,0.2)',
+                                                            bgcolor: s.isRunning ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.25)',
                                                             color: 'white',
-                                                            fontWeight: 600,
+                                                            fontWeight: 700,
+                                                            fontSize: '0.65rem',
+                                                        }}
+                                                    />
+                                                )}
+                                                {s?.mode && s.mode !== 'OFFLINE' && s.mode !== 'STOPPED' && (
+                                                    <Chip
+                                                        label={s.mode}
+                                                        size="small"
+                                                        sx={{
+                                                            bgcolor: 'rgba(0,0,0,0.2)',
+                                                            color: 'rgba(255,255,255,0.85)',
+                                                            fontSize: '0.6rem',
                                                         }}
                                                     />
                                                 )}
                                             </Box>
                                         </Box>
-                                        <Typography variant="h5" sx={{ color: 'white', fontWeight: 700, mt: 2 }}>
+                                        <Typography variant="h6" sx={{ color: 'white', fontWeight: 700, mt: 1.5 }}>
                                             {bot.name}
                                         </Typography>
-                                        <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.8)' }}>
+                                        <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.75)' }}>
                                             {bot.description}
                                         </Typography>
                                     </Box>
+
                                     <CardContent>
-                                        <Box sx={{ mb: 2 }}>
+                                        {/* Live stats */}
+                                        {s?.online ? (
+                                            <>
+                                                <Grid container spacing={1} sx={{ mb: 2 }}>
+                                                    <Grid item xs={6}>
+                                                        <Typography variant="caption" color="text.secondary">Equity</Typography>
+                                                        <Typography variant="body2" fontWeight={600}>
+                                                            ${(s.equity || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                                        </Typography>
+                                                    </Grid>
+                                                    <Grid item xs={6}>
+                                                        <Typography variant="caption" color="text.secondary">Daily P&amp;L</Typography>
+                                                        <Typography
+                                                            variant="body2"
+                                                            fontWeight={600}
+                                                            sx={{ color: (s.dailyPnL || 0) >= 0 ? 'success.main' : 'error.main', display: 'flex', alignItems: 'center', gap: 0.3 }}
+                                                        >
+                                                            {(s.dailyPnL || 0) >= 0 ? <TrendingUp fontSize="inherit" /> : <TrendingDown fontSize="inherit" />}
+                                                            ${Math.abs(s.dailyPnL || 0).toFixed(2)}
+                                                        </Typography>
+                                                    </Grid>
+                                                    <Grid item xs={6}>
+                                                        <Typography variant="caption" color="text.secondary">Positions</Typography>
+                                                        <Typography variant="body2" fontWeight={600}>{s.positions || 0}</Typography>
+                                                    </Grid>
+                                                    <Grid item xs={6}>
+                                                        <Typography variant="caption" color="text.secondary">Win Rate</Typography>
+                                                        <Typography variant="body2" fontWeight={600}>
+                                                            {s.totalTrades > 0 ? `${Number(s.winRate).toFixed(1)}%` : '—'}
+                                                        </Typography>
+                                                    </Grid>
+                                                </Grid>
+                                                <Divider sx={{ mb: 1.5 }} />
+                                            </>
+                                        ) : (
+                                            <Box sx={{ mb: 2, py: 1 }}>
+                                                <Typography variant="body2" color="text.secondary">Bot is offline</Typography>
+                                            </Box>
+                                        )}
+
+                                        {/* Feature chips */}
+                                        <Box>
                                             {bot.features.map((feature, i) => (
                                                 <Chip
                                                     key={i}
                                                     label={feature}
                                                     size="small"
                                                     variant="outlined"
-                                                    sx={{ mr: 0.5, mb: 0.5 }}
+                                                    sx={{ mr: 0.5, mb: 0.5, fontSize: '0.7rem' }}
                                                 />
                                             ))}
                                         </Box>
-                                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                            <Typography variant="h6" sx={{ fontWeight: 700, color: '#10b981' }}>
-                                                {bot.pricing}
-                                            </Typography>
-                                            <Typography variant="body2" color="text.secondary">
-                                                Click to manage →
-                                            </Typography>
-                                        </Box>
+
+                                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1.5 }}>
+                                            Click to manage →
+                                        </Typography>
                                     </CardContent>
                                 </CardActionArea>
                             </Card>
@@ -251,44 +331,6 @@ export default function OverviewPage() {
                     );
                 })}
             </Grid>
-
-            {/* All-In-One Bundle */}
-            <Paper
-                sx={{
-                    mt: 4,
-                    p: 3,
-                    background: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
-                    borderRadius: 3,
-                }}
-            >
-                <Grid container spacing={3} alignItems="center">
-                    <Grid item xs={12} md={8}>
-                        <Typography variant="h5" sx={{ color: 'white', fontWeight: 700, mb: 1 }}>
-                            🚀 All-In-One Bundle
-                        </Typography>
-                        <Typography variant="body1" sx={{ color: 'rgba(255,255,255,0.8)' }}>
-                            Get access to all 3 trading bots with a 15% discount. Trade stocks, forex, and crypto
-                            with one integrated platform.
-                        </Typography>
-                    </Grid>
-                    <Grid item xs={12} md={4}>
-                        <Box sx={{ textAlign: 'center' }}>
-                            <Typography
-                                variant="body2"
-                                sx={{ color: 'rgba(255,255,255,0.6)', textDecoration: 'line-through' }}
-                            >
-                                $117/month
-                            </Typography>
-                            <Typography variant="h4" sx={{ color: 'white', fontWeight: 700 }}>
-                                $99/month
-                            </Typography>
-                            <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.8)' }}>
-                                Save $18/month
-                            </Typography>
-                        </Box>
-                    </Grid>
-                </Grid>
-            </Paper>
         </Box>
     );
 }
