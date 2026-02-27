@@ -211,7 +211,7 @@ export default function ForexBotPage() {
                                 EQUITY
                             </Typography>
                             <Typography variant="h5" sx={{ fontWeight: 700, mt: 0.5 }}>
-                                ${status?.equity?.toLocaleString() || '0'}
+                                ${status?.equity?.toLocaleString() ?? '0'}
                             </Typography>
                         </CardContent>
                     </Card>
@@ -227,10 +227,10 @@ export default function ForexBotPage() {
                                 sx={{
                                     fontWeight: 700,
                                     mt: 0.5,
-                                    color: (status?.dailyReturn || 0) >= 0 ? '#10b981' : '#ef4444',
+                                    color: (status?.dailyReturn ?? 0) >= 0 ? '#10b981' : '#ef4444',
                                 }}
                             >
-                                {((status?.dailyReturn || 0) * 100).toFixed(2)}%
+                                {((status?.dailyReturn ?? 0) * 100).toFixed(2)}%
                             </Typography>
                         </CardContent>
                     </Card>
@@ -448,7 +448,7 @@ export default function ForexBotPage() {
                             Stop Loss
                         </Typography>
                         <Typography variant="body1" sx={{ fontWeight: 600 }}>
-                            {((status?.config?.stopLoss || 0.015) * 100).toFixed(1)}%
+                            {((status?.config?.stopLoss ?? 0.015) * 100).toFixed(1)}%
                         </Typography>
                     </Grid>
                     <Grid item xs={6} sm={4} md={2}>
@@ -456,7 +456,7 @@ export default function ForexBotPage() {
                             Profit Target
                         </Typography>
                         <Typography variant="body1" sx={{ fontWeight: 600, color: '#10b981' }}>
-                            {((status?.config?.profitTarget || 0.045) * 100).toFixed(1)}%
+                            {((status?.config?.profitTarget ?? 0.045) * 100).toFixed(1)}%
                         </Typography>
                     </Grid>
                     <Grid item xs={6} sm={4} md={2}>
@@ -473,7 +473,7 @@ export default function ForexBotPage() {
                         </Typography>
                         <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 0.5 }}>
                             {(status?.config?.symbols || []).map((sym) => (
-                                <Chip key={sym} label={sym} size="small" variant="outlined" />
+                                <Chip key={sym} label={sym.replace('_', '/')} size="small" variant="outlined" />
                             ))}
                         </Box>
                     </Grid>

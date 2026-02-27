@@ -668,6 +668,10 @@ async function executeTrade(signal) {
         trades.push({ time: Date.now(), side: signal.direction });
         recentTrades.set(signal.pair, trades);
 
+        // Update long/short counters
+        if (signal.direction === 'long') simLongTrades++;
+        else simShortTrades++;
+
         // Update metrics
         if (metrics.tradingMetrics) {
             metrics.tradingMetrics.tradesTotal?.inc({ strategy: 'forex', tier: signal.tier });
@@ -763,6 +767,9 @@ async function closePositionWithReason(pair, reason) {
             const isLoss = reason.toLowerCase().includes('stop');
             if (isWin) simWinners++;
             else if (isLoss) simLosers++;
+            // Update daily P&L so the circuit breaker at line 877 has real data
+            const tradePnL = pos.unrealizedPL ?? 0;
+            simDailyPnL += tradePnL;
         }
         saveForexPerf();
 
