@@ -109,6 +109,9 @@ const stoppedOutSymbols = new Map();
 const tradesPerSymbol = new Map();
 let totalTradesToday = 0;
 
+// Daily loss circuit breaker — updated by the status endpoint each poll
+let cachedDailyPnL = 0;
+
 // Performance tracking (in-memory, persisted to performance.json)
 const fs = require('fs');
 const PERF_FILE = path.join(__dirname, '../../services/trading/data/performance.json');
@@ -1057,6 +1060,7 @@ app.get('/api/trading/status', async (req, res) => {
         const account = accountResponse.data;
         const equity = parseFloat(account.equity);
         const lastEquity = parseFloat(account.last_equity);
+        cachedDailyPnL = equity - lastEquity;  // update circuit breaker cache
 
         const positionsData = positionsResponse.data.map(pos => {
             const tracked = positions.get(pos.symbol);
@@ -1675,6 +1679,13 @@ async function tradingLoop() {
     }
     if (botPaused) {
         console.log('⏸  Bot paused — skipping new entry scan');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        return;
+    }
+
+    // Daily loss circuit breaker — halt new entries if loss exceeds limit
+    if (cachedDailyPnL < -MAX_DAILY_LOSS) {
+        console.log(`🛑 [CIRCUIT BREAKER] Daily loss $${Math.abs(cachedDailyPnL).toFixed(2)} exceeds limit $${MAX_DAILY_LOSS} — no new entries today`);
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         return;
     }
