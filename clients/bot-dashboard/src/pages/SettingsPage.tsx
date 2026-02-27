@@ -1,206 +1,864 @@
-import React from 'react';
-import { useQuery } from 'react-query';
+import React, { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from 'react-query';
 import {
     Box,
     Paper,
     Typography,
     Grid,
+    Slider,
     Chip,
     Divider,
     CircularProgress,
     Alert,
-    List,
-    ListItem,
-    ListItemText,
-    ListItemSecondaryAction,
+    Button,
+    Stack,
+    Avatar,
+    TextField,
+    InputAdornment,
+    LinearProgress,
 } from '@mui/material';
 import {
+    FlashOn,
+    ScienceOutlined,
     CheckCircle,
-    Cancel,
-    Settings,
-    Security,
+    ErrorOutline,
     Notifications,
-    Hub,
+    PhoneAndroid,
+    ShowChart,
+    CurrencyExchange,
+    CurrencyBitcoin,
+    AccountBalanceWallet,
+    AddCircleOutline,
+    RemoveCircleOutline,
+    LockOutlined,
+    OpenInNew,
 } from '@mui/icons-material';
-import { apiClient } from '@/services/api';
+import axios from 'axios';
+import toast from 'react-hot-toast';
 
-function SectionHeader({ icon, title }: { icon: React.ReactElement; title: string }) {
+const API_BASE = 'http://localhost:3002';
+
+// ─── API ────────────────────────────────────────────────────────────────────
+
+async function fetchConfig() {
+    const res = await axios.get(`${API_BASE}/api/config`, { timeout: 5000 });
+    return res.data.data;
+}
+
+async function updateRisk(payload: { tier: string; stopLoss?: number; profitTarget?: number; positionSize?: number; maxPositions?: number }) {
+    const res = await axios.post(`${API_BASE}/api/config/risk`, payload);
+    return res.data;
+}
+
+// ─── SUB-COMPONENTS ─────────────────────────────────────────────────────────
+
+function SectionTitle({ label, sub }: { label: string; sub?: string }) {
     return (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
-            {icon}
-            <Typography variant="h6">{title}</Typography>
+        <Box sx={{ mb: 3 }}>
+            <Typography variant="h6" fontWeight={700} sx={{ letterSpacing: '-0.3px' }}>
+                {label}
+            </Typography>
+            {sub && (
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.3 }}>
+                    {sub}
+                </Typography>
+            )}
         </Box>
     );
 }
 
-function ConfigRow({ label, value, chip }: { label: string; value?: React.ReactNode; chip?: React.ReactElement }) {
+function StatusDot({ ok }: { ok: boolean }) {
     return (
-        <ListItem sx={{ py: 0.75 }}>
-            <ListItemText
-                primary={label}
-                primaryTypographyProps={{ variant: 'body2', color: 'text.secondary' }}
-            />
-            <ListItemSecondaryAction>
-                {chip ?? <Typography variant="body2" fontWeight={500}>{value}</Typography>}
-            </ListItemSecondaryAction>
-        </ListItem>
+        <Box
+            sx={{
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                bgcolor: ok ? 'success.main' : '#555',
+                boxShadow: ok ? '0 0 6px #10b981' : 'none',
+                display: 'inline-block',
+                mr: 0.8,
+            }}
+        />
     );
 }
 
-export default function SettingsPage() {
-    const { data: config, isLoading, isError } = useQuery(
-        'botConfig',
-        () => apiClient.getBotConfig(),
-        { refetchInterval: 30000 }
-    );
-
+function BrokerCard({
+    icon,
+    name,
+    mode,
+    configured,
+    accentColor,
+    setupUrl,
+    setupLabel,
+    children,
+}: {
+    icon: React.ReactElement;
+    name: string;
+    mode: string;
+    configured: boolean;
+    accentColor: string;
+    setupUrl?: string;
+    setupLabel?: string;
+    children?: React.ReactNode;
+}) {
     return (
-        <Box sx={{ p: 3 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 3 }}>
-                <Settings fontSize="large" />
-                <Typography variant="h4" fontWeight={700}>Settings</Typography>
+        <Paper
+            sx={{
+                p: 3,
+                border: '1px solid',
+                borderColor: configured ? `${accentColor}40` : 'divider',
+                borderRadius: 3,
+                position: 'relative',
+                overflow: 'hidden',
+                '&::before': configured ? {
+                    content: '""',
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    height: 3,
+                    background: `linear-gradient(90deg, ${accentColor}, transparent)`,
+                } : {},
+            }}
+        >
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                    <Avatar sx={{ bgcolor: `${accentColor}20`, color: accentColor, width: 40, height: 40 }}>
+                        {icon}
+                    </Avatar>
+                    <Box>
+                        <Typography fontWeight={600}>{name}</Typography>
+                        <Typography variant="caption" color="text.secondary">{mode}</Typography>
+                    </Box>
+                </Box>
+                <Chip
+                    icon={configured ? <CheckCircle sx={{ fontSize: '14px !important' }} /> : <ErrorOutline sx={{ fontSize: '14px !important' }} />}
+                    label={configured ? 'Connected' : 'Not configured'}
+                    color={configured ? 'success' : 'default'}
+                    size="small"
+                    sx={{ fontWeight: 600 }}
+                />
             </Box>
 
-            {isLoading && (
-                <Box sx={{ display: 'flex', justifyContent: 'center', p: 6 }}>
-                    <CircularProgress />
+            {children}
+
+            {!configured && setupUrl && (
+                <Button
+                    variant="outlined"
+                    size="small"
+                    endIcon={<OpenInNew sx={{ fontSize: 14 }} />}
+                    href={setupUrl}
+                    target="_blank"
+                    rel="noopener"
+                    sx={{ mt: 2, borderRadius: 2, textTransform: 'none', fontSize: 13 }}
+                >
+                    {setupLabel ?? 'Set up credentials'}
+                </Button>
+            )}
+        </Paper>
+    );
+}
+
+function NotifCard({
+    icon,
+    name,
+    description,
+    enabled,
+    configured,
+    accentColor,
+    detail,
+    setupSteps,
+}: {
+    icon: React.ReactElement;
+    name: string;
+    description: string;
+    enabled: boolean;
+    configured: boolean;
+    accentColor: string;
+    detail?: string | null;
+    setupSteps?: string[];
+}) {
+    return (
+        <Paper
+            sx={{
+                p: 3,
+                border: '1px solid',
+                borderColor: enabled ? `${accentColor}40` : 'divider',
+                borderRadius: 3,
+                transition: 'border-color 0.2s',
+            }}
+        >
+            <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                    <Avatar sx={{ bgcolor: `${accentColor}20`, color: accentColor, width: 40, height: 40 }}>
+                        {icon}
+                    </Avatar>
+                    <Box>
+                        <Typography fontWeight={600}>{name}</Typography>
+                        <Typography variant="caption" color="text.secondary">{description}</Typography>
+                    </Box>
+                </Box>
+                <Chip
+                    label={enabled ? 'Active' : 'Off'}
+                    color={enabled ? 'success' : 'default'}
+                    size="small"
+                    sx={{ fontWeight: 600 }}
+                />
+            </Box>
+
+            {configured && detail && (
+                <Box sx={{ mt: 2, p: 1.5, borderRadius: 2, bgcolor: 'background.default' }}>
+                    <Typography variant="caption" color="text.secondary">
+                        <StatusDot ok /> Credentials on file · {detail}
+                    </Typography>
                 </Box>
             )}
 
-            {isError && (
-                <Alert severity="warning" sx={{ mb: 2 }}>
-                    Could not load live config — stock bot may be offline. Showing last known values.
+            {!configured && setupSteps && (
+                <Box sx={{ mt: 2 }}>
+                    <Typography variant="caption" color="text.secondary" fontWeight={500}>
+                        How to set up:
+                    </Typography>
+                    <Stack spacing={0.5} sx={{ mt: 0.5 }}>
+                        {setupSteps.map((step, i) => (
+                            <Typography key={i} variant="caption" color="text.secondary">
+                                {i + 1}. {step}
+                            </Typography>
+                        ))}
+                    </Stack>
+                    <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                        Then add to your <code style={{ background: '#ffffff12', padding: '1px 4px', borderRadius: 3 }}>.env</code> file and restart.
+                    </Typography>
+                </Box>
+            )}
+        </Paper>
+    );
+}
+
+// ─── RISK TIER EDITOR ───────────────────────────────────────────────────────
+
+function RiskTierCard({
+    label,
+    accentColor,
+    data,
+    onSave,
+    isSaving,
+}: {
+    tier: string;
+    label: string;
+    accentColor: string;
+    data: { stopLoss: number; profitTarget: number; positionSize: number; maxPositions: number };
+    onSave: (vals: typeof data) => void;
+    isSaving: boolean;
+}) {
+    const [vals, setVals] = useState(data);
+    const dirty = JSON.stringify(vals) !== JSON.stringify(data);
+
+    const rr = vals.profitTarget / vals.stopLoss;
+
+    return (
+        <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid', borderColor: 'divider' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2.5 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: accentColor, boxShadow: `0 0 8px ${accentColor}` }} />
+                    <Typography fontWeight={700}>{label}</Typography>
+                </Box>
+                <Chip
+                    label={`${rr.toFixed(1)}:1 R:R`}
+                    size="small"
+                    sx={{ bgcolor: `${accentColor}20`, color: accentColor, fontWeight: 700, fontSize: 12 }}
+                />
+            </Box>
+
+            <Stack spacing={3}>
+                <Box>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                        <Typography variant="body2" color="text.secondary">Stop Loss</Typography>
+                        <Typography variant="body2" fontWeight={600} color="error.main">
+                            {(vals.stopLoss * 100).toFixed(1)}%
+                        </Typography>
+                    </Box>
+                    <Slider
+                        value={vals.stopLoss * 100}
+                        min={1} max={15} step={0.5}
+                        onChange={(_, v) => setVals(p => ({ ...p, stopLoss: (v as number) / 100 }))}
+                        sx={{ color: '#ef4444' }}
+                        size="small"
+                    />
+                </Box>
+
+                <Box>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                        <Typography variant="body2" color="text.secondary">Profit Target</Typography>
+                        <Typography variant="body2" fontWeight={600} color="success.main">
+                            {(vals.profitTarget * 100).toFixed(1)}%
+                        </Typography>
+                    </Box>
+                    <Slider
+                        value={vals.profitTarget * 100}
+                        min={2} max={40} step={0.5}
+                        onChange={(_, v) => setVals(p => ({ ...p, profitTarget: (v as number) / 100 }))}
+                        sx={{ color: '#10b981' }}
+                        size="small"
+                    />
+                </Box>
+
+                <Box>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                        <Typography variant="body2" color="text.secondary">Position Size</Typography>
+                        <Typography variant="body2" fontWeight={600}>
+                            {(vals.positionSize * 100).toFixed(2)}% of equity
+                        </Typography>
+                    </Box>
+                    <Slider
+                        value={vals.positionSize * 100}
+                        min={0.1} max={5} step={0.1}
+                        onChange={(_, v) => setVals(p => ({ ...p, positionSize: (v as number) / 100 }))}
+                        sx={{ color: accentColor }}
+                        size="small"
+                    />
+                </Box>
+
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Typography variant="body2" color="text.secondary">Max Positions</Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Button
+                            size="small"
+                            sx={{ minWidth: 28, p: 0, color: 'text.secondary' }}
+                            onClick={() => setVals(p => ({ ...p, maxPositions: Math.max(1, p.maxPositions - 1) }))}
+                        >
+                            <RemoveCircleOutline fontSize="small" />
+                        </Button>
+                        <Typography fontWeight={700} sx={{ minWidth: 24, textAlign: 'center' }}>
+                            {vals.maxPositions}
+                        </Typography>
+                        <Button
+                            size="small"
+                            sx={{ minWidth: 28, p: 0, color: 'text.secondary' }}
+                            onClick={() => setVals(p => ({ ...p, maxPositions: Math.min(10, p.maxPositions + 1) }))}
+                        >
+                            <AddCircleOutline fontSize="small" />
+                        </Button>
+                    </Box>
+                </Box>
+            </Stack>
+
+            {dirty && (
+                <Box sx={{ mt: 2.5, display: 'flex', gap: 1 }}>
+                    <Button
+                        variant="contained"
+                        size="small"
+                        disabled={isSaving}
+                        onClick={() => onSave(vals)}
+                        sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600, flex: 1 }}
+                    >
+                        {isSaving ? <CircularProgress size={14} sx={{ mr: 1 }} /> : null}
+                        Apply
+                    </Button>
+                    <Button
+                        variant="text"
+                        size="small"
+                        onClick={() => setVals(data)}
+                        sx={{ borderRadius: 2, textTransform: 'none', color: 'text.secondary' }}
+                    >
+                        Reset
+                    </Button>
+                </Box>
+            )}
+        </Paper>
+    );
+}
+
+// ─── FUND MANAGEMENT ────────────────────────────────────────────────────────
+
+function FundManagement({ config }: { config: any }) {
+    const [depositAmt, setDepositAmt] = useState('');
+    const [withdrawAmt, setWithdrawAmt] = useState('');
+
+    const isPaper = config?.trading?.mode !== 'live';
+
+    return (
+        <Stack spacing={3}>
+            {isPaper && (
+                <Alert
+                    severity="info"
+                    icon={<ScienceOutlined />}
+                    sx={{ borderRadius: 2 }}
+                >
+                    You are in <strong>Paper Trading</strong> mode. No real funds are at risk. Switch to Live mode and connect a funded broker account to trade with real capital.
                 </Alert>
             )}
 
-            <Grid container spacing={3}>
-                {/* Trading Limits */}
-                <Grid item xs={12} md={6}>
-                    <Paper sx={{ p: 3 }}>
-                        <SectionHeader icon={<Security color="primary" />} title="Anti-Churning Limits" />
-                        <Divider sx={{ mb: 1 }} />
-                        <List disablePadding>
-                            <ConfigRow
-                                label="Max trades per day"
-                                value={config?.trading?.maxTradesPerDay ?? 15}
-                            />
-                            <ConfigRow
-                                label="Max trades per symbol"
-                                value={config?.trading?.maxTradesPerSymbol ?? 3}
-                            />
-                            <ConfigRow
-                                label="Min time between trades"
-                                value={`${config?.trading?.minTimeBetweenTradesMins ?? 10} min`}
-                            />
-                            <ConfigRow
-                                label="Stop-out cooldown"
-                                value={`${config?.trading?.stopOutCooldownMins ?? 60} min`}
-                            />
-                            <ConfigRow
-                                label="Real trading enabled"
-                                chip={
-                                    <Chip
-                                        label={config?.trading?.realTradingEnabled ? 'LIVE' : 'PAPER'}
-                                        color={config?.trading?.realTradingEnabled ? 'error' : 'success'}
-                                        size="small"
-                                    />
-                                }
-                            />
-                        </List>
+            <Grid container spacing={2}>
+                <Grid item xs={12} sm={6}>
+                    <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid', borderColor: 'divider' }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                            <AddCircleOutline sx={{ color: 'success.main' }} />
+                            <Typography fontWeight={600}>Deposit Funds</Typography>
+                        </Box>
+                        <TextField
+                            fullWidth
+                            size="small"
+                            label="Amount"
+                            value={depositAmt}
+                            onChange={e => setDepositAmt(e.target.value)}
+                            InputProps={{
+                                startAdornment: <InputAdornment position="start">$</InputAdornment>,
+                            }}
+                            sx={{ mb: 2 }}
+                        />
+                        <Stack spacing={1} sx={{ mb: 2 }}>
+                            {['100', '500', '1000', '5000'].map(amt => (
+                                <Button
+                                    key={amt}
+                                    variant="outlined"
+                                    size="small"
+                                    onClick={() => setDepositAmt(amt)}
+                                    sx={{ borderRadius: 2, textTransform: 'none', justifyContent: 'flex-start' }}
+                                >
+                                    ${parseInt(amt).toLocaleString()}
+                                </Button>
+                            ))}
+                        </Stack>
+                        <Button
+                            variant="contained"
+                            fullWidth
+                            disabled={!depositAmt || isPaper}
+                            sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
+                            onClick={() => toast.error('Connect a live broker account to deposit funds')}
+                        >
+                            {isPaper ? 'Requires Live Mode' : 'Deposit'}
+                        </Button>
                     </Paper>
                 </Grid>
 
-                {/* Broker */}
-                <Grid item xs={12} md={6}>
-                    <Paper sx={{ p: 3 }}>
-                        <SectionHeader icon={<Hub color="info" />} title="Broker Connection" />
-                        <Divider sx={{ mb: 1 }} />
-                        <List disablePadding>
-                            <ConfigRow
-                                label="Alpaca base URL"
-                                value={config?.broker?.baseURL ?? 'https://paper-api.alpaca.markets'}
-                            />
-                            <ConfigRow
-                                label="API key"
-                                chip={
-                                    config?.broker?.apiKeyConfigured
-                                        ? <Chip icon={<CheckCircle />} label="Configured" color="success" size="small" />
-                                        : <Chip icon={<Cancel />} label="Missing" color="error" size="small" />
-                                }
-                            />
-                            <ConfigRow
-                                label="Secret key"
-                                chip={
-                                    config?.broker?.secretKeyConfigured
-                                        ? <Chip icon={<CheckCircle />} label="Configured" color="success" size="small" />
-                                        : <Chip icon={<Cancel />} label="Missing" color="error" size="small" />
-                                }
-                            />
-                        </List>
+                <Grid item xs={12} sm={6}>
+                    <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid', borderColor: 'divider' }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                            <RemoveCircleOutline sx={{ color: 'warning.main' }} />
+                            <Typography fontWeight={600}>Withdraw Funds</Typography>
+                        </Box>
+                        <TextField
+                            fullWidth
+                            size="small"
+                            label="Amount"
+                            value={withdrawAmt}
+                            onChange={e => setWithdrawAmt(e.target.value)}
+                            InputProps={{
+                                startAdornment: <InputAdornment position="start">$</InputAdornment>,
+                            }}
+                            sx={{ mb: 2 }}
+                        />
+                        <Box sx={{ mb: 2, p: 2, borderRadius: 2, bgcolor: 'background.default' }}>
+                            <Typography variant="caption" color="text.secondary">
+                                Withdrawals route through your connected broker. Processing time: 1–3 business days.
+                            </Typography>
+                        </Box>
+                        <Button
+                            variant="outlined"
+                            color="warning"
+                            fullWidth
+                            disabled={!withdrawAmt || isPaper}
+                            sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
+                            onClick={() => toast.error('Connect a live broker account to withdraw funds')}
+                        >
+                            {isPaper ? 'Requires Live Mode' : 'Withdraw'}
+                        </Button>
                     </Paper>
-                </Grid>
-
-                {/* Alerts */}
-                <Grid item xs={12} md={6}>
-                    <Paper sx={{ p: 3 }}>
-                        <SectionHeader icon={<Notifications color="warning" />} title="Alerts" />
-                        <Divider sx={{ mb: 1 }} />
-                        <List disablePadding>
-                            <ConfigRow
-                                label="Telegram alerts"
-                                chip={
-                                    <Chip
-                                        label={config?.alerts?.telegramEnabled ? 'Enabled' : 'Disabled'}
-                                        color={config?.alerts?.telegramEnabled ? 'success' : 'default'}
-                                        size="small"
-                                    />
-                                }
-                            />
-                            <ConfigRow
-                                label="Telegram credentials"
-                                chip={
-                                    config?.alerts?.telegramConfigured
-                                        ? <Chip icon={<CheckCircle />} label="Configured" color="success" size="small" />
-                                        : <Chip icon={<Cancel />} label="Missing" color="default" size="small" />
-                                }
-                            />
-                            <ConfigRow
-                                label="SMS alerts"
-                                chip={
-                                    <Chip
-                                        label={config?.alerts?.smsEnabled ? 'Enabled' : 'Disabled'}
-                                        color={config?.alerts?.smsEnabled ? 'success' : 'default'}
-                                        size="small"
-                                    />
-                                }
-                            />
-                        </List>
-                    </Paper>
-                </Grid>
-
-                {/* Service Ports */}
-                <Grid item xs={12} md={6}>
-                    <Paper sx={{ p: 3 }}>
-                        <SectionHeader icon={<Hub color="secondary" />} title="Service Ports" />
-                        <Divider sx={{ mb: 1 }} />
-                        <List disablePadding>
-                            <ConfigRow label="Stock Bot" value={`Port ${config?.ports?.stockBot ?? 3002}`} />
-                            <ConfigRow label="Market Data" value={`Port ${config?.ports?.marketData ?? 3001}`} />
-                            <ConfigRow label="Forex Bot" value={`Port ${config?.ports?.forexBot ?? 3005}`} />
-                            <ConfigRow label="Crypto Bot" value={`Port ${config?.ports?.cryptoBot ?? 3006}`} />
-                            <ConfigRow label="AI Service" value={`Port ${config?.ports?.aiService ?? 5001}`} />
-                        </List>
-                    </Paper>
-                </Grid>
-
-                {/* Edit reminder */}
-                <Grid item xs={12}>
-                    <Alert severity="info">
-                        Trading parameters are set in <code>.env</code> and <code>unified-trading-bot.js</code>.
-                        Restart the bot after making changes.
-                    </Alert>
                 </Grid>
             </Grid>
+
+            <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid', borderColor: 'divider' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                    <AccountBalanceWallet sx={{ color: 'primary.main' }} />
+                    <Typography fontWeight={600}>Linked Broker Accounts</Typography>
+                </Box>
+                <Stack spacing={1.5}>
+                    {[
+                        { name: 'Alpaca Paper Account', balance: null, configured: config?.brokers?.alpaca?.configured, color: '#10b981' },
+                        { name: 'OANDA Practice Account', balance: null, configured: config?.brokers?.oanda?.configured, color: '#3b82f6' },
+                        { name: 'Crypto Exchange (Binance)', balance: null, configured: config?.brokers?.crypto?.configured, color: '#f59e0b' },
+                    ].map(acct => (
+                        <Box
+                            key={acct.name}
+                            sx={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                p: 2,
+                                borderRadius: 2,
+                                bgcolor: 'background.default',
+                            }}
+                        >
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                                <StatusDot ok={!!acct.configured} />
+                                <Typography variant="body2" fontWeight={500}>{acct.name}</Typography>
+                            </Box>
+                            <Chip
+                                label={acct.configured ? 'Connected' : 'Not configured'}
+                                color={acct.configured ? 'success' : 'default'}
+                                size="small"
+                                variant={acct.configured ? 'filled' : 'outlined'}
+                            />
+                        </Box>
+                    ))}
+                </Stack>
+            </Paper>
+        </Stack>
+    );
+}
+
+// ─── MAIN PAGE ───────────────────────────────────────────────────────────────
+
+type Section = 'mode' | 'risk' | 'brokers' | 'notifications' | 'funds';
+
+const NAV: { id: Section; label: string }[] = [
+    { id: 'mode', label: 'Trading Mode' },
+    { id: 'risk', label: 'Risk & Strategy' },
+    { id: 'brokers', label: 'Brokers' },
+    { id: 'notifications', label: 'Notifications' },
+    { id: 'funds', label: 'Fund Management' },
+];
+
+export default function SettingsPage() {
+    const [activeSection, setActiveSection] = useState<Section>('mode');
+    const queryClient = useQueryClient();
+
+    const { data: config, isLoading } = useQuery('botConfig', fetchConfig, {
+        refetchInterval: 30000,
+        retry: 1,
+    });
+
+    const { mutate: saveRisk, isLoading: savingRisk } = useMutation(updateRisk, {
+        onSuccess: () => {
+            toast.success('Risk parameters updated');
+            void queryClient.invalidateQueries('botConfig');
+        },
+        onError: () => { toast.error('Failed to update — is the Stock Bot running?'); },
+    });
+
+    const isPaper = config?.trading?.mode !== 'live';
+
+    return (
+        <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: 'background.default' }}>
+            {/* ── Left nav ── */}
+            <Box
+                sx={{
+                    width: 220,
+                    flexShrink: 0,
+                    borderRight: '1px solid',
+                    borderColor: 'divider',
+                    pt: 4,
+                    px: 2,
+                }}
+            >
+                <Typography variant="overline" color="text.secondary" sx={{ px: 1, letterSpacing: 1.5, fontSize: 11 }}>
+                    Settings
+                </Typography>
+                <Stack spacing={0.5} sx={{ mt: 1.5 }}>
+                    {NAV.map(item => (
+                        <Button
+                            key={item.id}
+                            onClick={() => setActiveSection(item.id)}
+                            sx={{
+                                justifyContent: 'flex-start',
+                                textTransform: 'none',
+                                borderRadius: 2,
+                                px: 1.5,
+                                py: 1,
+                                fontWeight: activeSection === item.id ? 700 : 400,
+                                color: activeSection === item.id ? 'primary.main' : 'text.secondary',
+                                bgcolor: activeSection === item.id ? 'primary.main' + '15' : 'transparent',
+                                '&:hover': { bgcolor: activeSection === item.id ? 'primary.main' + '20' : 'action.hover' },
+                            }}
+                        >
+                            {item.label}
+                        </Button>
+                    ))}
+                </Stack>
+            </Box>
+
+            {/* ── Content ── */}
+            <Box sx={{ flex: 1, p: 4, maxWidth: 860, overflow: 'auto' }}>
+                {isLoading && <LinearProgress sx={{ mb: 3, borderRadius: 1 }} />}
+
+                {/* ── TRADING MODE ── */}
+                {activeSection === 'mode' && (
+                    <Box>
+                        <SectionTitle
+                            label="Trading Mode"
+                            sub="Switch between paper trading (simulated) and live trading with real capital."
+                        />
+                        <Stack spacing={3}>
+                            <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid', borderColor: 'divider' }}>
+                                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                                        <Avatar sx={{ bgcolor: isPaper ? '#3b82f620' : '#ef444420', color: isPaper ? '#3b82f6' : '#ef4444', width: 48, height: 48 }}>
+                                            {isPaper ? <ScienceOutlined /> : <FlashOn />}
+                                        </Avatar>
+                                        <Box>
+                                            <Typography fontWeight={700} variant="h6">
+                                                {isPaper ? 'Paper Trading' : 'Live Trading'}
+                                            </Typography>
+                                            <Typography variant="body2" color="text.secondary">
+                                                {isPaper
+                                                    ? 'Simulated trades — no real money at risk'
+                                                    : 'Real capital deployed — trades execute on your broker account'}
+                                            </Typography>
+                                        </Box>
+                                    </Box>
+                                    <Chip
+                                        label={isPaper ? 'PAPER' : 'LIVE'}
+                                        color={isPaper ? 'primary' : 'error'}
+                                        sx={{ fontWeight: 800, fontSize: 13, px: 1 }}
+                                    />
+                                </Box>
+
+                                <Divider sx={{ my: 2.5 }} />
+
+                                <Alert severity={isPaper ? 'info' : 'warning'} sx={{ borderRadius: 2, mb: 2 }}>
+                                    {isPaper
+                                        ? 'Paper trading is the safe default. All bots use virtual capital. Switching to live requires a funded broker account and changes REAL_TRADING_ENABLED in your .env file.'
+                                        : '⚠️ Live trading is active. Real money is at risk. Ensure your risk parameters and position sizes are correct before running the bot.'}
+                                </Alert>
+
+                                <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'background.default' }}>
+                                    <Typography variant="body2" color="text.secondary" gutterBottom>
+                                        To toggle trading mode, update <code style={{ background: '#ffffff12', padding: '2px 6px', borderRadius: 4 }}>REAL_TRADING_ENABLED</code> in your <code style={{ background: '#ffffff12', padding: '2px 6px', borderRadius: 4 }}>.env</code> file, then restart the bot.
+                                    </Typography>
+                                    <Box sx={{ mt: 1.5, display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                                        <Chip icon={<LockOutlined sx={{ fontSize: 14 }} />} label="Paper: REAL_TRADING_ENABLED=false" size="small" variant="outlined" />
+                                        <Chip icon={<FlashOn sx={{ fontSize: 14 }} />} label="Live: REAL_TRADING_ENABLED=true" size="small" variant="outlined" color="error" />
+                                    </Box>
+                                </Box>
+                            </Paper>
+
+                            {/* Trading hours summary */}
+                            <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid', borderColor: 'divider' }}>
+                                <Typography fontWeight={600} gutterBottom>Trading Schedule</Typography>
+                                <Grid container spacing={2} sx={{ mt: 0.5 }}>
+                                    {[
+                                        { label: 'Stock Bot', hours: 'Mon–Fri  9:30 AM – 4:00 PM EST', color: '#10b981', active: true },
+                                        { label: 'Forex Bot', hours: 'Sun 5 PM – Fri 5 PM EST (24/5)', color: '#3b82f6', active: config?.brokers?.oanda?.configured },
+                                        { label: 'Crypto Bot', hours: '24 hours · 7 days a week', color: '#f59e0b', active: config?.brokers?.crypto?.configured },
+                                    ].map(s => (
+                                        <Grid item xs={12} key={s.label}>
+                                            <Box
+                                                sx={{
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'space-between',
+                                                    p: 2,
+                                                    borderRadius: 2,
+                                                    bgcolor: 'background.default',
+                                                }}
+                                            >
+                                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                                                    <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: s.active ? s.color : '#555', boxShadow: s.active ? `0 0 6px ${s.color}` : 'none' }} />
+                                                    <Box>
+                                                        <Typography variant="body2" fontWeight={600}>{s.label}</Typography>
+                                                        <Typography variant="caption" color="text.secondary">{s.hours}</Typography>
+                                                    </Box>
+                                                </Box>
+                                                <Chip label={s.active ? 'Active' : 'Inactive'} color={s.active ? 'success' : 'default'} size="small" variant="outlined" />
+                                            </Box>
+                                        </Grid>
+                                    ))}
+                                </Grid>
+                            </Paper>
+                        </Stack>
+                    </Box>
+                )}
+
+                {/* ── RISK & STRATEGY ── */}
+                {activeSection === 'risk' && config?.risk && (
+                    <Box>
+                        <SectionTitle
+                            label="Risk & Strategy"
+                            sub="Adjust stop loss, profit targets, and position sizing per momentum tier. Changes apply instantly without restart."
+                        />
+                        <Alert severity="warning" sx={{ borderRadius: 2, mb: 3 }}>
+                            <strong>Never widen stop losses</strong> during a losing streak. Tighten them. Position size should stay below 2% of equity per trade.
+                        </Alert>
+                        <Grid container spacing={2}>
+                            {([
+                                { id: 'tier1', label: 'Tier 1 — Standard Momentum (2.5%+)', color: '#10b981' },
+                                { id: 'tier2', label: 'Tier 2 — Strong Momentum (5%+)', color: '#3b82f6' },
+                                { id: 'tier3', label: 'Tier 3 — Extreme Momentum (10%+)', color: '#f59e0b' },
+                            ] as const).map(t => (
+                                <Grid item xs={12} key={t.id}>
+                                    <RiskTierCard
+                                        tier={t.id}
+                                        label={t.label}
+                                        accentColor={t.color}
+                                        data={config.risk[t.id]}
+                                        onSave={vals => saveRisk({ tier: t.id, ...vals })}
+                                        isSaving={savingRisk}
+                                    />
+                                </Grid>
+                            ))}
+                        </Grid>
+                    </Box>
+                )}
+
+                {/* ── BROKERS ── */}
+                {activeSection === 'brokers' && (
+                    <Box>
+                        <SectionTitle
+                            label="Brokers"
+                            sub="Manage API credentials for each trading venue. Keys are stored in your .env file and never transmitted to third parties."
+                        />
+                        <Stack spacing={2.5}>
+                            <BrokerCard
+                                icon={<ShowChart />}
+                                name="Alpaca Markets"
+                                mode={config?.brokers?.alpaca?.mode === 'live' ? 'Live Trading' : 'Paper Trading'}
+                                configured={!!config?.brokers?.alpaca?.configured}
+                                accentColor="#10b981"
+                                setupUrl="https://alpaca.markets"
+                                setupLabel="Open Alpaca account"
+                            >
+                                {config?.brokers?.alpaca?.configured && (
+                                    <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'background.default', mt: 1 }}>
+                                        <Typography variant="caption" color="text.secondary">
+                                            Endpoint: <code>{config.brokers.alpaca.baseURL}</code>
+                                        </Typography>
+                                    </Box>
+                                )}
+                                {!config?.brokers?.alpaca?.configured && (
+                                    <Box sx={{ mt: 1.5 }}>
+                                        <Typography variant="caption" color="text.secondary">Add to .env:</Typography>
+                                        <Box sx={{ mt: 0.5, p: 1.5, borderRadius: 2, bgcolor: 'background.default', fontFamily: 'monospace', fontSize: 12, color: 'text.secondary' }}>
+                                            ALPACA_API_KEY=your_key<br />
+                                            ALPACA_SECRET_KEY=your_secret
+                                        </Box>
+                                    </Box>
+                                )}
+                            </BrokerCard>
+
+                            <BrokerCard
+                                icon={<CurrencyExchange />}
+                                name="OANDA"
+                                mode={config?.brokers?.oanda?.mode === 'live' ? 'Live Forex' : 'Practice Account'}
+                                configured={!!config?.brokers?.oanda?.configured}
+                                accentColor="#3b82f6"
+                                setupUrl="https://www.oanda.com/register/#/sign-up/demo"
+                                setupLabel="Open OANDA practice account"
+                            >
+                                {!config?.brokers?.oanda?.configured && (
+                                    <Box sx={{ mt: 1.5 }}>
+                                        <Typography variant="caption" color="text.secondary">Add to .env:</Typography>
+                                        <Box sx={{ mt: 0.5, p: 1.5, borderRadius: 2, bgcolor: 'background.default', fontFamily: 'monospace', fontSize: 12, color: 'text.secondary' }}>
+                                            OANDA_ACCOUNT_ID=your_account_id<br />
+                                            OANDA_ACCESS_TOKEN=your_token
+                                        </Box>
+                                    </Box>
+                                )}
+                            </BrokerCard>
+
+                            <BrokerCard
+                                icon={<CurrencyBitcoin />}
+                                name={`${config?.brokers?.crypto?.exchange ? config.brokers.crypto.exchange.charAt(0).toUpperCase() + config.brokers.crypto.exchange.slice(1) : 'Crypto Exchange'}`}
+                                mode={config?.brokers?.crypto?.testnet ? 'Testnet (Paper)' : 'Live Exchange'}
+                                configured={!!config?.brokers?.crypto?.configured}
+                                accentColor="#f59e0b"
+                                setupUrl="https://testnet.binance.vision/"
+                                setupLabel="Open Binance Testnet"
+                            >
+                                {!config?.brokers?.crypto?.configured && (
+                                    <Box sx={{ mt: 1.5 }}>
+                                        <Typography variant="caption" color="text.secondary">Add to .env:</Typography>
+                                        <Box sx={{ mt: 0.5, p: 1.5, borderRadius: 2, bgcolor: 'background.default', fontFamily: 'monospace', fontSize: 12, color: 'text.secondary' }}>
+                                            CRYPTO_API_KEY=your_api_key<br />
+                                            CRYPTO_API_SECRET=your_secret<br />
+                                            CRYPTO_TESTNET=true
+                                        </Box>
+                                    </Box>
+                                )}
+                            </BrokerCard>
+                        </Stack>
+                    </Box>
+                )}
+
+                {/* ── NOTIFICATIONS ── */}
+                {activeSection === 'notifications' && (
+                    <Box>
+                        <SectionTitle
+                            label="Notifications"
+                            sub="Get alerted on trade entries, exits, stop losses, and daily summaries."
+                        />
+                        <Stack spacing={2.5}>
+                            <NotifCard
+                                icon={<Notifications />}
+                                name="Telegram"
+                                description="Free instant alerts via Telegram bot · Unlimited messages"
+                                enabled={!!config?.notifications?.telegram?.enabled}
+                                configured={!!config?.notifications?.telegram?.configured}
+                                accentColor="#3b82f6"
+                                detail={config?.notifications?.telegram?.chatId ? `Chat ID ···${config.notifications.telegram.chatId}` : null}
+                                setupSteps={[
+                                    'Open Telegram and search @BotFather',
+                                    'Send /newbot and follow the prompts',
+                                    'Copy your bot token',
+                                    'Search @userinfobot to get your Chat ID',
+                                    'Add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to .env',
+                                    'Set TELEGRAM_ALERTS_ENABLED=true',
+                                ]}
+                            />
+
+                            <NotifCard
+                                icon={<PhoneAndroid />}
+                                name="SMS via Twilio"
+                                description="Text message alerts for critical events (stop losses, circuit breakers)"
+                                enabled={!!config?.notifications?.sms?.enabled}
+                                configured={!!config?.notifications?.sms?.configured}
+                                accentColor="#10b981"
+                                detail={config?.notifications?.sms?.phone ? `Sending to ···${config.notifications.sms.phone}` : null}
+                                setupSteps={[
+                                    'Sign up at twilio.com (free trial available)',
+                                    'Get a Twilio phone number',
+                                    'Copy Account SID and Auth Token from the console',
+                                    'Add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER, ALERT_PHONE_NUMBER to .env',
+                                    'Set SMS_ALERTS_ENABLED=true',
+                                ]}
+                            />
+
+                            <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid', borderColor: 'divider' }}>
+                                <Typography fontWeight={600} gutterBottom>What triggers alerts?</Typography>
+                                <Grid container spacing={1} sx={{ mt: 0.5 }}>
+                                    {[
+                                        'Trade entry (buy signal)',
+                                        'Trade exit (profit target hit)',
+                                        'Stop loss triggered',
+                                        'End-of-day position close',
+                                        'Circuit breaker activated',
+                                        'Daily P&L summary (9 PM EST)',
+                                    ].map(event => (
+                                        <Grid item xs={12} sm={6} key={event}>
+                                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                                <CheckCircle sx={{ fontSize: 14, color: 'success.main' }} />
+                                                <Typography variant="body2" color="text.secondary">{event}</Typography>
+                                            </Box>
+                                        </Grid>
+                                    ))}
+                                </Grid>
+                            </Paper>
+                        </Stack>
+                    </Box>
+                )}
+
+                {/* ── FUND MANAGEMENT ── */}
+                {activeSection === 'funds' && (
+                    <Box>
+                        <SectionTitle
+                            label="Fund Management"
+                            sub="Deposit, withdraw, and track capital across all connected broker accounts."
+                        />
+                        <FundManagement config={config} />
+                    </Box>
+                )}
+            </Box>
         </Box>
     );
 }

@@ -1184,37 +1184,71 @@ app.post('/test-telegram', async (req, res) => {
     }
 });
 
-// ===== BACKTEST REPORT ENDPOINT =====
+// ===== CONFIG READ / UPDATE ENDPOINTS =====
 app.get('/api/config', (req, res) => {
     res.json({
         success: true,
         data: {
             trading: {
+                mode: process.env.REAL_TRADING_ENABLED === 'true' ? 'live' : 'paper',
                 maxTradesPerDay: MAX_TRADES_PER_DAY,
                 maxTradesPerSymbol: MAX_TRADES_PER_SYMBOL,
                 minTimeBetweenTradesMins: Math.round(MIN_TIME_BETWEEN_TRADES / 60000),
                 stopOutCooldownMins: 60,
-                realTradingEnabled: process.env.REAL_TRADING_ENABLED === 'true',
             },
-            broker: {
-                baseURL: alpacaConfig.baseURL,
-                apiKeyConfigured: !!alpacaConfig.apiKey,
-                secretKeyConfigured: !!alpacaConfig.secretKey,
+            risk: {
+                tier1: { stopLoss: MOMENTUM_CONFIG.tier1.stopLoss, profitTarget: MOMENTUM_CONFIG.tier1.profitTarget, positionSize: MOMENTUM_CONFIG.tier1.positionSize, maxPositions: MOMENTUM_CONFIG.tier1.maxPositions },
+                tier2: { stopLoss: MOMENTUM_CONFIG.tier2.stopLoss, profitTarget: MOMENTUM_CONFIG.tier2.profitTarget, positionSize: MOMENTUM_CONFIG.tier2.positionSize, maxPositions: MOMENTUM_CONFIG.tier2.maxPositions },
+                tier3: { stopLoss: MOMENTUM_CONFIG.tier3.stopLoss, profitTarget: MOMENTUM_CONFIG.tier3.profitTarget, positionSize: MOMENTUM_CONFIG.tier3.positionSize, maxPositions: MOMENTUM_CONFIG.tier3.maxPositions },
             },
-            alerts: {
-                telegramEnabled: process.env.TELEGRAM_ALERTS_ENABLED === 'true',
-                telegramConfigured: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
-                smsEnabled: process.env.SMS_ALERTS_ENABLED === 'true',
+            brokers: {
+                alpaca: {
+                    configured: !!(alpacaConfig.apiKey && alpacaConfig.secretKey),
+                    mode: alpacaConfig.baseURL.includes('paper') ? 'paper' : 'live',
+                    baseURL: alpacaConfig.baseURL,
+                },
+                oanda: {
+                    configured: !!(process.env.OANDA_ACCOUNT_ID && process.env.OANDA_ACCESS_TOKEN),
+                    mode: process.env.OANDA_PRACTICE === 'false' ? 'live' : 'practice',
+                },
+                crypto: {
+                    configured: !!(process.env.CRYPTO_API_KEY && process.env.CRYPTO_API_SECRET),
+                    exchange: process.env.CRYPTO_EXCHANGE || 'binance',
+                    testnet: process.env.CRYPTO_TESTNET !== 'false',
+                },
             },
-            ports: {
-                stockBot: process.env.TRADING_PORT || 3002,
-                marketData: process.env.MARKET_DATA_PORT || 3001,
-                forexBot: process.env.FOREX_PORT || 3005,
-                cryptoBot: process.env.CRYPTO_PORT || 3006,
-                aiService: process.env.AI_SERVICE_PORT || 5001,
+            notifications: {
+                telegram: {
+                    enabled: process.env.TELEGRAM_ALERTS_ENABLED === 'true',
+                    configured: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
+                    chatId: process.env.TELEGRAM_CHAT_ID ? `...${process.env.TELEGRAM_CHAT_ID.slice(-4)}` : null,
+                },
+                sms: {
+                    enabled: process.env.SMS_ALERTS_ENABLED === 'true',
+                    configured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN),
+                    phone: process.env.ALERT_PHONE_NUMBER ? `***${process.env.ALERT_PHONE_NUMBER.slice(-4)}` : null,
+                },
             },
         }
     });
+});
+
+// Update live risk parameters (no restart needed)
+app.post('/api/config/risk', (req, res) => {
+    try {
+        const { tier, stopLoss, profitTarget, positionSize, maxPositions } = req.body;
+        if (!['tier1', 'tier2', 'tier3'].includes(tier)) {
+            return res.status(400).json({ success: false, error: 'Invalid tier' });
+        }
+        if (stopLoss != null) MOMENTUM_CONFIG[tier].stopLoss = Math.max(0.01, Math.min(0.20, stopLoss));
+        if (profitTarget != null) MOMENTUM_CONFIG[tier].profitTarget = Math.max(0.01, Math.min(0.50, profitTarget));
+        if (positionSize != null) MOMENTUM_CONFIG[tier].positionSize = Math.max(0.001, Math.min(0.05, positionSize));
+        if (maxPositions != null) MOMENTUM_CONFIG[tier].maxPositions = Math.max(1, Math.min(10, Math.round(maxPositions)));
+        console.log(`⚙️  Config updated: ${tier} → stopLoss=${MOMENTUM_CONFIG[tier].stopLoss} profitTarget=${MOMENTUM_CONFIG[tier].profitTarget}`);
+        res.json({ success: true, data: MOMENTUM_CONFIG[tier] });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
 app.get('/api/backtest/report', (req, res) => {
