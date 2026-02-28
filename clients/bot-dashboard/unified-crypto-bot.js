@@ -1254,7 +1254,7 @@ console.log('✅ Prometheus metrics initialized');
 // START SERVER
 // ============================================================================
 
-const PORT = process.env.CRYPTO_PORT || 3006;
+const PORT = process.env.PORT || process.env.CRYPTO_PORT || 3006;
 app.listen(PORT, () => {
     console.log(`
 ╔════════════════════════════════════════════════════════════════╗

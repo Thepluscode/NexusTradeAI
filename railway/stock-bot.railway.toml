@@ -1,0 +1,22 @@
+# Railway service config — Stock Bot (port 3002)
+# In Railway dashboard: set Root Directory = clients/bot-dashboard
+[build]
+builder = "nixpacks"
+buildCommand = "npm install"
+
+[deploy]
+startCommand = "node unified-trading-bot.js"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 5
+
+# Required environment variables (set in Railway dashboard):
+#   ALPACA_API_KEY
+#   ALPACA_SECRET_KEY
+#   ALPACA_BASE_URL         (https://paper-api.alpaca.markets)
+#   ALPACA_DATA_URL         (https://data.alpaca.markets)
+#   TELEGRAM_BOT_TOKEN
+#   TELEGRAM_CHAT_ID
+#   PORT                    (Railway sets this automatically)
+#   TRADING_PORT=3002       (internal port — Railway maps to $PORT)

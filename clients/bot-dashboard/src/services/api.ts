@@ -9,12 +9,22 @@ import type {
   AlpacaPosition,
 } from '@/types';
 
-// ── Active service ports ────────────────────────────────────────────────────
-//   3002  Stock Bot (unified-trading-bot.js)
-//   3005  Forex Bot (unified-forex-bot.js)
-//   3006  Crypto Bot (unified-crypto-bot.js)
-//   3001  Market Data (optional, may not be running)
-//   5001  AI Service  (optional, may not be running)
+// ── Service URLs ─────────────────────────────────────────────────────────────
+// Locally:    reads from localhost defaults below
+// Production: set VITE_* env vars in Railway (or .env.local for local override)
+//   VITE_STOCK_BOT_URL   → Stock Bot  (default http://localhost:3002)
+//   VITE_FOREX_BOT_URL   → Forex Bot  (default http://localhost:3005)
+//   VITE_CRYPTO_BOT_URL  → Crypto Bot (default http://localhost:3006)
+//   VITE_MARKET_DATA_URL → Market Data (default http://localhost:3001)
+//   VITE_AI_SERVICE_URL  → AI Service  (default http://localhost:5001)
+
+const SERVICE_URLS = {
+  stockBot:   import.meta.env.VITE_STOCK_BOT_URL   || 'http://localhost:3002',
+  forexBot:   import.meta.env.VITE_FOREX_BOT_URL   || 'http://localhost:3005',
+  cryptoBot:  import.meta.env.VITE_CRYPTO_BOT_URL  || 'http://localhost:3006',
+  marketData: import.meta.env.VITE_MARKET_DATA_URL || 'http://localhost:3001',
+  aiService:  import.meta.env.VITE_AI_SERVICE_URL  || 'http://localhost:5001',
+};
 
 class APIClient {
   private tradingEngine: AxiosInstance;  // port 3002
@@ -24,11 +34,11 @@ class APIClient {
   private aiService: AxiosInstance;      // port 5001 (optional)
 
   constructor() {
-    this.tradingEngine = axios.create({ baseURL: 'http://localhost:3002', timeout: 10000 });
-    this.forexService  = axios.create({ baseURL: 'http://localhost:3005', timeout: 10000 });
-    this.cryptoService = axios.create({ baseURL: 'http://localhost:3006', timeout: 10000 });
-    this.marketData    = axios.create({ baseURL: 'http://localhost:3001', timeout: 5000 });
-    this.aiService     = axios.create({ baseURL: 'http://localhost:5001', timeout: 5000 });
+    this.tradingEngine = axios.create({ baseURL: import.meta.env.VITE_STOCK_BOT_URL  || 'http://localhost:3002', timeout: 10000 });
+    this.forexService  = axios.create({ baseURL: import.meta.env.VITE_FOREX_BOT_URL  || 'http://localhost:3005', timeout: 10000 });
+    this.cryptoService = axios.create({ baseURL: import.meta.env.VITE_CRYPTO_BOT_URL || 'http://localhost:3006', timeout: 10000 });
+    this.marketData    = axios.create({ baseURL: import.meta.env.VITE_MARKET_DATA_URL || 'http://localhost:3001', timeout: 5000 });
+    this.aiService     = axios.create({ baseURL: import.meta.env.VITE_AI_SERVICE_URL  || 'http://localhost:5001', timeout: 5000 });
   }
 
   // ── Stock Bot (port 3002) ─────────────────────────────────────────────────
@@ -259,7 +269,7 @@ class APIClient {
 
   // ── Service Health Checks ─────────────────────────────────────────────────
 
-  async checkServiceHealth(serviceName: string, port: number): Promise<ServiceHealth> {
+  async checkServiceHealth(serviceName: string, port: number, baseURL?: string): Promise<ServiceHealth> {
     const startTime = Date.now();
     const healthEndpoints: Record<string, string[]> = {
       'Stock Bot':   ['/health', '/api/trading/status'],
@@ -269,10 +279,11 @@ class APIClient {
       'AI Service':  ['/health'],
     };
     const endpoints = healthEndpoints[serviceName] || ['/health'];
+    const origin = baseURL || `http://localhost:${port}`;
 
     for (const endpoint of endpoints) {
       try {
-        const response = await axios.get(`http://localhost:${port}${endpoint}`, { timeout: 3000 });
+        const response = await axios.get(`${origin}${endpoint}`, { timeout: 3000 });
         if (response.status === 200) {
           return { name: serviceName, status: 'online', port, latency: Date.now() - startTime, lastCheck: new Date().toISOString() };
         }
@@ -283,15 +294,15 @@ class APIClient {
 
   async getAllServicesHealth(): Promise<ServiceHealth[]> {
     const services = [
-      { name: 'Stock Bot',   port: 3002, optional: false },
-      { name: 'Forex Bot',   port: 3005, optional: false },
-      { name: 'Crypto Bot',  port: 3006, optional: false },
-      { name: 'Market Data', port: 3001, optional: true },
-      { name: 'AI Service',  port: 5001, optional: true },
+      { name: 'Stock Bot',   port: 3002, baseURL: SERVICE_URLS.stockBot,   optional: false },
+      { name: 'Forex Bot',   port: 3005, baseURL: SERVICE_URLS.forexBot,   optional: false },
+      { name: 'Crypto Bot',  port: 3006, baseURL: SERVICE_URLS.cryptoBot,  optional: false },
+      { name: 'Market Data', port: 3001, baseURL: SERVICE_URLS.marketData, optional: true },
+      { name: 'AI Service',  port: 5001, baseURL: SERVICE_URLS.aiService,  optional: true },
     ];
     // allSettled so one unreachable service doesn't reject the whole batch
     const results = await Promise.allSettled(
-      services.map(s => this.checkServiceHealth(s.name, s.port))
+      services.map(s => this.checkServiceHealth(s.name, s.port, s.baseURL))
     );
     return results.map((r, i) => {
       const base = r.status === 'fulfilled'

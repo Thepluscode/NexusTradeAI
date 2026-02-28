@@ -1,0 +1,21 @@
+# Railway service config — Forex Bot (port 3005)
+# In Railway dashboard: set Root Directory = clients/bot-dashboard
+[build]
+builder = "nixpacks"
+buildCommand = "npm install"
+
+[deploy]
+startCommand = "node unified-forex-bot.js"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 5
+
+# Required environment variables (set in Railway dashboard):
+#   OANDA_API_KEY
+#   OANDA_ACCOUNT_ID
+#   OANDA_BASE_URL          (https://api-fxpractice.oanda.com for paper)
+#   TELEGRAM_BOT_TOKEN
+#   TELEGRAM_CHAT_ID
+#   PORT                    (Railway sets this automatically)
+#   FOREX_PORT=3005

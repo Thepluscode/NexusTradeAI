@@ -36,7 +36,7 @@ const { getTelegramAlertService } = require('../../infrastructure/notifications/
  */
 
 const app = express();
-const PORT = process.env.FOREX_PORT || 3005;
+const PORT = process.env.PORT || process.env.FOREX_PORT || 3005;
 
 app.use(cors());
 app.use(express.json());

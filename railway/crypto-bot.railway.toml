@@ -1,0 +1,20 @@
+# Railway service config — Crypto Bot (port 3006)
+# In Railway dashboard: set Root Directory = clients/bot-dashboard
+[build]
+builder = "nixpacks"
+buildCommand = "npm install"
+
+[deploy]
+startCommand = "node unified-crypto-bot.js"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 5
+
+# Required environment variables (set in Railway dashboard):
+#   BINANCE_API_KEY
+#   BINANCE_SECRET_KEY
+#   TELEGRAM_BOT_TOKEN
+#   TELEGRAM_CHAT_ID
+#   PORT                    (Railway sets this automatically)
+#   CRYPTO_PORT=3006
