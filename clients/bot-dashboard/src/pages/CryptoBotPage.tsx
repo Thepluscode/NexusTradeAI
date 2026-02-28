@@ -298,6 +298,61 @@ export default function CryptoBotPage() {
                 </Grid>
             </Grid>
 
+            {/* Strategy Intelligence Panel */}
+            <Paper sx={{ p: 2, mb: 3, border: '1px solid', borderColor: 'rgba(245, 158, 11, 0.3)', background: 'rgba(245, 158, 11, 0.05)' }}>
+                <Typography variant="h6" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+                    🧠 Strategy Intelligence <Chip label="7-Strategy Ensemble" size="small" sx={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)', color: 'white', fontWeight: 600 }} />
+                </Typography>
+                <Grid container spacing={2}>
+                    <Grid item xs={12} sm={6} md={3}>
+                        <Box sx={{ p: 1.5, borderRadius: 2, background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)' }}>
+                            <Typography variant="caption" color="text.secondary">REGIME</Typography>
+                            <Typography variant="body1" sx={{ fontWeight: 700, color: '#10b981' }}>
+                                {status?.isRunning ? '📊 Active Detection' : '⏸️ Inactive'}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">HMM + BTC Trend Alignment</Typography>
+                        </Box>
+                    </Grid>
+                    <Grid item xs={12} sm={6} md={3}>
+                        <Box sx={{
+                            p: 1.5, borderRadius: 2,
+                            background: (status?.dailyReturn ?? 0) <= -2.0 ? 'rgba(239,68,68,0.15)' : (status?.dailyReturn ?? 0) <= -1.5 ? 'rgba(245,158,11,0.15)' : 'rgba(16,185,129,0.1)',
+                            border: '1px solid',
+                            borderColor: (status?.dailyReturn ?? 0) <= -2.0 ? 'rgba(239,68,68,0.3)' : (status?.dailyReturn ?? 0) <= -1.5 ? 'rgba(245,158,11,0.3)' : 'rgba(16,185,129,0.2)'
+                        }}>
+                            <Typography variant="caption" color="text.secondary">DRAWDOWN THROTTLE</Typography>
+                            <Typography variant="body1" sx={{
+                                fontWeight: 700,
+                                color: (status?.dailyReturn ?? 0) <= -2.0 ? '#ef4444' : (status?.dailyReturn ?? 0) <= -1.5 ? '#f59e0b' : '#10b981'
+                            }}>
+                                {(status?.dailyReturn ?? 0) <= -2.0 ? '🛑 PAUSED' : (status?.dailyReturn ?? 0) <= -1.5 ? '⚠️ REDUCED' : '✅ NORMAL'}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">3-Level Crypto (wider thresholds)</Typography>
+                        </Box>
+                    </Grid>
+                    <Grid item xs={12} sm={6} md={3}>
+                        <Box sx={{ p: 1.5, borderRadius: 2, background: 'rgba(99, 102, 241, 0.1)', border: '1px solid rgba(99, 102, 241, 0.2)' }}>
+                            <Typography variant="caption" color="text.secondary">POSITION SIZING</Typography>
+                            <Typography variant="body1" sx={{ fontWeight: 700, color: '#6366f1' }}>🎲 MC → Kelly</Typography>
+                            <Typography variant="caption" color="text.secondary">40% Kelly (crypto adjusted)</Typography>
+                        </Box>
+                    </Grid>
+                    <Grid item xs={12} sm={6} md={3}>
+                        <Box sx={{ p: 1.5, borderRadius: 2, background: 'rgba(236, 72, 153, 0.1)', border: '1px solid rgba(236, 72, 153, 0.2)' }}>
+                            <Typography variant="caption" color="text.secondary">STOP-LOSS ENGINE</Typography>
+                            <Typography variant="body1" sx={{ fontWeight: 700, color: '#ec4899' }}>📉 GARCH(1,1)</Typography>
+                            <Typography variant="caption" color="text.secondary">Dynamic 3%-20% range (crypto vol)</Typography>
+                        </Box>
+                    </Grid>
+                </Grid>
+                <Box sx={{ mt: 2, display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
+                    {['7-Strategy Ensemble', 'GARCH Stops', 'Monte Carlo', 'MTF Filter', 'Volume Confirm', 'Trailing Stop (3%)', 'Time Exit (3d)', 'Correlation Filter', 'Crypto Sector Limits', 'Limit Orders', 'Bidirectional (L+S)'].map(f => (
+                        <Chip key={f} label={f} size="small" variant="outlined"
+                            sx={{ fontSize: '0.7rem', borderColor: 'rgba(245,158,11,0.4)', color: 'rgba(245,158,11,0.9)' }} />
+                    ))}
+                </Box>
+            </Paper>
+
             {/* Controls */}
             <Paper sx={{ p: 2, mb: 3 }}>
                 <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
