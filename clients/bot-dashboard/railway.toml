@@ -1,9 +1,11 @@
 # Railway config — used by nexus-dashboard service
-# Bot services override NIXPACKS_BUILD_CMD and NIXPACKS_START_CMD via env vars
 [build]
 builder = "nixpacks"
+buildCommand = "cd clients/bot-dashboard && npm install && npm run build"
 
 [deploy]
+startCommand = "cd clients/bot-dashboard && npm run start"
+healthcheckPath = "/"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 5
