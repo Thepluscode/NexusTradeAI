@@ -198,8 +198,12 @@ class APIClient {
   }
 
   async scanForexSignals(): Promise<any[]> {
-    const response = await this.forexService.post('/api/forex/scan');
-    return response.data.signals || [];
+    try {
+      const response = await this.forexService.post('/api/forex/scan');
+      return response.data.signals || [];
+    } catch {
+      return [];
+    }
   }
 
   // ── Crypto Bot (port 3006) ────────────────────────────────────────────────
