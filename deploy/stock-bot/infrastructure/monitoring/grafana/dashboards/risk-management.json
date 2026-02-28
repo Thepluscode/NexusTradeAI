@@ -1,0 +1,318 @@
+{
+  "dashboard": {
+    "title": "NexusTradeAI - Risk Management",
+    "tags": ["risk", "compliance", "limits"],
+    "timezone": "browser",
+    "refresh": "30s",
+    "time": {
+      "from": "now-24h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Current Risk Exposure",
+        "type": "gauge",
+        "gridPos": { "x": 0, "y": 0, "w": 6, "h": 6 },
+        "targets": [
+          {
+            "expr": "trading_bot_portfolio_value_usd * trading_bot_leverage_ratio",
+            "legendFormat": "Gross Exposure"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyUSD",
+            "min": 0,
+            "max": 200000,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 100000, "color": "yellow" },
+                { "value": 150000, "color": "red" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Daily P&L",
+        "type": "stat",
+        "gridPos": { "x": 6, "y": 0, "w": 6, "h": 6 },
+        "targets": [
+          {
+            "expr": "trading_bot_pnl_total_usd"
+          }
+        ],
+        "options": {
+          "colorMode": "background"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyUSD",
+            "thresholds": {
+              "steps": [
+                { "value": -1000, "color": "red" },
+                { "value": 0, "color": "yellow" },
+                { "value": 500, "color": "green" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 3,
+        "title": "Max Drawdown",
+        "type": "gauge",
+        "gridPos": { "x": 12, "y": 0, "w": 6, "h": 6 },
+        "targets": [
+          {
+            "expr": "trading_bot_max_drawdown_percent"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 30,
+            "thresholds": {
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 10, "color": "yellow" },
+                { "value": 20, "color": "red" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 4,
+        "title": "Value at Risk (95%)",
+        "type": "stat",
+        "gridPos": { "x": 18, "y": 0, "w": 6, "h": 6 },
+        "targets": [
+          {
+            "expr": "trading_bot_var_95_percent"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyUSD",
+            "decimals": 0
+          }
+        }
+      },
+      {
+        "id": 5,
+        "title": "Position Concentration (Top 3)",
+        "type": "bargauge",
+        "gridPos": { "x": 0, "y": 6, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "topk(3, trading_bot_position_value_usd)",
+            "legendFormat": "{{symbol}}"
+          }
+        ],
+        "options": {
+          "orientation": "horizontal",
+          "displayMode": "gradient"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyUSD",
+            "max": 10000,
+            "thresholds": {
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 5000, "color": "yellow" },
+                { "value": 8000, "color": "red" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 6,
+        "title": "Leverage Ratio",
+        "type": "graph",
+        "gridPos": { "x": 12, "y": 6, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "trading_bot_leverage_ratio",
+            "legendFormat": "Current Leverage"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "short",
+            "min": 0,
+            "max": 3,
+            "label": "Leverage"
+          }
+        ],
+        "thresholds": [
+          {
+            "value": 2,
+            "colorMode": "critical",
+            "fill": true,
+            "line": true
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "title": "Risk Limit Breaches (24h)",
+        "type": "stat",
+        "gridPos": { "x": 0, "y": 14, "w": 4, "h": 4 },
+        "targets": [
+          {
+            "expr": "increase(trading_bot_risk_limit_breaches_total[24h])"
+          }
+        ],
+        "options": {
+          "colorMode": "background"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 1, "color": "red" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 8,
+        "title": "Margin Utilization",
+        "type": "gauge",
+        "gridPos": { "x": 4, "y": 14, "w": 4, "h": 4 },
+        "targets": [
+          {
+            "expr": "(sum(trading_bot_position_value_usd) / trading_bot_buying_power) * 100"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "thresholds": {
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 50, "color": "yellow" },
+                { "value": 80, "color": "red" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 9,
+        "title": "Stop Loss Hits (Today)",
+        "type": "stat",
+        "gridPos": { "x": 8, "y": 14, "w": 4, "h": 4 },
+        "targets": [
+          {
+            "expr": "sum(increase(trading_bot_trades_total{exit_reason=\"stop_loss\"}[24h]))"
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "title": "Profit Target Hits (Today)",
+        "type": "stat",
+        "gridPos": { "x": 12, "y": 14, "w": 4, "h": 4 },
+        "targets": [
+          {
+            "expr": "sum(increase(trading_bot_trades_total{exit_reason=\"profit_target\"}[24h]))"
+          }
+        ]
+      },
+      {
+        "id": 11,
+        "title": "Portfolio Beta",
+        "type": "stat",
+        "gridPos": { "x": 16, "y": 14, "w": 4, "h": 4 },
+        "targets": [
+          {
+            "expr": "trading_bot_portfolio_beta"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "decimals": 2
+          }
+        }
+      },
+      {
+        "id": 12,
+        "title": "Sharpe Ratio Trend",
+        "type": "graph",
+        "gridPos": { "x": 20, "y": 14, "w": 4, "h": 4 },
+        "targets": [
+          {
+            "expr": "trading_bot_sharpe_ratio"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "short",
+            "label": "Sharpe Ratio"
+          }
+        ]
+      },
+      {
+        "id": 13,
+        "title": "P&L Distribution (Histogram)",
+        "type": "graph",
+        "gridPos": { "x": 0, "y": 18, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.99, trading_bot_trade_pnl_bucket)",
+            "legendFormat": "99th percentile"
+          },
+          {
+            "expr": "histogram_quantile(0.95, trading_bot_trade_pnl_bucket)",
+            "legendFormat": "95th percentile"
+          },
+          {
+            "expr": "histogram_quantile(0.50, trading_bot_trade_pnl_bucket)",
+            "legendFormat": "Median"
+          },
+          {
+            "expr": "histogram_quantile(0.05, trading_bot_trade_pnl_bucket)",
+            "legendFormat": "5th percentile"
+          }
+        ]
+      },
+      {
+        "id": 14,
+        "title": "Risk-Adjusted Returns",
+        "type": "table",
+        "gridPos": { "x": 12, "y": 18, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "trading_bot_pnl_total_usd",
+            "legendFormat": "Total P&L"
+          },
+          {
+            "expr": "trading_bot_sharpe_ratio",
+            "legendFormat": "Sharpe Ratio"
+          },
+          {
+            "expr": "trading_bot_max_drawdown_percent",
+            "legendFormat": "Max Drawdown %"
+          },
+          {
+            "expr": "trading_bot_win_rate_percent",
+            "legendFormat": "Win Rate %"
+          }
+        ]
+      }
+    ]
+  }
+}

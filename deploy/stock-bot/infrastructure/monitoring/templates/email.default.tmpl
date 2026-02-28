@@ -1,0 +1,176 @@
+{{ define "email.default.html" }}
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px 8px 0 0;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+        .severity {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+        .severity-critical {
+            background: #e53e3e;
+            color: white;
+        }
+        .severity-warning {
+            background: #ed8936;
+            color: white;
+        }
+        .content {
+            background: #f7fafc;
+            padding: 20px;
+            border-left: 4px solid #667eea;
+        }
+        .alert-box {
+            background: white;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 4px;
+            border-left: 4px solid #3182ce;
+        }
+        .alert-box h3 {
+            margin-top: 0;
+            color: #2d3748;
+        }
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .metric:last-child {
+            border-bottom: none;
+        }
+        .metric-label {
+            font-weight: 600;
+            color: #4a5568;
+        }
+        .metric-value {
+            color: #2d3748;
+            font-family: 'Courier New', monospace;
+        }
+        .footer {
+            background: #edf2f7;
+            padding: 15px;
+            border-radius: 0 0 8px 8px;
+            text-align: center;
+            font-size: 12px;
+            color: #718096;
+        }
+        .button {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            margin: 10px 5px;
+        }
+        .timestamp {
+            color: #718096;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>
+            NexusTradeAI Alert
+            <span class="severity severity-{{ .GroupLabels.severity }}">
+                {{ .GroupLabels.severity | toUpper }}
+            </span>
+        </h1>
+        <div class="timestamp">{{ .Alerts | len }} alert(s) | {{ now | date "2006-01-02 15:04:05 MST" }}</div>
+    </div>
+
+    <div class="content">
+        {{ range .Alerts }}
+        <div class="alert-box">
+            <h3>{{ .Labels.alertname }}</h3>
+
+            {{ if .Annotations.summary }}
+            <p><strong>Summary:</strong> {{ .Annotations.summary }}</p>
+            {{ end }}
+
+            {{ if .Annotations.description }}
+            <p><strong>Description:</strong> {{ .Annotations.description }}</p>
+            {{ end }}
+
+            <div style="margin-top: 15px;">
+                <div class="metric">
+                    <span class="metric-label">Status:</span>
+                    <span class="metric-value">{{ .Status }}</span>
+                </div>
+
+                {{ if .Labels.component }}
+                <div class="metric">
+                    <span class="metric-label">Component:</span>
+                    <span class="metric-value">{{ .Labels.component }}</span>
+                </div>
+                {{ end }}
+
+                {{ if .Labels.instance }}
+                <div class="metric">
+                    <span class="metric-label">Instance:</span>
+                    <span class="metric-value">{{ .Labels.instance }}</span>
+                </div>
+                {{ end }}
+
+                <div class="metric">
+                    <span class="metric-label">Started:</span>
+                    <span class="metric-value">{{ .StartsAt | date "2006-01-02 15:04:05 MST" }}</span>
+                </div>
+
+                {{ if .EndsAt }}
+                <div class="metric">
+                    <span class="metric-label">Ended:</span>
+                    <span class="metric-value">{{ .EndsAt | date "2006-01-02 15:04:05 MST" }}</span>
+                </div>
+                {{ end }}
+            </div>
+
+            {{ if .GeneratorURL }}
+            <div style="margin-top: 15px;">
+                <a href="{{ .GeneratorURL }}" class="button">View in Prometheus</a>
+            </div>
+            {{ end }}
+        </div>
+        {{ end }}
+
+        <div style="margin-top: 20px; padding: 15px; background: white; border-radius: 4px;">
+            <h4>Quick Actions:</h4>
+            <a href="http://localhost:3030" class="button">Open Grafana</a>
+            <a href="http://localhost:9090/alerts" class="button">View All Alerts</a>
+            <a href="http://localhost:9091/metrics" class="button">Bot Metrics</a>
+        </div>
+    </div>
+
+    <div class="footer">
+        <p>NexusTradeAI Monitoring System</p>
+        <p>This is an automated alert. Do not reply to this email.</p>
+        <p>For runbooks and incident response procedures, see: infrastructure/monitoring/runbooks/</p>
+    </div>
+</body>
+</html>
+{{ end }}

@@ -1,0 +1,495 @@
+# Nexus Trade AI - Production Monitoring & Observability Stack
+# Enterprise-grade monitoring for financial services compliance
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nexus-monitoring
+  labels:
+    environment: production
+
+---
+# Prometheus for metrics collection
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: nexus-monitoring
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      containers:
+      - name: prometheus
+        image: prom/prometheus:v2.40.0
+        ports:
+        - containerPort: 9090
+        args:
+          - '--config.file=/etc/prometheus/prometheus.yml'
+          - '--storage.tsdb.path=/prometheus/'
+          - '--web.console.libraries=/etc/prometheus/console_libraries'
+          - '--web.console.templates=/etc/prometheus/consoles'
+          - '--storage.tsdb.retention.time=30d'
+          - '--web.enable-lifecycle'
+          - '--web.enable-admin-api'
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        volumeMounts:
+        - name: prometheus-config
+          mountPath: /etc/prometheus/
+        - name: prometheus-storage
+          mountPath: /prometheus/
+      volumes:
+      - name: prometheus-config
+        configMap:
+          name: prometheus-config
+      - name: prometheus-storage
+        persistentVolumeClaim:
+          claimName: prometheus-pvc
+
+---
+# Prometheus Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: nexus-monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    
+    rule_files:
+      - "nexus_alerts.yml"
+    
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets:
+              - alertmanager:9093
+    
+    scrape_configs:
+      - job_name: 'nexus-api'
+        static_configs:
+          - targets: ['nexus-api-service.nexus-trade-ai:3000']
+        metrics_path: '/metrics'
+        scrape_interval: 5s
+        
+      - job_name: 'nexus-alpha'
+        static_configs:
+          - targets: ['nexus-alpha-service.nexus-trade-ai:3001']
+        metrics_path: '/metrics'
+        scrape_interval: 5s
+        
+      - job_name: 'nexus-market-data'
+        static_configs:
+          - targets: ['nexus-market-data-service.nexus-trade-ai:3002']
+        metrics_path: '/metrics'
+        scrape_interval: 5s
+        
+      - job_name: 'redis-exporter'
+        static_configs:
+          - targets: ['redis-exporter:9121']
+          
+      - job_name: 'node-exporter'
+        static_configs:
+          - targets: ['node-exporter:9100']
+          
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+
+  nexus_alerts.yml: |
+    groups:
+    - name: nexus_trading_alerts
+      rules:
+      - alert: HighAPILatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API latency detected"
+          description: "95th percentile latency is {{ $value }}s"
+          
+      - alert: HighErrorRate
+        expr: rate(http_requests_total{status=~"5.."}[5m]) > 0.1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is {{ $value }} errors per second"
+          
+      - alert: TradingAlgorithmDown
+        expr: up{job="nexus-alpha"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Trading algorithm is down"
+          description: "Nexus Alpha algorithm is not responding"
+          
+      - alert: MarketDataLag
+        expr: time() - market_data_last_update_timestamp > 60
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Market data lag detected"
+          description: "Market data is {{ $value }}s behind"
+
+---
+# Grafana for visualization
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: nexus-monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+      - name: grafana
+        image: grafana/grafana:9.3.0
+        ports:
+        - containerPort: 3000
+        env:
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          value: "nexus-admin-2024"
+        - name: GF_INSTALL_PLUGINS
+          value: "grafana-piechart-panel,grafana-worldmap-panel"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        volumeMounts:
+        - name: grafana-storage
+          mountPath: /var/lib/grafana
+        - name: grafana-config
+          mountPath: /etc/grafana/provisioning
+      volumes:
+      - name: grafana-storage
+        persistentVolumeClaim:
+          claimName: grafana-pvc
+      - name: grafana-config
+        configMap:
+          name: grafana-config
+
+---
+# Grafana Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-config
+  namespace: nexus-monitoring
+data:
+  datasources.yml: |
+    apiVersion: 1
+    datasources:
+    - name: Prometheus
+      type: prometheus
+      access: proxy
+      url: http://prometheus:9090
+      isDefault: true
+      
+  dashboards.yml: |
+    apiVersion: 1
+    providers:
+    - name: 'nexus-dashboards'
+      orgId: 1
+      folder: 'Nexus Trade AI'
+      type: file
+      disableDeletion: false
+      updateIntervalSeconds: 10
+      options:
+        path: /var/lib/grafana/dashboards
+
+---
+# ELK Stack for logging
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: elasticsearch
+  namespace: nexus-monitoring
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: elasticsearch
+  template:
+    metadata:
+      labels:
+        app: elasticsearch
+    spec:
+      containers:
+      - name: elasticsearch
+        image: docker.elastic.co/elasticsearch/elasticsearch:8.5.0
+        ports:
+        - containerPort: 9200
+        - containerPort: 9300
+        env:
+        - name: discovery.type
+          value: single-node
+        - name: ES_JAVA_OPTS
+          value: "-Xms2g -Xmx2g"
+        - name: xpack.security.enabled
+          value: "false"
+        resources:
+          requests:
+            memory: "4Gi"
+            cpu: "1000m"
+          limits:
+            memory: "8Gi"
+            cpu: "2000m"
+        volumeMounts:
+        - name: elasticsearch-data
+          mountPath: /usr/share/elasticsearch/data
+      volumes:
+      - name: elasticsearch-data
+        persistentVolumeClaim:
+          claimName: elasticsearch-pvc
+
+---
+# Logstash for log processing
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: logstash
+  namespace: nexus-monitoring
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: logstash
+  template:
+    metadata:
+      labels:
+        app: logstash
+    spec:
+      containers:
+      - name: logstash
+        image: docker.elastic.co/logstash/logstash:8.5.0
+        ports:
+        - containerPort: 5044
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "1000m"
+        volumeMounts:
+        - name: logstash-config
+          mountPath: /usr/share/logstash/pipeline
+      volumes:
+      - name: logstash-config
+        configMap:
+          name: logstash-config
+
+---
+# Logstash Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logstash-config
+  namespace: nexus-monitoring
+data:
+  logstash.conf: |
+    input {
+      beats {
+        port => 5044
+      }
+    }
+    
+    filter {
+      if [fields][service] == "nexus-api" {
+        grok {
+          match => { "message" => "%{TIMESTAMP_ISO8601:timestamp} %{LOGLEVEL:level} %{GREEDYDATA:message}" }
+        }
+        
+        if [message] =~ /API call/ {
+          grok {
+            match => { "message" => "API call: %{WORD:method} %{URIPATH:endpoint} - %{NUMBER:response_time:float}ms - %{NUMBER:status_code:int}" }
+          }
+        }
+        
+        if [message] =~ /Trading signal/ {
+          grok {
+            match => { "message" => "Trading signal: %{WORD:action} %{WORD:symbol} - confidence: %{NUMBER:confidence:float}" }
+          }
+        }
+      }
+      
+      date {
+        match => [ "timestamp", "ISO8601" ]
+      }
+    }
+    
+    output {
+      elasticsearch {
+        hosts => ["elasticsearch:9200"]
+        index => "nexus-logs-%{+YYYY.MM.dd}"
+      }
+    }
+
+---
+# Kibana for log visualization
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kibana
+  namespace: nexus-monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kibana
+  template:
+    metadata:
+      labels:
+        app: kibana
+    spec:
+      containers:
+      - name: kibana
+        image: docker.elastic.co/kibana/kibana:8.5.0
+        ports:
+        - containerPort: 5601
+        env:
+        - name: ELASTICSEARCH_HOSTS
+          value: "http://elasticsearch:9200"
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+
+---
+# Jaeger for distributed tracing
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  namespace: nexus-monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jaeger
+  template:
+    metadata:
+      labels:
+        app: jaeger
+    spec:
+      containers:
+      - name: jaeger
+        image: jaegertracing/all-in-one:1.40
+        ports:
+        - containerPort: 16686
+        - containerPort: 14268
+        env:
+        - name: COLLECTOR_ZIPKIN_HTTP_PORT
+          value: "9411"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+
+---
+# Services for monitoring stack
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: nexus-monitoring
+spec:
+  selector:
+    app: prometheus
+  ports:
+  - port: 9090
+    targetPort: 9090
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: nexus-monitoring
+spec:
+  selector:
+    app: grafana
+  ports:
+  - port: 3000
+    targetPort: 3000
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch
+  namespace: nexus-monitoring
+spec:
+  selector:
+    app: elasticsearch
+  ports:
+  - port: 9200
+    targetPort: 9200
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kibana
+  namespace: nexus-monitoring
+spec:
+  selector:
+    app: kibana
+  ports:
+  - port: 5601
+    targetPort: 5601
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger
+  namespace: nexus-monitoring
+spec:
+  selector:
+    app: jaeger
+  ports:
+  - port: 16686
+    targetPort: 16686
+  - port: 14268
+    targetPort: 14268

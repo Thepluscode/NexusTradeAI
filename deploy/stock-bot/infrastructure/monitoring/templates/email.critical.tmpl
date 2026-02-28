@@ -1,0 +1,242 @@
+{{ define "email.critical.html" }}
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px 8px 0 0;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+            text-transform: uppercase;
+        }
+        .emergency-banner {
+            background: #742a2a;
+            color: white;
+            padding: 15px;
+            text-align: center;
+            font-weight: bold;
+            font-size: 18px;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        .content {
+            background: #fff5f5;
+            padding: 20px;
+            border-left: 6px solid #e53e3e;
+        }
+        .alert-box {
+            background: white;
+            padding: 20px;
+            margin: 15px 0;
+            border-radius: 4px;
+            border: 2px solid #fc8181;
+        }
+        .alert-box h3 {
+            margin-top: 0;
+            color: #742a2a;
+            font-size: 20px;
+        }
+        .impact {
+            background: #fed7d7;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 15px 0;
+            border-left: 4px solid #e53e3e;
+        }
+        .impact h4 {
+            margin-top: 0;
+            color: #742a2a;
+        }
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #feb2b2;
+        }
+        .metric:last-child {
+            border-bottom: none;
+        }
+        .metric-label {
+            font-weight: 700;
+            color: #742a2a;
+        }
+        .metric-value {
+            color: #2d3748;
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+        }
+        .action-required {
+            background: #742a2a;
+            color: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .action-required h4 {
+            margin-top: 0;
+        }
+        .action-required ol {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+        .action-required li {
+            margin: 8px 0;
+        }
+        .button {
+            display: inline-block;
+            padding: 12px 24px;
+            background: #e53e3e;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            margin: 10px 5px;
+            font-weight: bold;
+        }
+        .button:hover {
+            background: #c53030;
+        }
+        .runbook-link {
+            background: #2d3748;
+            color: white;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 15px 0;
+        }
+        .runbook-link a {
+            color: #90cdf4;
+            text-decoration: none;
+            font-weight: bold;
+        }
+        .footer {
+            background: #742a2a;
+            color: white;
+            padding: 15px;
+            border-radius: 0 0 8px 8px;
+            text-align: center;
+            font-size: 12px;
+        }
+        .timestamp {
+            color: #fed7d7;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="emergency-banner">
+        🚨 CRITICAL ALERT - IMMEDIATE ACTION REQUIRED 🚨
+    </div>
+
+    <div class="header">
+        <h1>CRITICAL: {{ .GroupLabels.alertname }}</h1>
+        <div class="timestamp">{{ .Alerts | len }} critical alert(s) | {{ now | date "2006-01-02 15:04:05 MST" }}</div>
+    </div>
+
+    <div class="content">
+        {{ range .Alerts }}
+        <div class="alert-box">
+            <h3>{{ .Labels.alertname }}</h3>
+
+            {{ if .Annotations.summary }}
+            <div class="impact">
+                <h4>⚠️ Summary</h4>
+                <p>{{ .Annotations.summary }}</p>
+            </div>
+            {{ end }}
+
+            {{ if .Annotations.description }}
+            <div class="impact">
+                <h4>📋 Description</h4>
+                <p>{{ .Annotations.description }}</p>
+            </div>
+            {{ end }}
+
+            <div style="margin-top: 15px;">
+                <h4>Alert Details:</h4>
+                <div class="metric">
+                    <span class="metric-label">Status:</span>
+                    <span class="metric-value">{{ .Status }}</span>
+                </div>
+
+                <div class="metric">
+                    <span class="metric-label">Severity:</span>
+                    <span class="metric-value" style="color: #e53e3e;">CRITICAL</span>
+                </div>
+
+                {{ if .Labels.component }}
+                <div class="metric">
+                    <span class="metric-label">Component:</span>
+                    <span class="metric-value">{{ .Labels.component }}</span>
+                </div>
+                {{ end }}
+
+                {{ if .Labels.instance }}
+                <div class="metric">
+                    <span class="metric-label">Instance:</span>
+                    <span class="metric-value">{{ .Labels.instance }}</span>
+                </div>
+                {{ end }}
+
+                <div class="metric">
+                    <span class="metric-label">Started:</span>
+                    <span class="metric-value">{{ .StartsAt | date "2006-01-02 15:04:05 MST" }}</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="action-required">
+            <h4>🔥 IMMEDIATE ACTIONS REQUIRED:</h4>
+            <ol>
+                <li>Review the runbook: <code>infrastructure/monitoring/runbooks/{{ .Labels.alertname }}.md</code></li>
+                <li>Check system health: <code>./infrastructure/scripts/health-check.sh</code></li>
+                <li>Review bot logs: <code>tail -100 clients/bot-dashboard/logs/*.log</code></li>
+                <li>Take corrective action as per runbook</li>
+                <li>Document incident in incident log</li>
+            </ol>
+        </div>
+
+        <div class="runbook-link">
+            <p>📖 <strong>Runbook:</strong> infrastructure/monitoring/runbooks/{{ .Labels.alertname }}.md</p>
+            <p>For step-by-step resolution procedures, consult the runbook immediately.</p>
+        </div>
+        {{ end }}
+
+        <div style="margin-top: 20px; padding: 15px; background: white; border-radius: 4px; text-align: center;">
+            <h4>Emergency Access:</h4>
+            <a href="http://localhost:3030" class="button">Open Grafana</a>
+            <a href="http://localhost:9090/alerts" class="button">Prometheus Alerts</a>
+            <a href="http://localhost:9091/health" class="button">Bot Health</a>
+            <a href="https://app.alpaca.markets/paper/dashboard" class="button">Alpaca Dashboard</a>
+        </div>
+
+        <div style="margin-top: 20px; padding: 15px; background: #fff5f5; border-radius: 4px; border-left: 4px solid #e53e3e;">
+            <h4 style="color: #742a2a;">⏱️ Response Time SLA</h4>
+            <p><strong>Critical alerts require response within 5 minutes.</strong></p>
+            <p>If you cannot resolve within 15 minutes, escalate immediately.</p>
+        </div>
+    </div>
+
+    <div class="footer">
+        <p><strong>NexusTradeAI Critical Alert System</strong></p>
+        <p>This is a CRITICAL automated alert requiring immediate attention.</p>
+        <p>Do not ignore this message. Follow the runbook procedures immediately.</p>
+    </div>
+</body>
+</html>
+{{ end }}

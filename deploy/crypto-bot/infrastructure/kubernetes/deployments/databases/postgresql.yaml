@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgresql
+  namespace: nexustrade-production
+  labels:
+    app: postgresql
+    component: database
+    tier: data
+    version: "14.9"
+  annotations:
+    description: "High-performance PostgreSQL database for trading data"
+spec:
+  serviceName: postgresql-headless
+  replicas: 3  # Primary + 2 read replicas
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: postgresql
+      tier: data
+  template:
+    metadata:
+      labels:
+        app: postgresql
+        component: database
+        tier: data
+        version: "14.9"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9187"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: postgresql-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        fsGroup: 999
+
+      # Anti-affinity to spread replicas across nodes
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - postgresql
+            topologyKey: kubernetes.io/hostname
+
+      containers:
+      - name: postgresql
+        image: postgres:14.9-alpine
+        imagePullPolicy: IfNotPresent
+
+        ports:
+        - name: postgresql
+          containerPort: 5432
+          protocol: TCP

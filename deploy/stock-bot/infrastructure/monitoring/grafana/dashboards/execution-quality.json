@@ -1,0 +1,349 @@
+{
+  "dashboard": {
+    "title": "NexusTradeAI - Execution Quality",
+    "tags": ["execution", "latency", "slippage"],
+    "timezone": "browser",
+    "refresh": "10s",
+    "time": {
+      "from": "now-6h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Order Fill Rate",
+        "type": "gauge",
+        "gridPos": { "x": 0, "y": 0, "w": 6, "h": 6 },
+        "targets": [
+          {
+            "expr": "trading_bot_order_fill_rate_percent"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "thresholds": {
+              "steps": [
+                { "value": 0, "color": "red" },
+                { "value": 80, "color": "yellow" },
+                { "value": 95, "color": "green" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Average Slippage",
+        "type": "stat",
+        "gridPos": { "x": 6, "y": 0, "w": 6, "h": 6 },
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, trading_bot_slippage_bps_bucket)"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "none",
+            "decimals": 2,
+            "suffix": " bps",
+            "thresholds": {
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 5, "color": "yellow" },
+                { "value": 10, "color": "red" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 3,
+        "title": "Trade Latency (p95)",
+        "type": "stat",
+        "gridPos": { "x": 12, "y": 0, "w": 6, "h": 6 },
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(trading_bot_trade_latency_ms_bucket[5m]))"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ms",
+            "thresholds": {
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 1000, "color": "yellow" },
+                { "value": 2000, "color": "red" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 4,
+        "title": "Rejected Orders (24h)",
+        "type": "stat",
+        "gridPos": { "x": 18, "y": 0, "w": 6, "h": 6 },
+        "targets": [
+          {
+            "expr": "sum(increase(trading_bot_trades_total{status=\"rejected\"}[24h]))"
+          }
+        ],
+        "options": {
+          "colorMode": "background"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 1, "color": "yellow" },
+                { "value": 5, "color": "red" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 5,
+        "title": "Trade Latency Distribution",
+        "type": "graph",
+        "gridPos": { "x": 0, "y": 6, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.99, rate(trading_bot_trade_latency_ms_bucket[5m]))",
+            "legendFormat": "p99"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(trading_bot_trade_latency_ms_bucket[5m]))",
+            "legendFormat": "p95"
+          },
+          {
+            "expr": "histogram_quantile(0.90, rate(trading_bot_trade_latency_ms_bucket[5m]))",
+            "legendFormat": "p90"
+          },
+          {
+            "expr": "histogram_quantile(0.50, rate(trading_bot_trade_latency_ms_bucket[5m]))",
+            "legendFormat": "p50 (median)"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "ms",
+            "label": "Latency"
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "title": "Slippage Distribution",
+        "type": "graph",
+        "gridPos": { "x": 12, "y": 6, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(trading_bot_slippage_bps_bucket[5m]))",
+            "legendFormat": "p95"
+          },
+          {
+            "expr": "histogram_quantile(0.50, rate(trading_bot_slippage_bps_bucket[5m]))",
+            "legendFormat": "Median"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "none",
+            "label": "Slippage (bps)"
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "title": "Fill Rate by Symbol",
+        "type": "table",
+        "gridPos": { "x": 0, "y": 14, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "sum by (symbol) (rate(trading_bot_trades_total{status=\"filled\"}[1h])) / sum by (symbol) (rate(trading_bot_trades_total[1h])) * 100",
+            "format": "table",
+            "instant": true
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "renameByName": {
+                "symbol": "Symbol",
+                "Value": "Fill Rate %"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "title": "Average Slippage by Symbol",
+        "type": "bargauge",
+        "gridPos": { "x": 12, "y": 14, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "avg by (symbol) (trading_bot_slippage_bps)",
+            "legendFormat": "{{symbol}}"
+          }
+        ],
+        "options": {
+          "orientation": "horizontal",
+          "displayMode": "gradient"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "none",
+            "suffix": " bps",
+            "thresholds": {
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 5, "color": "yellow" },
+                { "value": 10, "color": "red" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 9,
+        "title": "Order Execution Timeline",
+        "type": "graph",
+        "gridPos": { "x": 0, "y": 22, "w": 24, "h": 8 },
+        "targets": [
+          {
+            "expr": "rate(trading_bot_trades_total[1m])",
+            "legendFormat": "{{side}} {{symbol}}"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "short",
+            "label": "Trades per minute"
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "title": "Execution Quality Score",
+        "type": "stat",
+        "gridPos": { "x": 0, "y": 30, "w": 8, "h": 6 },
+        "targets": [
+          {
+            "expr": "(trading_bot_order_fill_rate_percent * 0.4) + ((100 - histogram_quantile(0.95, trading_bot_slippage_bps_bucket)) * 0.3) + ((5000 - histogram_quantile(0.95, rate(trading_bot_trade_latency_ms_bucket[5m]))) / 50 * 0.3)"
+          }
+        ],
+        "description": "Composite score based on fill rate (40%), slippage (30%), and latency (30%)",
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "decimals": 1,
+            "suffix": " / 100",
+            "thresholds": {
+              "steps": [
+                { "value": 0, "color": "red" },
+                { "value": 70, "color": "yellow" },
+                { "value": 85, "color": "green" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 11,
+        "title": "API Response Times",
+        "type": "graph",
+        "gridPos": { "x": 8, "y": 30, "w": 16, "h": 6 },
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(trading_bot_api_latency_ms_bucket[5m]))",
+            "legendFormat": "{{api_name}} - p95"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "ms",
+            "label": "API Latency"
+          }
+        ]
+      },
+      {
+        "id": 12,
+        "title": "Partial Fills",
+        "type": "stat",
+        "gridPos": { "x": 0, "y": 36, "w": 6, "h": 4 },
+        "targets": [
+          {
+            "expr": "sum(trading_bot_trades_total{status=\"partial\"})"
+          }
+        ]
+      },
+      {
+        "id": 13,
+        "title": "Cancelled Orders",
+        "type": "stat",
+        "gridPos": { "x": 6, "y": 36, "w": 6, "h": 4 },
+        "targets": [
+          {
+            "expr": "sum(increase(trading_bot_trades_total{status=\"cancelled\"}[24h]))"
+          }
+        ]
+      },
+      {
+        "id": 14,
+        "title": "Timeout Errors",
+        "type": "stat",
+        "gridPos": { "x": 12, "y": 36, "w": 6, "h": 4 },
+        "targets": [
+          {
+            "expr": "sum(increase(trading_bot_errors_total{error_type=\"timeout\"}[24h]))"
+          }
+        ],
+        "options": {
+          "colorMode": "background"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 1, "color": "red" }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 15,
+        "title": "Network Errors",
+        "type": "stat",
+        "gridPos": { "x": 18, "y": 36, "w": 6, "h": 4 },
+        "targets": [
+          {
+            "expr": "sum(increase(trading_bot_errors_total{error_type=\"network\"}[24h]))"
+          }
+        ],
+        "options": {
+          "colorMode": "background"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "steps": [
+                { "value": 0, "color": "green" },
+                { "value": 1, "color": "red" }
+              ]
+            }
+          }
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,70 @@
+# Prometheus Configuration
+# ========================
+
+global:
+  scrape_interval: 15s      # Scrape targets every 15 seconds
+  evaluation_interval: 15s  # Evaluate rules every 15 seconds
+  external_labels:
+    monitor: 'nexustradeai'
+    environment: 'production'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+# Load rules once and periodically evaluate them
+rule_files:
+  - "alerts.yml"
+
+# Scrape configuration
+scrape_configs:
+  # Trading Bot metrics
+  - job_name: 'trading-bot'
+    static_configs:
+      - targets: ['trading-bot:9091']
+        labels:
+          service: 'trading-bot'
+          tier: 'application'
+
+  # Data Server metrics
+  - job_name: 'data-server'
+    static_configs:
+      - targets: ['data-server:9092']
+        labels:
+          service: 'data-server'
+          tier: 'application'
+
+  # PostgreSQL metrics (requires postgres_exporter)
+  - job_name: 'postgresql'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+        labels:
+          service: 'postgresql'
+          tier: 'database'
+
+  # Redis metrics (requires redis_exporter)
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+        labels:
+          service: 'redis'
+          tier: 'cache'
+
+  # Node exporter for system metrics (optional)
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+        labels:
+          service: 'node-exporter'
+          tier: 'infrastructure'
+
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+          tier: 'monitoring'

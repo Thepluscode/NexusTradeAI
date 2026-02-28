@@ -1,0 +1,53 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nexustrade-staging
+  labels:
+    name: nexustrade-staging
+    environment: staging
+    app: nexustrade-ai
+    tier: staging
+    version: v1.0.0
+  annotations:
+    description: "NexusTradeAI Staging Environment - Pre-production Testing"
+    contact: "devops@nexustrade.ai"
+    cost-center: "trading-platform"
+    backup-policy: "weekly"
+    monitoring: "enabled"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: staging-quota
+  namespace: nexustrade-staging
+  labels:
+    environment: staging
+    component: resource-management
+spec:
+  hard:
+    # Reduced resources for staging
+    requests.cpu: "30"
+    requests.memory: 60Gi
+    limits.cpu: "60"
+    limits.memory: 120Gi
+
+    # Storage for testing
+    requests.storage: "200Gi"
+    persistentvolumeclaims: "20"
+
+    # Network resources
+    services: "20"
+    services.loadbalancers: "3"
+    services.nodeports: "2"
+
+    # Configuration and secrets
+    secrets: "50"
+    configmaps: "50"
+
+    # Workload limits
+    pods: "50"
+    replicationcontrollers: "20"
+    deployments.apps: "20"
+    statefulsets.apps: "10"
+    jobs.batch: "30"
+    cronjobs.batch: "10"

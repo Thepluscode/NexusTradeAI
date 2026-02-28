@@ -1,0 +1,284 @@
+---
+# NexusTradeAI Production Inventory
+# Ansible inventory for production environment
+
+all:
+  children:
+    # EKS Cluster Nodes
+    eks_nodes:
+      children:
+        general_nodes:
+          hosts:
+            # General purpose nodes (auto-discovered via AWS EC2 plugin)
+          vars:
+            node_group: general
+            instance_type: m5.2xlarge
+            workload_type: standard
+            
+        trading_nodes:
+          hosts:
+            # Trading nodes (auto-discovered via AWS EC2 plugin)
+          vars:
+            node_group: trading
+            instance_type: c5n.4xlarge
+            workload_type: high-performance
+            
+        gpu_nodes:
+          hosts:
+            # GPU nodes (auto-discovered via AWS EC2 plugin)
+          vars:
+            node_group: gpu
+            instance_type: p3.2xlarge
+            workload_type: ai-ml
+            
+        memory_nodes:
+          hosts:
+            # Memory-optimized nodes (auto-discovered via AWS EC2 plugin)
+          vars:
+            node_group: memory
+            instance_type: r5.2xlarge
+            workload_type: memory-intensive
+    
+    # Management and Bastion Hosts
+    management:
+      hosts:
+        bastion-prod:
+          ansible_host: bastion.nexustrade.ai
+          ansible_user: ubuntu
+          ansible_ssh_private_key_file: ~/.ssh/nexustrade-prod.pem
+          
+        jenkins-prod:
+          ansible_host: jenkins.nexustrade.ai
+          ansible_user: ubuntu
+          ansible_ssh_private_key_file: ~/.ssh/nexustrade-prod.pem
+          
+        monitoring-prod:
+          ansible_host: monitoring.nexustrade.ai
+          ansible_user: ubuntu
+          ansible_ssh_private_key_file: ~/.ssh/nexustrade-prod.pem
+
+  vars:
+    # Global Production Variables
+    environment: production
+    aws_region: us-east-1
+    cluster_name: nexustrade-ai-production
+    
+    # Kubernetes Configuration
+    kubectl_version: 1.28.0-00
+    helm_version: v3.13.0
+    
+    # Docker Configuration
+    docker_users:
+      - ubuntu
+      - jenkins
+      - monitoring
+    docker_registry_mirror: ""
+    docker_insecure_registries: []
+    docker_data_root: /var/lib/docker
+    
+    # Security Configuration
+    ssh_port: 22
+    firewall_enabled: true
+    fail2ban_enabled: true
+    
+    # Monitoring Configuration
+    prometheus_enabled: true
+    grafana_enabled: true
+    alertmanager_enabled: true
+    node_exporter_enabled: true
+    
+    # Logging Configuration
+    fluentd_enabled: true
+    elasticsearch_enabled: true
+    kibana_enabled: true
+    
+    # Backup Configuration
+    backup_enabled: true
+    backup_schedule: "0 2 * * *"  # Daily at 2 AM
+    backup_retention_days: 30
+    
+    # Performance Tuning
+    kernel_optimization: true
+    network_optimization: true
+    disk_optimization: true
+    
+    # Trading-Specific Configuration
+    time_sync_enabled: true
+    ntp_servers:
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
+      - 2.pool.ntp.org
+      - 3.pool.ntp.org
+    
+    # Resource Limits
+    max_open_files: 65536
+    max_processes: 65536
+    max_memory_lock: unlimited
+    
+    # Network Configuration
+    tcp_congestion_control: bbr
+    tcp_window_scaling: true
+    tcp_timestamps: true
+    
+    # SSL/TLS Configuration
+    ssl_enabled: true
+    ssl_protocols:
+      - TLSv1.2
+      - TLSv1.3
+    ssl_ciphers: "ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS"
+    
+    # Database Configuration
+    postgres_version: 14
+    redis_version: 7
+    mongodb_version: 6
+    influxdb_version: 2
+    
+    # Application Configuration
+    app_environment: production
+    debug_mode: false
+    log_level: info
+    
+    # Secrets Management
+    vault_enabled: true
+    vault_address: https://vault.nexustrade.ai
+    
+    # Compliance Configuration
+    audit_logging: true
+    compliance_standards:
+      - SOC2-Type2
+      - PCI-DSS
+      - ISO-27001
+    
+    # Disaster Recovery
+    dr_enabled: true
+    dr_region: us-west-2
+    cross_region_backup: true
+    
+    # Cost Optimization
+    spot_instances_enabled: false  # Disabled for production trading
+    scheduled_scaling_enabled: true
+    resource_tagging_enforced: true
+    
+    # AI/ML Configuration
+    gpu_enabled: true
+    cuda_version: 11.8
+    pytorch_version: 2.0
+    tensorflow_version: 2.13
+    
+    # Trading Configuration
+    market_data_feeds:
+      - polygon
+      - alpaca
+      - iex
+    exchanges:
+      - NYSE
+      - NASDAQ
+      - CBOE
+    
+    # Performance Requirements
+    max_latency_ms: 1
+    min_throughput_ops: 1000000
+    target_uptime: 99.99
+    
+    # Security Hardening
+    selinux_enabled: false  # Disabled for container compatibility
+    apparmor_enabled: true
+    fail2ban_maxretry: 3
+    fail2ban_bantime: 3600
+    
+    # Container Runtime
+    container_runtime: containerd
+    cri_socket: /run/containerd/containerd.sock
+    
+    # Storage Configuration
+    storage_class: gp3
+    storage_encryption: true
+    storage_backup: true
+    
+    # Networking
+    cni_plugin: aws-vpc-cni
+    service_mesh: istio
+    ingress_controller: nginx
+    
+    # Observability
+    tracing_enabled: true
+    metrics_retention_days: 90
+    logs_retention_days: 30
+    
+    # Automation
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+    ansible_host_key_checking: false
+    
+    # Deployment Configuration
+    rolling_update_max_surge: 1
+    rolling_update_max_unavailable: 0
+    deployment_timeout: 600
+    
+    # Health Checks
+    health_check_interval: 30
+    health_check_timeout: 10
+    health_check_retries: 3
+    
+    # Load Balancing
+    load_balancer_type: nlb
+    load_balancer_scheme: internal
+    cross_zone_load_balancing: true
+    
+    # Auto Scaling
+    cluster_autoscaler_enabled: true
+    hpa_enabled: true
+    vpa_enabled: true
+    
+    # Service Discovery
+    service_discovery: aws-cloud-map
+    dns_provider: route53
+    
+    # Certificate Management
+    cert_manager_enabled: true
+    acme_server: https://acme-v02.api.letsencrypt.org/directory
+    
+    # Image Registry
+    container_registry: ecr
+    image_pull_policy: Always
+    image_scanning_enabled: true
+    
+    # Chaos Engineering
+    chaos_engineering_enabled: false  # Disabled in production
+    chaos_monkey_enabled: false
+    
+    # Feature Flags
+    feature_flags:
+      blue_green_deployment: true
+      canary_deployment: true
+      circuit_breaker: true
+      rate_limiting: true
+      caching: true
+      compression: true
+    
+    # Integration Configuration
+    slack_notifications: true
+    pagerduty_integration: true
+    datadog_integration: true
+    newrelic_integration: false
+    
+    # Compliance Monitoring
+    cis_benchmarks: true
+    vulnerability_scanning: true
+    penetration_testing: quarterly
+    
+    # Business Continuity
+    rpo_minutes: 15  # Recovery Point Objective
+    rto_minutes: 60  # Recovery Time Objective
+    backup_testing: monthly
+    
+    # Performance Monitoring
+    apm_enabled: true
+    profiling_enabled: true
+    synthetic_monitoring: true
+    
+    # Data Protection
+    data_encryption_at_rest: true
+    data_encryption_in_transit: true
+    data_classification: confidential
+    data_retention_policy: 7_years

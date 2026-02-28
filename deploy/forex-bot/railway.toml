@@ -1,8 +1,9 @@
 [build]
-builder = "dockerfile"
-dockerfilePath = "deploy/forex-bot/Dockerfile"
+builder = "nixpacks"
+buildCommand = "npm install"
 
 [deploy]
+startCommand = "node bot.js"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
