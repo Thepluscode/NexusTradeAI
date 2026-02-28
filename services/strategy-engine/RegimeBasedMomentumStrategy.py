@@ -30,7 +30,19 @@ try:
     REGIME_AVAILABLE = True
 except ImportError:
     REGIME_AVAILABLE = False
-    logging.warning("RegimeDetector not available")
+    logging.warning("RegimeDetector not available — using fallback regime enum")
+    from enum import Enum
+    class MarketRegime(Enum):
+        TRENDING_UP = "trending_up"
+        TRENDING_DOWN = "trending_down"
+        MEAN_REVERTING = "mean_reverting"
+        HIGH_VOLATILITY = "high_volatility"
+    class RegimeState:
+        def __init__(self):
+            self.regime = MarketRegime.MEAN_REVERTING
+            self.confidence = 0.5
+    RegimeDetector = None
+    def get_regime_detector(): return None
 
 logger = logging.getLogger(__name__)
 
