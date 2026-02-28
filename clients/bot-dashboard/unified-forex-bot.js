@@ -14,6 +14,7 @@ const { getTelegramAlertService } = require('../../infrastructure/notifications/
 
 /**
  * UNIFIED FOREX TRADING BOT
+ * v3.2 - Forex Council Improvements: Wilder's RSI, ATR stops, H1 confirmation, BB breakout, entry candle
  *
  * FEATURES (Same Standard as Stock Bot):
  * 1. Anti-Churning Protection - 10 trades/day limit
@@ -24,6 +25,11 @@ const { getTelegramAlertService } = require('../../infrastructure/notifications/
  * 6. Economic Calendar Awareness - Pause before NFP, FOMC
  * 7. Memory Management - Production-grade infrastructure
  * 8. Prometheus Metrics - Full observability
+ * 9. [v3.2] Wilder's Smoothed RSI - Industry-standard, matches broker platform values
+ * 10. [v3.2] ATR-Based Stops/Targets - 1.5x ATR stop, 3.0x ATR target (adapts per pair volatility)
+ * 11. [v3.2] H1 Trend Confirmation - Higher timeframe filter before M15 entry
+ * 12. [v3.2] Entry Candle Confirmation - Last M15 candle must align with signal direction
+ * 13. [v3.2] Bollinger Band Breakout Filter - Only enter on genuine BB(20,2) breakouts
  *
  * TRADING HOURS: 24/5 (Sunday 5 PM - Friday 5 PM EST)
  * BEST SESSION: London/NY Overlap (8 AM - 12 PM EST)
@@ -441,24 +447,30 @@ async function closePosition(instrument) {
 
 // ===== INDICATORS =====
 
+// [v3.2] Wilder's Smoothed RSI — matches broker platform values, eliminates simple-average drift
 function calculateRSI(candles, period = 14) {
-    if (candles.length < period + 1) return 50;
+    if (candles.length < period * 2) return 50;
+    const closes = candles.map(c => parseFloat(c.mid.c));
+    const changes = [];
+    for (let i = 1; i < closes.length; i++) changes.push(closes[i] - closes[i - 1]);
 
-    const closes = candles.slice(-period - 1).map(c => parseFloat(c.mid.c));
-    let gains = 0, losses = 0;
+    let avgGain = 0, avgLoss = 0;
+    for (let i = 0; i < period; i++) {
+        if (changes[i] > 0) avgGain += changes[i];
+        else avgLoss += Math.abs(changes[i]);
+    }
+    avgGain /= period;
+    avgLoss /= period;
 
-    for (let i = 1; i < closes.length; i++) {
-        const change = closes[i] - closes[i - 1];
-        if (change > 0) gains += change;
-        else losses += Math.abs(change);
+    for (let i = period; i < changes.length; i++) {
+        const gain = changes[i] > 0 ? changes[i] : 0;
+        const loss = changes[i] < 0 ? Math.abs(changes[i]) : 0;
+        avgGain = (avgGain * (period - 1) + gain) / period;
+        avgLoss = (avgLoss * (period - 1) + loss) / period;
     }
 
-    const avgGain = gains / period;
-    const avgLoss = losses / period;
     if (avgLoss === 0) return 100;
-
-    const rs = avgGain / avgLoss;
-    return 100 - (100 / (1 + rs));
+    return 100 - (100 / (1 + avgGain / avgLoss));
 }
 
 function calculateSMA(candles, period) {
@@ -479,6 +491,62 @@ function calculateATR(candles, period = 14) {
     }
 
     return tr / period;
+}
+
+// [v3.2] Bollinger Bands — detects genuine breakouts from ranging price action
+function calculateBollingerBands(candles, period = 20, numStdDev = 2) {
+    if (candles.length < period) return null;
+    const closes = candles.slice(-period).map(c => parseFloat(c.mid.c));
+    const sma = closes.reduce((a, b) => a + b, 0) / period;
+    const variance = closes.reduce((sum, c) => sum + Math.pow(c - sma, 2), 0) / period;
+    const std = Math.sqrt(variance);
+    return { upper: sma + numStdDev * std, middle: sma, lower: sma - numStdDev * std };
+}
+
+// [v3.2] H1 Trend Filter — only trade M15 signals that align with H1 direction
+async function getH1Trend(pair) {
+    try {
+        const h1Candles = await getCandles(pair, 'H1', 30);
+        if (h1Candles.length < 22) return 'neutral';
+        const closes = h1Candles.map(c => parseFloat(c.mid.c));
+        const period = 20;
+        const sma20 = closes.slice(-period).reduce((a, b) => a + b, 0) / period;
+        const last3 = closes.slice(-3);
+        const allAbove = last3.every(c => c > sma20);
+        const allBelow = last3.every(c => c < sma20);
+        const risingSlope = last3[2] > last3[0];
+        if (allAbove && risingSlope) return 'up';
+        if (allBelow && !risingSlope) return 'down';
+        return 'neutral';
+    } catch (e) {
+        console.warn(`[H1 Trend] ${pair}: ${e.message}`);
+        return 'neutral';
+    }
+}
+
+// ===== STRATEGY BRIDGE (port 3010) =====
+// Non-blocking ensemble confirmation — if bridge is offline, local signals are used as-is
+
+async function queryStrategyBridge(pair, direction) {
+    try {
+        const candles = await getCandles(pair, 'M15', 60);
+        if (!candles || candles.length < 30) return null;
+        const prices = candles.map(c => ({
+            timestamp: c.time || new Date().toISOString(),
+            open:   parseFloat(c.mid.o) || 0,
+            high:   parseFloat(c.mid.h) || 0,
+            low:    parseFloat(c.mid.l) || 0,
+            close:  parseFloat(c.mid.c) || 0,
+            volume: parseFloat(c.volume) || 0
+        }));
+        const response = await axios.post('http://localhost:3010/signal',
+            { symbol: pair, prices, asset_class: 'forex' },
+            { timeout: 3000 }
+        );
+        return response.data;
+    } catch (e) {
+        return null;
+    }
 }
 
 // ===== TRAILING STOP UPDATE =====
@@ -527,19 +595,26 @@ async function analyzePair(pair) {
     const rsi = calculateRSI(candles);
     const atr = calculateATR(candles);
 
+    // [v3.2] ATR as % of price — used for adaptive stops/targets
+    const atrPct = currentPrice > 0 ? atr / currentPrice : 0;
+
+    // [v3.2] Bollinger Bands — breakout confirmation
+    const bb = calculateBollingerBands(candles, 20, 2);
+
     const isUptrend = sma10 > sma20 && sma20 > sma50 && currentPrice > sma10;
     const isDowntrend = sma10 < sma20 && sma20 < sma50 && currentPrice < sma10;
     const trendStrength = Math.abs(currentPrice - sma50) / sma50;
 
+    // [v3.2] Entry candle direction — last completed M15 candle must align with signal
+    const lastCandle = candles[candles.length - 1];
+    const lastCandleBullish = parseFloat(lastCandle.mid.c) > parseFloat(lastCandle.mid.o);
+    const lastCandleBearish = parseFloat(lastCandle.mid.c) < parseFloat(lastCandle.mid.o);
+
     return {
-        pair,
-        currentPrice,
-        sma10, sma20, sma50,
-        rsi,
-        atr,
-        isUptrend,
-        isDowntrend,
-        trendStrength
+        pair, currentPrice, sma10, sma20, sma50, rsi, atr,
+        atrPct, bb,
+        isUptrend, isDowntrend, trendStrength,
+        lastCandleBullish, lastCandleBearish
     };
 }
 
@@ -554,66 +629,119 @@ async function scanForSignals() {
     }
 
     for (const pair of FOREX_PAIRS) {
-        // Check if can trade
         const canTradeResult = canTrade(pair);
         if (!canTradeResult.allowed) continue;
-
-        // Skip if already in position
         if (positions.has(pair)) continue;
 
         const analysis = await analyzePair(pair);
         if (!analysis) continue;
 
-        const { currentPrice, rsi, isUptrend, isDowntrend, trendStrength, atr } = analysis;
+        const {
+            currentPrice, rsi, isUptrend, isDowntrend, trendStrength,
+            atrPct, bb, lastCandleBullish, lastCandleBearish
+        } = analysis;
+
+        // [v3.2] H1 trend confirmation — fetch once per pair
+        const h1Trend = await getH1Trend(pair);
 
         // Determine tier
         let tier = null;
         if (trendStrength >= MOMENTUM_CONFIG.tier3.threshold) tier = 'tier3';
         else if (trendStrength >= MOMENTUM_CONFIG.tier2.threshold) tier = 'tier2';
         else if (trendStrength >= MOMENTUM_CONFIG.tier1.threshold) tier = 'tier1';
-
         if (!tier) continue;
 
         const config = MOMENTUM_CONFIG[tier];
-
-        // Check position count for this tier
         const tierPositions = Array.from(positions.values()).filter(p => p.tier === tier).length;
         if (tierPositions >= config.maxPositions) continue;
 
+        // [v3.2] ATR-based stops/targets — adapts to each pair's volatility
+        const atrStop  = atrPct > 0 ? atrPct * 1.5 : config.stopLoss;
+        const atrTarget = atrPct > 0 ? atrPct * 3.0 : config.profitTarget;
+
         // LONG Signal
         if (isUptrend && rsi < config.rsiMax && rsi > config.rsiMin - 10) {
-            const stopLoss = currentPrice * (1 - config.stopLoss);
-            const takeProfit = currentPrice * (1 + config.profitTarget);
-
-            signals.push({
-                pair,
-                direction: 'long',
-                tier,
-                entry: currentPrice,
-                stopLoss,
-                takeProfit,
-                rsi,
-                trendStrength,
-                session: session.name
-            });
+            if (h1Trend !== 'up') {
+                console.log(`[H1 Filter] ${pair} LONG skipped — H1 trend is ${h1Trend}`);
+                continue;
+            }
+            if (!lastCandleBullish) {
+                console.log(`[Candle Filter] ${pair} LONG skipped — last candle not bullish`);
+                continue;
+            }
+            if (bb && currentPrice < bb.upper * 0.999) {
+                console.log(`[BB Filter] ${pair} LONG skipped — not breaking above BB upper ${bb.upper.toFixed(5)}`);
+                continue;
+            }
+            // [v3.2] Strategy Bridge confirmation
+            const bridgeLong = await queryStrategyBridge(pair, 'long');
+            if (bridgeLong !== null) {
+                if (!bridgeLong.should_enter || bridgeLong.direction !== 'long') {
+                    console.log(`[Bridge] ${pair} LONG rejected — bridge: ${bridgeLong.direction} (conf: ${(bridgeLong.confidence || 0).toFixed(2)})`);
+                    // fall through to SHORT check
+                } else {
+                    console.log(`[Bridge] ${pair} LONG confirmed ✓ conf: ${(bridgeLong.confidence || 0).toFixed(2)}`);
+                    signals.push({
+                        pair, direction: 'long', tier,
+                        entry: currentPrice,
+                        stopLoss:   currentPrice * (1 - atrStop),
+                        takeProfit: currentPrice * (1 + atrTarget),
+                        rsi, trendStrength, atrPct, h1Trend,
+                        session: session.name
+                    });
+                }
+            } else {
+                signals.push({
+                    pair, direction: 'long', tier,
+                    entry: currentPrice,
+                    stopLoss:   currentPrice * (1 - atrStop),
+                    takeProfit: currentPrice * (1 + atrTarget),
+                    rsi, trendStrength, atrPct, h1Trend,
+                    session: session.name
+                });
+            }
         }
 
         // SHORT Signal
         if (isDowntrend && rsi > (100 - config.rsiMax) && rsi < (100 - config.rsiMin + 10)) {
-            const stopLoss = currentPrice * (1 + config.stopLoss);
-            const takeProfit = currentPrice * (1 - config.profitTarget);
-
-            signals.push({
-                pair,
-                direction: 'short',
-                tier,
-                entry: currentPrice,
-                stopLoss,
-                takeProfit,
-                rsi,
-                trendStrength,
-                session: session.name
-            });
+            if (h1Trend !== 'down') {
+                console.log(`[H1 Filter] ${pair} SHORT skipped — H1 trend is ${h1Trend}`);
+                continue;
+            }
+            if (!lastCandleBearish) {
+                console.log(`[Candle Filter] ${pair} SHORT skipped — last candle not bearish`);
+                continue;
+            }
+            if (bb && currentPrice > bb.lower * 1.001) {
+                console.log(`[BB Filter] ${pair} SHORT skipped — not breaking below BB lower ${bb.lower.toFixed(5)}`);
+                continue;
+            }
+            // [v3.2] Strategy Bridge confirmation
+            const bridgeShort = await queryStrategyBridge(pair, 'short');
+            if (bridgeShort !== null) {
+                if (!bridgeShort.should_enter || bridgeShort.direction !== 'short') {
+                    console.log(`[Bridge] ${pair} SHORT rejected — bridge: ${bridgeShort.direction} (conf: ${(bridgeShort.confidence || 0).toFixed(2)})`);
+                } else {
+                    console.log(`[Bridge] ${pair} SHORT confirmed ✓ conf: ${(bridgeShort.confidence || 0).toFixed(2)}`);
+                    signals.push({
+                        pair, direction: 'short', tier,
+                        entry: currentPrice,
+                        stopLoss:   currentPrice * (1 + atrStop),
+                        takeProfit: currentPrice * (1 - atrTarget),
+                        rsi, trendStrength, atrPct, h1Trend,
+                        session: session.name
+                    });
+                }
+            } else {
+                signals.push({
+                    pair, direction: 'short', tier,
+                    entry: currentPrice,
+                    stopLoss:   currentPrice * (1 + atrStop),
+                    takeProfit: currentPrice * (1 - atrTarget),
+                    rsi, trendStrength, atrPct, h1Trend,
+                    session: session.name
+                });
+            }
         }
     }
 
@@ -1074,28 +1202,44 @@ app.get('/api/accounts/summary', async (req, res) => {
 });
 
 app.post('/api/forex/start', (req, res) => {
-    botRunning = true;
-    botPaused = false;
-    saveBotState();
-    res.json({ success: true, message: 'Forex trading bot started', isRunning: true, isPaused: false });
+    try {
+        botRunning = true;
+        botPaused = false;
+        saveBotState();
+        res.json({ success: true, message: 'Forex trading bot started', isRunning: true, isPaused: false });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
 app.post('/api/forex/stop', (req, res) => {
-    botRunning = false;
-    botPaused = false;
-    saveBotState();
-    res.json({ success: true, message: 'Forex trading bot stopped', isRunning: false, isPaused: false });
+    try {
+        botRunning = false;
+        botPaused = false;
+        saveBotState();
+        res.json({ success: true, message: 'Forex trading bot stopped', isRunning: false, isPaused: false });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
 app.post('/api/forex/pause', (req, res) => {
-    botPaused = !botPaused;
-    saveBotState();
-    res.json({ success: true, message: botPaused ? 'Forex trading bot paused' : 'Forex trading bot resumed', isRunning: botRunning, isPaused: botPaused });
+    try {
+        botPaused = !botPaused;
+        saveBotState();
+        res.json({ success: true, message: botPaused ? 'Forex trading bot paused' : 'Forex trading bot resumed', isRunning: botRunning, isPaused: botPaused });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
 app.post('/api/forex/scan', async (req, res) => {
-    const signals = await scanForSignals();
-    res.json({ success: true, signals });
+    try {
+        const signals = await scanForSignals();
+        res.json({ success: true, signals });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
 // Test Telegram Alerts

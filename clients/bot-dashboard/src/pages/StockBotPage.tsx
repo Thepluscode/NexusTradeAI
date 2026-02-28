@@ -130,7 +130,7 @@ export default function StockBotPage() {
 
     if (error) {
         return (
-            <Box sx={{ p: 3 }}>
+            <Box sx={{ p: { xs: 1.5, sm: 2, md: 3 } }}>
                 <Alert severity="error" sx={{ mb: 2 }}>
                     Stock Bot is offline. Make sure the bot server is running on port 3002.
                 </Alert>
@@ -151,7 +151,7 @@ export default function StockBotPage() {
         : '0';
 
     return (
-        <Box sx={{ p: 3 }}>
+        <Box sx={{ p: { xs: 1.5, sm: 2, md: 3 } }}>
             {/* Header */}
             <Paper
                 sx={{
@@ -161,7 +161,7 @@ export default function StockBotPage() {
                     borderRadius: 3,
                 }}
             >
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: { xs: 2, md: 0 } }}>
                     <Box>
                         <Typography variant="h4" sx={{ color: 'white', fontWeight: 700, mb: 1 }}>
                             📈 Stock Bot
@@ -256,7 +256,7 @@ export default function StockBotPage() {
 
             {/* Controls */}
             <Paper sx={{ p: 2, mb: 3 }}>
-                <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
                     <Typography variant="subtitle1" sx={{ fontWeight: 600, mr: 2 }}>
                         Controls:
                     </Typography>

@@ -156,18 +156,18 @@ export default function OverviewPage() {
     }
 
     return (
-        <Box sx={{ p: 3 }}>
+        <Box sx={{ p: { xs: 1.5, sm: 2, md: 3 } }}>
             {/* Header summary */}
             <Paper
                 sx={{
-                    p: 4,
-                    mb: 4,
+                    p: { xs: 2.5, sm: 3, md: 4 },
+                    mb: { xs: 2, md: 4 },
                     background: 'linear-gradient(135deg, #1e1e2f 0%, #2d2d44 100%)',
                     borderRadius: 3,
                     border: '1px solid rgba(255,255,255,0.1)',
                 }}
             >
-                <Typography variant="h4" sx={{ fontWeight: 800, mb: 0.5 }}>
+                <Typography variant="h4" sx={{ fontWeight: 800, mb: 0.5, fontSize: { xs: '1.5rem', sm: '2rem', md: '2.125rem' } }}>
                     🎯 NexusTradeAI
                 </Typography>
                 <Typography variant="body1" sx={{ color: 'rgba(255,255,255,0.6)', mb: 3 }}>
@@ -234,7 +234,7 @@ export default function OverviewPage() {
                                 <CardActionArea onClick={() => navigate(bot.path)} sx={{ height: '100%' }}>
                                     {/* Coloured header */}
                                     <Box sx={{ background: bot.gradient, p: 3 }}>
-                                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                        <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', sm: 'flex-start' }, gap: 1 }}>
                                             <Box sx={{ color: 'white' }}>{bot.icon}</Box>
                                             <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                                                 <Chip

@@ -63,7 +63,7 @@ class VolatilityArbitrageStrategy(BaseStrategy):
         super().__init__(
             name=f"VolatilityArbitrage_{vol_lookback}_{forecast_lookback}",
             strategy_type=StrategyType.MEAN_REVERSION,
-            config={
+            parameters={
                 'vol_lookback': vol_lookback,
                 'forecast_lookback': forecast_lookback,
                 'entry_threshold': entry_threshold,

@@ -131,7 +131,7 @@ export default function ForexBotPage() {
 
     if (error) {
         return (
-            <Box sx={{ p: 3 }}>
+            <Box sx={{ p: { xs: 1.5, sm: 2, md: 3 } }}>
                 <Alert severity="error" sx={{ mb: 2 }}>
                     Forex Bot is offline. Make sure the bot server is running on port 3005.
                 </Alert>
@@ -160,7 +160,7 @@ export default function ForexBotPage() {
     };
 
     return (
-        <Box sx={{ p: 3 }}>
+        <Box sx={{ p: { xs: 1.5, sm: 2, md: 3 } }}>
             {/* Header */}
             <Paper
                 sx={{
@@ -170,7 +170,7 @@ export default function ForexBotPage() {
                     borderRadius: 3,
                 }}
             >
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: { xs: 2, md: 0 } }}>
                     <Box>
                         <Typography variant="h4" sx={{ color: 'white', fontWeight: 700, mb: 1 }}>
                             🌍 Forex Bot
@@ -274,7 +274,7 @@ export default function ForexBotPage() {
 
             {/* Controls */}
             <Paper sx={{ p: 2, mb: 3 }}>
-                <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
                     <Typography variant="subtitle1" sx={{ fontWeight: 600, mr: 2 }}>
                         Controls:
                     </Typography>
@@ -325,51 +325,51 @@ export default function ForexBotPage() {
                             const pnl = pos.unrealizedPL ?? 0;
                             const pnlPct = pos.unrealizedPLPct ?? 0;
                             return (
-                            <Grid item xs={12} sm={6} md={4} key={`${sym}-${idx}`}>
-                                <Card
-                                    sx={{
-                                        border: '1px solid',
-                                        borderColor: pnl >= 0 ? '#10b981' : '#ef4444',
-                                    }}
-                                >
-                                    <CardContent>
-                                        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                                            <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                                                {sym}
+                                <Grid item xs={12} sm={6} md={4} key={`${sym}-${idx}`}>
+                                    <Card
+                                        sx={{
+                                            border: '1px solid',
+                                            borderColor: pnl >= 0 ? '#10b981' : '#ef4444',
+                                        }}
+                                    >
+                                        <CardContent>
+                                            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                                                <Typography variant="h6" sx={{ fontWeight: 700 }}>
+                                                    {sym}
+                                                </Typography>
+                                                <Chip
+                                                    label={side.toUpperCase()}
+                                                    size="small"
+                                                    color={side === 'long' ? 'success' : 'error'}
+                                                />
+                                            </Box>
+                                            <Typography variant="body2" color="text.secondary">
+                                                {qty} units @ {ep.toFixed(5)}
                                             </Typography>
-                                            <Chip
-                                                label={side.toUpperCase()}
-                                                size="small"
-                                                color={side === 'long' ? 'success' : 'error'}
-                                            />
-                                        </Box>
-                                        <Typography variant="body2" color="text.secondary">
-                                            {qty} units @ {ep.toFixed(5)}
-                                        </Typography>
-                                        <Box sx={{ display: 'flex', alignItems: 'center', mt: 1 }}>
-                                            {pnl >= 0 ? (
-                                                <TrendingUp sx={{ color: '#10b981', mr: 0.5 }} />
-                                            ) : (
-                                                <TrendingDown sx={{ color: '#ef4444', mr: 0.5 }} />
+                                            <Box sx={{ display: 'flex', alignItems: 'center', mt: 1 }}>
+                                                {pnl >= 0 ? (
+                                                    <TrendingUp sx={{ color: '#10b981', mr: 0.5 }} />
+                                                ) : (
+                                                    <TrendingDown sx={{ color: '#ef4444', mr: 0.5 }} />
+                                                )}
+                                                <Typography
+                                                    variant="h6"
+                                                    sx={{
+                                                        fontWeight: 700,
+                                                        color: pnl >= 0 ? '#10b981' : '#ef4444',
+                                                    }}
+                                                >
+                                                    ${pnl.toFixed(2)} ({(pnlPct * 100).toFixed(2)}%)
+                                                </Typography>
+                                            </Box>
+                                            {pos.stopLoss != null && (
+                                                <Typography variant="caption" color="text.secondary">
+                                                    SL: {pos.stopLoss.toFixed(5)} · TP: {pos.takeProfit?.toFixed(5) ?? '—'}
+                                                </Typography>
                                             )}
-                                            <Typography
-                                                variant="h6"
-                                                sx={{
-                                                    fontWeight: 700,
-                                                    color: pnl >= 0 ? '#10b981' : '#ef4444',
-                                                }}
-                                            >
-                                                ${pnl.toFixed(2)} ({(pnlPct * 100).toFixed(2)}%)
-                                            </Typography>
-                                        </Box>
-                                        {pos.stopLoss != null && (
-                                            <Typography variant="caption" color="text.secondary">
-                                                SL: {pos.stopLoss.toFixed(5)} · TP: {pos.takeProfit?.toFixed(5) ?? '—'}
-                                            </Typography>
-                                        )}
-                                    </CardContent>
-                                </Card>
-                            </Grid>
+                                        </CardContent>
+                                    </Card>
+                                </Grid>
                             );
                         })}
                     </Grid>

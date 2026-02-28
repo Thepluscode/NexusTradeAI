@@ -16,6 +16,17 @@ const smsAlerts = getSMSAlertService();
 const promClient = require('prom-client');
 const register = promClient.register; // Use default register
 
+/**
+ * UNIFIED CRYPTO TRADING BOT
+ * v3.2 - Crypto Council Improvements:
+ * 1. Wilder's Smoothed RSI (replaces simple-average — matches broker platform values)
+ * 2. MACD(12,26,9) confirmation filter (only enter when MACD histogram is bullish)
+ * 3. Enhanced BTC filter with RSI + 24h change check (avoids overbought/weak BTC)
+ * 4. Tighter trailing stops (+5% → trail 3%, +10% → 6%, +20% → 12%, +30% → 18%)
+ * 5. Volume surge filter (current 5-min bar must have 1.5x average volume)
+ * 6. Dynamic position sizing (Kelly-inspired: scale with win rate, capped 0.25x–2.0x)
+ */
+
 // ============================================================================
 // CRYPTO TRADING CONFIGURATION (24/7/365)
 // ============================================================================
@@ -100,11 +111,12 @@ const CRYPTO_CONFIG = {
         avoidWeekend: false     // Crypto trades 24/7 even weekends
     },
 
-    // Trailing Stops (crypto needs looser stops)
+    // Trailing Stops — v3.2: tighter stops to capture more profit before reversal
     trailingStops: [
-        { profit: 0.10, stopDistance: 0.05 }, // At +10%, trail by 5%
-        { profit: 0.20, stopDistance: 0.08 }, // At +20%, trail by 8%
-        { profit: 0.30, stopDistance: 0.12 }  // At +30%, trail by 12%
+        { profit: 0.05, stopDistance: 0.03 }, // At +5%, trail by 3% (NEW — protect early gains)
+        { profit: 0.10, stopDistance: 0.06 }, // At +10%, trail by 6% (was 5%)
+        { profit: 0.20, stopDistance: 0.12 }, // At +20%, trail by 12% (was 8%)
+        { profit: 0.30, stopDistance: 0.18 }  // At +30%, trail by 18% (was 12%)
     ],
 
     // Scan Interval (5 min for crypto)
@@ -312,40 +324,125 @@ class CryptoTradingEngine {
         return ema;
     }
 
+    // [v3.2] Wilder's Smoothed RSI — industry-standard, matches broker platform values
     calculateRSI(prices, period = 14) {
-        if (prices.length < period + 1) return 50;
+        if (prices.length < period * 2) return 50;
+        const changes = [];
+        for (let i = 1; i < prices.length; i++) changes.push(prices[i] - prices[i - 1]);
 
-        let gains = 0, losses = 0;
-        for (let i = prices.length - period; i < prices.length; i++) {
-            const change = prices[i] - prices[i - 1];
-            if (change > 0) gains += change;
-            else losses += Math.abs(change);
+        let avgGain = 0, avgLoss = 0;
+        for (let i = 0; i < period; i++) {
+            if (changes[i] > 0) avgGain += changes[i];
+            else avgLoss += Math.abs(changes[i]);
+        }
+        avgGain /= period;
+        avgLoss /= period;
+
+        for (let i = period; i < changes.length; i++) {
+            const gain = changes[i] > 0 ? changes[i] : 0;
+            const loss = changes[i] < 0 ? Math.abs(changes[i]) : 0;
+            avgGain = (avgGain * (period - 1) + gain) / period;
+            avgLoss = (avgLoss * (period - 1) + loss) / period;
         }
 
-        const avgGain = gains / period;
-        const avgLoss = losses / period;
         if (avgLoss === 0) return 100;
+        return 100 - (100 / (1 + avgGain / avgLoss));
+    }
 
-        const rs = avgGain / avgLoss;
-        return 100 - (100 / (1 + rs));
+    // [v3.2] MACD(12,26,9) — momentum confirmation; only enter when histogram is bullish & rising
+    calculateMACD(prices, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
+        if (prices.length < slowPeriod + signalPeriod) return null;
+
+        // Build MACD line for each bar once we have enough data
+        const macdLine = [];
+        for (let i = slowPeriod - 1; i < prices.length; i++) {
+            const slice = prices.slice(0, i + 1);
+            const fast = this.calculateEMA(slice, fastPeriod);
+            const slow = this.calculateEMA(slice, slowPeriod);
+            if (fast !== null && slow !== null) macdLine.push(fast - slow);
+        }
+
+        if (macdLine.length < signalPeriod) return null;
+        const signalLine = this.calculateEMA(macdLine, signalPeriod);
+        if (signalLine === null) return null;
+
+        const histogram = macdLine[macdLine.length - 1] - signalLine;
+        const prevHistogram = macdLine.length > 1
+            ? macdLine[macdLine.length - 2] - this.calculateEMA(macdLine.slice(0, -1), signalPeriod)
+            : histogram;
+
+        return {
+            macd: macdLine[macdLine.length - 1],
+            signal: signalLine,
+            histogram,
+            // Bullish = histogram positive AND rising (momentum accelerating)
+            bullish: histogram > 0 && histogram > (prevHistogram || 0)
+        };
+    }
+
+    // ========================================================================
+    // STRATEGY BRIDGE (port 3010)
+    // ========================================================================
+
+    // Non-blocking ensemble confirmation from Python strategy bridge.
+    // Returns null if bridge is offline — trade proceeds on local signals alone.
+    async queryStrategyBridge(symbol, prices) {
+        try {
+            if (!prices || prices.length < 30) return null;
+            const priceData = prices.map((close, i) => ({
+                timestamp: new Date(Date.now() - (prices.length - 1 - i) * 5 * 60000).toISOString(),
+                open: close, high: close, low: close, close, volume: 0
+            }));
+            const response = await axios.post('http://localhost:3010/signal',
+                { symbol, prices: priceData, asset_class: 'crypto' },
+                { timeout: 3000 }
+            );
+            return response.data;
+        } catch (e) {
+            return null;
+        }
     }
 
     // ========================================================================
     // BTC CORRELATION STRATEGY
     // ========================================================================
 
+    // [v3.2] Enhanced BTC filter — adds RSI health check and 24h change threshold
+    // Prevents entering altcoin trades when BTC is overbought or in sharp decline
     async isBTCBullish() {
         const btcPrices = this.priceHistory.get('BTCUSDT') || [];
-        if (btcPrices.length < 20) return true; // Default allow
+        if (btcPrices.length < 20) return true; // Default allow when insufficient data
 
         const sma20 = this.calculateSMA(btcPrices, 20);
         const currentPrice = btcPrices[btcPrices.length - 1];
         const ema9 = this.calculateEMA(btcPrices, 9);
 
-        // BTC is bullish if:
-        // 1. Price above 20 SMA
-        // 2. EMA9 above SMA20 (short-term momentum)
-        return currentPrice > sma20 && ema9 > sma20;
+        // Basic trend check: price above SMA20, EMA9 above SMA20
+        const isTrending = currentPrice > sma20 && ema9 > sma20;
+        if (!isTrending) return false;
+
+        // [v3.2] RSI health check: avoid overbought (>70) and weak (<45) BTC
+        const btcRsi = this.calculateRSI(btcPrices, 14);
+        if (btcRsi < 45 || btcRsi > 70) {
+            console.log(`[BTC Filter] RSI ${btcRsi.toFixed(1)} outside healthy range 45-70`);
+            return false;
+        }
+
+        // [v3.2] 24h change check: avoid altcoin entries when BTC dropped >2% today
+        try {
+            const ticker = await this.binance.get24hTicker('BTCUSDT');
+            if (ticker) {
+                const change24h = parseFloat(ticker.priceChangePercent);
+                if (change24h < -2) {
+                    console.log(`[BTC Filter] 24h change ${change24h.toFixed(1)}% too negative — holding off altcoins`);
+                    return false;
+                }
+            }
+        } catch (e) {
+            // Non-critical — proceed if ticker fetch fails
+        }
+
+        return true;
     }
 
     // ========================================================================
@@ -436,6 +533,22 @@ class CryptoTradingEngine {
 
             if (!sma20 || !ema9) continue;
 
+            // [v3.2] MACD confirmation — only enter when momentum is accelerating bullishly
+            const macd = this.calculateMACD(data.prices);
+            if (!macd || !macd.bullish) {
+                continue; // Skip when MACD histogram not bullish/rising
+            }
+
+            // [v3.2] Volume surge filter — current bar must have 1.5x average volume
+            const avgVolume = data.volumes.length >= 20
+                ? data.volumes.slice(-20).reduce((a, b) => a + b, 0) / 20
+                : null;
+            const currentBarVolume = data.volumes[data.volumes.length - 1];
+            const volumeRatio = avgVolume > 0 ? currentBarVolume / avgVolume : 1;
+            if (volumeRatio < 1.5) {
+                continue; // Require volume surge on entry candle
+            }
+
             // Momentum calculation
             const momentum = (data.currentPrice - sma20) / sma20;
 
@@ -455,7 +568,16 @@ class CryptoTradingEngine {
                     .filter(p => p.tier === tierName).length;
                 if (tierPositions >= tier.maxPositions) continue;
 
-                // OPPORTUNITY FOUND!
+                // OPPORTUNITY FOUND — run bridge confirmation before committing
+                const bridgeResult = await this.queryStrategyBridge(symbol, data.prices);
+                if (bridgeResult !== null) {
+                    if (!bridgeResult.should_enter || bridgeResult.direction !== 'long') {
+                        console.log(`[Bridge] ${symbol} rejected — bridge: ${bridgeResult.direction} (conf: ${(bridgeResult.confidence || 0).toFixed(2)}): ${bridgeResult.reason || ''}`);
+                        break;
+                    }
+                    console.log(`[Bridge] ${symbol} confirmed ✓ conf: ${(bridgeResult.confidence || 0).toFixed(2)}`);
+                }
+
                 opportunities.push({
                     symbol,
                     tier: tierName,
@@ -463,6 +585,7 @@ class CryptoTradingEngine {
                     momentum: momentum * 100,
                     rsi,
                     volume24h: data.volume24h,
+                    volumeRatio,  // [v3.2] volume surge ratio
                     stopLoss: data.currentPrice * (1 - tier.stopLoss),
                     takeProfit: data.currentPrice * (1 + tier.profitTarget),
                     stopLossPercent: tier.stopLoss * 100,
@@ -526,11 +649,18 @@ class CryptoTradingEngine {
         }
 
         try {
-            // Calculate position size (in base currency, e.g., BTC, ETH)
+            // [v3.2] Dynamic position sizing — Kelly-inspired: scale with win rate
+            // Defaults to 50% win rate until 10 trades have been recorded
+            const totalClosedTrades = this.winningTrades + this.losingTrades;
+            const runningWinRate = totalClosedTrades >= 10
+                ? this.winningTrades / totalClosedTrades
+                : 0.5;
+            const sizingMultiplier = Math.max(0.25, Math.min(2.0, runningWinRate / 0.5));
             const positionSizeUSD = Math.min(
-                this.config.basePositionSizeUSD,
+                this.config.basePositionSizeUSD * sizingMultiplier,
                 this.config.maxPositionSizeUSD
             );
+            console.log(`   [Kelly Sizing] WinRate: ${(runningWinRate * 100).toFixed(1)}% → multiplier ${sizingMultiplier.toFixed(2)}x → $${positionSizeUSD.toFixed(0)}`);
             const quantity = positionSizeUSD / signal.price;
 
             console.log(`\n📈 EXECUTING CRYPTO TRADE:`);
@@ -1029,12 +1159,20 @@ app.post('/api/crypto/start', async (req, res) => {
     }
 });
 app.post('/api/crypto/stop', (req, res) => {
-    engine.stop();
-    res.json({ success: true, message: 'Crypto trading engine stopped' });
+    try {
+        engine.stop();
+        res.json({ success: true, message: 'Crypto trading engine stopped' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 app.post('/api/crypto/pause', (req, res) => {
-    engine.pause();
-    res.json({ success: true, message: 'Crypto trading engine paused' });
+    try {
+        engine.pause();
+        res.json({ success: true, message: 'Crypto trading engine paused' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
 // Test Telegram alert

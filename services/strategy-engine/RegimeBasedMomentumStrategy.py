@@ -108,7 +108,7 @@ class RegimeBasedMomentumStrategy(BaseStrategy):
         super().__init__(
             name="RegimeBasedMomentum",
             strategy_type=StrategyType.MOMENTUM,
-            config={
+            parameters={
                 'base_lookback': base_lookback,
                 'use_regime_detector': use_regime_detector,
                 'adaptive': True

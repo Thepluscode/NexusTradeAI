@@ -249,7 +249,8 @@ function Navigation() {
         component="main"
         sx={{
           flexGrow: 1,
-          width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
+          width: { xs: '100%', md: `calc(100% - ${DRAWER_WIDTH}px)` },
+          maxWidth: '100vw',
           mt: { xs: 7, md: 0 },
           minHeight: '100vh',
           bgcolor: 'background.default',
@@ -274,20 +275,28 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider theme={darkTheme}>
         <CssBaseline />
-        <BrowserRouter>
-          <Navigation />
-        </BrowserRouter>
-        <Toaster
-          position="top-right"
-          toastOptions={{
-            duration: 4000,
-            style: {
-              background: '#1a1a24',
-              color: '#fff',
-              borderRadius: '12px',
-            },
-          }}
-        />
+        <Box sx={{
+          minHeight: '100vh',
+          width: '100vw',
+          overflowX: 'hidden',
+          display: 'flex',
+          flexDirection: 'column'
+        }}>
+          <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+            <Navigation />
+          </BrowserRouter>
+          <Toaster
+            position="top-right"
+            toastOptions={{
+              duration: 4000,
+              style: {
+                background: '#1a1a24',
+                color: '#fff',
+                borderRadius: '12px',
+              },
+            }}
+          />
+        </Box>
       </ThemeProvider>
     </QueryClientProvider>
   );

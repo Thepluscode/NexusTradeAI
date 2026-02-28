@@ -67,7 +67,7 @@ class PairsTradingStrategy(BaseStrategy):
         super().__init__(
             name=f"PairsTrading_{lookback_period}_{entry_z_score}",
             strategy_type=StrategyType.ARBITRAGE,
-            config={
+            parameters={
                 'lookback_period': lookback_period,
                 'entry_z_score': entry_z_score,
                 'exit_z_score': exit_z_score,

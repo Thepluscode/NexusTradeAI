@@ -46,6 +46,14 @@ const { createKellyCalculator } = require('./kelly-criterion');
 // Yahoo Finance for FREE forex data (since Alpaca requires paid subscription)
 const yahooFinance = require('./yahoo-finance-data');
 
+// Advanced Strategy Engine (Multi-strategy ensemble with regime detection)
+const { AdvancedStrategyEngine, MarketRegime } = require('./advanced-strategy-engine');
+
+// PHASE 4: Standalone modules
+const MultiTimeframeConfirmation = require('./multi-timeframe');
+const GARCHModel = require('./garch-volatility');
+const MonteCarloSizer = require('./monte-carlo-sizer');
+
 // ========================================
 // CONFIGURATION
 // ========================================
@@ -75,7 +83,7 @@ const CONFIG = {
 
     // Risk Management (BIDIRECTIONAL)
     MAX_POSITION_PCT: 0.05,      // 5% of equity per position (lower for forex)
-    MAX_POSITIONS: 3,            // Max 3 concurrent positions
+    MAX_POSITIONS: 5,            // Max 5 concurrent positions (diversification-guarded)
     STOP_LOSS_PCT: 0.015,        // 1.5% stop loss (forex moves less)
     PROFIT_TARGET_PCT: 0.045,    // 4.5% profit target (3:1 R:R)
     DAILY_LOSS_LIMIT: -0.02,     // 2% daily loss = kill switch
@@ -161,6 +169,28 @@ class AutoForexBot extends EventEmitter {
         // Initialize Kelly Calculator
         this.kelly = createKellyCalculator('forex', __dirname);
         this.log(`🎰 Kelly Criterion: Half-Kelly position sizing enabled`);
+
+        // Initialize Advanced Strategy Engine for forex
+        this.strategyEngine = new AdvancedStrategyEngine('forex');
+        this.log(`🧠 Advanced Strategy Engine: 7-strategy ensemble for forex`);
+
+        // PHASE 1: Forex currency grouping for concentration limits
+        // Group by base/counter currency to prevent over-exposure
+        this.currencyExposure = {};  // dynamically tracked
+
+        // Progressive drawdown state
+        this.drawdownThrottleLevel = 0; // 0=normal, 1=reduced, 2=paused
+
+        // PHASE 4: Multi-Timeframe Confirmation
+        this.mtf = new MultiTimeframeConfirmation({ minTimeframesAgreeing: 2 });
+        this.log(`📊 Multi-Timeframe: 4-TF alignment filter active`);
+
+        // PHASE 4: GARCH Volatility Model (per symbol)
+        this.garchModels = new Map();
+
+        // PHASE 4: Monte Carlo Position Sizer
+        this.mcSizer = new MonteCarloSizer({ numSimulations: 5000, sequenceLength: 50 });
+        this.log(`🎲 Monte Carlo Sizer: 5K-simulation position optimizer active`);
     }
 
     // ========================================
@@ -261,8 +291,10 @@ class AutoForexBot extends EventEmitter {
             // Refresh account
             this.account = await this.alpaca.getAccount();
 
-            // Check kill switch
+            // Check progressive drawdown throttling
             const dailyReturn = this.calculateDailyReturn();
+            this.updateDrawdownThrottle(dailyReturn);
+
             if (dailyReturn <= CONFIG.DAILY_LOSS_LIMIT) {
                 await this.triggerKillSwitch(dailyReturn);
                 return;
@@ -280,8 +312,8 @@ class AutoForexBot extends EventEmitter {
             // Manage existing positions
             await this.managePositions();
 
-            // Look for new entries (if not paused)
-            if (!this.isPaused) {
+            // Look for new entries (if not paused and not throttled to level 2)
+            if (!this.isPaused && this.drawdownThrottleLevel < 2) {
                 await this.scanForEntries();
             }
 
@@ -309,20 +341,47 @@ class AutoForexBot extends EventEmitter {
             // Prioritize pairs for current session
             const isPairOptimal = this.isPairOptimalForSession(symbol, session);
             if (!isPairOptimal && this.positions.size > 0) {
-                continue; // Skip non-optimal pairs if we have positions
+                continue;
             }
 
             try {
                 // Update price history
                 await this.updatePriceHistory(symbol);
 
-                // Check for BIDIRECTIONAL signals
+                // PHASE 1: Check currency concentration
+                if (!this.checkCurrencyConcentration(symbol)) {
+                    continue;
+                }
+
+                // PHASE 1: Check correlation with existing positions
+                if (!this.checkCorrelation(symbol)) {
+                    continue;
+                }
+
+                // PHASE 5: Volume confirmation
+                if (!this.checkVolumeConfirmation(symbol)) {
+                    continue;
+                }
+
+                // Check for BIDIRECTIONAL signals using ensemble engine
                 const signal = this.checkEntrySignal(symbol);
 
                 if (signal.shouldEnter) {
+                    // PHASE 4: Multi-Timeframe confirmation gate
+                    const history = this.priceHistory.get(symbol);
+                    if (history && history.length >= 50) {
+                        this.mtf.updateFromSingleTimeframe(history);
+                        const mtfSignal = this.mtf.getConfirmedSignal(history[history.length - 1].close);
+
+                        if (!mtfSignal.shouldEnter) {
+                            this.log(`📊 ${symbol}: MTF filter rejected`);
+                            continue;
+                        }
+                        this.log(`📊 ${symbol}: MTF confirmed (${mtfSignal.reason})`);
+                    }
+
                     this.log(`\n✨ ${signal.direction.toUpperCase()} SIGNAL: ${symbol}`);
                     this.log(`   Reason: ${signal.reason}`);
-                    this.log(`   Fast MA: ${signal.fastMA.toFixed(5)} | Slow MA: ${signal.slowMA.toFixed(5)}`);
                     this.log(`   Session: ${session} ${isPairOptimal ? '(OPTIMAL)' : ''}`);
 
                     await this.openPosition(symbol, signal);
@@ -337,84 +396,149 @@ class AutoForexBot extends EventEmitter {
     checkEntrySignal(symbol) {
         const history = this.priceHistory.get(symbol);
 
-        if (!history || history.length < CONFIG.SLOW_MA + 2) {
-            return { shouldEnter: false, reason: 'Insufficient data' };
+        if (!history || history.length < 50) {
+            return { shouldEnter: false, reason: 'Insufficient data (need 50+ bars)' };
         }
 
-        // Calculate MAs
-        const closes = history.map(h => h.close);
-        const fastMA = this.calculateSMA(closes, CONFIG.FAST_MA);
-        const slowMA = this.calculateSMA(closes, CONFIG.SLOW_MA);
+        // Use Advanced Strategy Engine for 7-strategy ensemble signal
+        const signal = this.strategyEngine.generateSignal(history, symbol);
 
-        const currentFast = fastMA[fastMA.length - 1];
-        const currentSlow = slowMA[slowMA.length - 1];
-        const prevFast = fastMA[fastMA.length - 2];
-        const prevSlow = slowMA[slowMA.length - 2];
-
-        if (!currentFast || !currentSlow || !prevFast || !prevSlow) {
-            return { shouldEnter: false, reason: 'MA calculation failed' };
+        if (signal.shouldEnter) {
+            this.log(`\n🧠 ENSEMBLE SIGNAL: ${symbol}`);
+            this.log(`   Direction: ${signal.direction.toUpperCase()}`);
+            this.log(`   Confidence: ${(signal.confidence * 100).toFixed(1)}%`);
+            this.log(`   Regime: ${signal.regime}`);
+            this.log(`   Strategies agreeing: ${signal.agreementCount[signal.direction]}/7`);
+            this.log(`   Reason: ${signal.reason}`);
         }
 
-        // Calculate trend strength
-        const trendStrength = Math.abs(currentFast - currentSlow) / currentSlow;
-        const minStrength = 0.0002; // 0.02% minimum spread for forex (loosened)
+        return {
+            shouldEnter: signal.shouldEnter,
+            direction: signal.direction,
+            reason: signal.reason,
+            confidence: signal.confidence,
+            regime: signal.regime,
+            regimeConfig: signal.regimeConfig,
+            strategies: signal.strategies
+        };
+    }
 
-        // ===== BULLISH CROSSOVER (LONG) =====
-        const bullishCrossover = prevFast <= prevSlow && currentFast > currentSlow;
-        if (bullishCrossover && trendStrength > minStrength) {
-            return {
-                shouldEnter: true,
-                direction: 'long',
-                reason: `Bullish MA Crossover (Fast ${currentFast.toFixed(5)} > Slow ${currentSlow.toFixed(5)})`,
-                fastMA: currentFast,
-                slowMA: currentSlow,
-                trendStrength
-            };
+    /**
+     * PHASE 1: Check forex currency concentration
+     * Max 2 positions per individual currency to prevent over-exposure
+     */
+    checkCurrencyConcentration(symbol) {
+        const maxPerCurrency = 2;
+        // Extract currencies from pair (e.g., EURUSD -> EUR, USD)
+        const base = symbol.slice(0, 3);
+        const quote = symbol.slice(3, 6);
+
+        let baseCnt = 0, quoteCnt = 0;
+        for (const [posSymbol] of this.positions) {
+            if (posSymbol.includes(base)) baseCnt++;
+            if (posSymbol.includes(quote)) quoteCnt++;
         }
 
-        // ===== BULLISH TREND CONTINUATION (LONG) =====
-        // Enter on strong existing uptrend, not just crossover
-        const strongUptrend = currentFast > currentSlow && trendStrength > 0.001; // 0.1% spread
-        const gettingStronger = currentFast - currentSlow > prevFast - prevSlow;
-        if (strongUptrend && gettingStronger) {
-            return {
-                shouldEnter: true,
-                direction: 'long',
-                reason: `Bullish Trend Acceleration (strength: ${(trendStrength * 100).toFixed(3)}%)`,
-                fastMA: currentFast,
-                slowMA: currentSlow,
-                trendStrength
-            };
+        if (baseCnt >= maxPerCurrency) {
+            this.log(`🔄 ${symbol}: ${base} currency limit (${baseCnt}/${maxPerCurrency})`);
+            return false;
+        }
+        if (quoteCnt >= maxPerCurrency) {
+            this.log(`🔄 ${symbol}: ${quote} currency limit (${quoteCnt}/${maxPerCurrency})`);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * PHASE 1: Check price correlation with existing positions
+     * Reject entries where Pearson r > 0.80 with any held position.
+     */
+    checkCorrelation(symbol) {
+        const newHistory = this.priceHistory.get(symbol);
+        if (!newHistory || newHistory.length < 20) return true;
+
+        const newCloses = newHistory.slice(-30).map(h => h.close);
+
+        for (const [posSymbol] of this.positions) {
+            const posHistory = this.priceHistory.get(posSymbol);
+            if (!posHistory || posHistory.length < 20) continue;
+
+            const posCloses = posHistory.slice(-30).map(h => h.close);
+            const len = Math.min(newCloses.length, posCloses.length);
+            if (len < 15) continue;
+
+            const a = newCloses.slice(-len);
+            const b = posCloses.slice(-len);
+
+            const meanA = a.reduce((s, v) => s + v, 0) / len;
+            const meanB = b.reduce((s, v) => s + v, 0) / len;
+
+            let num = 0, denA = 0, denB = 0;
+            for (let i = 0; i < len; i++) {
+                const dA = a[i] - meanA;
+                const dB = b[i] - meanB;
+                num += dA * dB;
+                denA += dA * dA;
+                denB += dB * dB;
+            }
+
+            const r = denA > 0 && denB > 0 ? num / (Math.sqrt(denA) * Math.sqrt(denB)) : 0;
+
+            if (Math.abs(r) > 0.80) {
+                this.log(`🔗 ${symbol}: Correlation too high with ${posSymbol} (r=${r.toFixed(3)}) — skipping`);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * PHASE 1: Progressive drawdown throttling
+     * Level 0: Normal trading
+     * Level 1: -1% daily → reduce position sizes 50%
+     * Level 2: -1.5% daily → stop opening new positions
+     * Kill switch: -2% daily → close everything
+     */
+    updateDrawdownThrottle(dailyReturn) {
+        const prevLevel = this.drawdownThrottleLevel;
+
+        if (dailyReturn <= -0.015) {
+            this.drawdownThrottleLevel = 2;
+        } else if (dailyReturn <= -0.01) {
+            this.drawdownThrottleLevel = 1;
+        } else {
+            this.drawdownThrottleLevel = 0;
         }
 
-        // ===== BEARISH CROSSOVER (SHORT) =====
-        const bearishCrossover = prevFast >= prevSlow && currentFast < currentSlow;
-        if (bearishCrossover && trendStrength > minStrength) {
-            return {
-                shouldEnter: true,
-                direction: 'short',
-                reason: `Bearish MA Crossover (Fast ${currentFast.toFixed(5)} < Slow ${currentSlow.toFixed(5)})`,
-                fastMA: currentFast,
-                slowMA: currentSlow,
-                trendStrength
-            };
+        if (this.drawdownThrottleLevel !== prevLevel) {
+            const labels = ['NORMAL', 'REDUCED (50% size)', 'PAUSED (no new entries)'];
+            this.log(`⚠️ Drawdown throttle: Level ${this.drawdownThrottleLevel} — ${labels[this.drawdownThrottleLevel]} (daily: ${(dailyReturn * 100).toFixed(2)}%)`);
+        }
+    }
+
+    /**
+     * PHASE 5: Volume confirmation
+     * Require current volume > 1.5x 20-day average to enter.
+     */
+    checkVolumeConfirmation(symbol) {
+        const history = this.priceHistory.get(symbol);
+        if (!history || history.length < 20) return true;
+
+        const volumes = history.map(h => h.volume).filter(v => v > 0);
+        if (volumes.length < 10) return true;
+
+        const avgVolume = volumes.slice(-20).reduce((s, v) => s + v, 0) / Math.min(volumes.length, 20);
+        const currentVolume = volumes[volumes.length - 1];
+
+        const volumeRatio = currentVolume / avgVolume;
+
+        if (volumeRatio < 1.5) {
+            return false;
         }
 
-        // ===== BEARISH TREND CONTINUATION (SHORT) =====
-        const strongDowntrend = currentFast < currentSlow && trendStrength > 0.001;
-        const gettingWeaker = currentSlow - currentFast > prevSlow - prevFast;
-        if (strongDowntrend && gettingWeaker) {
-            return {
-                shouldEnter: true,
-                direction: 'short',
-                reason: `Bearish Trend Acceleration (strength: ${(trendStrength * 100).toFixed(3)}%)`,
-                fastMA: currentFast,
-                slowMA: currentSlow,
-                trendStrength
-            };
-        }
-
-        return { shouldEnter: false, reason: 'No signal' };
+        this.log(`📊 ${symbol}: Volume confirmed (${volumeRatio.toFixed(1)}x avg)`);
+        return true;
     }
 
     checkExitSignal(symbol, currentSide) {
@@ -477,12 +601,25 @@ class AutoForexBot extends EventEmitter {
             const equity = parseFloat(this.account.equity);
             const buyingPower = parseFloat(this.account.buying_power);
 
-            // Get Kelly-optimized position size
-            const kellyResult = this.kelly.getOptimalPositionSize(equity);
-            const positionPct = kellyResult.recommendedPct;
-            const positionSize = kellyResult.optimalDollarSize;
+            // PHASE 4: Monte Carlo position sizing (falls back to Kelly)
+            let positionPct, positionSize;
+            if (this.mcSizer.tradeReturns.length >= 20) {
+                const mcResult = this.mcSizer.getRecommendedSize(equity);
+                positionPct = mcResult.fraction;
+                positionSize = mcResult.dollarSize;
+                this.log(`   🎲 Monte Carlo: ${(positionPct * 100).toFixed(1)}% (${mcResult.reason})`);
+            } else {
+                const kellyResult = this.kelly.getOptimalPositionSize(equity);
+                positionPct = kellyResult.recommendedPct;
+                positionSize = kellyResult.optimalDollarSize;
+                this.log(`   🎰 Kelly: ${(positionPct * 100).toFixed(1)}% (${kellyResult.edgeStrength || 'collecting data'})`);
+            }
 
-            this.log(`   🎰 Kelly: ${(positionPct * 100).toFixed(1)}% (${kellyResult.edgeStrength || 'collecting data'})`);
+            // PHASE 1: Drawdown throttle level 1 = 50% position size
+            if (this.drawdownThrottleLevel === 1) {
+                positionSize *= 0.5;
+                this.log(`   ⚠️ Drawdown throttle: Position halved to $${positionSize.toFixed(0)}`);
+            }
 
             if (positionSize > buyingPower) {
                 this.log(`⚠️  ${symbol}: Insufficient buying power`);
@@ -505,30 +642,47 @@ class AutoForexBot extends EventEmitter {
                 return;
             }
 
-            // Calculate stop and target based on direction
+            // PHASE 4: GARCH-based dynamic stop-loss width
+            let stopLossPct = CONFIG.STOP_LOSS_PCT;
+            const history = this.priceHistory.get(symbol);
+            if (history && history.length >= 30) {
+                if (!this.garchModels.has(symbol)) {
+                    this.garchModels.set(symbol, new GARCHModel());
+                }
+                const garch = this.garchModels.get(symbol);
+                if (garch.fit(history)) {
+                    const optimalStop = garch.getOptimalStopWidth(0.95);
+                    // Clamp between 0.5% and 3% for forex (lower vol)
+                    stopLossPct = Math.max(0.005, Math.min(0.03, optimalStop * 2));
+                    this.log(`   📉 GARCH stop: ${(stopLossPct * 100).toFixed(2)}% (vol: ${(garch.forecast(1).annualizedVol * 100).toFixed(1)}%)`);
+                }
+            }
+
+            // Calculate stop and target with GARCH-dynamic width
             let stopLoss, profitTarget;
             if (signal.direction === 'long') {
-                stopLoss = price * (1 - CONFIG.STOP_LOSS_PCT);
-                profitTarget = price * (1 + CONFIG.PROFIT_TARGET_PCT);
-            } else { // short
-                stopLoss = price * (1 + CONFIG.STOP_LOSS_PCT);
-                profitTarget = price * (1 - CONFIG.PROFIT_TARGET_PCT);
+                stopLoss = price * (1 - stopLossPct);
+                profitTarget = price * (1 + stopLossPct * 3); // 3:1 R:R
+            } else {
+                stopLoss = price * (1 + stopLossPct);
+                profitTarget = price * (1 - stopLossPct * 3);
             }
 
             const side = signal.direction === 'long' ? 'buy' : 'sell';
 
             this.log(`\n📈 OPENING ${signal.direction.toUpperCase()}: ${symbol}`);
             this.log(`   Units: ${units} @ ~${price.toFixed(5)}`);
-            this.log(`   Stop Loss: ${stopLoss.toFixed(5)}`);
-            this.log(`   Target: ${profitTarget.toFixed(5)}`);
+            this.log(`   Stop Loss: ${stopLoss.toFixed(5)} (-${(stopLossPct * 100).toFixed(2)}%)`);
+            this.log(`   Target: ${profitTarget.toFixed(5)} (+${(stopLossPct * 300).toFixed(2)}%)`);
 
-            // Place order
+            // PHASE 5: Limit order (reduced slippage)
             const order = await this.alpaca.createOrder({
                 symbol,
                 qty: units,
                 side,
-                type: 'market',
-                time_in_force: 'gtc' // Good till cancelled for forex
+                type: 'limit',
+                limit_price: price.toFixed(5),
+                time_in_force: 'gtc'
             });
 
             // Track position
@@ -542,6 +696,7 @@ class AutoForexBot extends EventEmitter {
                 stopLoss,
                 profitTarget,
                 reason: signal.reason,
+                entryTimestamp: Date.now(),
                 timestamp: new Date().toISOString()
             };
 
@@ -625,6 +780,9 @@ class AutoForexBot extends EventEmitter {
                 exitPrice: position.currentPrice
             });
 
+            // PHASE 4: Record trade for Monte Carlo optimizer
+            this.mcSizer.addTrade(pnlPct);
+
             this.logTrade(trade);
 
             this.log(`   ✅ Order submitted: ${order.id}`);
@@ -675,6 +833,17 @@ class AutoForexBot extends EventEmitter {
                     }
                     await this.closePosition(symbol, `PROFIT_TARGET (${(pnlPct * 100).toFixed(2)}%)`);
                     continue;
+                }
+
+                // PHASE 5: Time-based exit — close stale positions after 4 days with < 0.5% move (forex = tighter)
+                const lastTrade = this.dailyTrades.find(t => t.symbol === symbol && t.entryTimestamp);
+                if (lastTrade && lastTrade.entryTimestamp) {
+                    const daysHeld = (Date.now() - lastTrade.entryTimestamp) / (1000 * 60 * 60 * 24);
+                    if (daysHeld >= 4 && Math.abs(pnlPct) < 0.005) {
+                        this.log(`⏰ ${symbol}: Stale position (${daysHeld.toFixed(1)} days, ${(pnlPct * 100).toFixed(2)}% move)`);
+                        await this.closePosition(symbol, `TIME_EXIT (${daysHeld.toFixed(0)} days, ${(pnlPct * 100).toFixed(2)}%)`);
+                        continue;
+                    }
                 }
 
                 // Check for crossover exit (and optionally flip)

@@ -11,7 +11,7 @@ const { getSMSAlertService } = require('../../infrastructure/notifications/sms-a
 const { getTelegramAlertService } = require('../../infrastructure/notifications/telegram-alerts');
 
 /**
- * IMPROVED UNIFIED TRADING BOT - v3.1 (Profitability Fixes)
+ * IMPROVED UNIFIED TRADING BOT - v3.2 (Quant Council Improvements)
  *
  * FIXES IN v3.1:
  * 1. Fixed RSI calculation - now uses Wilder's smoothed EMA (standard)
@@ -22,6 +22,13 @@ const { getTelegramAlertService } = require('../../infrastructure/notifications/
  * 6. Added VWAP-based entry filter (avoid chasing at intraday extremes)
  * 7. Added market breadth check - avoids entering into extreme sell-offs
  * 8. Added better logging of trade decisions
+ *
+ * NEW IN v3.2 (Quant Council):
+ * 1. ATR-based dynamic stop loss & profit target (1.5x ATR stop, 3x ATR target → 2:1 R:R adapted to volatility)
+ * 2. EMA 9/21 crossover entry filter (uptrend confirmation, avoids entering against trend)
+ * 3. ADX filter (minimum ADX 20 — only trade trending markets, not choppy/ranging)
+ * 4. Tighter RSI entry bands (40-65 instead of 30-70 — avoids exhaustion zones)
+ * 5. Lower profit targets + earlier trailing stop (5% day-0 target, lock 40% at +2%)
  */
 
 const app = express();
@@ -221,20 +228,21 @@ const EXIT_CONFIG = {
     idealHoldDays: 3,         // Ideal 3-day momentum trades
     stalePositionDays: 10,    // Force close after 10 days
 
-    // Dynamic profit targets based on hold time
+    // Dynamic profit targets based on hold time (v3.2: lowered to 5% day 0-2 for higher hit rate)
     profitTargetByDay: {
-        0: 0.08,  // Day 0-1: 8% target
-        1: 0.08,  // Day 1-2: 8% target
-        2: 0.08,  // Day 2-3: 8% target
-        3: 0.05,  // Day 3-4: 5% target (reduce)
-        4: 0.04,  // Day 4-5: 4% target
-        5: 0.03,  // Day 5-6: 3% target
-        6: 0.02,  // Day 6-7: 2% target
+        0: 0.05,  // Day 0-1: 5% target (reduced from 8% — more achievable, higher win rate)
+        1: 0.05,  // Day 1-2: 5% target
+        2: 0.05,  // Day 2-3: 5% target
+        3: 0.04,  // Day 3-4: 4% target
+        4: 0.03,  // Day 4-5: 3% target
+        5: 0.02,  // Day 5-6: 2% target
+        6: 0.015, // Day 6-7: 1.5% target
         7: 0.01   // Day 7+: ANY profit
     },
 
-    // Aggressive trailing stops (lock more profit)
+    // Aggressive trailing stops (lock more profit) — v3.2: added early lock at +2%
     trailingStopLevels: [
+        { gainThreshold: 0.02, lockPercent: 0.40 },  // +2%: lock 40% (NEW — protect early gains)
         { gainThreshold: 0.03, lockPercent: 0.60 },  // +3%: lock 60%
         { gainThreshold: 0.05, lockPercent: 0.75 },  // +5%: lock 75%
         { gainThreshold: 0.07, lockPercent: 0.85 },  // +7%: lock 85%
@@ -255,8 +263,8 @@ const MOMENTUM_CONFIG = {
         threshold: 2.5,
         minVolume: 500000,
         volumeRatio: 1.5,
-        rsiMax: 70,
-        rsiMin: 30,
+        rsiMax: 65,  // v3.2: tightened from 70 — avoid overbought exhaustion
+        rsiMin: 40,  // v3.2: tightened from 30 — avoid oversold reversals
         positionSize: 0.005,
         stopLoss: 0.04,
         profitTarget: 0.08,
@@ -266,8 +274,8 @@ const MOMENTUM_CONFIG = {
         threshold: 5.0,
         minVolume: 750000,
         volumeRatio: 2.0,
-        rsiMax: 70,
-        rsiMin: 30,
+        rsiMax: 65,  // v3.2: tightened from 70
+        rsiMin: 40,  // v3.2: tightened from 30
         positionSize: 0.0075,
         stopLoss: 0.05,
         profitTarget: 0.10,
@@ -278,7 +286,7 @@ const MOMENTUM_CONFIG = {
         minVolume: 1000000,
         volumeRatio: 2.5,
         rsiMax: 65,
-        rsiMin: 35,
+        rsiMin: 40,  // v3.2: tightened from 35
         positionSize: 0.01,
         stopLoss: 0.06,
         profitTarget: 0.15,
@@ -382,6 +390,70 @@ function calculateRSI(bars, period = 14) {
     }
 }
 
+// [v3.2] EMA helper — used by EMA crossover and ADX filters
+function calculateEMA(closes, period) {
+    if (closes.length < period) return null;
+    const multiplier = 2 / (period + 1);
+    let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    for (let i = period; i < closes.length; i++) {
+        ema = (closes[i] - ema) * multiplier + ema;
+    }
+    return ema;
+}
+
+// [v3.2] ATR (Wilder's smoothing) — measures volatility for adaptive stop/target sizing
+function calculateATR(bars, period = 14) {
+    if (bars.length < period + 1) return null;
+    const trValues = [];
+    for (let i = 1; i < bars.length; i++) {
+        const high = bars[i].h, low = bars[i].l, prevClose = bars[i - 1].c;
+        trValues.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
+    }
+    // Seed with simple average
+    let atr = trValues.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    // Wilder's smoothing
+    for (let i = period; i < trValues.length; i++) {
+        atr = (atr * (period - 1) + trValues[i]) / period;
+    }
+    return atr;
+}
+
+// [v3.2] ADX — measures trend strength (0-100). >20 = trending, >25 = strong trend
+// Only enter when market is trending, not ranging/choppy
+function calculateADX(bars, period = 14) {
+    if (bars.length < period * 2 + 1) return null;
+    const plusDM = [], minusDM = [], tr = [];
+
+    for (let i = 1; i < bars.length; i++) {
+        const upMove = bars[i].h - bars[i - 1].h;
+        const downMove = bars[i - 1].l - bars[i].l;
+        plusDM.push(upMove > downMove && upMove > 0 ? upMove : 0);
+        minusDM.push(downMove > upMove && downMove > 0 ? downMove : 0);
+        tr.push(Math.max(bars[i].h - bars[i].l, Math.abs(bars[i].h - bars[i - 1].c), Math.abs(bars[i].l - bars[i - 1].c)));
+    }
+
+    // Wilder smoothing seed
+    let smoothTR = tr.slice(0, period).reduce((a, b) => a + b, 0);
+    let smoothPlusDM = plusDM.slice(0, period).reduce((a, b) => a + b, 0);
+    let smoothMinusDM = minusDM.slice(0, period).reduce((a, b) => a + b, 0);
+
+    const dxValues = [];
+    for (let i = period; i < tr.length; i++) {
+        smoothTR = smoothTR - smoothTR / period + tr[i];
+        smoothPlusDM = smoothPlusDM - smoothPlusDM / period + plusDM[i];
+        smoothMinusDM = smoothMinusDM - smoothMinusDM / period + minusDM[i];
+
+        const plusDI = (smoothPlusDM / smoothTR) * 100;
+        const minusDI = (smoothMinusDM / smoothTR) * 100;
+        const diSum = plusDI + minusDI;
+        dxValues.push(diSum > 0 ? Math.abs(plusDI - minusDI) / diSum * 100 : 0);
+    }
+
+    if (dxValues.length < period) return null;
+    const adx = dxValues.slice(-period).reduce((a, b) => a + b, 0) / period;
+    return adx;
+}
+
 // Calculate VWAP for today's bars
 function calculateVWAP(bars) {
     try {
@@ -395,6 +467,31 @@ function calculateVWAP(bars) {
         }
         return cumulativeVolume > 0 ? cumulativeTPV / cumulativeVolume : null;
     } catch {
+        return null;
+    }
+}
+
+// ===== STRATEGY BRIDGE (port 3010) =====
+// Non-blocking ensemble confirmation — if bridge is offline, local signals are used as-is
+
+async function queryStrategyBridge(symbol, bars, assetClass = 'stock') {
+    try {
+        if (!bars || bars.length < 30) return null; // Bridge needs at least 30 bars
+        const prices = bars.map(b => ({
+            timestamp: b.t || new Date().toISOString(),
+            open: parseFloat(b.o) || 0,
+            high: parseFloat(b.h) || 0,
+            low:  parseFloat(b.l) || 0,
+            close: parseFloat(b.c) || 0,
+            volume: parseFloat(b.v) || 0
+        }));
+        const response = await axios.post('http://localhost:3010/signal',
+            { symbol, prices, asset_class: assetClass },
+            { timeout: 3000 }
+        );
+        return response.data; // { should_enter, direction, confidence, reason, strategies }
+    } catch (e) {
+        // Bridge offline or slow — non-blocking, proceed on local signals alone
         return null;
     }
 }
@@ -796,6 +893,35 @@ async function analyzeMomentum(symbol) {
             }
         }
 
+        // [v3.2] EMA 9/21 crossover filter — only enter in confirmed uptrends
+        const closes = bars.map(b => b.c);
+        const ema9 = calculateEMA(closes, 9);
+        const ema21 = calculateEMA(closes, 21);
+        if (ema9 !== null && ema21 !== null && ema9 <= ema21) {
+            // EMA9 below EMA21 = downtrend or no trend — skip
+            return null;
+        }
+
+        // [v3.2] ADX filter — only trade trending markets (ADX > 20), skip choppy/ranging
+        const adx = calculateADX(bars);
+        if (adx !== null && adx < 20) {
+            return null;
+        }
+
+        // [v3.2] ATR-based stop/target — adapts to each stock's volatility
+        const atr = calculateATR(bars);
+        let atrStop = null, atrTarget = null;
+        if (atr !== null && current > 0) {
+            const atrPct = atr / current;
+            const candidateStop = current * (1 - atrPct * 1.5);
+            const candidateTarget = current * (1 + atrPct * 3.0);
+            const rr = (candidateTarget - current) / (current - candidateStop);
+            if (rr >= 1.8) {
+                atrStop = candidateStop;
+                atrTarget = candidateTarget;
+            }
+        }
+
         let tier = null;
         let config = null;
 
@@ -832,6 +958,16 @@ async function analyzeMomentum(symbol) {
 
         if (tierPositions >= config.maxPositions) return null;
 
+        // [v3.2] Strategy Bridge confirmation — ensemble signal from Python strategies
+        const bridgeResult = await queryStrategyBridge(symbol, bars, 'stock');
+        if (bridgeResult !== null) {
+            if (!bridgeResult.should_enter || bridgeResult.direction !== 'long') {
+                console.log(`[Bridge] ${symbol} rejected — bridge says ${bridgeResult.direction} (conf: ${(bridgeResult.confidence || 0).toFixed(2)}): ${bridgeResult.reason || ''}`);
+                return null;
+            }
+            console.log(`[Bridge] ${symbol} confirmed ✓ conf: ${(bridgeResult.confidence || 0).toFixed(2)}`);
+        }
+
         return {
             symbol,
             price: current,
@@ -843,7 +979,9 @@ async function analyzeMomentum(symbol) {
             tier,
             strategy: 'momentum',
             config,
-            entryVolume: volumeToday
+            entryVolume: volumeToday,
+            atrStop,    // [v3.2] ATR-based stop price (null if not applicable)
+            atrTarget   // [v3.2] ATR-based target price (null if not applicable)
         };
 
     } catch (error) {
@@ -877,8 +1015,10 @@ async function executeTrade(signal, strategy) {
             return null;
         }
 
-        const stopPrice = (signal.price * (1 - config.stopLoss)).toFixed(2);
-        const targetPrice = (signal.price * (1 + config.profitTarget)).toFixed(2);
+        // [v3.2] Prefer ATR-based stops when they provide >= 1.8:1 R:R, else use config defaults
+        const stopPrice = (signal.atrStop || signal.price * (1 - config.stopLoss)).toFixed(2);
+        const targetPrice = (signal.atrTarget || signal.price * (1 + config.profitTarget)).toFixed(2);
+        if (signal.atrStop) console.log(`   [ATR Stops] Using volatility-adapted: Stop $${stopPrice}, Target $${targetPrice}`);
 
         const orderUrl = `${alpacaConfig.baseURL}/v2/orders`;
         const orderResponse = await axios.post(orderUrl, {
@@ -1165,17 +1305,25 @@ app.get('/health', (req, res) => {
 
 // Trading bot start/stop/pause endpoints (for dashboard compatibility)
 app.post('/api/trading/start', (req, res) => {
-    botRunning = true;
-    botPaused = false;
-    saveBotState();
-    res.json({ success: true, message: 'Stock trading bot started', isRunning: true, isPaused: false });
+    try {
+        botRunning = true;
+        botPaused = false;
+        saveBotState();
+        res.json({ success: true, message: 'Stock trading bot started', isRunning: true, isPaused: false });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
 app.post('/api/trading/stop', (req, res) => {
-    botRunning = false;
-    botPaused = false;
-    saveBotState();
-    res.json({ success: true, message: 'Stock trading bot stopped', isRunning: false, isPaused: false });
+    try {
+        botRunning = false;
+        botPaused = false;
+        saveBotState();
+        res.json({ success: true, message: 'Stock trading bot stopped', isRunning: false, isPaused: false });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
 // Realize profits — close all open positions that are currently profitable
@@ -1257,9 +1405,13 @@ app.post('/api/accounts/demo/reset', (req, res) => {
 });
 
 app.post('/api/trading/pause', (req, res) => {
-    botPaused = !botPaused;
-    saveBotState();
-    res.json({ success: true, message: botPaused ? 'Stock trading bot paused' : 'Stock trading bot resumed', isRunning: botRunning, isPaused: botPaused });
+    try {
+        botPaused = !botPaused;
+        saveBotState();
+        res.json({ success: true, message: botPaused ? 'Stock trading bot paused' : 'Stock trading bot resumed', isRunning: botRunning, isPaused: botPaused });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
 // Test SMS Alerts

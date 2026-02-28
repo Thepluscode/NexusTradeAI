@@ -47,6 +47,11 @@ const { createKellyCalculator } = require('./kelly-criterion');
 // Advanced Strategy Engine (Multi-strategy ensemble with regime detection)
 const { AdvancedStrategyEngine, MarketRegime } = require('./advanced-strategy-engine');
 
+// PHASE 4: Standalone modules
+const MultiTimeframeConfirmation = require('./multi-timeframe');
+const GARCHModel = require('./garch-volatility');
+const MonteCarloSizer = require('./monte-carlo-sizer');
+
 // ========================================
 // CONFIGURATION
 // ========================================
@@ -150,7 +155,31 @@ class AutoStockBot extends EventEmitter {
 
         // Initialize Advanced Strategy Engine
         this.strategyEngine = new AdvancedStrategyEngine('stock');
-        this.log(`🧠 Advanced Strategy Engine: Multi-strategy ensemble active`);
+        this.log(`🧠 Advanced Strategy Engine: 7-strategy ensemble active`);
+
+        // PHASE 1: Stock sector grouping for concentration limits
+        this.stockSectors = {
+            'SPY': 'index', 'QQQ': 'index',
+            'META': 'mega_tech', 'GOOGL': 'mega_tech', 'MSFT': 'mega_tech', 'AMZN': 'mega_tech', 'AAPL': 'mega_tech',
+            'TSLA': 'high_beta', 'NVDA': 'high_beta', 'AMD': 'high_beta'
+        };
+
+        // Progressive drawdown state
+        this.drawdownThrottleLevel = 0; // 0=normal, 1=reduced, 2=paused
+
+        // Trailing stop tracking: symbol -> { highWaterMark, trailingStop }
+        this.trailingStops = new Map();
+
+        // PHASE 4: Multi-Timeframe Confirmation
+        this.mtf = new MultiTimeframeConfirmation({ minTimeframesAgreeing: 2 });
+        this.log(`📊 Multi-Timeframe: 4-TF alignment filter active`);
+
+        // PHASE 4: GARCH Volatility Model (per symbol)
+        this.garchModels = new Map();
+
+        // PHASE 4: Monte Carlo Position Sizer
+        this.mcSizer = new MonteCarloSizer({ numSimulations: 5000, sequenceLength: 50 });
+        this.log(`🎲 Monte Carlo Sizer: 5K-simulation position optimizer active`);
     }
 
     // ========================================
@@ -252,8 +281,10 @@ class AutoStockBot extends EventEmitter {
             // Refresh account
             this.account = await this.alpaca.getAccount();
 
-            // Check kill switch
+            // Check progressive drawdown throttling
             const dailyReturn = this.calculateDailyReturn();
+            this.updateDrawdownThrottle(dailyReturn);
+
             if (dailyReturn <= CONFIG.DAILY_LOSS_LIMIT) {
                 await this.triggerKillSwitch(dailyReturn);
                 return;
@@ -271,8 +302,8 @@ class AutoStockBot extends EventEmitter {
             // Manage existing positions (check stops/targets/signals)
             await this.managePositions();
 
-            // Look for new entries (if not paused)
-            if (!this.isPaused) {
+            // Look for new entries (if not paused and not throttled)
+            if (!this.isPaused && this.drawdownThrottleLevel < 2) {
                 await this.scanForEntries();
             }
 
@@ -298,13 +329,40 @@ class AutoStockBot extends EventEmitter {
                 // Update price history
                 await this.updatePriceHistory(symbol);
 
+                // PHASE 1: Check sector concentration
+                if (!this.checkSectorConcentration(symbol)) {
+                    continue;
+                }
+
+                // PHASE 1: Check correlation with existing positions
+                if (!this.checkCorrelation(symbol)) {
+                    continue;
+                }
+
+                // PHASE 5: Volume confirmation — require above-average volume
+                if (!this.checkVolumeConfirmation(symbol)) {
+                    continue;
+                }
+
                 // Check for entry signal
                 const signal = this.checkEntrySignal(symbol);
 
                 if (signal.shouldEnter) {
+                    // PHASE 4: Multi-Timeframe confirmation gate
+                    const history = this.priceHistory.get(symbol);
+                    if (history && history.length >= 50) {
+                        this.mtf.updateFromSingleTimeframe(history);
+                        const mtfSignal = this.mtf.getConfirmedSignal(history[history.length - 1].close);
+
+                        if (!mtfSignal.shouldEnter) {
+                            this.log(`📊 ${symbol}: MTF filter rejected (${JSON.stringify(mtfSignal.timeframeAlignment)})`);
+                            continue;
+                        }
+                        this.log(`📊 ${symbol}: MTF confirmed (${mtfSignal.reason})`);
+                    }
+
                     this.log(`\n✨ ENTRY SIGNAL: ${symbol}`);
                     this.log(`   Reason: ${signal.reason}`);
-                    this.log(`   Fast MA: ${signal.fastMA.toFixed(2)} | Slow MA: ${signal.slowMA.toFixed(2)}`);
 
                     await this.openPosition(symbol, signal);
                 }
@@ -331,7 +389,7 @@ class AutoStockBot extends EventEmitter {
             this.log(`   Direction: ${signal.direction.toUpperCase()}`);
             this.log(`   Confidence: ${(signal.confidence * 100).toFixed(1)}%`);
             this.log(`   Regime: ${signal.regime}`);
-            this.log(`   Strategies agreeing: ${signal.agreementCount[signal.direction]}/5`);
+            this.log(`   Strategies agreeing: ${signal.agreementCount[signal.direction]}/7`);
             this.log(`   Reason: ${signal.reason}`);
         }
 
@@ -390,12 +448,25 @@ class AutoStockBot extends EventEmitter {
             const equity = parseFloat(this.account.equity);
             const buyingPower = parseFloat(this.account.buying_power);
 
-            // Get Kelly-optimized position size
-            const kellyResult = this.kelly.getOptimalPositionSize(equity);
-            const positionPct = kellyResult.recommendedPct;
-            const positionSize = kellyResult.optimalDollarSize;
+            // PHASE 4: Monte Carlo position sizing (falls back to Kelly if insufficient trades)
+            let positionPct, positionSize;
+            if (this.mcSizer.tradeReturns.length >= 20) {
+                const mcResult = this.mcSizer.getRecommendedSize(equity);
+                positionPct = mcResult.fraction;
+                positionSize = mcResult.dollarSize;
+                this.log(`   🎲 Monte Carlo: ${(positionPct * 100).toFixed(1)}% (${mcResult.reason})`);
+            } else {
+                const kellyResult = this.kelly.getOptimalPositionSize(equity);
+                positionPct = kellyResult.recommendedPct;
+                positionSize = kellyResult.optimalDollarSize;
+                this.log(`   🎰 Kelly: ${(positionPct * 100).toFixed(1)}% (${kellyResult.edgeStrength || 'collecting data'})`);
+            }
 
-            this.log(`   🎰 Kelly: ${(positionPct * 100).toFixed(1)}% (${kellyResult.edgeStrength || 'collecting data'})`);
+            // PHASE 1: Drawdown throttle level 1 = 50% position size
+            if (this.drawdownThrottleLevel === 1) {
+                positionSize *= 0.5;
+                this.log(`   ⚠️ Drawdown throttle: Position halved to $${positionSize.toFixed(0)}`);
+            }
 
             if (positionSize > buyingPower) {
                 this.log(`⚠️  ${symbol}: Insufficient buying power`);
@@ -404,7 +475,9 @@ class AutoStockBot extends EventEmitter {
 
             // Get current price
             const quote = await this.alpaca.getLatestQuote(symbol);
-            const price = quote.AskPrice || quote.BidPrice;
+            const askPrice = quote.AskPrice;
+            const bidPrice = quote.BidPrice;
+            const price = askPrice || bidPrice;
 
             if (!price || price <= 0) {
                 this.log(`⚠️  ${symbol}: Could not get valid price`);
@@ -418,21 +491,38 @@ class AutoStockBot extends EventEmitter {
                 return;
             }
 
-            // Calculate stop and target
-            const stopLoss = price * (1 - CONFIG.STOP_LOSS_PCT);
-            const profitTarget = price * (1 + CONFIG.PROFIT_TARGET_PCT);
+            // PHASE 4: GARCH-based dynamic stop-loss width
+            let stopLossPct = CONFIG.STOP_LOSS_PCT;
+            const history = this.priceHistory.get(symbol);
+            if (history && history.length >= 30) {
+                if (!this.garchModels.has(symbol)) {
+                    this.garchModels.set(symbol, new GARCHModel());
+                }
+                const garch = this.garchModels.get(symbol);
+                if (garch.fit(history)) {
+                    const optimalStop = garch.getOptimalStopWidth(0.95);
+                    // Clamp between 3% and 15%
+                    stopLossPct = Math.max(0.03, Math.min(0.15, optimalStop * 2));
+                    this.log(`   📉 GARCH stop: ${(stopLossPct * 100).toFixed(1)}% (vol: ${(garch.forecast(1).annualizedVol * 100).toFixed(1)}%)`);
+                }
+            }
+
+            const stopLoss = price * (1 - stopLossPct);
+            const profitTarget = price * (1 + stopLossPct * 3); // Dynamic R:R = 3:1
 
             this.log(`\n📈 OPENING POSITION: ${symbol}`);
             this.log(`   Shares: ${shares} @ ~$${price.toFixed(2)}`);
-            this.log(`   Stop Loss: $${stopLoss.toFixed(2)} (-${(CONFIG.STOP_LOSS_PCT * 100).toFixed(1)}%)`);
-            this.log(`   Target: $${profitTarget.toFixed(2)} (+${(CONFIG.PROFIT_TARGET_PCT * 100).toFixed(1)}%)`);
+            this.log(`   Stop Loss: $${stopLoss.toFixed(2)} (-${(stopLossPct * 100).toFixed(1)}%)`);
+            this.log(`   Target: $${profitTarget.toFixed(2)} (+${(stopLossPct * 300).toFixed(1)}%)`);
 
-            // Place market order
+            // PHASE 5: Limit order at ask price (reduced slippage vs market orders)
+            const limitPrice = askPrice ? (askPrice * 1.001) : price; // Slightly above ask
             const order = await this.alpaca.createOrder({
                 symbol,
                 qty: shares,
                 side: 'buy',
-                type: 'market',
+                type: 'limit',
+                limit_price: limitPrice.toFixed(2),
                 time_in_force: 'day'
             });
 
@@ -446,6 +536,7 @@ class AutoStockBot extends EventEmitter {
                 stopLoss,
                 profitTarget,
                 reason: signal.reason,
+                entryTimestamp: Date.now(),
                 timestamp: new Date().toISOString()
             };
 
@@ -524,6 +615,9 @@ class AutoStockBot extends EventEmitter {
                 exitPrice: currentPrice
             });
 
+            // PHASE 4: Record trade for Monte Carlo optimizer
+            this.mcSizer.addTrade(pnlPct);
+
             this.logTrade(trade);
 
             this.log(`   ✅ Order submitted: ${order.id}`);
@@ -540,30 +634,72 @@ class AutoStockBot extends EventEmitter {
                 await this.updatePriceHistory(symbol);
 
                 const pnlPct = position.unrealizedPLPct;
+                const currentPrice = position.currentPrice;
 
                 // Check stop loss
                 if (pnlPct <= -CONFIG.STOP_LOSS_PCT) {
-                    // Send Telegram notification before closing
                     if (telegram) {
-                        telegram.sendStockStopLoss(symbol, position.entryPrice, position.currentPrice, pnlPct * 100, position.entryPrice * (1 - CONFIG.STOP_LOSS_PCT));
+                        telegram.sendStockStopLoss(symbol, position.entryPrice, currentPrice, pnlPct * 100, position.entryPrice * (1 - CONFIG.STOP_LOSS_PCT));
                     }
+                    this.trailingStops.delete(symbol);
                     await this.closePosition(symbol, `STOP_LOSS (${(pnlPct * 100).toFixed(2)}%)`);
                     continue;
                 }
 
                 // Check profit target
                 if (pnlPct >= CONFIG.PROFIT_TARGET_PCT) {
-                    // Send Telegram notification before closing
                     if (telegram) {
-                        telegram.sendStockTakeProfit(symbol, position.entryPrice, position.currentPrice, pnlPct * 100, position.entryPrice * (1 + CONFIG.PROFIT_TARGET_PCT));
+                        telegram.sendStockTakeProfit(symbol, position.entryPrice, currentPrice, pnlPct * 100, position.entryPrice * (1 + CONFIG.PROFIT_TARGET_PCT));
                     }
+                    this.trailingStops.delete(symbol);
                     await this.closePosition(symbol, `PROFIT_TARGET (${(pnlPct * 100).toFixed(2)}%)`);
                     continue;
+                }
+
+                // PHASE 1: TRAILING STOP — ratchet stop upward as price moves in our favor
+                if (pnlPct >= 0.05) { // Activate when profit > 5% for stocks
+                    if (!this.trailingStops.has(symbol)) {
+                        this.trailingStops.set(symbol, {
+                            highWaterMark: currentPrice,
+                            trailingStop: position.entryPrice + (currentPrice - position.entryPrice) * 0.5
+                        });
+                        this.log(`📈 ${symbol}: Trailing stop ACTIVATED at $${this.trailingStops.get(symbol).trailingStop.toFixed(2)} (locking 50% of ${(pnlPct * 100).toFixed(1)}% profit)`);
+                    }
+
+                    const ts = this.trailingStops.get(symbol);
+
+                    // Update high water mark and ratchet stop
+                    if (currentPrice > ts.highWaterMark) {
+                        ts.highWaterMark = currentPrice;
+                        ts.trailingStop = position.entryPrice + (currentPrice - position.entryPrice) * 0.5;
+                        this.log(`📈 ${symbol}: Trailing stop ratcheted to $${ts.trailingStop.toFixed(2)}`);
+                    }
+
+                    // Check if trailing stop hit
+                    if (currentPrice <= ts.trailingStop) {
+                        this.log(`🔔 ${symbol}: TRAILING STOP HIT at $${currentPrice.toFixed(2)} (stop: $${ts.trailingStop.toFixed(2)})`);
+                        this.trailingStops.delete(symbol);
+                        await this.closePosition(symbol, `TRAILING_STOP (${(pnlPct * 100).toFixed(2)}% profit locked)`);
+                        continue;
+                    }
+                }
+
+                // PHASE 5: Time-based exit — close stale positions after 5 days with < 1% move
+                const lastTrade = this.dailyTrades.find(t => t.symbol === symbol && t.entryTimestamp);
+                if (lastTrade && lastTrade.entryTimestamp) {
+                    const daysHeld = (Date.now() - lastTrade.entryTimestamp) / (1000 * 60 * 60 * 24);
+                    if (daysHeld >= 5 && Math.abs(pnlPct) < 0.01) {
+                        this.log(`⏰ ${symbol}: Stale position (${daysHeld.toFixed(1)} days, ${(pnlPct * 100).toFixed(2)}% move)`);
+                        this.trailingStops.delete(symbol);
+                        await this.closePosition(symbol, `TIME_EXIT (${daysHeld.toFixed(0)} days, ${(pnlPct * 100).toFixed(2)}%)`);
+                        continue;
+                    }
                 }
 
                 // Check bearish crossover (exit signal)
                 const exitSignal = this.checkExitSignal(symbol);
                 if (exitSignal.shouldExit) {
+                    this.trailingStops.delete(symbol);
                     await this.closePosition(symbol, exitSignal.reason);
                 }
 
@@ -571,6 +707,120 @@ class AutoStockBot extends EventEmitter {
                 this.log(`⚠️  Error managing ${symbol}: ${error.message}`);
             }
         }
+    }
+
+    /**
+     * PHASE 1: Check stock sector concentration
+     * Max 2 positions per sector to prevent over-exposure
+     */
+    checkSectorConcentration(symbol) {
+        const sector = this.stockSectors[symbol] || 'other';
+        const maxPerSector = 2;
+
+        let sectorCount = 0;
+        for (const [posSymbol] of this.positions) {
+            if ((this.stockSectors[posSymbol] || 'other') === sector) {
+                sectorCount++;
+            }
+        }
+
+        if (sectorCount >= maxPerSector) {
+            this.log(`🔄 ${symbol}: Sector limit (${sectorCount}/${maxPerSector} ${sector} positions)`);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * PHASE 1: Check price correlation with existing positions
+     * Reject entries where Pearson r > 0.80
+     */
+    checkCorrelation(symbol) {
+        const newHistory = this.priceHistory.get(symbol);
+        if (!newHistory || newHistory.length < 20) return true;
+
+        const newCloses = newHistory.slice(-30).map(h => h.close);
+
+        for (const [posSymbol] of this.positions) {
+            const posHistory = this.priceHistory.get(posSymbol);
+            if (!posHistory || posHistory.length < 20) continue;
+
+            const posCloses = posHistory.slice(-30).map(h => h.close);
+            const len = Math.min(newCloses.length, posCloses.length);
+            if (len < 15) continue;
+
+            const a = newCloses.slice(-len);
+            const b = posCloses.slice(-len);
+
+            const meanA = a.reduce((s, v) => s + v, 0) / len;
+            const meanB = b.reduce((s, v) => s + v, 0) / len;
+
+            let num = 0, denA = 0, denB = 0;
+            for (let i = 0; i < len; i++) {
+                const dA = a[i] - meanA;
+                const dB = b[i] - meanB;
+                num += dA * dB;
+                denA += dA * dA;
+                denB += dB * dB;
+            }
+
+            const r = denA > 0 && denB > 0 ? num / (Math.sqrt(denA) * Math.sqrt(denB)) : 0;
+
+            if (Math.abs(r) > 0.80) {
+                this.log(`🔗 ${symbol}: Correlation too high with ${posSymbol} (r=${r.toFixed(3)}) — skipping`);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * PHASE 1: Progressive drawdown throttling
+     * Level 0: Normal trading
+     * Level 1: -1% daily → reduce position sizes 50%
+     * Level 2: -1.5% daily → stop opening new positions
+     * Kill switch: -2% daily → close everything
+     */
+    updateDrawdownThrottle(dailyReturn) {
+        const prevLevel = this.drawdownThrottleLevel;
+
+        if (dailyReturn <= -0.015) {
+            this.drawdownThrottleLevel = 2;
+        } else if (dailyReturn <= -0.01) {
+            this.drawdownThrottleLevel = 1;
+        } else {
+            this.drawdownThrottleLevel = 0;
+        }
+
+        if (this.drawdownThrottleLevel !== prevLevel) {
+            const labels = ['NORMAL', 'REDUCED (50% size)', 'PAUSED (no new entries)'];
+            this.log(`⚠️ Drawdown throttle: Level ${this.drawdownThrottleLevel} — ${labels[this.drawdownThrottleLevel]} (daily: ${(dailyReturn * 100).toFixed(2)}%)`);
+        }
+    }
+
+    /**
+     * PHASE 5: Volume confirmation
+     * Require current volume > 1.5x 20-day average to enter.
+     * Prevents entries during thin/unreliable price action.
+     */
+    checkVolumeConfirmation(symbol) {
+        const history = this.priceHistory.get(symbol);
+        if (!history || history.length < 20) return true; // Not enough data, allow
+
+        const volumes = history.map(h => h.volume).filter(v => v > 0);
+        if (volumes.length < 10) return true;
+
+        const avgVolume = volumes.slice(-20).reduce((s, v) => s + v, 0) / Math.min(volumes.length, 20);
+        const currentVolume = volumes[volumes.length - 1];
+
+        const volumeRatio = currentVolume / avgVolume;
+
+        if (volumeRatio < 1.5) {
+            return false; // Silently skip — too noisy to log every skip
+        }
+
+        this.log(`📊 ${symbol}: Volume confirmed (${volumeRatio.toFixed(1)}x avg)`);
+        return true;
     }
 
     // ========================================

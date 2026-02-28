@@ -91,6 +91,9 @@ class WinningStrategy extends ProfitableTradeEngine {
         // WEEK 4+ IMPROVEMENT: Grid trading state
         this.gridPositions = new Map();
 
+        // ATR history for adaptive multiplier (Phase 1 improvement)
+        this.atrHistory = new Map(); // symbol -> ATR values array
+
         // Override strategies with winning approach
         this.initializeWinningStrategies();
     }
@@ -515,32 +518,43 @@ class WinningStrategy extends ProfitableTradeEngine {
                 // Entry price
                 const entry = data.price;
 
-                // INSTITUTIONAL: ATR-based stop losses (adapts to volatility)
+                // PHASE 1: Adaptive ATR-based stop losses
                 const atr = this.calculateATR(priceHistory, 14);
                 let stopLoss;
-                const atrMultiplier = 2.5; // 2.5x ATR (institutional standard)
+
+                // Track ATR history for percentile-based adaptive multiplier
+                if (!this.atrHistory.has(symbol)) this.atrHistory.set(symbol, []);
+                const atrHist = this.atrHistory.get(symbol);
+                if (atr && atr > 0) {
+                    atrHist.push(atr);
+                    if (atrHist.length > 100) atrHist.shift();
+                }
+
+                // ADAPTIVE ATR MULTIPLIER: adjusts to current volatility percentile
+                const atrMultiplier = this.getAdaptiveATRMultiplier(symbol, atr);
 
                 if (atr && atr > 0) {
-                    // ATR-based dynamic stop loss
+                    // ATR-based dynamic stop loss with adaptive multiplier
                     const atrStopDistance = atr * atrMultiplier;
                     const proposedStop = entry - atrStopDistance;
 
-                    // FIX #2: TIGHTER STOPS - Minimum 1.5% stop, maximum 2.5% stop
-                    // Cut losses faster to prevent small losses from becoming big losses
-                    const minStopDistance = entry * 0.015;  // 1.5% minimum (was 3%)
-                    const maxStopDistance = entry * 0.025;  // 2.5% maximum (was 5%)
+                    // Clamp to min 1.5% / max 3.0% stop distance
+                    const minStopDistance = entry * 0.015;
+                    const maxStopDistance = entry * 0.030;
 
                     const actualStopDistance = entry - proposedStop;
                     if (actualStopDistance < minStopDistance) {
-                        stopLoss = entry - minStopDistance; // Widen to minimum
+                        stopLoss = entry - minStopDistance;
                     } else if (actualStopDistance > maxStopDistance) {
-                        stopLoss = entry - maxStopDistance; // Cap at maximum
+                        stopLoss = entry - maxStopDistance;
                     } else {
                         stopLoss = proposedStop;
                     }
+
+                    console.log(`   🎯 Adaptive ATR: multiplier=${atrMultiplier.toFixed(2)}x (percentile-based)`);
                 } else {
-                    // FIX #2: Fallback to tighter 2% stop loss (was 3.5%)
-                    stopLoss = entry * 0.98;  // 2% stop
+                    // Fallback to 2% stop loss
+                    stopLoss = entry * 0.98;
                 }
 
                 const target = direction === 'long'
@@ -669,6 +683,42 @@ class WinningStrategy extends ProfitableTradeEngine {
         // Average True Range
         const atr = trueRanges.reduce((sum, tr) => sum + tr, 0) / trueRanges.length;
         return atr;
+    }
+
+    /**
+     * PHASE 1 IMPROVEMENT: Adaptive ATR Multiplier
+     * Uses percentile rank of current ATR vs last 100 readings.
+     *   High vol (>80th percentile) → tighter 1.8x (cut losses fast)
+     *   Low vol  (<20th percentile) → wider  3.5x (avoid noise stops)
+     *   Normal                      → standard 2.5x
+     */
+    getAdaptiveATRMultiplier(symbol, currentATR) {
+        const history = this.atrHistory.get(symbol);
+        if (!history || history.length < 10 || !currentATR) {
+            return 2.5; // default
+        }
+
+        // Calculate percentile rank
+        const sorted = [...history].sort((a, b) => a - b);
+        const rank = sorted.filter(v => v <= currentATR).length;
+        const percentile = rank / sorted.length;
+
+        // Adaptive multiplier curve
+        if (percentile > 0.80) {
+            // High volatility: tighter stops to limit damage
+            return 1.8;
+        } else if (percentile > 0.60) {
+            // Above average vol: slightly tight
+            return 2.2;
+        } else if (percentile < 0.20) {
+            // Low volatility: wider stops to avoid noise
+            return 3.5;
+        } else if (percentile < 0.40) {
+            // Below average vol: slightly wide
+            return 3.0;
+        }
+
+        return 2.5; // Normal range
     }
 
     /**

@@ -9,8 +9,10 @@ class HMMRegimeDetector {
     constructor(config = {}) {
         this.config = {
             states: config.states || ['bull', 'bear', 'sideways'],
-            historyLength: config.historyLength || 50,
-            updateInterval: config.updateInterval || 300000 // 5 minutes
+            historyLength: config.historyLength || 100,
+            updateInterval: config.updateInterval || 300000, // 5 minutes
+            calibrationInterval: config.calibrationInterval || 3600000, // 1 hour
+            minRegimeChangeConfidence: config.minRegimeChangeConfidence || 0.45 // Require 45% confidence to switch
         };
 
         this.priceHistory = [];
@@ -21,8 +23,13 @@ class HMMRegimeDetector {
             sideways: 0.34
         };
         this.lastUpdate = null;
+        this.lastCalibration = null;
+        this.isCalibrated = false;
 
-        // HMM parameters (simplified Baum-Welch would calibrate these)
+        // Regime history for transition estimation
+        this.regimeHistory = [];
+
+        // HMM parameters (will be calibrated from data via Baum-Welch)
         this.transitionMatrix = {
             bull: { bull: 0.7, bear: 0.1, sideways: 0.2 },
             bear: { bull: 0.1, bear: 0.7, sideways: 0.2 },
@@ -31,9 +38,9 @@ class HMMRegimeDetector {
 
         // Emission probabilities (what we observe in each state)
         this.emissionParams = {
-            bull: { meanReturn: 0.001, volatility: 0.015 },     // Positive returns, moderate vol
-            bear: { meanReturn: -0.001, volatility: 0.025 },    // Negative returns, high vol
-            sideways: { meanReturn: 0.0001, volatility: 0.010 } // Near-zero returns, low vol
+            bull: { meanReturn: 0.001, volatility: 0.015 },
+            bear: { meanReturn: -0.001, volatility: 0.025 },
+            sideways: { meanReturn: 0.0001, volatility: 0.010 }
         };
     }
 
@@ -63,18 +70,37 @@ class HMMRegimeDetector {
 
         this.lastUpdate = now;
 
+        // PHASE 2: Calibrate emission parameters from real data
+        if (!this.lastCalibration || now - this.lastCalibration > this.config.calibrationInterval) {
+            if (this.priceHistory.length >= 50) {
+                this.calibrateFromHistory();
+                this.lastCalibration = now;
+            }
+        }
+
         // Calculate features from price history
         const features = this.calculateFeatures();
 
         // Run Viterbi algorithm to find most likely state
         const newRegime = this.viterbiDecode(features);
 
+        // PHASE 2: Require minimum confidence for regime change (prevent flapping)
+        const newRegimeProb = this.regimeProbabilities[newRegime];
+        if (newRegime !== this.currentRegime && newRegimeProb < this.config.minRegimeChangeConfidence) {
+            // Not confident enough to switch
+            return this.currentRegime;
+        }
+
         // Log regime changes
         if (newRegime !== this.currentRegime) {
-            console.log(`\n🔮 HMM Regime Change: ${this.currentRegime} → ${newRegime}`);
+            console.log(`\n🔮 HMM Regime Change: ${this.currentRegime} → ${newRegime} ${this.isCalibrated ? '(calibrated)' : '(default params)'}`);
             console.log(`   Probabilities: Bull=${(this.regimeProbabilities.bull * 100).toFixed(1)}% | Bear=${(this.regimeProbabilities.bear * 100).toFixed(1)}% | Sideways=${(this.regimeProbabilities.sideways * 100).toFixed(1)}%`);
             this.currentRegime = newRegime;
         }
+
+        // Track regime history for transition matrix calibration
+        this.regimeHistory.push(this.currentRegime);
+        if (this.regimeHistory.length > 200) this.regimeHistory.shift();
 
         return this.currentRegime;
     }
@@ -168,6 +194,92 @@ class HMMRegimeDetector {
     gaussianProb(x, mean, stdDev) {
         const exponent = -Math.pow(x - mean, 2) / (2 * Math.pow(stdDev, 2));
         return (1 / (stdDev * Math.sqrt(2 * Math.PI))) * Math.exp(exponent);
+    }
+
+    /**
+     * PHASE 2: Online Baum-Welch Calibration
+     * Estimates emission parameters (mean return, volatility per regime)
+     * and transition matrix from observed price data.
+     */
+    calibrateFromHistory() {
+        const prices = this.priceHistory.map(h => h.price);
+        if (prices.length < 50) return;
+
+        // Step 1: Calculate returns
+        const returns = [];
+        for (let i = 1; i < prices.length; i++) {
+            returns.push((prices[i] - prices[i - 1]) / prices[i - 1]);
+        }
+
+        // Step 2: Segment returns into terciles for regime approximation
+        const sorted = [...returns].sort((a, b) => a - b);
+        const n = sorted.length;
+        const bullThreshold = sorted[Math.floor(n * 0.67)];
+        const bearThreshold = sorted[Math.floor(n * 0.33)];
+
+        // Step 3: Assign each period to a regime and estimate emission params
+        const segments = { bull: [], bear: [], sideways: [] };
+        const regimeSequence = [];
+
+        for (const r of returns) {
+            if (r > bullThreshold) {
+                segments.bull.push(r);
+                regimeSequence.push('bull');
+            } else if (r < bearThreshold) {
+                segments.bear.push(r);
+                regimeSequence.push('bear');
+            } else {
+                segments.sideways.push(r);
+                regimeSequence.push('sideways');
+            }
+        }
+
+        // Step 4: MLE for emission parameters (mean and stddev per regime)
+        for (const state of this.config.states) {
+            const data = segments[state];
+            if (data.length >= 5) {
+                const mean = data.reduce((s, v) => s + v, 0) / data.length;
+                const variance = data.reduce((s, v) => s + Math.pow(v - mean, 2), 0) / data.length;
+                const stdDev = Math.sqrt(variance);
+
+                // Blend with prior (80% data, 20% prior) for stability
+                this.emissionParams[state] = {
+                    meanReturn: 0.8 * mean + 0.2 * this.emissionParams[state].meanReturn,
+                    volatility: Math.max(0.001, 0.8 * stdDev + 0.2 * this.emissionParams[state].volatility)
+                };
+            }
+        }
+
+        // Step 5: Estimate transition matrix from regime sequence
+        if (regimeSequence.length >= 20) {
+            const transitions = {};
+            for (const s of this.config.states) {
+                transitions[s] = {};
+                for (const t of this.config.states) {
+                    transitions[s][t] = 1; // Laplace smoothing
+                }
+            }
+
+            for (let i = 1; i < regimeSequence.length; i++) {
+                transitions[regimeSequence[i - 1]][regimeSequence[i]]++;
+            }
+
+            // Normalize to probabilities
+            for (const from of this.config.states) {
+                const total = Object.values(transitions[from]).reduce((s, v) => s + v, 0);
+                for (const to of this.config.states) {
+                    // Blend with prior (70% data, 30% prior)
+                    const dataProb = transitions[from][to] / total;
+                    this.transitionMatrix[from][to] = 0.7 * dataProb + 0.3 * this.transitionMatrix[from][to];
+                }
+            }
+        }
+
+        this.isCalibrated = true;
+        console.log(`🔬 HMM Calibrated from ${returns.length} observations`);
+        console.log(`   Bull: μ=${(this.emissionParams.bull.meanReturn * 100).toFixed(3)}%, σ=${(this.emissionParams.bull.volatility * 100).toFixed(3)}%`);
+        console.log(`   Bear: μ=${(this.emissionParams.bear.meanReturn * 100).toFixed(3)}%, σ=${(this.emissionParams.bear.volatility * 100).toFixed(3)}%`);
+        console.log(`   Sideways: μ=${(this.emissionParams.sideways.meanReturn * 100).toFixed(3)}%, σ=${(this.emissionParams.sideways.volatility * 100).toFixed(3)}%`);
     }
 
     /**

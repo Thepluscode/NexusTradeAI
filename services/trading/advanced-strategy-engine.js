@@ -82,11 +82,13 @@ class AdvancedStrategyEngine {
 
         // Strategy weights (auto-adjusted based on performance)
         this.strategyWeights = {
-            maCrossover: 0.25,
-            rsi: 0.20,
-            macd: 0.25,
-            momentum: 0.15,
-            volume: 0.15
+            maCrossover: 0.20,
+            rsi: 0.15,
+            macd: 0.20,
+            momentum: 0.10,
+            volume: 0.10,
+            bollingerSqueeze: 0.15,
+            rsiDivergence: 0.10
         };
 
         // Performance tracking for auto-adjustment
@@ -95,8 +97,13 @@ class AdvancedStrategyEngine {
             rsi: { wins: 0, losses: 0, pnl: 0 },
             macd: { wins: 0, losses: 0, pnl: 0 },
             momentum: { wins: 0, losses: 0, pnl: 0 },
-            volume: { wins: 0, losses: 0, pnl: 0 }
+            volume: { wins: 0, losses: 0, pnl: 0 },
+            bollingerSqueeze: { wins: 0, losses: 0, pnl: 0 },
+            rsiDivergence: { wins: 0, losses: 0, pnl: 0 }
         };
+
+        // Bollinger Band history for squeeze detection
+        this.bbWidthHistory = [];
 
         console.log(`🧠 Advanced Strategy Engine initialized (${assetClass})`);
     }
@@ -304,6 +311,132 @@ class AdvancedStrategyEngine {
         return { signal: 'NEUTRAL', confidence: 0, reason: 'Normal Volume' };
     }
 
+    // Strategy 6: Bollinger Band Squeeze
+    getBollingerSqueezeSignal(priceHistory) {
+        const closes = priceHistory.map(h => h.close);
+        if (closes.length < 25) {
+            return { signal: 'NEUTRAL', confidence: 0, reason: 'Insufficient data for BB' };
+        }
+
+        const { upper, middle, lower, width } = this.calculateBollingerBands(closes, 20, 2);
+        const currentWidth = width[width.length - 1];
+        const prevWidth = width[width.length - 2];
+        const currentPrice = closes[closes.length - 1];
+
+        // Track BB width history for percentile calculation
+        this.bbWidthHistory.push(currentWidth);
+        if (this.bbWidthHistory.length > 100) this.bbWidthHistory.shift();
+
+        if (this.bbWidthHistory.length < 20) {
+            return { signal: 'NEUTRAL', confidence: 0, reason: 'Building BB history' };
+        }
+
+        // Calculate percentile of current bandwidth
+        const sorted = [...this.bbWidthHistory].sort((a, b) => a - b);
+        const rank = sorted.filter(v => v <= currentWidth).length;
+        const percentile = rank / sorted.length;
+
+        // SQUEEZE DETECTION: Width was below 20th percentile and now expanding
+        const wasSqueezed = prevWidth <= sorted[Math.floor(sorted.length * 0.20)];
+        const isExpanding = currentWidth > prevWidth * 1.05; // 5%+ expansion
+
+        if (wasSqueezed && isExpanding) {
+            // Breakout direction: price above/below middle band
+            if (currentPrice > middle[middle.length - 1]) {
+                return {
+                    signal: 'LONG',
+                    confidence: Math.min(0.85, 0.5 + (1 - percentile) * 0.5),
+                    reason: `BB Squeeze Breakout UP (width pctl: ${(percentile * 100).toFixed(0)}%)`
+                };
+            } else {
+                return {
+                    signal: 'SHORT',
+                    confidence: Math.min(0.85, 0.5 + (1 - percentile) * 0.5),
+                    reason: `BB Squeeze Breakout DOWN (width pctl: ${(percentile * 100).toFixed(0)}%)`
+                };
+            }
+        }
+
+        // Price touching/exceeding upper band = overbought
+        if (currentPrice >= upper[upper.length - 1]) {
+            return { signal: 'SHORT', confidence: 0.4, reason: 'Price at Upper BB' };
+        }
+        // Price touching/below lower band = oversold
+        if (currentPrice <= lower[lower.length - 1]) {
+            return { signal: 'LONG', confidence: 0.4, reason: 'Price at Lower BB' };
+        }
+
+        return { signal: 'NEUTRAL', confidence: 0, reason: 'No BB Signal' };
+    }
+
+    // Strategy 7: RSI Divergence
+    getRSIDivergenceSignal(priceHistory) {
+        const closes = priceHistory.map(h => h.close);
+        if (closes.length < 30) {
+            return { signal: 'NEUTRAL', confidence: 0, reason: 'Insufficient data for RSI Divergence' };
+        }
+
+        const rsi = this.calculateRSI(closes, 14);
+
+        // Find recent swing highs/lows in price and RSI (lookback 15 bars)
+        const lookback = 15;
+        const recentCloses = closes.slice(-lookback);
+        const recentRSI = rsi.slice(-lookback);
+
+        // Find local maxima and minima
+        const priceHighs = [];
+        const priceLows = [];
+        const rsiHighs = [];
+        const rsiLows = [];
+
+        for (let i = 1; i < recentCloses.length - 1; i++) {
+            if (recentCloses[i] > recentCloses[i - 1] && recentCloses[i] > recentCloses[i + 1]) {
+                priceHighs.push({ idx: i, value: recentCloses[i] });
+                rsiHighs.push({ idx: i, value: recentRSI[i] });
+            }
+            if (recentCloses[i] < recentCloses[i - 1] && recentCloses[i] < recentCloses[i + 1]) {
+                priceLows.push({ idx: i, value: recentCloses[i] });
+                rsiLows.push({ idx: i, value: recentRSI[i] });
+            }
+        }
+
+        // BEARISH DIVERGENCE: Price making higher high, RSI making lower high
+        if (priceHighs.length >= 2 && rsiHighs.length >= 2) {
+            const lastPH = priceHighs[priceHighs.length - 1];
+            const prevPH = priceHighs[priceHighs.length - 2];
+            const lastRH = rsiHighs[rsiHighs.length - 1];
+            const prevRH = rsiHighs[rsiHighs.length - 2];
+
+            if (lastPH.value > prevPH.value && lastRH.value < prevRH.value) {
+                const divergenceStrength = (prevRH.value - lastRH.value) / prevRH.value;
+                return {
+                    signal: 'SHORT',
+                    confidence: Math.min(0.80, 0.5 + divergenceStrength * 5),
+                    reason: `Bearish RSI Divergence (RSI: ${lastRH.value.toFixed(1)} < ${prevRH.value.toFixed(1)})`
+                };
+            }
+        }
+
+        // BULLISH DIVERGENCE: Price making lower low, RSI making higher low
+        if (priceLows.length >= 2 && rsiLows.length >= 2) {
+            const lastPL = priceLows[priceLows.length - 1];
+            const prevPL = priceLows[priceLows.length - 2];
+            const lastRL = rsiLows[rsiLows.length - 1];
+            const prevRL = rsiLows[rsiLows.length - 2];
+
+            if (lastPL.value < prevPL.value && lastRL.value > prevRL.value) {
+                const divergenceStrength = (lastRL.value - prevRL.value) / prevRL.value;
+                return {
+                    signal: 'LONG',
+                    confidence: Math.min(0.80, 0.5 + divergenceStrength * 5),
+                    reason: `Bullish RSI Divergence (RSI: ${lastRL.value.toFixed(1)} > ${prevRL.value.toFixed(1)})`
+                };
+            }
+        }
+
+        return { signal: 'NEUTRAL', confidence: 0, reason: 'No RSI Divergence' };
+    }
+
     // ========================================
     // ENSEMBLE SIGNAL GENERATION
     // ========================================
@@ -330,7 +463,9 @@ class AdvancedStrategyEngine {
             rsi: this.getRSISignal(priceHistory),
             macd: this.getMACDSignal(priceHistory),
             momentum: this.getMomentumSignal(priceHistory),
-            volume: this.getVolumeSignal(priceHistory)
+            volume: this.getVolumeSignal(priceHistory),
+            bollingerSqueeze: this.getBollingerSqueezeSignal(priceHistory),
+            rsiDivergence: this.getRSIDivergenceSignal(priceHistory)
         };
 
         // Step 3: Weighted voting
@@ -374,12 +509,12 @@ class AdvancedStrategyEngine {
             shouldEnter = true;
             direction = 'long';
             confidence = normalizedLong;
-            reason = `LONG: ${reasons.slice(0, 3).join(', ')} [${agreementCount.long}/5 strategies agree]`;
+            reason = `LONG: ${reasons.slice(0, 3).join(', ')} [${agreementCount.long}/7 strategies agree]`;
         } else if (normalizedShort > normalizedLong && normalizedShort >= requiredConfidence && agreementCount.short >= minStrategiesAgreeing) {
             shouldEnter = true;
             direction = 'short';
             confidence = normalizedShort;
-            reason = `SHORT: ${reasons.slice(0, 3).join(', ')} [${agreementCount.short}/5 strategies agree]`;
+            reason = `SHORT: ${reasons.slice(0, 3).join(', ')} [${agreementCount.short}/7 strategies agree]`;
         }
 
         // Step 5: Regime override - block trades in HIGH_VOLATILITY unless very confident
@@ -565,6 +700,33 @@ class AdvancedStrategyEngine {
         const last = data.slice(-5).reduce((a, b) => a + b, 0) / 5;
 
         return (last - first) / first;
+    }
+
+    // Bollinger Bands calculation
+    calculateBollingerBands(data, period = 20, stdDevMultiplier = 2) {
+        const middle = this.calculateSMA(data, period);
+        const upper = [];
+        const lower = [];
+        const width = [];
+
+        for (let i = 0; i < data.length; i++) {
+            if (i < period - 1 || middle[i] === null) {
+                upper.push(null);
+                lower.push(null);
+                width.push(null);
+            } else {
+                const slice = data.slice(i - period + 1, i + 1);
+                const mean = middle[i];
+                const variance = slice.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / period;
+                const stdDev = Math.sqrt(variance);
+
+                upper.push(mean + stdDev * stdDevMultiplier);
+                lower.push(mean - stdDev * stdDevMultiplier);
+                width.push((upper[upper.length - 1] - lower[lower.length - 1]) / mean);
+            }
+        }
+
+        return { upper, middle, lower, width };
     }
 
     // ========================================

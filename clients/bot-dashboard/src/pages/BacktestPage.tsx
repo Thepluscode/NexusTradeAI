@@ -93,9 +93,9 @@ export default function BacktestPage() {
     const recentTrades = trades.slice(-20);
 
     return (
-        <Box sx={{ p: 2 }}>
+        <Box sx={{ p: { xs: 1.5, sm: 2 } }}>
             {/* Header */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
+            <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'flex-start', sm: 'center' }, gap: 2, mb: 3 }}>
                 <Assessment sx={{ fontSize: 32, color: 'primary.main' }} />
                 <Box>
                     <Typography variant="h5" fontWeight={700}>
@@ -108,56 +108,60 @@ export default function BacktestPage() {
                 <Chip
                     label={validation?.passed ? `PASSED (${validation.passedChecks}/${validation.totalChecks})` : `FAILED (${validation.passedChecks}/${validation.totalChecks})`}
                     color={validation?.passed ? 'success' : 'error'}
-                    sx={{ ml: 'auto', fontWeight: 700 }}
+                    sx={{ ml: { xs: 0, sm: 'auto' }, fontWeight: 700 }}
+                />
+            </Box>
+
+            <Box
+                sx={{
+                    display: 'grid',
+                    gridTemplateColumns: {
+                        xs: '1fr',
+                        sm: 'repeat(2, 1fr)',
+                        md: 'repeat(3, 1fr)',
+                        lg: 'repeat(5, 1fr)'
+                    },
+                    gap: 3,
+                    mb: 3
+                }}
+            >
+                {/* Summary metrics */}
+                <MetricCard
+                    title="Win Rate"
+                    value={((summary.overallWinRate ?? 0) * 100).toFixed(1)}
+                    suffix="%"
+                    color={(summary.overallWinRate ?? 0) >= 0.5 ? 'success' : 'warning'}
+                    icon={<TrendingUp />}
+                />
+                <MetricCard
+                    title="Profit Factor"
+                    value={(summary.profitFactor ?? 0).toFixed(2)}
+                    color={(summary.profitFactor ?? 0) >= 1.5 ? 'success' : (summary.profitFactor ?? 0) >= 1.2 ? 'warning' : 'error'}
+                    icon={<Assessment />}
+                />
+                <MetricCard
+                    title="Avg Sharpe"
+                    value={(summary.avgSharpe ?? 0).toFixed(2)}
+                    color={(summary.avgSharpe ?? 0) >= 1.0 ? 'success' : (summary.avgSharpe ?? 0) >= 0.5 ? 'warning' : 'error'}
+                    icon={<Assessment />}
+                />
+                <MetricCard
+                    title="Max Drawdown"
+                    value={((summary.avgDrawdown ?? 0) * 100).toFixed(2)}
+                    suffix="%"
+                    color={(summary.avgDrawdown ?? 0) <= 0.1 ? 'success' : (summary.avgDrawdown ?? 0) <= 0.2 ? 'warning' : 'error'}
+                    icon={<TrendingDown />}
+                />
+                <MetricCard
+                    title="Expectancy"
+                    value={((summary.expectancy ?? 0) * 100).toFixed(2)}
+                    suffix="%"
+                    color={(summary.expectancy ?? 0) > 0 ? 'success' : 'error'}
+                    icon={<Assessment />}
                 />
             </Box>
 
             <Grid container spacing={3}>
-                {/* Summary metrics */}
-                <Grid item xs={12} sm={6} md={2.4}>
-                    <MetricCard
-                        title="Win Rate"
-                        value={((summary.overallWinRate ?? 0) * 100).toFixed(1)}
-                        suffix="%"
-                        color={(summary.overallWinRate ?? 0) >= 0.5 ? 'success' : 'warning'}
-                        icon={<TrendingUp />}
-                    />
-                </Grid>
-                <Grid item xs={12} sm={6} md={2.4}>
-                    <MetricCard
-                        title="Profit Factor"
-                        value={(summary.profitFactor ?? 0).toFixed(2)}
-                        color={(summary.profitFactor ?? 0) >= 1.5 ? 'success' : (summary.profitFactor ?? 0) >= 1.2 ? 'warning' : 'error'}
-                        icon={<Assessment />}
-                    />
-                </Grid>
-                <Grid item xs={12} sm={6} md={2.4}>
-                    <MetricCard
-                        title="Avg Sharpe"
-                        value={(summary.avgSharpe ?? 0).toFixed(2)}
-                        color={(summary.avgSharpe ?? 0) >= 1.0 ? 'success' : (summary.avgSharpe ?? 0) >= 0.5 ? 'warning' : 'error'}
-                        icon={<Assessment />}
-                    />
-                </Grid>
-                <Grid item xs={12} sm={6} md={2.4}>
-                    <MetricCard
-                        title="Max Drawdown"
-                        value={((summary.avgDrawdown ?? 0) * 100).toFixed(2)}
-                        suffix="%"
-                        color={(summary.avgDrawdown ?? 0) <= 0.1 ? 'success' : (summary.avgDrawdown ?? 0) <= 0.2 ? 'warning' : 'error'}
-                        icon={<TrendingDown />}
-                    />
-                </Grid>
-                <Grid item xs={12} sm={6} md={2.4}>
-                    <MetricCard
-                        title="Expectancy"
-                        value={((summary.expectancy ?? 0) * 100).toFixed(2)}
-                        suffix="%"
-                        color={(summary.expectancy ?? 0) > 0 ? 'success' : 'error'}
-                        icon={<Assessment />}
-                    />
-                </Grid>
-
                 {/* Validation checklist */}
                 <Grid item xs={12} md={4}>
                     <Paper sx={{ p: 3, height: '100%' }}>

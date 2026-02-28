@@ -31,7 +31,15 @@ export const MetricCard: React.FC<MetricCardProps> = ({
             <Typography variant="body2" color="text.secondary" gutterBottom>
               {title}
             </Typography>
-            <Typography variant="h4" component="div" color={`${color}.main`}>
+            <Typography
+              variant="h4"
+              component="div"
+              color={`${color}.main`}
+              sx={{
+                wordBreak: 'break-word',
+                fontSize: { xs: '1.5rem', sm: '1.75rem', md: '2.125rem' }
+              }}
+            >
               {prefix}{value}{suffix}
             </Typography>
             {change !== undefined && (

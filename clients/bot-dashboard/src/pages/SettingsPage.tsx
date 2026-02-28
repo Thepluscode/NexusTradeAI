@@ -23,6 +23,8 @@ import {
     InputLabel,
     Switch,
     FormControlLabel,
+    Tabs,
+    Tab,
 } from '@mui/material';
 import {
     FlashOn,
@@ -186,7 +188,7 @@ function BrokerForm({
                 } : {},
             }}
         >
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2.5 }}>
+            <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'flex-start', sm: 'center' }, justifyContent: 'space-between', mb: 2.5, gap: { xs: 1.5, sm: 0 } }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
                     <Avatar sx={{ bgcolor: `${accentColor}20`, color: accentColor, width: 42, height: 42 }}>
                         {icon}
@@ -196,7 +198,7 @@ function BrokerForm({
                         <Typography variant="caption" color="text.secondary">{description}</Typography>
                     </Box>
                 </Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
                     <Chip
                         icon={configured ? <CheckCircle sx={{ fontSize: '14px !important' }} /> : <ErrorOutline sx={{ fontSize: '14px !important' }} />}
                         label={configured ? 'Connected' : 'Not configured'}
@@ -280,7 +282,7 @@ function NotifForm({
                 transition: 'border-color 0.2s',
             }}
         >
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2.5 }}>
+            <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'flex-start', sm: 'center' }, justifyContent: 'space-between', mb: 2.5, gap: { xs: 1.5, sm: 0 } }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
                     <Avatar sx={{ bgcolor: `${accentColor}20`, color: accentColor, width: 42, height: 42 }}>
                         {icon}
@@ -290,7 +292,7 @@ function NotifForm({
                         <Typography variant="caption" color="text.secondary">{description}</Typography>
                     </Box>
                 </Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
                     {configured && detail && (
                         <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>
                             <StatusDot ok /> {detail}
@@ -535,8 +537,8 @@ function FundManagement({ config }: { config: any }) {
     });
 
     const stockBalance = balances?.stock?.realAccount?.balance ?? balances?.stock?.demoAccount?.balance ?? null;
-    const stockEquity  = balances?.stock?.realAccount?.equity  ?? balances?.stock?.demoAccount?.equity  ?? null;
-    const stockPnL     = balances?.stock?.realAccount?.pnl     ?? null;
+    const stockEquity = balances?.stock?.realAccount?.equity ?? balances?.stock?.demoAccount?.equity ?? null;
+    const stockPnL = balances?.stock?.realAccount?.pnl ?? null;
     const forexBalance = balances?.forex?.account?.balance ?? balances?.forex?.equity ?? null;
     const cryptoBalance = balances?.crypto?.portfolioValue ?? balances?.crypto?.equity ?? null;
 
@@ -590,7 +592,7 @@ function FundManagement({ config }: { config: any }) {
 
             {/* Portfolio summary */}
             <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid', borderColor: 'divider' }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2.5 }}>
+                <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'flex-start', sm: 'center' }, justifyContent: 'space-between', mb: 2.5, gap: { xs: 1, sm: 0 } }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                         <AccountBalanceWallet sx={{ color: 'primary.main' }} />
                         <Typography fontWeight={700}>Portfolio Overview</Typography>
@@ -616,8 +618,10 @@ function FundManagement({ config }: { config: any }) {
                             key={b.name}
                             sx={{
                                 display: 'flex',
-                                alignItems: 'center',
+                                flexDirection: { xs: 'column', sm: 'row' },
+                                alignItems: { xs: 'flex-start', sm: 'center' },
                                 justifyContent: 'space-between',
+                                gap: { xs: 1.5, sm: 0 },
                                 p: 2,
                                 borderRadius: 2,
                                 bgcolor: 'background.default',
@@ -876,7 +880,7 @@ export default function SettingsPage() {
         if (config.notifications?.sms?.enabled !== undefined) {
             setSmsEnabled(config.notifications.sms.enabled);
         }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [!!config]);
 
     const { mutate: saveRisk, isLoading: savingRisk } = useMutation(updateRisk, {
@@ -909,46 +913,37 @@ export default function SettingsPage() {
     const isPaper = config?.trading?.mode !== 'live';
 
     return (
-        <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: 'background.default' }}>
-            {/* ── Left nav ── */}
-            <Box
-                sx={{
-                    width: 220,
-                    flexShrink: 0,
-                    borderRight: '1px solid',
-                    borderColor: 'divider',
-                    pt: 4,
-                    px: 2,
-                }}
-            >
-                <Typography variant="overline" color="text.secondary" sx={{ px: 1, letterSpacing: 1.5, fontSize: 11 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', bgcolor: 'background.default' }}>
+            {/* ── Content ── */}
+            <Box sx={{ flex: 1, p: { xs: 2, sm: 3, md: 4 }, maxWidth: 860, mx: 'auto', width: '100%', overflow: 'auto' }}>
+                <Typography variant="h4" fontWeight={800} sx={{ mb: 3 }}>
                     Settings
                 </Typography>
-                <Stack spacing={0.5} sx={{ mt: 1.5 }}>
-                    {NAV.map(item => (
-                        <Button
-                            key={item.id}
-                            onClick={() => setActiveSection(item.id)}
-                            sx={{
-                                justifyContent: 'flex-start',
-                                textTransform: 'none',
-                                borderRadius: 2,
-                                px: 1.5,
-                                py: 1,
-                                fontWeight: activeSection === item.id ? 700 : 400,
-                                color: activeSection === item.id ? 'primary.main' : 'text.secondary',
-                                bgcolor: activeSection === item.id ? 'primary.main' + '15' : 'transparent',
-                                '&:hover': { bgcolor: activeSection === item.id ? 'primary.main' + '20' : 'action.hover' },
-                            }}
-                        >
-                            {item.label}
-                        </Button>
-                    ))}
-                </Stack>
-            </Box>
 
-            {/* ── Content ── */}
-            <Box sx={{ flex: 1, p: 4, maxWidth: 860, overflow: 'auto' }}>
+                <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 4 }}>
+                    <Tabs
+                        value={activeSection}
+                        onChange={(_, newValue) => setActiveSection(newValue)}
+                        variant="scrollable"
+                        scrollButtons="auto"
+                        sx={{
+                            '& .MuiTab-root': {
+                                textTransform: 'none',
+                                fontWeight: 600,
+                                fontSize: '0.95rem',
+                                minHeight: 48,
+                            }
+                        }}
+                    >
+                        {NAV.map(item => (
+                            <Tab
+                                key={item.id}
+                                label={item.label}
+                                value={item.id}
+                            />
+                        ))}
+                    </Tabs>
+                </Box>
                 {isLoading && <LinearProgress sx={{ mb: 3, borderRadius: 1 }} />}
 
                 {/* ── TRADING MODE ── */}
@@ -979,7 +974,7 @@ export default function SettingsPage() {
                                 }}
                             >
                                 {/* Current status */}
-                                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2.5 }}>
+                                <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'flex-start', sm: 'center' }, justifyContent: 'space-between', mb: 2.5, gap: { xs: 1.5, sm: 0 } }}>
                                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                                         <Avatar sx={{ bgcolor: isPaper ? '#3b82f620' : '#ef444420', color: isPaper ? '#3b82f6' : '#ef4444', width: 48, height: 48 }}>
                                             {isPaper ? <ScienceOutlined /> : <FlashOn />}
@@ -1143,8 +1138,10 @@ export default function SettingsPage() {
                                             <Box
                                                 sx={{
                                                     display: 'flex',
-                                                    alignItems: 'center',
+                                                    flexDirection: { xs: 'column', sm: 'row' },
+                                                    alignItems: { xs: 'flex-start', sm: 'center' },
                                                     justifyContent: 'space-between',
+                                                    gap: { xs: 1, sm: 0 },
                                                     p: 2,
                                                     borderRadius: 2,
                                                     bgcolor: 'background.default',
