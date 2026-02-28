@@ -1,11 +1,9 @@
-# Railway config for the React frontend (Vite static build)
+# Railway config — used by nexus-dashboard service
+# Bot services override NIXPACKS_BUILD_CMD and NIXPACKS_START_CMD via env vars
 [build]
 builder = "nixpacks"
-buildCommand = "npm install && npm run build"
 
 [deploy]
-startCommand = "npx serve dist -p $PORT"
-healthcheckPath = "/"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
-restartPolicyMaxRetries = 3
+restartPolicyMaxRetries = 5
