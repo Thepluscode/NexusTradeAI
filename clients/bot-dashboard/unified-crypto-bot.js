@@ -994,12 +994,16 @@ app.get('/api/trading/status', (req, res) => {
 
 // Start trading
 app.post('/api/trading/start', async (req, res) => {
-    await engine.start();
-    res.json({
-        success: true,
-        message: 'Crypto trading engine started',
-        warning: 'Crypto is HIGH RISK - use testnet first!'
-    });
+    try {
+        await engine.start();
+        res.json({
+            success: true,
+            message: 'Crypto trading engine started',
+            warning: 'Crypto is HIGH RISK - use testnet first!'
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
 });
 
 // Stop trading
@@ -1017,8 +1021,12 @@ app.get('/api/crypto/status', (req, res) => {
     res.json(engine.getStatus());
 });
 app.post('/api/crypto/start', async (req, res) => {
-    await engine.start();
-    res.json({ success: true, message: 'Crypto trading engine started' });
+    try {
+        await engine.start();
+        res.json({ success: true, message: 'Crypto trading engine started' });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
 });
 app.post('/api/crypto/stop', (req, res) => {
     engine.stop();
@@ -1031,9 +1039,10 @@ app.post('/api/crypto/pause', (req, res) => {
 
 // Test Telegram alert
 app.post('/test-telegram', async (req, res) => {
-    console.log('📱 Sending test Telegram alert...');
+    try {
+        console.log('📱 Sending test Telegram alert...');
 
-    const testMessage = `🧪 *CRYPTO BOT TEST* 🧪
+        const testMessage = `🧪 *CRYPTO BOT TEST* 🧪
 
 This is a test alert from your Crypto Trading Bot.
 
@@ -1041,18 +1050,26 @@ This is a test alert from your Crypto Trading Bot.
 
 ⏰ Time: ${new Date().toLocaleString()}`;
 
-    const sent = await telegramAlerts.send(testMessage);
+        const sent = await telegramAlerts.send(testMessage);
 
-    if (sent) {
-        res.json({
-            success: true,
-            message: 'Test Telegram message sent successfully! Check your Telegram app.',
-            timestamp: new Date().toISOString()
-        });
-    } else {
+        if (sent) {
+            res.json({
+                success: true,
+                message: 'Test Telegram message sent successfully! Check your Telegram app.',
+                timestamp: new Date().toISOString()
+            });
+        } else {
+            res.status(500).json({
+                success: false,
+                message: 'Failed to send Telegram message. Check your configuration.',
+                timestamp: new Date().toISOString()
+            });
+        }
+    } catch (error) {
         res.status(500).json({
             success: false,
-            message: 'Failed to send Telegram message. Check your configuration.',
+            message: 'Failed to send Telegram message',
+            error: error.message,
             timestamp: new Date().toISOString()
         });
     }

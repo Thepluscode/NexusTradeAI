@@ -1066,7 +1066,7 @@ app.get('/api/accounts/summary', async (req, res) => {
                 }
             });
         } else {
-            res.json({ success: false, error: 'Cannot fetch account' });
+            res.status(500).json({ success: false, error: 'Cannot fetch account' });
         }
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
