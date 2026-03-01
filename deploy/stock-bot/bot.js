@@ -37,6 +37,34 @@ const PORT = process.env.PORT || process.env.TRADING_PORT || 3002;
 app.use(cors());
 app.use(express.json());
 
+// ── Auth middleware for config-write endpoints ──────────────────────────────
+// All POST /api/config/* routes require: Authorization: Bearer <NEXUS_API_SECRET>
+function requireApiSecret(req, res, next) {
+    const secret = process.env.NEXUS_API_SECRET;
+    if (!secret) return next(); // not configured — allow (startup / local dev)
+    const auth = req.headers.authorization || '';
+    if (auth === `Bearer ${secret}`) return next();
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+}
+
+// ── Persist env var to Railway (survives redeploys) ────────────────────────
+async function persistEnvVar(name, value) {
+    const token   = process.env.RAILWAY_TOKEN;
+    const project = process.env.RAILWAY_PROJECT_ID;
+    const env     = process.env.RAILWAY_ENVIRONMENT_ID;
+    const service = process.env.RAILWAY_SERVICE_ID;
+    if (!token || !project || !env || !service) return; // not on Railway — skip
+    const query = `mutation { variableUpsert(input: { projectId: "${project}", environmentId: "${env}", serviceId: "${service}", name: "${name}", value: "${value.replace(/"/g, '\\"')}" }) }`;
+    try {
+        await axios.post('https://backboard.railway.app/graphql/v2',
+            { query },
+            { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 8000 }
+        );
+    } catch (e) {
+        console.warn(`⚠️  Railway env var persist failed for ${name}: ${e.message}`);
+    }
+}
+
 const alpacaConfig = {
     baseURL: process.env.ALPACA_BASE_URL || 'https://paper-api.alpaca.markets',
     apiKey: process.env.ALPACA_API_KEY,
@@ -1540,7 +1568,7 @@ app.get('/api/config', (req, res) => {
 });
 
 // Update live risk parameters (no restart needed)
-app.post('/api/config/risk', (req, res) => {
+app.post('/api/config/risk', requireApiSecret, (req, res) => {
     try {
         const { tier, stopLoss, profitTarget, positionSize, maxPositions } = req.body;
         if (!['tier1', 'tier2', 'tier3'].includes(tier)) {
@@ -1560,36 +1588,23 @@ app.post('/api/config/risk', (req, res) => {
 
 // ===== BROKER CREDENTIALS ENDPOINT =====
 // Writes keys to .env file on the local machine. Never logs key values.
-app.post('/api/config/mode', (req, res) => {
+app.post('/api/config/mode', requireApiSecret, async (req, res) => {
     try {
-        const { mode } = req.body; // 'paper' | 'live'
+        const { mode } = req.body;
         if (!['paper', 'live'].includes(mode)) {
             return res.status(400).json({ success: false, error: 'mode must be "paper" or "live"' });
         }
-
         const value = mode === 'live' ? 'true' : 'false';
-        const envPath = path.join(__dirname, '.env');
-        let envContent = '';
-        try { envContent = fs.readFileSync(envPath, 'utf8'); } catch { envContent = ''; }
-
-        const regex = /^REAL_TRADING_ENABLED=.*$/m;
-        if (regex.test(envContent)) {
-            envContent = envContent.replace(regex, `REAL_TRADING_ENABLED=${value}`);
-        } else {
-            envContent += `\nREAL_TRADING_ENABLED=${value}`;
-        }
-
-        fs.writeFileSync(envPath, envContent);
         process.env.REAL_TRADING_ENABLED = value;
+        await persistEnvVar('REAL_TRADING_ENABLED', value);
         console.log(`⚙️  Trading mode switched to: ${mode.toUpperCase()}`);
-
         res.json({ success: true, mode });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-app.post('/api/config/risk-limits', (req, res) => {
+app.post('/api/config/risk-limits', requireApiSecret, (req, res) => {
     try {
         const { maxDailyLoss, maxDrawdown, maxTradesPerDay } = req.body;
         if (maxDailyLoss !== undefined && typeof maxDailyLoss === 'number' && maxDailyLoss > 0) {
@@ -1631,52 +1646,40 @@ app.post('/api/config/risk-limits', (req, res) => {
     }
 });
 
-app.post('/api/config/credentials', (req, res) => {
+app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
     try {
         const { broker, credentials, fields } = req.body;
-        const creds = credentials || fields; // support both field names
-        // creds: { KEY_NAME: 'value', ... } — only whitelisted keys accepted
+        const creds = credentials || fields;
         const ALLOWED_KEYS = {
-            alpaca:  ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_BASE_URL'],
-            oanda:   ['OANDA_ACCOUNT_ID', 'OANDA_ACCESS_TOKEN', 'OANDA_PRACTICE'],
-            crypto:  ['CRYPTO_API_KEY', 'CRYPTO_API_SECRET', 'CRYPTO_EXCHANGE', 'CRYPTO_TESTNET'],
-            telegram:['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_ALERTS_ENABLED'],
-            sms:     ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'ALERT_PHONE_NUMBER', 'SMS_ALERTS_ENABLED'],
+            alpaca:   ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_BASE_URL'],
+            oanda:    ['OANDA_ACCOUNT_ID', 'OANDA_ACCESS_TOKEN', 'OANDA_PRACTICE'],
+            crypto:   ['CRYPTO_API_KEY', 'CRYPTO_API_SECRET', 'CRYPTO_EXCHANGE', 'CRYPTO_TESTNET'],
+            telegram: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_ALERTS_ENABLED'],
+            sms:      ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'ALERT_PHONE_NUMBER', 'SMS_ALERTS_ENABLED'],
         };
 
         const allowed = ALLOWED_KEYS[broker];
         if (!allowed) return res.status(400).json({ success: false, error: 'Unknown broker' });
         if (!creds || typeof creds !== 'object') return res.status(400).json({ success: false, error: 'No credentials provided' });
 
-        const envPath = path.join(__dirname, '.env');
-        let envContent = '';
-        try { envContent = fs.readFileSync(envPath, 'utf8'); } catch { envContent = ''; }
-
         let updated = 0;
         for (const [key, value] of Object.entries(creds)) {
-            if (!allowed.includes(key)) continue; // silently skip disallowed keys
+            if (!allowed.includes(key)) continue;
             if (typeof value !== 'string' || value === '') continue;
-
-            const line = `${key}=${value}`;
-            const regex = new RegExp(`^${key}=.*$`, 'm');
-            if (regex.test(envContent)) {
-                envContent = envContent.replace(regex, line);
-            } else {
-                envContent += `\n${line}`;
-            }
-            // Update process.env so bot picks up new values immediately
+            // Apply immediately in-memory
             process.env[key] = value;
+            // Persist to Railway env vars so they survive redeploys
+            await persistEnvVar(key, value);
             updated++;
         }
 
-        fs.writeFileSync(envPath, envContent);
-        console.log(`⚙️  Credentials updated for broker: ${broker} (${updated} keys)`);
+        console.log(`⚙️  Credentials updated: broker=${broker} keys=${updated}`);
 
-        // Update alpacaConfig in memory if Alpaca keys changed
+        // Refresh in-memory broker config
         if (broker === 'alpaca') {
-            if (creds.ALPACA_API_KEY) alpacaConfig.apiKey = creds.ALPACA_API_KEY;
+            if (creds.ALPACA_API_KEY)    alpacaConfig.apiKey    = creds.ALPACA_API_KEY;
             if (creds.ALPACA_SECRET_KEY) alpacaConfig.secretKey = creds.ALPACA_SECRET_KEY;
-            if (creds.ALPACA_BASE_URL) alpacaConfig.baseURL = creds.ALPACA_BASE_URL;
+            if (creds.ALPACA_BASE_URL)   alpacaConfig.baseURL   = creds.ALPACA_BASE_URL;
         }
 
         res.json({ success: true, updated });
@@ -1686,7 +1689,7 @@ app.post('/api/config/credentials', (req, res) => {
     }
 });
 
-app.post('/api/config/test-notification', async (req, res) => {
+app.post('/api/config/test-notification', requireApiSecret, async (req, res) => {
     const { channel } = req.body;
     try {
         if (channel === 'telegram') {

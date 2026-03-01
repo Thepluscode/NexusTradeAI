@@ -41,6 +41,33 @@ const PORT = process.env.PORT || process.env.FOREX_PORT || 3005;
 app.use(cors());
 app.use(express.json());
 
+// ── Auth middleware for config-write endpoints ──────────────────────────────
+function requireApiSecret(req, res, next) {
+    const secret = process.env.NEXUS_API_SECRET;
+    if (!secret) return next();
+    const auth = req.headers.authorization || '';
+    if (auth === `Bearer ${secret}`) return next();
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+}
+
+// ── Persist env var to Railway (survives redeploys) ────────────────────────
+async function persistEnvVar(name, value) {
+    const token   = process.env.RAILWAY_TOKEN;
+    const project = process.env.RAILWAY_PROJECT_ID;
+    const env     = process.env.RAILWAY_ENVIRONMENT_ID;
+    const service = process.env.RAILWAY_SERVICE_ID;
+    if (!token || !project || !env || !service) return;
+    const query = `mutation { variableUpsert(input: { projectId: "${project}", environmentId: "${env}", serviceId: "${service}", name: "${name}", value: "${value.replace(/"/g, '\\"')}" }) }`;
+    try {
+        await axios.post('https://backboard.railway.app/graphql/v2',
+            { query },
+            { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 8000 }
+        );
+    } catch (e) {
+        console.warn(`⚠️  Railway env var persist failed for ${name}: ${e.message}`);
+    }
+}
+
 // Initialize Alert Services
 const smsAlerts = getSMSAlertService();
 const telegramAlerts = getTelegramAlertService();
@@ -1266,6 +1293,34 @@ app.post('/test-telegram', async (req, res) => {
             success: false,
             error: error.message
         });
+    }
+});
+
+// ── Credentials management ──────────────────────────────────────────────────
+app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
+    try {
+        const { broker, credentials, fields } = req.body;
+        const creds = credentials || fields;
+        const ALLOWED_KEYS = {
+            oanda:    ['OANDA_ACCOUNT_ID', 'OANDA_ACCESS_TOKEN', 'OANDA_PRACTICE'],
+            telegram: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_ALERTS_ENABLED'],
+            sms:      ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'ALERT_PHONE_NUMBER', 'SMS_ALERTS_ENABLED'],
+        };
+        const allowed = ALLOWED_KEYS[broker];
+        if (!allowed) return res.status(400).json({ success: false, error: 'Unknown broker' });
+        if (!creds || typeof creds !== 'object') return res.status(400).json({ success: false, error: 'No credentials provided' });
+        let updated = 0;
+        for (const [key, value] of Object.entries(creds)) {
+            if (!allowed.includes(key)) continue;
+            if (typeof value !== 'string' || value === '') continue;
+            process.env[key] = value;
+            await persistEnvVar(key, value);
+            updated++;
+        }
+        console.log(`⚙️  Credentials updated: broker=${broker} keys=${updated}`);
+        res.json({ success: true, updated });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 

@@ -56,6 +56,8 @@ jobs:
 
       - name: Build
         working-directory: clients/bot-dashboard
+        env:
+          VITE_NEXUS_API_SECRET: ${{ secrets.NEXUS_API_SECRET }}
         run: npm run build
 
       # Verify the bundle has no localhost:PORT URLs before deploying

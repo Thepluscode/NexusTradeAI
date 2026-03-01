@@ -52,6 +52,11 @@ import toast from 'react-hot-toast';
 
 const API_BASE = SERVICE_URLS.stockBot;
 
+// Auth header for protected config-write endpoints.
+// VITE_NEXUS_API_SECRET is injected at build time from the GitHub secret.
+const API_SECRET = import.meta.env.VITE_NEXUS_API_SECRET || '';
+const authHeaders = API_SECRET ? { Authorization: `Bearer ${API_SECRET}` } : {};
+
 // ─── API ────────────────────────────────────────────────────────────────────
 
 async function fetchConfig() {
@@ -60,17 +65,23 @@ async function fetchConfig() {
 }
 
 async function updateRisk(payload: { tier: string; stopLoss?: number; profitTarget?: number; positionSize?: number; maxPositions?: number }) {
-    const res = await axios.post(`${API_BASE}/api/config/risk`, payload);
+    const res = await axios.post(`${API_BASE}/api/config/risk`, payload, { headers: authHeaders });
     return res.data;
 }
 
-async function saveCredentials(payload: { broker: string; credentials: Record<string, string> }) {
-    const res = await axios.post(`${API_BASE}/api/config/credentials`, payload);
+async function saveCredentials(payload: { broker: string; credentials: Record<string, string>; targetBot?: string }) {
+    const { targetBot, ...body } = payload;
+    // Route to the correct bot based on broker type
+    const botUrl =
+        (body.broker === 'oanda') ? SERVICE_URLS.forexBot :
+        (body.broker === 'crypto') ? SERVICE_URLS.cryptoBot :
+        API_BASE;
+    const res = await axios.post(`${botUrl}/api/config/credentials`, body, { headers: authHeaders });
     return res.data;
 }
 
 async function setTradingMode(mode: 'paper' | 'live') {
-    const res = await axios.post(`${API_BASE}/api/config/mode`, { mode });
+    const res = await axios.post(`${API_BASE}/api/config/mode`, { mode }, { headers: authHeaders });
     return res.data;
 }
 
@@ -503,7 +514,7 @@ async function fetchAllBalances() {
 }
 
 async function saveRiskLimits(payload: { maxDailyLoss: number; maxDrawdown: number; maxTradesPerDay: number }) {
-    const res = await axios.post(`${SERVICE_URLS.stockBot}/api/config/risk-limits`, payload);
+    const res = await axios.post(`${SERVICE_URLS.stockBot}/api/config/risk-limits`, payload, { headers: authHeaders });
     return res.data;
 }
 
@@ -1457,7 +1468,7 @@ export default function SettingsPage() {
                                         sx={{ borderRadius: 2, textTransform: 'none', alignSelf: 'flex-start' }}
                                         onClick={async () => {
                                             try {
-                                                await axios.post(`${API_BASE}/api/config/test-notification`, { channel: 'telegram' });
+                                                await axios.post(`${API_BASE}/api/config/test-notification`, { channel: 'telegram' }, { headers: authHeaders });
                                                 toast.success('Test message sent to Telegram');
                                             } catch {
                                                 toast.error('Failed to send test message — check bot token and chat ID');
@@ -1544,7 +1555,7 @@ export default function SettingsPage() {
                                         sx={{ borderRadius: 2, textTransform: 'none', alignSelf: 'flex-start' }}
                                         onClick={async () => {
                                             try {
-                                                await axios.post(`${API_BASE}/api/config/test-notification`, { channel: 'sms' });
+                                                await axios.post(`${API_BASE}/api/config/test-notification`, { channel: 'sms' }, { headers: authHeaders });
                                                 toast.success('Test SMS sent');
                                             } catch {
                                                 toast.error('Failed to send SMS — check Twilio credentials');
