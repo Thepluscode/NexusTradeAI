@@ -1248,6 +1248,23 @@ app.get('/api/trading/status', async (req, res) => {
         });
 
     } catch (error) {
+        const status = error?.response?.status;
+        if (status === 401 || status === 403) {
+            return res.json({
+                success: true,
+                data: {
+                    isRunning: botRunning,
+                    mode: 'PAPER',
+                    credentialsRequired: true,
+                    account: { equity: 0, cash: 0, buyingPower: 0 },
+                    performance: { totalTrades: totalTradesToday, winRate: 0, profitFactor: 0, activePositions: 0 },
+                    positions: [],
+                    portfolioValue: 0,
+                    dailyPnL: 0,
+                    lastUpdate: lastScanTime
+                }
+            });
+        }
         res.status(500).json({ success: false, error: error.message });
     }
 });

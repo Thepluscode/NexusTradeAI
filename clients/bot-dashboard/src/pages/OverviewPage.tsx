@@ -20,6 +20,7 @@ import {
     TrendingDown,
 } from '@mui/icons-material';
 import axios from 'axios';
+import { SERVICE_URLS } from '@/services/api';
 import { useQuery } from 'react-query';
 import { useNavigate } from 'react-router-dom';
 
@@ -48,6 +49,7 @@ const BOTS = [
         description: 'Momentum • Market Hours (9:30–4 PM EST)',
         gradient: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
         port: 3002,
+        baseURL: SERVICE_URLS.stockBot,
         path: '/stock',
         statusPath: '/api/trading/status',
         features: ['3-Tier Momentum', 'Anti-Churning (15/day)', 'EOD Close-All', 'Trailing Stops'],
@@ -59,6 +61,7 @@ const BOTS = [
         description: 'Trend Following • 24/5',
         gradient: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
         port: 3005,
+        baseURL: SERVICE_URLS.forexBot,
         path: '/forex',
         statusPath: '/api/forex/status',
         features: ['12 Forex Pairs', 'Session-Optimized', 'Correlation Filter', 'OANDA Integration'],
@@ -70,6 +73,7 @@ const BOTS = [
         description: 'BTC-Correlation • 24/7/365',
         gradient: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
         port: 3006,
+        baseURL: SERVICE_URLS.cryptoBot,
         path: '/crypto',
         statusPath: '/api/crypto/status',
         features: ['12 Crypto Pairs', 'BTC Trend Filter', 'Volatility Pause', '5% Stop Loss'],
@@ -78,7 +82,7 @@ const BOTS = [
 
 async function fetchBotStatus(bot: typeof BOTS[0]): Promise<BotHealth> {
     try {
-        const res = await axios.get(`http://localhost:${bot.port}${bot.statusPath}`, { timeout: 3000 });
+        const res = await axios.get(`${bot.baseURL}${bot.statusPath}`, { timeout: 3000 });
         const d = res.data?.data || res.data;
 
         // Normalise across the three different response shapes
