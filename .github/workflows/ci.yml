@@ -97,44 +97,57 @@ jobs:
           echo "Dashboard / → $CODE"
           [ "$CODE" = "200" ]
 
-      # Verify each status endpoint returns the fields the UI depends on
+      # Verify each status endpoint returns the fields the UI depends on.
+      # Retries 3× with 15s gaps to handle mid-deploy transient failures.
       - name: API contract — Stock Bot /api/trading/status
         run: |
-          curl -s --max-time 15 \
-            https://nexus-stock-bot-production.up.railway.app/api/trading/status \
-          | python3 -c "
+          for i in 1 2 3; do
+            RESULT=$(curl -s --max-time 15 \
+              https://nexus-stock-bot-production.up.railway.app/api/trading/status \
+            | python3 -c "
           import json, sys
           body = json.load(sys.stdin)
           d = body.get('data', body)
           missing = [k for k in ('isRunning', 'mode') if k not in d]
           if missing:
-              print('FAIL — missing fields:', missing); sys.exit(1)
+              print('FAIL'); sys.exit(1)
           print('OK — isRunning=%s mode=%s' % (d['isRunning'], d['mode']))
-          "
+            " 2>&1) && echo "$RESULT" && break || \
+            (echo "Attempt $i failed: $RESULT" && [ $i -lt 3 ] && sleep 15)
+          done
+          echo "$RESULT" | grep -q OK || (echo "Stock Bot API contract failed" && exit 1)
 
       - name: API contract — Forex Bot /api/forex/status
         run: |
-          curl -s --max-time 15 \
-            https://nexus-forex-bot-production.up.railway.app/api/forex/status \
-          | python3 -c "
+          for i in 1 2 3; do
+            RESULT=$(curl -s --max-time 15 \
+              https://nexus-forex-bot-production.up.railway.app/api/forex/status \
+            | python3 -c "
           import json, sys
           d = json.load(sys.stdin)
           missing = [k for k in ('isRunning', 'mode', 'equity') if k not in d]
           if missing:
-              print('FAIL — missing fields:', missing); sys.exit(1)
+              print('FAIL'); sys.exit(1)
           print('OK — isRunning=%s equity=%s' % (d['isRunning'], d['equity']))
-          "
+            " 2>&1) && echo "$RESULT" && break || \
+            (echo "Attempt $i failed: $RESULT" && [ $i -lt 3 ] && sleep 15)
+          done
+          echo "$RESULT" | grep -q OK || (echo "Forex Bot API contract failed" && exit 1)
 
       - name: API contract — Crypto Bot /api/crypto/status
         run: |
-          curl -s --max-time 15 \
-            https://nexus-crypto-bot-production.up.railway.app/api/crypto/status \
-          | python3 -c "
+          for i in 1 2 3; do
+            RESULT=$(curl -s --max-time 15 \
+              https://nexus-crypto-bot-production.up.railway.app/api/crypto/status \
+            | python3 -c "
           import json, sys
           d = json.load(sys.stdin)
           missing = [k for k in ('isRunning', 'mode', 'equity') if k not in d]
           if missing:
-              print('FAIL — missing fields:', missing); sys.exit(1)
+              print('FAIL'); sys.exit(1)
           print('OK — isRunning=%s equity=%s' % (d['isRunning'], d['equity']))
-          "
+            " 2>&1) && echo "$RESULT" && break || \
+            (echo "Attempt $i failed: $RESULT" && [ $i -lt 3 ] && sleep 15)
+          done
+          echo "$RESULT" | grep -q OK || (echo "Crypto Bot API contract failed" && exit 1)
 

@@ -128,9 +128,7 @@ jobs:
           fetch-depth: 1
 
       - name: Install Railway CLI
-        run: |
-          curl -fsSL https://railway.app/install.sh | sh
-          echo "$HOME/.railway/bin" >> $GITHUB_PATH
+        run: npm install -g @railway/cli
 
       # Deploy each service with --path-as-root pointing at its subdirectory.
       # --detach means we don't wait inline — we'll poll health after all 5 kick off.
