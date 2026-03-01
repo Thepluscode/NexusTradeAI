@@ -1,258 +1,134 @@
-name: Continuous Integration
+name: CI
+
+# Runs on every push to main and on all pull requests.
+# Gates: lint → type-check → build → smoke-test live services.
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main]
   pull_request:
-    branches: [ main, develop ]
-
-env:
-  NODE_VERSION: '18'
-  PYTHON_VERSION: '3.9'
-  REGISTRY: ghcr.io
-  IMAGE_NAME: nexus-trade-ai
+    branches: [main]
 
 jobs:
-  # Code Quality and Security
-  code-quality:
+  # ── 1. Lint + type-check + production build ─────────────────────────────────
+  dashboard-build:
+    name: Dashboard — lint · typecheck · build
     runs-on: ubuntu-latest
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ env.NODE_VERSION }}
-        cache: 'npm'
-        
-    - name: Install dependencies
-      run: npm ci
-      
-    - name: Run ESLint
-      run: npm run lint
-      
-    - name: Run Prettier
-      run: npm run format
-      
-    - name: Security audit
-      run: npm audit --audit-level=moderate
-      
-    - name: License compliance check
-      run: npx license-checker --onlyAllow 'MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC'
-
-  # Unit Tests
-  unit-tests:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        service: [api-gateway, auth-service, market-data-service, trading-engine, risk-management-service]
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ env.NODE_VERSION }}
-        cache: 'npm'
-        
-    - name: Install dependencies
-      run: |
-        cd services/${{ matrix.service }}
-        npm ci
-        
-    - name: Run unit tests
-      run: |
-        cd services/${{ matrix.service }}
-        npm run test:coverage
-        
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
-      with:
-        file: services/${{ matrix.service }}/coverage/lcov.info
-        flags: ${{ matrix.service }}
-
-  # Frontend Tests
-  frontend-tests:
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ env.NODE_VERSION }}
-        cache: 'npm'
-        
-    - name: Install dependencies
-      run: |
-        cd clients/web-app
-        npm ci
-        
-    - name: Build application
-      run: |
-        cd clients/web-app
-        npm run build
-        
-    - name: Run tests
-      run: |
-        cd clients/web-app
-        npm run test
-        
-    - name: Type check
-      run: |
-        cd clients/web-app
-        npm run type-check
-
-  # AI/ML Tests
-  ml-tests:
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Setup Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-        cache: 'pip'
-        
-    - name: Install Python dependencies
-      run: |
-        cd ai-ml
-        pip install -r requirements.txt
-        
-    - name: Run Python tests
-      run: |
-        cd ai-ml
-        python -m pytest tests/ --cov=. --cov-report=xml
-        
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
-      with:
-        file: ai-ml/coverage.xml
-        flags: ai-ml
-
-  # Integration Tests
-  integration-tests:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: timescale/timescaledb:latest-pg14
-        env:
-          POSTGRES_PASSWORD: test_password
-          POSTGRES_USER: test_user
-          POSTGRES_DB: test_db
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-          
-      redis:
-        image: redis:7-alpine
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 6379:6379
-          
-      mongodb:
-        image: mongo:6
-        env:
-          MONGO_INITDB_ROOT_USERNAME: test_user
-          MONGO_INITDB_ROOT_PASSWORD: test_password
-        options: >-
-          --health-cmd "echo 'db.runCommand(\"ping\").ok' | mongo localhost:27017/test --quiet"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 27017:27017
+    defaults:
+      run:
+        working-directory: clients/bot-dashboard
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ env.NODE_VERSION }}
-        cache: 'npm'
-        
-    - name: Install dependencies
-      run: npm ci
-      
-    - name: Wait for services
-      run: |
-        sleep 10
-        
-    - name: Run integration tests
-      env:
-        NODE_ENV: test
-        POSTGRESQL_URI: postgresql://test_user:test_password@localhost:5432/test_db
-        MONGODB_URI: mongodb://test_user:test_password@localhost:27017/test_auth?authSource=admin
-        REDIS_URL: redis://localhost:6379
-      run: npm run test:integration
+      - uses: actions/checkout@v4
 
-  # Security Scanning
-  security-scan:
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@master
-      with:
-        scan-type: 'fs'
-        scan-ref: '.'
-        format: 'sarif'
-        output: 'trivy-results.sarif'
-        
-    - name: Upload Trivy scan results to GitHub Security tab
-      uses: github/codeql-action/upload-sarif@v2
-      with:
-        sarif_file: 'trivy-results.sarif'
-        
-    - name: Run Snyk security scan
-      uses: snyk/actions/node@master
-      env:
-        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-      with:
-        args: --severity-threshold=high
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: clients/bot-dashboard/package-lock.json
 
-  # Performance Tests
-  performance-tests:
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+
+      # Upload the built dist so the deploy job can download it without rebuilding
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-dist
+          path: clients/bot-dashboard/dist/
+          retention-days: 1
+
+  # ── 2. Smoke-test all 5 live Railway services ────────────────────────────────
+  # Only runs on push to main (PRs from forks can't reach Railway).
+  smoke-tests:
+    name: Smoke-test Railway services
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'push'
+    # Don't smoke-test before the build passes
+    needs: dashboard-build
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ env.NODE_VERSION }}
-        cache: 'npm'
-        
-    - name: Start services for testing
-      run: |
-        docker-compose -f docker-compose.test.yml up -d
-        sleep 30
-        
-    - name: Install k6
-      run: |
-        curl https://github.com/grafana/k6/releases/download/v0.45.0/k6-v0.45.0-linux-amd64.tar.gz -L | tar xvz --strip-components 1
-        
-    - name: Run performance tests
-      run: ./k6 run tests/performance/api-load-test.js
-      
-    - name: Stop services
-      run: docker-compose -f docker-compose.test.yml down
+      - name: Stock Bot — /health
+        run: |
+          CODE=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 15 \
+            https://nexus-stock-bot-production.up.railway.app/health)
+          echo "Stock Bot /health → $CODE"
+          [ "$CODE" = "200" ]
+
+      - name: Forex Bot — /health
+        run: |
+          CODE=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 15 \
+            https://nexus-forex-bot-production.up.railway.app/health)
+          echo "Forex Bot /health → $CODE"
+          [ "$CODE" = "200" ]
+
+      - name: Crypto Bot — /health
+        run: |
+          CODE=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 15 \
+            https://nexus-crypto-bot-production.up.railway.app/health)
+          echo "Crypto Bot /health → $CODE"
+          [ "$CODE" = "200" ]
+
+      - name: Strategy Bridge — /health
+        run: |
+          CODE=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 20 \
+            https://nexus-strategy-bridge-production.up.railway.app/health)
+          echo "Strategy Bridge /health → $CODE"
+          [ "$CODE" = "200" ]
+
+      - name: Dashboard — / (200 OK)
+        run: |
+          CODE=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 15 \
+            https://nexus-dashboard-production-e6e6.up.railway.app/)
+          echo "Dashboard / → $CODE"
+          [ "$CODE" = "200" ]
+
+      # Verify each status endpoint returns the fields the UI depends on
+      - name: API contract — Stock Bot /api/trading/status
+        run: |
+          curl -s --max-time 15 \
+            https://nexus-stock-bot-production.up.railway.app/api/trading/status \
+          | python3 -c "
+          import json, sys
+          body = json.load(sys.stdin)
+          d = body.get('data', body)
+          missing = [k for k in ('isRunning', 'mode') if k not in d]
+          if missing:
+              print('FAIL — missing fields:', missing); sys.exit(1)
+          print('OK — isRunning=%s mode=%s' % (d['isRunning'], d['mode']))
+          "
+
+      - name: API contract — Forex Bot /api/forex/status
+        run: |
+          curl -s --max-time 15 \
+            https://nexus-forex-bot-production.up.railway.app/api/forex/status \
+          | python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)
+          missing = [k for k in ('isRunning', 'mode', 'equity') if k not in d]
+          if missing:
+              print('FAIL — missing fields:', missing); sys.exit(1)
+          print('OK — isRunning=%s equity=%s' % (d['isRunning'], d['equity']))
+          "
+
+      - name: API contract — Crypto Bot /api/crypto/status
+        run: |
+          curl -s --max-time 15 \
+            https://nexus-crypto-bot-production.up.railway.app/api/crypto/status \
+          | python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)
+          missing = [k for k in ('isRunning', 'mode', 'equity') if k not in d]
+          if missing:
+              print('FAIL — missing fields:', missing); sys.exit(1)
+          print('OK — isRunning=%s equity=%s' % (d['isRunning'], d['equity']))
+          "

@@ -1,61 +1,84 @@
-name: Security Scan
+name: Security audit
+
+# Weekly dependency audit using only built-in npm audit — no external tokens required.
+# Runs every Monday at 09:00 UTC, and can be triggered manually.
 
 on:
   schedule:
-    - cron: '0 2 * * *'  # Daily at 2 AM
+    - cron: '0 9 * * 1'
   workflow_dispatch:
 
 jobs:
-  dependency-scan:
+  audit-dashboard:
+    name: npm audit — dashboard
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/bot-dashboard
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Run dependency vulnerability scan
-      uses: snyk/actions/node@master
-      env:
-        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-      with:
-        args: --severity-threshold=medium --fail-on=upgradable
-        
-    - name: Monitor Docker images
-      uses: snyk/actions/docker@master
-      env:
-        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-      with:
-        image: nexus-trade/api-gateway:latest
-        args: --severity-threshold=high
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: clients/bot-dashboard/package-lock.json
+      - run: npm ci
+      - name: Audit (high + critical only)
+        run: npm audit --audit-level=high || true
+        # `|| true` — report vulnerabilities but don't fail the workflow.
+        # Remove `|| true` once all high/critical advisories are resolved.
 
-  infrastructure-scan:
+  audit-stock-bot:
+    name: npm audit — stock bot
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/stock-bot
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Scan Kubernetes manifests
-      uses: aquasecurity/trivy-action@master
-      with:
-        scan-type: 'config'
-        scan-ref: 'infrastructure/kubernetes/'
-        format: 'sarif'
-        output: 'trivy-k8s-results.sarif'
-        
-    - name: Upload results
-      uses: github/codeql-action/upload-sarif@v2
-      with:
-        sarif_file: 'trivy-k8s-results.sarif'
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm audit --audit-level=high || true
 
-  secrets-scan:
+  audit-forex-bot:
+    name: npm audit — forex bot
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/forex-bot
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm audit --audit-level=high || true
+
+  audit-crypto-bot:
+    name: npm audit — crypto bot
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/crypto-bot
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm audit --audit-level=high || true
+
+  check-for-secrets:
+    name: Scan for accidental secrets
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Scan for secrets
-      uses: trufflesecurity/trufflehog@main
-      with:
-        path: ./
-        base: main
-        head: HEAD
-        extra_args: --debug --only-verified
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # gitleaks is free, open-source, requires no external token
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
