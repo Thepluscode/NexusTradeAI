@@ -24,11 +24,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: clients/bot-dashboard/package-lock.json
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: clients/bot-dashboard/node_modules
+          key: dashboard-node-modules-${{ hashFiles('clients/bot-dashboard/package.json') }}
+          restore-keys: dashboard-node-modules-
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       - name: Lint
         run: npm run lint
