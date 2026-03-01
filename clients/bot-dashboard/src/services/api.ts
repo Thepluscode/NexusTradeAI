@@ -14,7 +14,7 @@ import type {
 // Fallbacks point to Railway production URLs so the deployed dashboard works
 // without needing any env vars set. For local dev, create .env.local to override.
 
-const SERVICE_URLS = {
+export const SERVICE_URLS = {
   stockBot:   import.meta.env.VITE_STOCK_BOT_URL   || 'https://nexus-stock-bot-production.up.railway.app',
   forexBot:   import.meta.env.VITE_FOREX_BOT_URL   || 'https://nexus-forex-bot-production.up.railway.app',
   cryptoBot:  import.meta.env.VITE_CRYPTO_BOT_URL  || 'https://nexus-crypto-bot-production.up.railway.app',

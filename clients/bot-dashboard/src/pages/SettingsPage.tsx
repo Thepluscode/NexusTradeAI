@@ -47,9 +47,10 @@ import {
     WarningAmber,
 } from '@mui/icons-material';
 import axios from 'axios';
+import { SERVICE_URLS } from '@/services/api';
 import toast from 'react-hot-toast';
 
-const API_BASE = 'http://localhost:3002';
+const API_BASE = SERVICE_URLS.stockBot;
 
 // ─── API ────────────────────────────────────────────────────────────────────
 
@@ -489,9 +490,9 @@ function RiskTierCard({
 
 async function fetchAllBalances() {
     const [stock, forex, crypto] = await Promise.allSettled([
-        axios.get('http://localhost:3002/api/accounts/summary', { timeout: 4000 }),
-        axios.get('http://localhost:3005/api/forex/status', { timeout: 4000 }),
-        axios.get('http://localhost:3006/api/crypto/status', { timeout: 4000 }),
+        axios.get(`${SERVICE_URLS.stockBot}/api/accounts/summary`, { timeout: 4000 }),
+        axios.get(`${SERVICE_URLS.forexBot}/api/forex/status`, { timeout: 4000 }),
+        axios.get(`${SERVICE_URLS.cryptoBot}/api/crypto/status`, { timeout: 4000 }),
     ]);
 
     const stockData = stock.status === 'fulfilled' ? stock.value.data?.data : null;
@@ -502,7 +503,7 @@ async function fetchAllBalances() {
 }
 
 async function saveRiskLimits(payload: { maxDailyLoss: number; maxDrawdown: number; maxTradesPerDay: number }) {
-    const res = await axios.post('http://localhost:3002/api/config/risk-limits', payload);
+    const res = await axios.post(`${SERVICE_URLS.stockBot}/api/config/risk-limits`, payload);
     return res.data;
 }
 

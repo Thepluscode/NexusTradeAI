@@ -37,17 +37,18 @@ import {
 import axios from 'axios';
 import { useQuery } from 'react-query';
 import toast from 'react-hot-toast';
+import { SERVICE_URLS } from '@/services/api';
 
 // ── Data fetching ──────────────────────────────────────────────────────────
 
 async function fetchStockAccount() {
-    const res = await axios.get('http://localhost:3002/api/accounts/summary', { timeout: 5000 });
+    const res = await axios.get(`${SERVICE_URLS.stockBot}/api/accounts/summary`, { timeout: 5000 });
     return res.data?.data || res.data;
 }
 
 async function fetchForexAccount() {
     try {
-        const res = await axios.get('http://localhost:3005/api/accounts/summary', { timeout: 3000 });
+        const res = await axios.get(`${SERVICE_URLS.forexBot}/api/accounts/summary`, { timeout: 3000 });
         return res.data?.data || res.data;
     } catch {
         return null;
@@ -56,7 +57,7 @@ async function fetchForexAccount() {
 
 async function fetchCryptoAccount() {
     try {
-        const res = await axios.get('http://localhost:3006/api/crypto/status', { timeout: 3000 });
+        const res = await axios.get(`${SERVICE_URLS.cryptoBot}/api/crypto/status`, { timeout: 3000 });
         const d = res.data?.data || res.data;
         return { equity: d?.equity || d?.portfolioValue || 0, mode: d?.mode || 'DEMO' };
     } catch {

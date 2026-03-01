@@ -18,15 +18,16 @@ import {
 } from '@mui/icons-material';
 import axios from 'axios';
 import { useQuery } from 'react-query';
+import { SERVICE_URLS } from '@/services/api';
 
 // ── Data fetching ──────────────────────────────────────────────────────────
 
 async function fetchAllBotStats() {
     const results = await Promise.allSettled([
-        axios.get('http://localhost:3002/api/trading/status', { timeout: 3000 }),
-        axios.get('http://localhost:3002/api/config', { timeout: 3000 }),
-        axios.get('http://localhost:3005/api/forex/status', { timeout: 3000 }),
-        axios.get('http://localhost:3006/api/crypto/status', { timeout: 3000 }),
+        axios.get(`${SERVICE_URLS.stockBot}/api/trading/status`, { timeout: 3000 }),
+        axios.get(`${SERVICE_URLS.stockBot}/api/config`, { timeout: 3000 }),
+        axios.get(`${SERVICE_URLS.forexBot}/api/forex/status`, { timeout: 3000 }),
+        axios.get(`${SERVICE_URLS.cryptoBot}/api/crypto/status`, { timeout: 3000 }),
     ]);
 
     return {

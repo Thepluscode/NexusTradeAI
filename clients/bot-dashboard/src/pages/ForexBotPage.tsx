@@ -20,6 +20,7 @@ import {
     SwapVert,
 } from '@mui/icons-material';
 import axios from 'axios';
+import { SERVICE_URLS } from '@/services/api';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import toast from 'react-hot-toast';
 
@@ -67,7 +68,7 @@ interface BotStatus {
     };
 }
 
-const API_BASE = 'http://localhost:3005';
+const API_BASE = SERVICE_URLS.forexBot;
 
 export default function ForexBotPage() {
     const queryClient = useQueryClient();
