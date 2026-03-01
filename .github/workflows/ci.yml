@@ -132,3 +132,4 @@ jobs:
               print('FAIL — missing fields:', missing); sys.exit(1)
           print('OK — isRunning=%s equity=%s' % (d['isRunning'], d['equity']))
           "
+
