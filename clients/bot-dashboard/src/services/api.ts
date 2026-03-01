@@ -10,35 +10,31 @@ import type {
 } from '@/types';
 
 // ── Service URLs ─────────────────────────────────────────────────────────────
-// Locally:    reads from localhost defaults below
-// Production: set VITE_* env vars in Railway (or .env.local for local override)
-//   VITE_STOCK_BOT_URL   → Stock Bot  (default http://localhost:3002)
-//   VITE_FOREX_BOT_URL   → Forex Bot  (default http://localhost:3005)
-//   VITE_CRYPTO_BOT_URL  → Crypto Bot (default http://localhost:3006)
-//   VITE_MARKET_DATA_URL → Market Data (default http://localhost:3001)
-//   VITE_AI_SERVICE_URL  → AI Service  (default http://localhost:5001)
+// VITE_* env vars are baked in at build time.
+// Fallbacks point to Railway production URLs so the deployed dashboard works
+// without needing any env vars set. For local dev, create .env.local to override.
 
 const SERVICE_URLS = {
-  stockBot:   import.meta.env.VITE_STOCK_BOT_URL   || 'http://localhost:3002',
-  forexBot:   import.meta.env.VITE_FOREX_BOT_URL   || 'http://localhost:3005',
-  cryptoBot:  import.meta.env.VITE_CRYPTO_BOT_URL  || 'http://localhost:3006',
-  marketData: import.meta.env.VITE_MARKET_DATA_URL || 'http://localhost:3001',
-  aiService:  import.meta.env.VITE_AI_SERVICE_URL  || 'http://localhost:5001',
+  stockBot:   import.meta.env.VITE_STOCK_BOT_URL   || 'https://nexus-stock-bot-production.up.railway.app',
+  forexBot:   import.meta.env.VITE_FOREX_BOT_URL   || 'https://nexus-forex-bot-production.up.railway.app',
+  cryptoBot:  import.meta.env.VITE_CRYPTO_BOT_URL  || 'https://nexus-crypto-bot-production.up.railway.app',
+  marketData: import.meta.env.VITE_MARKET_DATA_URL || 'https://nexus-stock-bot-production.up.railway.app',
+  aiService:  import.meta.env.VITE_AI_SERVICE_URL  || 'https://nexus-strategy-bridge-production.up.railway.app',
 };
 
 class APIClient {
-  private tradingEngine: AxiosInstance;  // port 3002
-  private forexService: AxiosInstance;   // port 3005
-  private cryptoService: AxiosInstance;  // port 3006
-  private marketData: AxiosInstance;     // port 3001 (optional)
-  private aiService: AxiosInstance;      // port 5001 (optional)
+  private tradingEngine: AxiosInstance;
+  private forexService: AxiosInstance;
+  private cryptoService: AxiosInstance;
+  private marketData: AxiosInstance;
+  private aiService: AxiosInstance;
 
   constructor() {
-    this.tradingEngine = axios.create({ baseURL: import.meta.env.VITE_STOCK_BOT_URL  || 'http://localhost:3002', timeout: 10000 });
-    this.forexService  = axios.create({ baseURL: import.meta.env.VITE_FOREX_BOT_URL  || 'http://localhost:3005', timeout: 10000 });
-    this.cryptoService = axios.create({ baseURL: import.meta.env.VITE_CRYPTO_BOT_URL || 'http://localhost:3006', timeout: 10000 });
-    this.marketData    = axios.create({ baseURL: import.meta.env.VITE_MARKET_DATA_URL || 'http://localhost:3001', timeout: 5000 });
-    this.aiService     = axios.create({ baseURL: import.meta.env.VITE_AI_SERVICE_URL  || 'http://localhost:5001', timeout: 5000 });
+    this.tradingEngine = axios.create({ baseURL: SERVICE_URLS.stockBot,   timeout: 10000 });
+    this.forexService  = axios.create({ baseURL: SERVICE_URLS.forexBot,   timeout: 10000 });
+    this.cryptoService = axios.create({ baseURL: SERVICE_URLS.cryptoBot,  timeout: 10000 });
+    this.marketData    = axios.create({ baseURL: SERVICE_URLS.marketData, timeout: 5000 });
+    this.aiService     = axios.create({ baseURL: SERVICE_URLS.aiService,  timeout: 5000 });
   }
 
   // ── Stock Bot (port 3002) ─────────────────────────────────────────────────
