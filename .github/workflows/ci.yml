@@ -107,7 +107,9 @@ jobs:
             | python3 -c "
           import json, sys
           body = json.load(sys.stdin)
-          d = body.get('data', body)
+          # Stock bot returns fields at top level AND has a nested 'data' dict.
+          # Check top-level first; fall back to nested data only if top-level missing.
+          d = body if 'isRunning' in body else body.get('data', body)
           missing = [k for k in ('isRunning', 'mode') if k not in d]
           if missing:
               print('FAIL'); sys.exit(1)
