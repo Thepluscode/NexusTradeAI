@@ -25,6 +25,7 @@ import {
   Assessment,
   Menu as MenuIcon,
   Settings,
+  Logout,
 } from '@mui/icons-material';
 import { Toaster } from 'react-hot-toast';
 
@@ -35,6 +36,9 @@ import ForexBotPage from './pages/ForexBotPage';
 import CryptoBotPage from './pages/CryptoBotPage';
 import BacktestPage from './pages/BacktestPage';
 import SettingsPage from './pages/SettingsPage';
+import LoginPage from './pages/LoginPage';
+import ProtectedRoute from './components/ProtectedRoute';
+import { useAuth } from './hooks/useAuth';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -116,6 +120,7 @@ function Navigation() {
   const navigate = useNavigate();
   const location = useLocation();
   const isMobile = useMediaQuery(darkTheme.breakpoints.down('md'));
+  const { user, logout } = useAuth();
 
   const drawer = (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -172,6 +177,27 @@ function Navigation() {
             <ListItemText primary="Settings" />
           </ListItemButton>
         </ListItem>
+        {user && (
+          <ListItem disablePadding sx={{ mt: 0.5 }}>
+            <ListItemButton
+              onClick={logout}
+              sx={{
+                borderRadius: 2,
+                '&:hover': { bgcolor: 'error.dark' },
+              }}
+            >
+              <ListItemIcon sx={{ color: 'error.main', minWidth: 40 }}>
+                <Logout />
+              </ListItemIcon>
+              <ListItemText
+                primary="Logout"
+                secondary={user.email}
+                primaryTypographyProps={{ color: 'error.main', fontWeight: 500 }}
+                secondaryTypographyProps={{ fontSize: '0.7rem', noWrap: true }}
+              />
+            </ListItemButton>
+          </ListItem>
+        )}
       </List>
     </Box>
   );
@@ -257,12 +283,13 @@ function Navigation() {
         }}
       >
         <Routes>
-          <Route path="/" element={<OverviewPage />} />
-          <Route path="/stock" element={<StockBotPage />} />
-          <Route path="/forex" element={<ForexBotPage />} />
-          <Route path="/crypto" element={<CryptoBotPage />} />
-          <Route path="/backtest" element={<BacktestPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/" element={<ProtectedRoute><OverviewPage /></ProtectedRoute>} />
+          <Route path="/stock" element={<ProtectedRoute><StockBotPage /></ProtectedRoute>} />
+          <Route path="/forex" element={<ProtectedRoute><ForexBotPage /></ProtectedRoute>} />
+          <Route path="/crypto" element={<ProtectedRoute><CryptoBotPage /></ProtectedRoute>} />
+          <Route path="/backtest" element={<ProtectedRoute><BacktestPage /></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Box>

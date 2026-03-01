@@ -1,4 +1,4 @@
-import axios, { AxiosInstance } from 'axios';
+import axios, { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 import type {
   TradingEngineStatus,
   AIServiceHealth,
@@ -22,6 +22,77 @@ export const SERVICE_URLS = {
   aiService:  import.meta.env.VITE_AI_SERVICE_URL  || 'https://nexus-strategy-bridge-production.up.railway.app',
 };
 
+// ── Auth token helpers ────────────────────────────────────────────────────────
+function getAccessToken() { return localStorage.getItem('nexus_access_token'); }
+function getRefreshToken() { return localStorage.getItem('nexus_refresh_token'); }
+
+// Attach Bearer token to every outgoing request
+function addAuthInterceptor(instance: AxiosInstance) {
+  instance.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+    const token = getAccessToken();
+    if (token) config.headers.Authorization = `Bearer ${token}`;
+    return config;
+  });
+}
+
+// On 401: try to refresh, then retry original request once
+let _refreshing = false;
+let _refreshSubscribers: Array<(token: string) => void> = [];
+
+function subscribeRefresh(cb: (token: string) => void) {
+  _refreshSubscribers.push(cb);
+}
+function notifyRefreshed(token: string) {
+  _refreshSubscribers.forEach(cb => cb(token));
+  _refreshSubscribers = [];
+}
+
+async function tryRefreshToken(): Promise<string | null> {
+  const refreshToken = getRefreshToken();
+  if (!refreshToken) return null;
+  try {
+    const { data } = await axios.post(`${SERVICE_URLS.stockBot}/api/auth/refresh`, { refreshToken });
+    localStorage.setItem('nexus_access_token', data.accessToken);
+    localStorage.setItem('nexus_refresh_token', data.refreshToken);
+    return data.accessToken;
+  } catch {
+    localStorage.removeItem('nexus_access_token');
+    localStorage.removeItem('nexus_refresh_token');
+    window.location.href = '/login';
+    return null;
+  }
+}
+
+function addRefreshInterceptor(instance: AxiosInstance) {
+  instance.interceptors.response.use(
+    r => r,
+    async error => {
+      const original = error.config;
+      if (error.response?.status !== 401 || original._retry) return Promise.reject(error);
+      original._retry = true;
+
+      if (_refreshing) {
+        return new Promise(resolve => {
+          subscribeRefresh(token => {
+            original.headers.Authorization = `Bearer ${token}`;
+            resolve(instance(original));
+          });
+        });
+      }
+
+      _refreshing = true;
+      const newToken = await tryRefreshToken();
+      _refreshing = false;
+      if (newToken) {
+        notifyRefreshed(newToken);
+        original.headers.Authorization = `Bearer ${newToken}`;
+        return instance(original);
+      }
+      return Promise.reject(error);
+    }
+  );
+}
+
 class APIClient {
   private tradingEngine: AxiosInstance;
   private forexService: AxiosInstance;
@@ -35,6 +106,10 @@ class APIClient {
     this.cryptoService = axios.create({ baseURL: SERVICE_URLS.cryptoBot,  timeout: 10000 });
     this.marketData    = axios.create({ baseURL: SERVICE_URLS.marketData, timeout: 5000 });
     this.aiService     = axios.create({ baseURL: SERVICE_URLS.aiService,  timeout: 5000 });
+
+    // Apply auth interceptors to all instances
+    [this.tradingEngine, this.forexService, this.cryptoService, this.marketData, this.aiService]
+      .forEach(inst => { addAuthInterceptor(inst); addRefreshInterceptor(inst); });
   }
 
   // ── Stock Bot (port 3002) ─────────────────────────────────────────────────

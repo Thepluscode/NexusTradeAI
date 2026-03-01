@@ -4,7 +4,6 @@
   "description": "NexusTradeAI Bot Dashboard - Real-time Trading Monitoring",
   "private": true,
   "dependencies": {
-    "serve": "^14.2.0",
     "@emotion/react": "^11.11.0",
     "@emotion/styled": "^11.11.0",
     "@mui/icons-material": "^5.15.0",
@@ -12,6 +11,7 @@
     "axios": "^1.6.0",
     "date-fns": "^2.30.0",
     "framer-motion": "^10.16.0",
+    "jwt-decode": "^4.0.0",
     "node-telegram-bot-api": "^0.67.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
@@ -19,6 +19,7 @@
     "react-query": "^3.39.0",
     "react-router-dom": "^6.20.0",
     "recharts": "^2.10.0",
+    "serve": "^14.2.0",
     "socket.io-client": "^4.6.0",
     "twilio": "^5.11.1",
     "zustand": "^4.4.0"
