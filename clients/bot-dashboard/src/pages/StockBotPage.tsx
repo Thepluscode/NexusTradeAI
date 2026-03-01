@@ -75,7 +75,33 @@ export default function StockBotPage() {
         'stockBotStatus',
         async () => {
             const res = await axios.get(`${API_BASE}/api/trading/status`);
-            return res.data;
+            // Stock bot wraps response in { success, data: {...} }
+            const d = res.data?.data ?? res.data;
+            return {
+                isRunning: d?.isRunning ?? false,
+                isPaused: d?.isPaused ?? false,
+                mode: d?.mode ?? 'PAPER',
+                equity: d?.account?.equity ?? d?.equity ?? d?.portfolioValue ?? 0,
+                dailyReturn: d?.dailyReturn ?? (d?.dailyPnL ? (d.dailyPnL / (d?.account?.equity || 1)) * 100 : 0),
+                positions: d?.positions ?? [],
+                stats: {
+                    totalTrades: d?.performance?.totalTrades ?? d?.stats?.totalTrades ?? d?.totalTrades ?? 0,
+                    winners: d?.performance?.winners ?? d?.stats?.winners ?? 0,
+                    losers: d?.performance?.losers ?? d?.stats?.losers ?? 0,
+                    totalPnL: d?.performance?.totalPnL ?? d?.stats?.totalPnL ?? d?.dailyPnL ?? 0,
+                    maxDrawdown: d?.performance?.maxDrawdown ?? d?.stats?.maxDrawdown ?? 0,
+                    winRate: d?.performance?.winRate ?? d?.stats?.winRate ?? 0,
+                    profitFactor: d?.performance?.profitFactor ?? d?.stats?.profitFactor ?? 0,
+                    totalTradesToday: d?.performance?.totalTrades ?? d?.stats?.totalTradesToday ?? 0,
+                },
+                config: d?.config ?? {
+                    symbols: [],
+                    maxPositions: 6,
+                    stopLoss: 4,
+                    profitTarget: 8,
+                    dailyLossLimit: -500,
+                },
+            } as BotStatus;
         },
         { refetchInterval: 5000 }
     );
@@ -133,7 +159,7 @@ export default function StockBotPage() {
         return (
             <Box sx={{ p: { xs: 1.5, sm: 2, md: 3 } }}>
                 <Alert severity="error" sx={{ mb: 2 }}>
-                    Stock Bot is offline. Make sure the bot server is running on port 3002.
+                    Stock Bot is offline. Unable to reach the stock bot service.
                 </Alert>
                 <Button
                     variant="contained"
