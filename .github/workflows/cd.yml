@@ -1,4 +1,0 @@
-# This file is intentionally empty.
-# Deployment is handled by deploy.yml.
-# The previous version of this file targeted non-existent AWS EKS infrastructure
-# and has been replaced.
