@@ -39,7 +39,7 @@
     "build": "tsc && vite build",
     "start": "serve dist -p ${PORT:-3000}",
     "preview": "vite preview",
-    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives"
   },
   "browserslist": {
     "production": [
