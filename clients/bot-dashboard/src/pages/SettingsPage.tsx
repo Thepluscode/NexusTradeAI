@@ -69,14 +69,13 @@ async function updateRisk(payload: { tier: string; stopLoss?: number; profitTarg
     return res.data;
 }
 
-async function saveCredentials(payload: { broker: string; credentials: Record<string, string>; targetBot?: string }) {
-    const { targetBot, ...body } = payload;
+async function saveCredentials(payload: { broker: string; credentials: Record<string, string> }) {
     // Route to the correct bot based on broker type
     const botUrl =
-        (body.broker === 'oanda') ? SERVICE_URLS.forexBot :
-        (body.broker === 'crypto') ? SERVICE_URLS.cryptoBot :
+        (payload.broker === 'oanda') ? SERVICE_URLS.forexBot :
+        (payload.broker === 'crypto') ? SERVICE_URLS.cryptoBot :
         API_BASE;
-    const res = await axios.post(`${botUrl}/api/config/credentials`, body, { headers: authHeaders });
+    const res = await axios.post(`${botUrl}/api/config/credentials`, payload, { headers: authHeaders });
     return res.data;
 }
 
