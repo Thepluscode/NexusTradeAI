@@ -107,9 +107,11 @@ class APIClient {
     this.marketData    = axios.create({ baseURL: SERVICE_URLS.marketData, timeout: 5000 });
     this.aiService     = axios.create({ baseURL: SERVICE_URLS.aiService,  timeout: 5000 });
 
-    // Apply auth interceptors to all instances
+    // Apply auth token header to all instances (JWT Bearer for dashboard routes)
     [this.tradingEngine, this.forexService, this.cryptoService, this.marketData, this.aiService]
-      .forEach(inst => { addAuthInterceptor(inst); addRefreshInterceptor(inst); });
+      .forEach(inst => addAuthInterceptor(inst));
+    // JWT refresh/redirect only on tradingEngine (stock-bot hosts the auth endpoints)
+    addRefreshInterceptor(this.tradingEngine);
   }
 
   // ── Stock Bot (port 3002) ─────────────────────────────────────────────────

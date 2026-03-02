@@ -135,12 +135,14 @@ function CredentialField({
     onChange,
     secret,
     placeholder,
+    autoComplete,
 }: {
     label: string;
     value: string;
     onChange: (v: string) => void;
     secret?: boolean;
     placeholder?: string;
+    autoComplete?: string;
 }) {
     const [show, setShow] = useState(false);
     return (
@@ -152,6 +154,7 @@ function CredentialField({
             value={value}
             onChange={e => onChange(e.target.value)}
             placeholder={placeholder}
+            autoComplete={autoComplete ?? (secret ? 'new-password' : 'off')}
             InputProps={secret ? {
                 endAdornment: (
                     <InputAdornment position="end">
