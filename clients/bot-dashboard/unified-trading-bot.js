@@ -2122,6 +2122,71 @@ app.get('/api/trades', async (req, res) => {
     } catch (e) { res.status(500).json({ success: false, error: e.message, trades: [] }); }
 });
 
+// Weekly / daily P&L summary across all bots
+app.get('/api/trades/summary', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not configured', summary: [] });
+    try {
+        const days = Math.min(parseInt(req.query.days) || 30, 90);
+        const r = await dbPool.query(`
+            SELECT
+                bot,
+                DATE_TRUNC('day', COALESCE(exit_time, created_at)) AS day,
+                COUNT(*) FILTER (WHERE status='closed') AS closed_trades,
+                COUNT(*) FILTER (WHERE status='open')   AS open_trades,
+                COUNT(*) FILTER (WHERE status='closed' AND pnl_usd > 0) AS winners,
+                COUNT(*) FILTER (WHERE status='closed' AND pnl_usd <= 0) AS losers,
+                COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed'), 0)::FLOAT AS daily_pnl,
+                COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd > 0), 0)::FLOAT AS gross_profit,
+                COALESCE(ABS(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd < 0)), 0)::FLOAT AS gross_loss
+            FROM trades
+            WHERE created_at >= NOW() - INTERVAL '1 day' * $1
+            GROUP BY bot, day
+            ORDER BY day DESC, bot
+        `, [days]);
+        // Also compute totals
+        const totals = await dbPool.query(`
+            SELECT
+                bot,
+                COUNT(*) FILTER (WHERE status='closed') AS total_trades,
+                COUNT(*) FILTER (WHERE status='closed' AND pnl_usd > 0) AS winners,
+                COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed'), 0)::FLOAT AS total_pnl,
+                COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd > 0), 0)::FLOAT AS gross_profit,
+                COALESCE(ABS(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd < 0)), 0)::FLOAT AS gross_loss
+            FROM trades
+            GROUP BY bot
+        `);
+        res.json({ success: true, daily: r.rows, totals: totals.rows });
+    } catch (e) { res.status(500).json({ success: false, error: e.message, daily: [], totals: [] }); }
+});
+
+// Trigger a live backtest scan (runs analyzeMomentum on all symbols, returns signals without executing trades)
+let backtestRunning = false;
+app.post('/api/backtest/run', async (req, res) => {
+    if (backtestRunning) return res.status(409).json({ success: false, error: 'Backtest already running' });
+    backtestRunning = true;
+    const started = Date.now();
+    try {
+        const results = [];
+        const symbols = MOMENTUM_SYMBOLS.slice(0, 50); // cap at 50 to avoid rate limits
+        for (const symbol of symbols) {
+            try {
+                const signal = await analyzeMomentum(symbol);
+                if (signal) results.push({ symbol, tier: signal.tier, score: signal.score || 0,
+                    rsi: signal.rsi, volumeRatio: signal.volumeRatio, percentChange: signal.percentChange,
+                    price: signal.price });
+            } catch { /* skip failures */ }
+        }
+        results.sort((a, b) => (b.score || 0) - (a.score || 0));
+        const elapsed = ((Date.now() - started) / 1000).toFixed(1);
+        res.json({ success: true, signals: results, scanned: symbols.length, elapsed: `${elapsed}s`,
+            timestamp: new Date().toISOString() });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    } finally {
+        backtestRunning = false;
+    }
+});
+
 app.listen(PORT, async () => {
     console.log('\n╔════════════════════════════════════════════════════════════╗');
     console.log('║     🚀 IMPROVED UNIFIED TRADING BOT - STARTED             ║');

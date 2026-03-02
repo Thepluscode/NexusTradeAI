@@ -162,10 +162,31 @@ if FASTAPI_AVAILABLE:
 
     @app.get("/health")
     def health():
+        cached_symbols = list(_price_cache.keys())
+        pairs_ready = [
+            f"{s}/{KNOWN_PAIRS[s]}"
+            for s in cached_symbols
+            if s in KNOWN_PAIRS and KNOWN_PAIRS[s] in _price_cache
+        ]
+        # Deduplicate (XOM/CVX and CVX/XOM are the same pair)
+        seen = set()
+        unique_pairs = []
+        for p in pairs_ready:
+            key = tuple(sorted(p.split('/')))
+            if key not in seen:
+                seen.add(key)
+                unique_pairs.append(p)
         return {
             "status": "ok",
             "service": "strategy-bridge",
             "strategies": ["regime_momentum", "volatility_arbitrage", "pairs_trading"],
+            "pairs_cache": {
+                "symbols_cached": len(cached_symbols),
+                "symbols": sorted(cached_symbols),
+                "pairs_active": len(unique_pairs),
+                "pairs": unique_pairs,
+                "known_pairs_total": len(KNOWN_PAIRS) // 2,
+            },
             "timestamp": datetime.now().isoformat()
         }
 

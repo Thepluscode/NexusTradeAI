@@ -23,6 +23,7 @@ import {
   CurrencyExchange,
   CurrencyBitcoin,
   Assessment,
+  Receipt,
   Menu as MenuIcon,
   Settings,
   Logout,
@@ -35,6 +36,7 @@ import StockBotPage from './pages/StockBotPage';
 import ForexBotPage from './pages/ForexBotPage';
 import CryptoBotPage from './pages/CryptoBotPage';
 import BacktestPage from './pages/BacktestPage';
+import TradesPage from './pages/TradesPage';
 import SettingsPage from './pages/SettingsPage';
 import LoginPage from './pages/LoginPage';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -113,6 +115,7 @@ const NAV_ITEMS = [
   { path: '/forex', label: 'Forex Bot', icon: <CurrencyExchange />, color: '#3b82f6' },
   { path: '/crypto', label: 'Crypto Bot', icon: <CurrencyBitcoin />, color: '#f59e0b' },
   { path: '/backtest', label: 'Backtest', icon: <Assessment />, color: '#8b5cf6' },
+  { path: '/trades', label: 'Trade History', icon: <Receipt />, color: '#ec4899' },
 ];
 
 function Navigation() {
@@ -289,6 +292,7 @@ function Navigation() {
           <Route path="/forex" element={<ProtectedRoute><ForexBotPage /></ProtectedRoute>} />
           <Route path="/crypto" element={<ProtectedRoute><CryptoBotPage /></ProtectedRoute>} />
           <Route path="/backtest" element={<ProtectedRoute><BacktestPage /></ProtectedRoute>} />
+          <Route path="/trades" element={<ProtectedRoute><TradesPage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

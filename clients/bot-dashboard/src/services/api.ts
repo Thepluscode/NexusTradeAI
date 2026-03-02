@@ -9,6 +9,9 @@ import type {
   AlpacaPosition,
   BotConfig,
   BacktestReport,
+  BacktestScanResult,
+  TradeRecord,
+  TradesSummaryResult,
 } from '@/types';
 
 // ── Service URLs ─────────────────────────────────────────────────────────────
@@ -181,6 +184,33 @@ class APIClient {
     try {
       const response = await this.tradingEngine.get('/api/backtest/report');
       return response.data.data;
+    } catch {
+      return null;
+    }
+  }
+
+  async runBacktest(): Promise<BacktestScanResult | null> {
+    try {
+      const response = await this.tradingEngine.post('/api/backtest/run');
+      return response.data;
+    } catch {
+      return null;
+    }
+  }
+
+  async getTrades(params?: { bot?: string; limit?: number }): Promise<TradeRecord[]> {
+    try {
+      const response = await this.tradingEngine.get('/api/trades', { params });
+      return response.data.trades ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  async getTradesSummary(days = 30): Promise<TradesSummaryResult | null> {
+    try {
+      const response = await this.tradingEngine.get('/api/trades/summary', { params: { days } });
+      return response.data;
     } catch {
       return null;
     }

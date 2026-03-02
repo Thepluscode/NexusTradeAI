@@ -536,3 +536,70 @@ export interface SaveCredentialsResult {
   demoMode?: boolean;
   warning?: string;
 }
+
+export interface BacktestSignal {
+  symbol: string;
+  tier: string;
+  score: number;
+  rsi: number;
+  volumeRatio: number;
+  percentChange: number;
+  price: number;
+}
+
+export interface BacktestScanResult {
+  success: boolean;
+  signals: BacktestSignal[];
+  scanned: number;
+  elapsed: string;
+  timestamp: string;
+}
+
+export interface TradeRecord {
+  id: number;
+  bot: string;
+  symbol: string;
+  direction: string;
+  tier: string | null;
+  status: string;
+  entry_price: string | null;
+  exit_price: string | null;
+  quantity: string | null;
+  position_size_usd: string | null;
+  pnl_usd: string | null;
+  pnl_pct: string | null;
+  stop_loss: string | null;
+  take_profit: string | null;
+  entry_time: string | null;
+  exit_time: string | null;
+  close_reason: string | null;
+  session: string | null;
+  created_at: string;
+}
+
+export interface TradeDaySummary {
+  bot: string;
+  day: string;
+  closed_trades: string;
+  open_trades: string;
+  winners: string;
+  losers: string;
+  daily_pnl: number;
+  gross_profit: number;
+  gross_loss: number;
+}
+
+export interface TradeBotTotal {
+  bot: string;
+  total_trades: string;
+  winners: string;
+  total_pnl: number;
+  gross_profit: number;
+  gross_loss: number;
+}
+
+export interface TradesSummaryResult {
+  success: boolean;
+  daily: TradeDaySummary[];
+  totals: TradeBotTotal[];
+}

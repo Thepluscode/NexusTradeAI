@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useQuery } from 'react-query';
 import {
     Box,
@@ -18,6 +19,9 @@ import {
     ListItemIcon,
     ListItemText,
     Alert,
+    Button,
+    LinearProgress,
+    Collapse,
 } from '@mui/material';
 import {
     CheckCircle,
@@ -26,10 +30,11 @@ import {
     TrendingUp,
     TrendingDown,
     ShowChart,
+    PlayArrow,
 } from '@mui/icons-material';
 import { apiClient } from '@/services/api';
 import { MetricCard } from '@/components/MetricCard';
-import type { BacktestSymbolResult, BacktestTrade } from '@/types';
+import type { BacktestSymbolResult, BacktestTrade, BacktestScanResult } from '@/types';
 
 function ValidationChecklist({ checks }: { checks: Record<string, boolean> }) {
     const labels: Record<string, string> = {
@@ -73,6 +78,25 @@ export default function BacktestPage() {
         { staleTime: 60 * 1000, retry: 1, refetchInterval: 30 * 1000 }
     );
 
+    const [scanning, setScanning] = useState(false);
+    const [scanResult, setScanResult] = useState<BacktestScanResult | null>(null);
+    const [scanError, setScanError] = useState<string | null>(null);
+
+    const runScan = async () => {
+        setScanning(true);
+        setScanError(null);
+        setScanResult(null);
+        try {
+            const result = await apiClient.runBacktest();
+            if (result?.success) setScanResult(result);
+            else setScanError(result?.signals ? 'No signals found' : 'Scan failed');
+        } catch {
+            setScanError('Could not reach the stock bot');
+        } finally {
+            setScanning(false);
+        }
+    };
+
     if (isLoading) {
         return (
             <Box sx={{ display: 'flex', justifyContent: 'center', p: 6 }}>
@@ -115,13 +139,24 @@ export default function BacktestPage() {
                         }
                     </Typography>
                 </Box>
-                {!noTradesYet && validation && (
-                    <Chip
-                        label={validation.passed ? 'PASSING' : 'NEEDS WORK'}
-                        color={validation.passed ? 'success' : 'warning'}
-                        sx={{ ml: { xs: 0, sm: 'auto' }, fontWeight: 700 }}
-                    />
-                )}
+                <Box sx={{ ml: { xs: 0, sm: 'auto' }, display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                    {!noTradesYet && validation && (
+                        <Chip
+                            label={validation.passed ? 'PASSING' : 'NEEDS WORK'}
+                            color={validation.passed ? 'success' : 'warning'}
+                            sx={{ fontWeight: 700 }}
+                        />
+                    )}
+                    <Button
+                        variant="contained"
+                        startIcon={scanning ? <CircularProgress size={16} color="inherit" /> : <PlayArrow />}
+                        onClick={runScan}
+                        disabled={scanning}
+                        size="small"
+                    >
+                        {scanning ? 'Scanning…' : 'Run Signal Scan'}
+                    </Button>
+                </Box>
             </Box>
 
             {/* Empty state — bot hasn't traded yet */}
@@ -178,6 +213,62 @@ export default function BacktestPage() {
                     icon={<TrendingDown />}
                 />
             </Box>
+
+            {/* Live signal scan progress + results */}
+            {scanning && <LinearProgress sx={{ mb: 2, borderRadius: 1 }} />}
+            {scanError && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setScanError(null)}>{scanError}</Alert>}
+            <Collapse in={!!scanResult}>
+                {scanResult && (
+                    <Paper sx={{ p: 2, mb: 3 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
+                            <PlayArrow sx={{ color: 'success.main' }} />
+                            <Typography variant="h6" fontWeight={600}>
+                                Signal Scan Results
+                            </Typography>
+                            <Chip label={`${scanResult.signals.length} signals / ${scanResult.scanned} scanned`} size="small" color="success" sx={{ ml: 'auto' }} />
+                            <Typography variant="caption" color="text.secondary">{scanResult.elapsed}</Typography>
+                        </Box>
+                        {scanResult.signals.length === 0 ? (
+                            <Alert severity="info">No signals found matching current thresholds. Market may be closed or conditions too quiet.</Alert>
+                        ) : (
+                            <TableContainer>
+                                <Table size="small">
+                                    <TableHead>
+                                        <TableRow>
+                                            <TableCell>Symbol</TableCell>
+                                            <TableCell>Tier</TableCell>
+                                            <TableCell align="right">Price</TableCell>
+                                            <TableCell align="right">Change %</TableCell>
+                                            <TableCell align="right">RSI</TableCell>
+                                            <TableCell align="right">Vol Ratio</TableCell>
+                                        </TableRow>
+                                    </TableHead>
+                                    <TableBody>
+                                        {scanResult.signals.map((s) => (
+                                            <TableRow key={s.symbol} hover>
+                                                <TableCell><Typography fontWeight={600}>{s.symbol}</Typography></TableCell>
+                                                <TableCell>
+                                                    <Chip label={s.tier} size="small"
+                                                        color={s.tier === 'tier3' ? 'error' : s.tier === 'tier2' ? 'warning' : 'success'}
+                                                        variant="outlined" />
+                                                </TableCell>
+                                                <TableCell align="right">${s.price?.toFixed(2) ?? '—'}</TableCell>
+                                                <TableCell align="right">
+                                                    <Typography variant="body2" color={(s.percentChange ?? 0) >= 0 ? 'success.main' : 'error.main'}>
+                                                        {((s.percentChange ?? 0) * 100).toFixed(2)}%
+                                                    </Typography>
+                                                </TableCell>
+                                                <TableCell align="right">{s.rsi?.toFixed(1) ?? '—'}</TableCell>
+                                                <TableCell align="right">{s.volumeRatio?.toFixed(2) ?? '—'}x</TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </TableContainer>
+                        )}
+                    </Paper>
+                )}
+            </Collapse>
 
             <Grid container spacing={3}>
                 {/* Validation checklist — only show when there are real trades */}
