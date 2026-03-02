@@ -2,15 +2,13 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
-// Load .env - try services/trading/.env first (where OANDA creds are), then root
-require('dotenv').config({ path: path.join(__dirname, '../../services/trading/.env') });
-require('dotenv').config({ path: path.join(__dirname, '../../.env') });
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 // ===== PRODUCTION INFRASTRUCTURE =====
-const memoryManager = require('../../infrastructure/memory/MemoryManager');
-const { metrics, createMetricsServer } = require('../../infrastructure/monitoring/metrics');
-const { getSMSAlertService } = require('../../infrastructure/notifications/sms-alerts');
-const { getTelegramAlertService } = require('../../infrastructure/notifications/telegram-alerts');
+const memoryManager = require('./infrastructure/memory/MemoryManager');
+const { metrics, createMetricsServer } = require('./infrastructure/monitoring/metrics');
+const { getSMSAlertService } = require('./infrastructure/notifications/sms-alerts');
+const { getTelegramAlertService } = require('./infrastructure/notifications/telegram-alerts');
 
 /**
  * UNIFIED FOREX TRADING BOT
@@ -40,6 +38,33 @@ const PORT = process.env.PORT || process.env.FOREX_PORT || 3005;
 
 app.use(cors());
 app.use(express.json());
+
+// ── Auth middleware for config-write endpoints ──────────────────────────────
+function requireApiSecret(req, res, next) {
+    const secret = process.env.NEXUS_API_SECRET;
+    if (!secret) return next();
+    const auth = req.headers.authorization || '';
+    if (auth === `Bearer ${secret}`) return next();
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+}
+
+// ── Persist env var to Railway (survives redeploys) ────────────────────────
+async function persistEnvVar(name, value) {
+    const token   = process.env.RAILWAY_TOKEN;
+    const project = process.env.RAILWAY_PROJECT_ID;
+    const env     = process.env.RAILWAY_ENVIRONMENT_ID;
+    const service = process.env.RAILWAY_SERVICE_ID;
+    if (!token || !project || !env || !service) return;
+    const query = `mutation { variableUpsert(input: { projectId: "${project}", environmentId: "${env}", serviceId: "${service}", name: "${name}", value: "${value.replace(/"/g, '\\"')}" }) }`;
+    try {
+        await axios.post('https://backboard.railway.app/graphql/v2',
+            { query },
+            { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 8000 }
+        );
+    } catch (e) {
+        console.warn(`⚠️  Railway env var persist failed for ${name}: ${e.message}`);
+    }
+}
 
 // Initialize Alert Services
 const smsAlerts = getSMSAlertService();
@@ -98,7 +123,7 @@ let lastEquity = null; // null means not initialized yet
 let cachedLiveDailyPnL = 0; // updated by status endpoint for circuit breaker
 
 // Daily loss circuit breaker — halt new entries once this is exceeded
-const MAX_DAILY_LOSS_FOREX = parseFloat(process.env.MAX_DAILY_LOSS || '500');
+const MAX_DAILY_LOSS_FOREX = Math.abs(parseFloat(process.env.MAX_DAILY_LOSS || '500'));
 
 // Persistent bot state (survives restarts)
 const BOT_STATE_FILE = path.join(__dirname, 'data/forex-bot-state.json');
@@ -267,8 +292,8 @@ const TRADING_SESSIONS = {
     sydney: { start: 21, end: 6, name: 'Sydney', quality: 'fair' }
 };
 
-// ===== HIGH-IMPACT EVENTS (Avoid Trading) =====
-const HIGH_IMPACT_EVENTS = [
+// ===== HIGH-IMPACT EVENTS (reference — logic is in isNearHighImpactEvent()) =====
+const _HIGH_IMPACT_EVENTS = [
     { day: 5, hour: 13, minute: 30, name: 'NFP', avoidMinutes: 60 },
     { pattern: 'monthly', name: 'FOMC', avoidMinutes: 120 },
     { pattern: 'monthly', name: 'CPI', avoidMinutes: 60 },
@@ -362,7 +387,7 @@ function canTrade(pair, direction = 'long') {
 function getCorrelatedPositions(pair, direction) {
     const correlated = [];
 
-    for (const [groupName, pairs] of Object.entries(CORRELATION_GROUPS)) {
+    for (const [, pairs] of Object.entries(CORRELATION_GROUPS)) {
         if (pairs.includes(pair)) {
             for (const p of pairs) {
                 if (p !== pair && positions.has(p)) {
@@ -527,7 +552,7 @@ async function getH1Trend(pair) {
 // ===== STRATEGY BRIDGE (port 3010) =====
 // Non-blocking ensemble confirmation — if bridge is offline, local signals are used as-is
 
-async function queryStrategyBridge(pair, direction) {
+async function queryStrategyBridge(pair, _direction) {
     try {
         const candles = await getCandles(pair, 'M15', 60);
         if (!candles || candles.length < 30) return null;
@@ -1266,6 +1291,49 @@ app.post('/test-telegram', async (req, res) => {
             success: false,
             error: error.message
         });
+    }
+});
+
+// ── Config status (for Settings page) ───────────────────────────────────────
+app.get('/api/config', (req, res) => {
+    res.json({
+        success: true,
+        data: {
+            brokers: {
+                oanda: {
+                    configured: !!(process.env.OANDA_ACCOUNT_ID && process.env.OANDA_ACCESS_TOKEN),
+                    mode: process.env.OANDA_PRACTICE === 'false' ? 'live' : 'practice',
+                },
+            },
+        },
+    });
+});
+
+// ── Credentials management ──────────────────────────────────────────────────
+app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
+    try {
+        const { broker, credentials, fields } = req.body;
+        const creds = credentials || fields;
+        const ALLOWED_KEYS = {
+            oanda:    ['OANDA_ACCOUNT_ID', 'OANDA_ACCESS_TOKEN', 'OANDA_PRACTICE'],
+            telegram: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_ALERTS_ENABLED'],
+            sms:      ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'ALERT_PHONE_NUMBER', 'SMS_ALERTS_ENABLED'],
+        };
+        const allowed = ALLOWED_KEYS[broker];
+        if (!allowed) return res.status(400).json({ success: false, error: 'Unknown broker' });
+        if (!creds || typeof creds !== 'object') return res.status(400).json({ success: false, error: 'No credentials provided' });
+        let updated = 0;
+        for (const [key, value] of Object.entries(creds)) {
+            if (!allowed.includes(key)) continue;
+            if (typeof value !== 'string' || value === '') continue;
+            process.env[key] = value;
+            await persistEnvVar(key, value);
+            updated++;
+        }
+        console.log(`⚙️  Credentials updated: broker=${broker} keys=${updated}`);
+        res.json({ success: true, updated });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 

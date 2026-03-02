@@ -92,15 +92,26 @@ jobs:
           rm -f deploy/dashboard/dist/assets/index-*.js
           cp -r clients/bot-dashboard/dist/. deploy/dashboard/dist/
 
+      # Sync bot source files to deploy dirs so Railway picks up any bot changes.
+      # The source bots in clients/bot-dashboard/ are the single source of truth.
+      # Deploy bots are copies with identical content (Railway-relative paths).
+      - name: Sync bot source to deploy dirs
+        run: |
+          cp clients/bot-dashboard/unified-trading-bot.js deploy/stock-bot/bot.js
+          cp clients/bot-dashboard/unified-forex-bot.js   deploy/forex-bot/bot.js
+          cp clients/bot-dashboard/unified-crypto-bot.js  deploy/crypto-bot/bot.js
+          echo "Bot files synced:"
+          wc -l deploy/stock-bot/bot.js deploy/forex-bot/bot.js deploy/crypto-bot/bot.js
+
       - name: Check if bundle changed
         id: check
         run: |
-          if git diff --quiet deploy/dashboard/dist/; then
+          if git diff --quiet deploy/; then
             echo "changed=false" >> $GITHUB_OUTPUT
-            echo "Bundle unchanged — skipping commit"
+            echo "Deploy unchanged — skipping commit"
           else
             echo "changed=true" >> $GITHUB_OUTPUT
-            echo "Bundle changed — will commit"
+            echo "Deploy changed — will commit"
           fi
 
       - name: Commit and push bundle
@@ -108,7 +119,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add deploy/dashboard/dist/
+          git add deploy/
           BUNDLE=$(ls clients/bot-dashboard/dist/assets/index-*.js | xargs basename)
           git commit -m "chore: rebuild dashboard bundle ($BUNDLE) [skip ci]"
           git push origin main

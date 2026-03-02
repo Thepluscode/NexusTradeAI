@@ -5,11 +5,11 @@ const crypto = require('crypto');
 require('dotenv').config();
 
 // Telegram alerts
-const { getTelegramAlertService } = require('../../infrastructure/notifications/telegram-alerts');
+const { getTelegramAlertService } = require('./infrastructure/notifications/telegram-alerts');
 const telegramAlerts = getTelegramAlertService();
 
 // SMS alerts (graceful fallback)
-const { getSMSAlertService } = require('../../infrastructure/notifications/sms-alerts');
+const { getSMSAlertService } = require('./infrastructure/notifications/sms-alerts');
 const smsAlerts = getSMSAlertService();
 
 // Prometheus metrics
@@ -32,31 +32,28 @@ const register = promClient.register; // Use default register
 // ============================================================================
 
 const CRYPTO_CONFIG = {
-    // Exchange Configuration
+    // Exchange Configuration — Kraken (US-friendly, no geo-block)
     exchange: {
-        name: process.env.CRYPTO_EXCHANGE || 'binance',
+        name: 'kraken',
         apiKey: process.env.CRYPTO_API_KEY,
         apiSecret: process.env.CRYPTO_API_SECRET,
-        testnet: process.env.CRYPTO_TESTNET === 'true', // Use testnet first!
-        baseURL: process.env.CRYPTO_TESTNET === 'true'
-            ? 'https://testnet.binance.vision'
-            : 'https://api.binance.com'
+        baseURL: 'https://api.kraken.com'
     },
 
-    // Trading Pairs (12 major cryptocurrencies)
+    // Trading Pairs — Kraken format (XBT = Bitcoin on Kraken)
     symbols: [
-        'BTCUSDT',  // Bitcoin - Market leader
-        'ETHUSDT',  // Ethereum - #2, high liquidity
-        'BNBUSDT',  // Binance Coin - Exchange token
-        'SOLUSDT',  // Solana - High performance blockchain
-        'ADAUSDT',  // Cardano - Smart contracts
-        'XRPUSDT',  // Ripple - Payments
-        'AVAXUSDT', // Avalanche - DeFi
-        'MATICUSDT',// Polygon - Scaling
-        'LINKUSDT', // Chainlink - Oracles
-        'DOTUSDT',  // Polkadot - Interoperability
-        'UNIUSDT',  // Uniswap - DEX
-        'ATOMUSDT'  // Cosmos - Hub
+        'XBTUSD',   // Bitcoin
+        'ETHUSD',   // Ethereum
+        'SOLUSD',   // Solana
+        'ADAUSD',   // Cardano
+        'XRPUSD',   // Ripple
+        'AVAXUSD',  // Avalanche
+        'LINKUSD',  // Chainlink
+        'DOTUSD',   // Polkadot
+        'UNIUSD',   // Uniswap
+        'ATOMUSD',  // Cosmos
+        'MATICUSD', // Polygon
+        'LTCUSD',   // Litecoin (replaces BNB — not on Kraken)
     ],
 
     // Risk Management (Ultra-Conservative for crypto)
@@ -124,147 +121,126 @@ const CRYPTO_CONFIG = {
 };
 
 // ============================================================================
-// BINANCE API CLIENT
+// KRAKEN API CLIENT  (replaces Binance — US-friendly, no geo-block)
 // ============================================================================
 
-class BinanceClient {
+class KrakenClient {
     constructor(config) {
-        this.config = config;
-        this.baseURL = config.baseURL;
+        this.baseURL = 'https://api.kraken.com';
         this.apiKey = config.apiKey;
         this.apiSecret = config.apiSecret;
     }
 
-    // Generate signature for authenticated requests
-    sign(params) {
-        const query = Object.keys(params)
-            .map(key => `${key}=${params[key]}`)
-            .join('&');
-
-        return crypto
-            .createHmac('sha256', this.apiSecret)
-            .update(query)
-            .digest('hex');
+    // Kraken HMAC-SHA512 signature for private endpoints
+    _sign(path, nonce, postData) {
+        const message = postData + crypto.createHash('sha256').update(nonce + postData).digest('binary');
+        const secretBuffer = Buffer.from(this.apiSecret, 'base64');
+        return crypto.createHmac('sha512', secretBuffer).update(path + message, 'binary').digest('base64');
     }
 
-    // Get account information
+    async _privateRequest(endpoint, params = {}) {
+        const nonce = Date.now().toString();
+        const postData = new URLSearchParams({ nonce, ...params }).toString();
+        const path = `/0/private/${endpoint}`;
+        const signature = this._sign(path, nonce, postData);
+        const response = await axios.post(`${this.baseURL}${path}`, postData, {
+            headers: {
+                'API-Key': this.apiKey,
+                'API-Sign': signature,
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            timeout: 10000,
+        });
+        if (response.data.error && response.data.error.length > 0) {
+            throw new Error(response.data.error.join(', '));
+        }
+        return response.data.result;
+    }
+
+    // Get account balances
     async getAccountInfo() {
         try {
-            const timestamp = Date.now();
-            const params = { timestamp };
-            params.signature = this.sign(params);
-
-            const response = await axios.get(`${this.baseURL}/api/v3/account`, {
-                params,
-                headers: { 'X-MBX-APIKEY': this.apiKey }
-            });
-
-            return response.data;
+            const result = await this._privateRequest('Balance');
+            return result; // { ZUSD: '10000.00', XXBT: '0.5', ... }
         } catch (error) {
-            console.error('❌ Failed to get account info:', error.response?.data || error.message);
+            console.error('❌ Failed to get account info:', error.message);
             return null;
         }
     }
 
-    // Get current price for a symbol
+    // Get current price — public Ticker endpoint, no auth needed
     async getPrice(symbol) {
         try {
-            const response = await axios.get(`${this.baseURL}/api/v3/ticker/price`, {
-                params: { symbol }
+            const response = await axios.get(`${this.baseURL}/0/public/Ticker`, {
+                params: { pair: symbol }, timeout: 5000,
             });
-            return parseFloat(response.data.price);
+            const result = response.data.result;
+            const key = Object.keys(result)[0];
+            return parseFloat(result[key].c[0]); // Last trade price
         } catch (error) {
             console.error(`❌ Failed to get price for ${symbol}:`, error.message);
             return null;
         }
     }
 
-    // Get 24h ticker data
+    // Get 24h ticker data — public, no auth needed
     async get24hTicker(symbol) {
         try {
-            const response = await axios.get(`${this.baseURL}/api/v3/ticker/24hr`, {
-                params: { symbol }
+            const response = await axios.get(`${this.baseURL}/0/public/Ticker`, {
+                params: { pair: symbol }, timeout: 5000,
             });
-            return response.data;
+            const result = response.data.result;
+            const key = Object.keys(result)[0];
+            const t = result[key];
+            const lastPrice = parseFloat(t.c[0]);
+            const openPrice = parseFloat(t.o);
+            const priceChangePercent = openPrice > 0 ? ((lastPrice - openPrice) / openPrice) * 100 : 0;
+            return {
+                lastPrice: lastPrice.toString(),
+                highPrice: t.h[1],
+                lowPrice:  t.l[1],
+                quoteVolume: (parseFloat(t.v[1]) * lastPrice).toString(), // approx 24h USD volume
+                priceChangePercent: priceChangePercent.toFixed(4),
+            };
         } catch (error) {
             console.error(`❌ Failed to get 24h ticker for ${symbol}:`, error.message);
             return null;
         }
     }
 
-    // Get klines (candlestick data)
+    // Get OHLCV candles — public, no auth needed
+    // Kraken interval in minutes: 1,5,15,30,60,240,1440
     async getKlines(symbol, interval = '5m', limit = 100) {
+        const intervalMap = { '1m': 1, '5m': 5, '15m': 15, '30m': 30, '1h': 60, '4h': 240, '1d': 1440 };
+        const krakenInterval = intervalMap[interval] || 5;
         try {
-            const response = await axios.get(`${this.baseURL}/api/v3/klines`, {
-                params: { symbol, interval, limit }
+            const response = await axios.get(`${this.baseURL}/0/public/OHLC`, {
+                params: { pair: symbol, interval: krakenInterval }, timeout: 10000,
             });
-            return response.data;
+            const result = response.data.result;
+            const key = Object.keys(result).find(k => k !== 'last');
+            const candles = result[key];
+            // Kraken OHLC row: [time, open, high, low, close, vwap, volume, count]
+            // Return last `limit` rows in Binance-compatible format: index 4 = close, index 5 = volume
+            return candles.slice(-limit).map(c => [c[0], c[1], c[2], c[3], c[4], c[6]]);
         } catch (error) {
             console.error(`❌ Failed to get klines for ${symbol}:`, error.message);
             return null;
         }
     }
 
-    // Place a market order
+    // Place a market order (requires API keys)
     async placeOrder(symbol, side, quantity) {
         try {
-            const timestamp = Date.now();
-            const params = {
-                symbol,
-                side,  // BUY or SELL
-                type: 'MARKET',
-                quantity: quantity.toFixed(8),
-                timestamp
-            };
-            params.signature = this.sign(params);
-
-            const response = await axios.post(`${this.baseURL}/api/v3/order`, null, {
-                params,
-                headers: { 'X-MBX-APIKEY': this.apiKey }
+            const result = await this._privateRequest('AddOrder', {
+                pair: symbol,
+                type: side.toLowerCase(), // 'buy' or 'sell'
+                ordertype: 'market',
+                volume: quantity.toFixed(8),
             });
-
-            return response.data;
+            return { orderId: result.txid?.[0], ...result };
         } catch (error) {
-            console.error(`❌ Failed to place order for ${symbol}:`, error.response?.data || error.message);
-            return null;
-        }
-    }
-
-    // Get open orders
-    async getOpenOrders(symbol = null) {
-        try {
-            const timestamp = Date.now();
-            const params = { timestamp };
-            if (symbol) params.symbol = symbol;
-            params.signature = this.sign(params);
-
-            const response = await axios.get(`${this.baseURL}/api/v3/openOrders`, {
-                params,
-                headers: { 'X-MBX-APIKEY': this.apiKey }
-            });
-
-            return response.data;
-        } catch (error) {
-            console.error('❌ Failed to get open orders:', error.response?.data || error.message);
-            return [];
-        }
-    }
-
-    // Cancel an order
-    async cancelOrder(symbol, orderId) {
-        try {
-            const timestamp = Date.now();
-            const params = { symbol, orderId, timestamp };
-            params.signature = this.sign(params);
-
-            const response = await axios.delete(`${this.baseURL}/api/v3/order`, {
-                params,
-                headers: { 'X-MBX-APIKEY': this.apiKey }
-            });
-
-            return response.data;
-        } catch (error) {
-            console.error(`❌ Failed to cancel order ${orderId}:`, error.response?.data || error.message);
+            console.error(`❌ Failed to place order for ${symbol}:`, error.message);
             return null;
         }
     }
@@ -277,7 +253,7 @@ class BinanceClient {
 class CryptoTradingEngine {
     constructor(config) {
         this.config = config;
-        this.binance = new BinanceClient(config.exchange);
+        this.kraken = new KrakenClient(config.exchange);
 
         // Persistent state file
         this.stateFile = require('path').join(__dirname, 'data/crypto-bot-state.json');
@@ -410,7 +386,7 @@ class CryptoTradingEngine {
     // [v3.2] Enhanced BTC filter — adds RSI health check and 24h change threshold
     // Prevents entering altcoin trades when BTC is overbought or in sharp decline
     async isBTCBullish() {
-        const btcPrices = this.priceHistory.get('BTCUSDT') || [];
+        const btcPrices = this.priceHistory.get('XBTUSD') || [];
         if (btcPrices.length < 20) return true; // Default allow when insufficient data
 
         const sma20 = this.calculateSMA(btcPrices, 20);
@@ -430,7 +406,7 @@ class CryptoTradingEngine {
 
         // [v3.2] 24h change check: avoid altcoin entries when BTC dropped >2% today
         try {
-            const ticker = await this.binance.get24hTicker('BTCUSDT');
+            const ticker = await this.kraken.get24hTicker('XBTUSD');
             if (ticker) {
                 const change24h = parseFloat(ticker.priceChangePercent);
                 if (change24h < -2) {
@@ -452,7 +428,7 @@ class CryptoTradingEngine {
     async fetchMarketData(symbol) {
         try {
             // Get klines (5-min candles, last 100)
-            const klines = await this.binance.getKlines(symbol, '5m', 100);
+            const klines = await this.kraken.getKlines(symbol, '5m', 100);
             if (!klines || klines.length === 0) return null;
 
             // Extract close prices
@@ -463,7 +439,7 @@ class CryptoTradingEngine {
             this.priceHistory.set(symbol, prices);
 
             // Get 24h ticker for volatility check
-            const ticker24h = await this.binance.get24hTicker(symbol);
+            const ticker24h = await this.kraken.get24hTicker(symbol);
             if (!ticker24h) return null;
 
             const currentPrice = parseFloat(ticker24h.lastPrice);
@@ -501,7 +477,7 @@ class CryptoTradingEngine {
 
         for (const symbol of this.config.symbols) {
             // Skip altcoins if BTC is bearish (except BTC and ETH themselves)
-            if (!btcBullish && symbol !== 'BTCUSDT' && symbol !== 'ETHUSDT') {
+            if (!btcBullish && symbol !== 'XBTUSD' && symbol !== 'ETHUSD') {
                 continue;
             }
 
@@ -672,8 +648,8 @@ class CryptoTradingEngine {
             console.log(`   Stop: $${signal.stopLoss.toFixed(2)} (-${signal.stopLossPercent.toFixed(1)}%)`);
             console.log(`   Target: $${signal.takeProfit.toFixed(2)} (+${signal.profitTargetPercent.toFixed(1)}%)`);
 
-            // Place order on Binance
-            const order = await this.binance.placeOrder(signal.symbol, 'BUY', quantity);
+            // Place order on Kraken
+            const order = await this.kraken.placeOrder(signal.symbol, 'BUY', quantity);
 
             if (!order) {
                 console.log(`❌ Failed to place order for ${signal.symbol}`);
@@ -739,7 +715,7 @@ class CryptoTradingEngine {
 
     async managePositions() {
         for (const [symbol, position] of this.positions.entries()) {
-            const currentPrice = await this.binance.getPrice(symbol);
+            const currentPrice = await this.kraken.getPrice(symbol);
             if (!currentPrice) continue;
 
             const pnlPercent = ((currentPrice - position.entry) / position.entry) * 100;
@@ -805,7 +781,7 @@ class CryptoTradingEngine {
 
         try {
             // Place sell order
-            const order = await this.binance.placeOrder(symbol, 'SELL', position.quantity);
+            const order = await this.kraken.placeOrder(symbol, 'SELL', position.quantity);
             if (!order) {
                 console.log(`❌ Failed to close position for ${symbol}`);
                 return;
@@ -880,7 +856,7 @@ class CryptoTradingEngine {
                 }
 
                 // Daily loss circuit breaker
-                const maxDailyLoss = parseFloat(process.env.MAX_DAILY_LOSS || '500');
+                const maxDailyLoss = Math.abs(parseFloat(process.env.MAX_DAILY_LOSS || '500'));
                 if (this.dailyLoss >= maxDailyLoss) {
                     console.log(`🛑 [CIRCUIT BREAKER] Crypto daily loss $${this.dailyLoss.toFixed(2)} exceeds limit $${maxDailyLoss} — no new entries today`);
                     if (this.positions.size > 0) await this.managePositions();
@@ -945,7 +921,7 @@ class CryptoTradingEngine {
         }
 
         // Test connection
-        const account = await this.binance.getAccountInfo();
+        const account = await this.kraken.getAccountInfo();
         if (!account) {
             console.log('❌ Failed to connect to exchange - running in DEMO MODE');
             this.isRunning = true;
@@ -1082,7 +1058,7 @@ class CryptoTradingEngine {
                 maxPositions: this.config.maxTotalPositions,
                 stopLoss: this.config.tiers.tier1.stopLoss,
                 profitTarget: this.config.tiers.tier1.profitTarget,
-                dailyLossLimit: parseFloat(process.env.MAX_DAILY_LOSS || '500')
+                dailyLossLimit: Math.abs(parseFloat(process.env.MAX_DAILY_LOSS || '500'))
             },
             scanCount: this.scanCount,
             dailyTrades: this.dailyTradeCount,
@@ -1100,6 +1076,36 @@ class CryptoTradingEngine {
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// ── Auth middleware for config-write endpoints ──────────────────────────────
+function requireApiSecret(req, res, next) {
+    const secret = process.env.NEXUS_API_SECRET;
+    if (!secret) return next();
+    const auth = req.headers.authorization || '';
+    if (auth === `Bearer ${secret}`) return next();
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+}
+
+// ── Persist env var to Railway (survives redeploys) ────────────────────────
+async function persistEnvVar(name, value) {
+    const token   = process.env.RAILWAY_TOKEN;
+    const project = process.env.RAILWAY_PROJECT_ID;
+    const env     = process.env.RAILWAY_ENVIRONMENT_ID;
+    const service = process.env.RAILWAY_SERVICE_ID;
+    if (!token || !project || !env || !service) {
+        console.warn(`⚠️  persistEnvVar: missing Railway vars (token=${!!token} project=${!!project} env=${!!env} service=${!!service}) — ${name} saved in-memory only`);
+        return;
+    }
+    const query = `mutation { variableUpsert(input: { projectId: "${project}", environmentId: "${env}", serviceId: "${service}", name: "${name}", value: "${value.replace(/"/g, '\\"')}" }) }`;
+    try {
+        await axios.post('https://backboard.railway.app/graphql/v2',
+            { query },
+            { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 8000 }
+        );
+    } catch (e) {
+        console.warn(`⚠️  Railway env var persist failed for ${name}: ${e.message}`);
+    }
+}
 
 const engine = new CryptoTradingEngine(CRYPTO_CONFIG);
 
@@ -1242,6 +1248,65 @@ setInterval(() => {
     metrics.tradesCounter.inc(0); // Just to register
     metrics.pnlGauge.set(parseFloat(status.netPnL));
 }, 10000);
+
+// ── Config read endpoint (used by SettingsPage to load broker state) ─────────
+app.get('/api/config', (req, res) => {
+    res.json({
+        success: true,
+        data: {
+            brokers: {
+                crypto: {
+                    configured: !!(process.env.CRYPTO_API_KEY && process.env.CRYPTO_API_SECRET),
+                    exchange: process.env.CRYPTO_EXCHANGE || 'kraken',
+                    testnet: process.env.CRYPTO_TESTNET !== 'false',
+                },
+            },
+        },
+    });
+});
+
+// ── Credentials management ──────────────────────────────────────────────────
+app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
+    try {
+        const { broker, credentials, fields } = req.body;
+        const creds = credentials || fields;
+        const ALLOWED_KEYS = {
+            crypto:   ['CRYPTO_API_KEY', 'CRYPTO_API_SECRET', 'CRYPTO_EXCHANGE', 'CRYPTO_TESTNET'],
+            telegram: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_ALERTS_ENABLED'],
+            sms:      ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'ALERT_PHONE_NUMBER', 'SMS_ALERTS_ENABLED'],
+        };
+        const allowed = ALLOWED_KEYS[broker];
+        if (!allowed) return res.status(400).json({ success: false, error: 'Unknown broker' });
+        if (!creds || typeof creds !== 'object') return res.status(400).json({ success: false, error: 'No credentials provided' });
+        let updated = 0;
+        for (const [key, value] of Object.entries(creds)) {
+            if (!allowed.includes(key)) continue;
+            if (typeof value !== 'string' || value === '') continue;
+            process.env[key] = value;
+            await persistEnvVar(key, value);
+            updated++;
+        }
+        console.log(`⚙️  Credentials updated: broker=${broker} keys=${updated}`);
+        // If crypto keys were updated, reinitialise the exchange client and reconnect
+        if (broker === 'crypto' && updated > 0) {
+            engine.kraken = new KrakenClient({
+                apiKey: process.env.CRYPTO_API_KEY,
+                apiSecret: process.env.CRYPTO_API_SECRET,
+            });
+            // If currently in demo mode due to missing keys, attempt reconnect
+            if (engine.demoMode) {
+                const account = await engine.kraken.getAccountInfo();
+                if (account) {
+                    engine.demoMode = false;
+                    console.log('✅ Kraken reconnected after credential update — exiting DEMO MODE');
+                }
+            }
+        }
+        res.json({ success: true, updated });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
 
 app.get('/metrics', async (req, res) => {
     res.set('Content-Type', register.contentType);

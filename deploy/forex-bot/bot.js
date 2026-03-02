@@ -2,8 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
-// Load .env - try services/trading/.env first (where OANDA creds are), then root
-require('dotenv').config({ path: path.join(__dirname, '.env') });
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 // ===== PRODUCTION INFRASTRUCTURE =====
@@ -294,8 +292,8 @@ const TRADING_SESSIONS = {
     sydney: { start: 21, end: 6, name: 'Sydney', quality: 'fair' }
 };
 
-// ===== HIGH-IMPACT EVENTS (Avoid Trading) =====
-const HIGH_IMPACT_EVENTS = [
+// ===== HIGH-IMPACT EVENTS (reference — logic is in isNearHighImpactEvent()) =====
+const _HIGH_IMPACT_EVENTS = [
     { day: 5, hour: 13, minute: 30, name: 'NFP', avoidMinutes: 60 },
     { pattern: 'monthly', name: 'FOMC', avoidMinutes: 120 },
     { pattern: 'monthly', name: 'CPI', avoidMinutes: 60 },
@@ -389,7 +387,7 @@ function canTrade(pair, direction = 'long') {
 function getCorrelatedPositions(pair, direction) {
     const correlated = [];
 
-    for (const [groupName, pairs] of Object.entries(CORRELATION_GROUPS)) {
+    for (const [, pairs] of Object.entries(CORRELATION_GROUPS)) {
         if (pairs.includes(pair)) {
             for (const p of pairs) {
                 if (p !== pair && positions.has(p)) {
@@ -554,7 +552,7 @@ async function getH1Trend(pair) {
 // ===== STRATEGY BRIDGE (port 3010) =====
 // Non-blocking ensemble confirmation — if bridge is offline, local signals are used as-is
 
-async function queryStrategyBridge(pair, direction) {
+async function queryStrategyBridge(pair, _direction) {
     try {
         const candles = await getCandles(pair, 'M15', 60);
         if (!candles || candles.length < 30) return null;

@@ -1,0 +1,29 @@
+{
+  "root": true,
+  "env": {
+    "node": true,
+    "es2022": true
+  },
+  "parserOptions": {
+    "ecmaVersion": 2022,
+    "sourceType": "commonjs"
+  },
+  "rules": {
+    "no-unused-vars": ["warn", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_|^createMetricsServer$|^smsAlerts$" }],
+    "no-undef": "error",
+    "no-console": "off",
+    "semi": ["error", "always"],
+    "no-var": "warn",
+    "eqeqeq": ["warn", "smart"]
+  },
+  "ignorePatterns": [
+    "node_modules/",
+    "dist/",
+    "build/",
+    "*.min.js",
+    "venv/",
+    "ai-ml/",
+    "**/__pycache__/**"
+  ],
+  "overrides": []
+}

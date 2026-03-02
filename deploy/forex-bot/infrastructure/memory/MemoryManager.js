@@ -249,7 +249,7 @@ class MemoryManager extends EventEmitter {
   /**
    * Clean up Set data structure
    */
-  cleanupSet(set, maxSize, maxAge, strategy) {
+  cleanupSet(set, maxSize, _maxAge, _strategy) {
     if (set.size <= maxSize) {
       return 0;
     }

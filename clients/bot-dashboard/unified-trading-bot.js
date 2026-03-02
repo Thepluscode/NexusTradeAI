@@ -2,13 +2,16 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '../../.env') });
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { Pool } = require('pg');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 // ===== PRODUCTION INFRASTRUCTURE =====
-const memoryManager = require('../../infrastructure/memory/MemoryManager');
-const { metrics, createMetricsServer } = require('../../infrastructure/monitoring/metrics');
-const { getSMSAlertService } = require('../../infrastructure/notifications/sms-alerts');
-const { getTelegramAlertService } = require('../../infrastructure/notifications/telegram-alerts');
+const memoryManager = require('./infrastructure/memory/MemoryManager');
+const { metrics, createMetricsServer } = require('./infrastructure/monitoring/metrics');
+const { getSMSAlertService } = require('./infrastructure/notifications/sms-alerts');
+const { getTelegramAlertService } = require('./infrastructure/notifications/telegram-alerts');
 
 /**
  * IMPROVED UNIFIED TRADING BOT - v3.2 (Quant Council Improvements)
@@ -37,6 +40,171 @@ const PORT = process.env.PORT || process.env.TRADING_PORT || 3002;
 app.use(cors());
 app.use(express.json());
 
+// ── Auth middleware for config-write endpoints ──────────────────────────────
+// All POST /api/config/* routes require: Authorization: Bearer <NEXUS_API_SECRET>
+function requireApiSecret(req, res, next) {
+    const secret = process.env.NEXUS_API_SECRET;
+    if (!secret) return next(); // not configured — allow (startup / local dev)
+    const auth = req.headers.authorization || '';
+    if (auth === `Bearer ${secret}`) return next();
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+}
+
+// ── Persist env var to Railway (survives redeploys) ────────────────────────
+async function persistEnvVar(name, value) {
+    const token   = process.env.RAILWAY_TOKEN;
+    const project = process.env.RAILWAY_PROJECT_ID;
+    const env     = process.env.RAILWAY_ENVIRONMENT_ID;
+    const service = process.env.RAILWAY_SERVICE_ID;
+    if (!token || !project || !env || !service) return; // not on Railway — skip
+    const query = `mutation { variableUpsert(input: { projectId: "${project}", environmentId: "${env}", serviceId: "${service}", name: "${name}", value: "${value.replace(/"/g, '\\"')}" }) }`;
+    try {
+        await axios.post('https://backboard.railway.app/graphql/v2',
+            { query },
+            { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 8000 }
+        );
+    } catch (e) {
+        console.warn(`⚠️  Railway env var persist failed for ${name}: ${e.message}`);
+    }
+}
+
+// ── PostgreSQL + Auth Setup ─────────────────────────────────────────────────
+let dbPool = null;
+
+async function initDb() {
+    if (!process.env.DATABASE_URL) {
+        console.log('⚠️  DATABASE_URL not set — auth endpoints disabled');
+        return;
+    }
+    try {
+        dbPool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                name VARCHAR(100),
+                role VARCHAR(20) DEFAULT 'user',
+                refresh_token TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                last_login TIMESTAMPTZ
+            )
+        `);
+        console.log('✅ Auth DB ready');
+    } catch (e) {
+        console.warn('⚠️  Auth DB init failed:', e.message);
+        dbPool = null;
+    }
+}
+
+function signTokens(userId, email) {
+    const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+    const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret-change-me';
+    const accessToken = jwt.sign({ sub: userId, email }, JWT_SECRET, { expiresIn: '24h' });
+    const refreshToken = jwt.sign({ sub: userId, email }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+    return { accessToken, refreshToken };
+}
+
+function requireJwt(req, res, next) {
+    const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+    const auth = req.headers.authorization || '';
+    if (!auth.startsWith('Bearer ')) return res.status(401).json({ success: false, error: 'Missing token' });
+    try {
+        req.user = jwt.verify(auth.slice(7), JWT_SECRET);
+        next();
+    } catch {
+        return res.status(401).json({ success: false, error: 'Invalid or expired token' });
+    }
+}
+
+// ── Auth Endpoints ────────────────────────────────────────────────────────────
+
+app.post('/api/auth/register', async (req, res) => {
+    if (!dbPool) return res.status(503).json({ success: false, error: 'Auth service unavailable' });
+    const { email, password, name } = req.body || {};
+    if (!email || !password) return res.status(400).json({ success: false, error: 'Email and password required' });
+    if (password.length < 8) return res.status(400).json({ success: false, error: 'Password must be at least 8 characters' });
+    try {
+        const hash = await bcrypt.hash(password, 12);
+        const result = await dbPool.query(
+            'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id, email, name, role',
+            [email.toLowerCase().trim(), hash, name || null]
+        );
+        const user = result.rows[0];
+        const tokens = signTokens(user.id, user.email);
+        await dbPool.query('UPDATE users SET refresh_token=$1, last_login=NOW() WHERE id=$2', [tokens.refreshToken, user.id]);
+        res.json({ success: true, user: { id: user.id, email: user.email, name: user.name, role: user.role }, ...tokens });
+    } catch (e) {
+        if (e.code === '23505') return res.status(409).json({ success: false, error: 'Email already registered' });
+        console.error('Register error:', e.message);
+        res.status(500).json({ success: false, error: 'Registration failed' });
+    }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+    if (!dbPool) return res.status(503).json({ success: false, error: 'Auth service unavailable' });
+    const { email, password } = req.body || {};
+    if (!email || !password) return res.status(400).json({ success: false, error: 'Email and password required' });
+    try {
+        const result = await dbPool.query('SELECT * FROM users WHERE email=$1', [email.toLowerCase().trim()]);
+        const user = result.rows[0];
+        if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+            return res.status(401).json({ success: false, error: 'Invalid email or password' });
+        }
+        const tokens = signTokens(user.id, user.email);
+        await dbPool.query('UPDATE users SET refresh_token=$1, last_login=NOW() WHERE id=$2', [tokens.refreshToken, user.id]);
+        res.json({ success: true, user: { id: user.id, email: user.email, name: user.name, role: user.role }, ...tokens });
+    } catch (e) {
+        console.error('Login error:', e.message);
+        res.status(500).json({ success: false, error: 'Login failed' });
+    }
+});
+
+app.post('/api/auth/refresh', async (req, res) => {
+    if (!dbPool) return res.status(503).json({ success: false, error: 'Auth service unavailable' });
+    const { refreshToken } = req.body || {};
+    if (!refreshToken) return res.status(400).json({ success: false, error: 'Refresh token required' });
+    const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret-change-me';
+    try {
+        const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
+        const result = await dbPool.query('SELECT * FROM users WHERE id=$1 AND refresh_token=$2', [payload.sub, refreshToken]);
+        if (!result.rows[0]) return res.status(401).json({ success: false, error: 'Invalid refresh token' });
+        const user = result.rows[0];
+        const tokens = signTokens(user.id, user.email);
+        await dbPool.query('UPDATE users SET refresh_token=$1 WHERE id=$2', [tokens.refreshToken, user.id]);
+        res.json({ success: true, ...tokens });
+    } catch {
+        res.status(401).json({ success: false, error: 'Invalid or expired refresh token' });
+    }
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+    if (dbPool) {
+        const { refreshToken } = req.body || {};
+        if (refreshToken) {
+            const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret-change-me';
+            try {
+                const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
+                await dbPool.query('UPDATE users SET refresh_token=NULL WHERE id=$1', [payload.sub]);
+            } catch {}
+        }
+    }
+    res.json({ success: true });
+});
+
+app.get('/api/auth/me', requireJwt, async (req, res) => {
+    if (!dbPool) return res.status(503).json({ success: false, error: 'Auth service unavailable' });
+    try {
+        const result = await dbPool.query('SELECT id, email, name, role FROM users WHERE id=$1', [req.user.sub]);
+        if (!result.rows[0]) return res.status(404).json({ success: false, error: 'User not found' });
+        res.json({ success: true, user: result.rows[0] });
+    } catch (e) {
+        res.status(500).json({ success: false, error: 'Failed to fetch user' });
+    }
+});
+
+// ── End Auth Endpoints ────────────────────────────────────────────────────────
+
 const alpacaConfig = {
     baseURL: process.env.ALPACA_BASE_URL || 'https://paper-api.alpaca.markets',
     apiKey: process.env.ALPACA_API_KEY,
@@ -44,7 +212,7 @@ const alpacaConfig = {
     dataURL: 'https://data.alpaca.markets'
 };
 
-const popularStocks = require('../../services/trading/popular-stocks-list');
+const popularStocks = require('./services/trading/popular-stocks-list');
 
 // Initialize Alert Services
 const smsAlerts = getSMSAlertService();
@@ -121,8 +289,10 @@ let cachedDailyPnL = 0;
 
 // Performance tracking (in-memory, persisted to performance.json)
 const fs = require('fs');
-const PERF_FILE = path.join(__dirname, '../../services/trading/data/performance.json');
-const RISK_CONFIG_FILE = path.join(__dirname, 'data/risk-config.json');
+const DATA_DIR = path.join(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+const PERF_FILE = path.join(DATA_DIR, 'performance.json');
+const RISK_CONFIG_FILE = path.join(DATA_DIR, 'risk-config.json');
 let perfData = {
     totalTrades: 0,
     winningTrades: 0,
@@ -219,7 +389,7 @@ let MAX_TRADES_PER_DAY = parseInt(process.env.MAX_TRADES_PER_DAY || '15');
 const MAX_TRADES_PER_SYMBOL = 3;
 const MIN_TIME_BETWEEN_TRADES = 10 * 60 * 1000;
 const MIN_TIME_AFTER_STOP = 60 * 60 * 1000;
-let MAX_DAILY_LOSS = parseFloat(process.env.MAX_DAILY_LOSS || '500');   // $ amount
+let MAX_DAILY_LOSS = Math.abs(parseFloat(process.env.MAX_DAILY_LOSS || '500'));   // $ amount (always positive)
 let MAX_DRAWDOWN_PCT = parseFloat(process.env.MAX_DRAWDOWN_PCT || '10'); // percent
 
 // ===== NEW: TIME-BASED EXIT CONFIGURATION =====
@@ -1248,6 +1418,23 @@ app.get('/api/trading/status', async (req, res) => {
         });
 
     } catch (error) {
+        const status = error?.response?.status;
+        if (status === 401 || status === 403) {
+            return res.json({
+                success: true,
+                data: {
+                    isRunning: botRunning,
+                    mode: 'PAPER',
+                    credentialsRequired: true,
+                    account: { equity: 0, cash: 0, buyingPower: 0 },
+                    performance: { totalTrades: totalTradesToday, winRate: 0, profitFactor: 0, activePositions: 0 },
+                    positions: [],
+                    portfolioValue: 0,
+                    dailyPnL: 0,
+                    lastUpdate: lastScanTime
+                }
+            });
+        }
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -1332,7 +1519,7 @@ app.post('/api/trading/realize-profits', async (req, res) => {
         const closed = [];
         const skipped = [];
 
-        for (const [symbol, pos] of positions) {
+        for (const [symbol] of positions) {
             try {
                 const posUrl = `${alpacaConfig.baseURL}/v2/positions/${symbol}`;
                 const posRes = await axios.get(posUrl, {
@@ -1341,7 +1528,6 @@ app.post('/api/trading/realize-profits', async (req, res) => {
                         'APCA-API-SECRET-KEY': alpacaConfig.secretKey,
                     },
                 });
-                const currentPrice = parseFloat(posRes.data.current_price);
                 const qty = posRes.data.qty;
                 const unrealizedPnL = parseFloat(posRes.data.unrealized_pl);
 
@@ -1497,7 +1683,7 @@ app.get('/api/config', (req, res) => {
                 },
                 crypto: {
                     configured: !!(process.env.CRYPTO_API_KEY && process.env.CRYPTO_API_SECRET),
-                    exchange: process.env.CRYPTO_EXCHANGE || 'binance',
+                    exchange: process.env.CRYPTO_EXCHANGE || 'kraken',
                     testnet: process.env.CRYPTO_TESTNET !== 'false',
                 },
             },
@@ -1523,7 +1709,7 @@ app.get('/api/config', (req, res) => {
 });
 
 // Update live risk parameters (no restart needed)
-app.post('/api/config/risk', (req, res) => {
+app.post('/api/config/risk', requireApiSecret, (req, res) => {
     try {
         const { tier, stopLoss, profitTarget, positionSize, maxPositions } = req.body;
         if (!['tier1', 'tier2', 'tier3'].includes(tier)) {
@@ -1543,36 +1729,23 @@ app.post('/api/config/risk', (req, res) => {
 
 // ===== BROKER CREDENTIALS ENDPOINT =====
 // Writes keys to .env file on the local machine. Never logs key values.
-app.post('/api/config/mode', (req, res) => {
+app.post('/api/config/mode', requireApiSecret, async (req, res) => {
     try {
-        const { mode } = req.body; // 'paper' | 'live'
+        const { mode } = req.body;
         if (!['paper', 'live'].includes(mode)) {
             return res.status(400).json({ success: false, error: 'mode must be "paper" or "live"' });
         }
-
         const value = mode === 'live' ? 'true' : 'false';
-        const envPath = path.join(__dirname, '../../.env');
-        let envContent = '';
-        try { envContent = fs.readFileSync(envPath, 'utf8'); } catch { envContent = ''; }
-
-        const regex = /^REAL_TRADING_ENABLED=.*$/m;
-        if (regex.test(envContent)) {
-            envContent = envContent.replace(regex, `REAL_TRADING_ENABLED=${value}`);
-        } else {
-            envContent += `\nREAL_TRADING_ENABLED=${value}`;
-        }
-
-        fs.writeFileSync(envPath, envContent);
         process.env.REAL_TRADING_ENABLED = value;
+        await persistEnvVar('REAL_TRADING_ENABLED', value);
         console.log(`⚙️  Trading mode switched to: ${mode.toUpperCase()}`);
-
         res.json({ success: true, mode });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-app.post('/api/config/risk-limits', (req, res) => {
+app.post('/api/config/risk-limits', requireApiSecret, (req, res) => {
     try {
         const { maxDailyLoss, maxDrawdown, maxTradesPerDay } = req.body;
         if (maxDailyLoss !== undefined && typeof maxDailyLoss === 'number' && maxDailyLoss > 0) {
@@ -1586,7 +1759,7 @@ app.post('/api/config/risk-limits', (req, res) => {
         }
 
         // Persist to .env
-        const envPath = path.join(__dirname, '../../.env');
+        const envPath = path.join(__dirname, '.env');
         let envContent = '';
         try { envContent = fs.readFileSync(envPath, 'utf8'); } catch { envContent = ''; }
 
@@ -1614,52 +1787,40 @@ app.post('/api/config/risk-limits', (req, res) => {
     }
 });
 
-app.post('/api/config/credentials', (req, res) => {
+app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
     try {
         const { broker, credentials, fields } = req.body;
-        const creds = credentials || fields; // support both field names
-        // creds: { KEY_NAME: 'value', ... } — only whitelisted keys accepted
+        const creds = credentials || fields;
         const ALLOWED_KEYS = {
-            alpaca:  ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_BASE_URL'],
-            oanda:   ['OANDA_ACCOUNT_ID', 'OANDA_ACCESS_TOKEN', 'OANDA_PRACTICE'],
-            crypto:  ['CRYPTO_API_KEY', 'CRYPTO_API_SECRET', 'CRYPTO_EXCHANGE', 'CRYPTO_TESTNET'],
-            telegram:['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_ALERTS_ENABLED'],
-            sms:     ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'ALERT_PHONE_NUMBER', 'SMS_ALERTS_ENABLED'],
+            alpaca:   ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_BASE_URL'],
+            oanda:    ['OANDA_ACCOUNT_ID', 'OANDA_ACCESS_TOKEN', 'OANDA_PRACTICE'],
+            crypto:   ['CRYPTO_API_KEY', 'CRYPTO_API_SECRET', 'CRYPTO_EXCHANGE', 'CRYPTO_TESTNET'],
+            telegram: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_ALERTS_ENABLED'],
+            sms:      ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'ALERT_PHONE_NUMBER', 'SMS_ALERTS_ENABLED'],
         };
 
         const allowed = ALLOWED_KEYS[broker];
         if (!allowed) return res.status(400).json({ success: false, error: 'Unknown broker' });
         if (!creds || typeof creds !== 'object') return res.status(400).json({ success: false, error: 'No credentials provided' });
 
-        const envPath = path.join(__dirname, '../../.env');
-        let envContent = '';
-        try { envContent = fs.readFileSync(envPath, 'utf8'); } catch { envContent = ''; }
-
         let updated = 0;
         for (const [key, value] of Object.entries(creds)) {
-            if (!allowed.includes(key)) continue; // silently skip disallowed keys
+            if (!allowed.includes(key)) continue;
             if (typeof value !== 'string' || value === '') continue;
-
-            const line = `${key}=${value}`;
-            const regex = new RegExp(`^${key}=.*$`, 'm');
-            if (regex.test(envContent)) {
-                envContent = envContent.replace(regex, line);
-            } else {
-                envContent += `\n${line}`;
-            }
-            // Update process.env so bot picks up new values immediately
+            // Apply immediately in-memory
             process.env[key] = value;
+            // Persist to Railway env vars so they survive redeploys
+            await persistEnvVar(key, value);
             updated++;
         }
 
-        fs.writeFileSync(envPath, envContent);
-        console.log(`⚙️  Credentials updated for broker: ${broker} (${updated} keys)`);
+        console.log(`⚙️  Credentials updated: broker=${broker} keys=${updated}`);
 
-        // Update alpacaConfig in memory if Alpaca keys changed
+        // Refresh in-memory broker config
         if (broker === 'alpaca') {
-            if (creds.ALPACA_API_KEY) alpacaConfig.apiKey = creds.ALPACA_API_KEY;
+            if (creds.ALPACA_API_KEY)    alpacaConfig.apiKey    = creds.ALPACA_API_KEY;
             if (creds.ALPACA_SECRET_KEY) alpacaConfig.secretKey = creds.ALPACA_SECRET_KEY;
-            if (creds.ALPACA_BASE_URL) alpacaConfig.baseURL = creds.ALPACA_BASE_URL;
+            if (creds.ALPACA_BASE_URL)   alpacaConfig.baseURL   = creds.ALPACA_BASE_URL;
         }
 
         res.json({ success: true, updated });
@@ -1669,7 +1830,7 @@ app.post('/api/config/credentials', (req, res) => {
     }
 });
 
-app.post('/api/config/test-notification', async (req, res) => {
+app.post('/api/config/test-notification', requireApiSecret, async (req, res) => {
     const { channel } = req.body;
     try {
         if (channel === 'telegram') {
@@ -1706,13 +1867,65 @@ app.post('/api/config/test-notification', async (req, res) => {
 });
 
 app.get('/api/backtest/report', (req, res) => {
+    // Try static file first (generated by enhanced-backtester.js),
+    // but skip it if it has no real trades (stale/empty report)
     try {
-        const reportPath = path.join(__dirname, '../../services/trading/backtest-report.json');
+        const reportPath = path.join(DATA_DIR, 'backtest-report.json');
         const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
-        res.json({ success: true, data: report });
-    } catch {
-        res.status(404).json({ success: false, error: 'No backtest report found' });
-    }
+        const hasTrades = (report.summary?.totalTrades ?? 0) > 0 || (report.trades?.length ?? 0) > 0;
+        if (hasTrades) return res.json({ success: true, data: report });
+    } catch {}
+
+    // Fall back: return live performance stats so the dashboard always has data
+    const pf = perfData.profitFactor || 0;
+    const wr = perfData.winRate || 0;
+    const liveReport = {
+        type: 'live',
+        timestamp: new Date().toISOString(),
+        summary: {
+            totalTrades: perfData.totalTrades,
+            winningTrades: perfData.winningTrades,
+            losingTrades: perfData.losingTrades,
+            overallWinRate: wr / 100,
+            profitFactor: pf,
+            totalProfit: perfData.totalProfit,
+            totalWinAmount: perfData.totalWinAmount,
+            totalLossAmount: perfData.totalLossAmount,
+            avgSharpe: perfData.sharpeRatio || 0,
+            avgDrawdown: perfData.maxDrawdown || 0,
+            expectancy: perfData.totalTrades > 0
+                ? perfData.totalProfit / perfData.totalTrades / 100
+                : 0,
+            symbolsTested: positions.size,
+            consecutiveLosses: perfData.consecutiveLosses,
+            maxConsecutiveLosses: perfData.maxConsecutiveLosses,
+        },
+        validation: {
+            passed: wr >= 45 && pf >= 1.2 && perfData.totalTrades >= 5,
+            passedChecks: [wr >= 45, pf >= 1.2, (perfData.maxDrawdown || 0) <= 0.2, perfData.totalProfit > 0].filter(Boolean).length,
+            totalChecks: 4,
+            checks: {
+                sufficientTrades: perfData.totalTrades >= 30,
+                winRateOK: wr >= 45,
+                profitFactorOK: pf >= 1.2,
+                drawdownOK: (perfData.maxDrawdown || 0) <= 0.2,
+                profitPositive: perfData.totalProfit > 0,
+                noCircuitBreaker: perfData.circuitBreakerStatus === 'OK',
+            },
+        },
+        config: {
+            fastMA: 9, slowMA: 21,
+            stopLossPct: MOMENTUM_CONFIG.tier1.stopLoss,
+            profitTargetPct: MOMENTUM_CONFIG.tier1.profitTarget,
+            positionSizePct: MOMENTUM_CONFIG.tier1.positionSize,
+            initialCapital: 100000,
+            walkForwardWindows: 5,
+            inSampleRatio: 0.7,
+        },
+        symbolResults: [],
+        trades: [],
+    };
+    res.json({ success: true, data: liveReport });
 });
 
 // ===== PROMETHEUS METRICS ENDPOINT =====
@@ -1760,7 +1973,7 @@ async function checkEndOfDay() {
     if (hour === 15 && minute >= 50) {
         if (positions.size > 0) {
             console.log(`\n⚠️  [EOD] Market closing soon (${hour}:${String(minute).padStart(2, '0')} EST) - closing all ${positions.size} positions`);
-            for (const [symbol, pos] of positions) {
+            for (const [symbol] of positions) {
                 try {
                     // Get current qty from Alpaca
                     const posUrl = `${alpacaConfig.baseURL}/v2/positions/${symbol}`;
@@ -1839,8 +2052,10 @@ app.listen(PORT, async () => {
     console.log('║  ✅ Aggressive Trailing Stops (lock 85-92%)                ║');
     console.log('║  ✅ Dynamic Profit Targets                                 ║');
     console.log('║  ✅ Volume Confirmation                                    ║');
+    console.log('║  ✅ JWT Auth + PostgreSQL Users                            ║');
     console.log('╚════════════════════════════════════════════════════════════╝\n');
 
+    initDb().catch(e => console.warn('Auth DB init error:', e.message));
     await tradingLoop();
     setInterval(() => tradingLoop().catch(e => console.error('❌ Stock loop crashed:', e)), 60000);
 });

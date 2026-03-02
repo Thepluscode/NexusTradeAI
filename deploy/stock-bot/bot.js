@@ -1519,7 +1519,7 @@ app.post('/api/trading/realize-profits', async (req, res) => {
         const closed = [];
         const skipped = [];
 
-        for (const [symbol, pos] of positions) {
+        for (const [symbol] of positions) {
             try {
                 const posUrl = `${alpacaConfig.baseURL}/v2/positions/${symbol}`;
                 const posRes = await axios.get(posUrl, {
@@ -1528,7 +1528,6 @@ app.post('/api/trading/realize-profits', async (req, res) => {
                         'APCA-API-SECRET-KEY': alpacaConfig.secretKey,
                     },
                 });
-                const currentPrice = parseFloat(posRes.data.current_price);
                 const qty = posRes.data.qty;
                 const unrealizedPnL = parseFloat(posRes.data.unrealized_pl);
 
@@ -1974,7 +1973,7 @@ async function checkEndOfDay() {
     if (hour === 15 && minute >= 50) {
         if (positions.size > 0) {
             console.log(`\n⚠️  [EOD] Market closing soon (${hour}:${String(minute).padStart(2, '0')} EST) - closing all ${positions.size} positions`);
-            for (const [symbol, pos] of positions) {
+            for (const [symbol] of positions) {
                 try {
                     // Get current qty from Alpaca
                     const posUrl = `${alpacaConfig.baseURL}/v2/positions/${symbol}`;
