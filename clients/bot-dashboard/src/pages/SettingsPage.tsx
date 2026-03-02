@@ -61,7 +61,17 @@ const authHeaders = API_SECRET ? { Authorization: `Bearer ${API_SECRET}` } : {};
 
 async function fetchConfig() {
     const res = await axios.get(`${API_BASE}/api/config`, { timeout: 5000 });
-    return res.data.data;
+    const config = res.data.data;
+    // Merge crypto broker state from the crypto bot (stock bot doesn't know about it)
+    try {
+        const cryptoRes = await axios.get(`${SERVICE_URLS.cryptoBot}/api/config`, { timeout: 5000 });
+        const cryptoConfig = cryptoRes.data?.data;
+        if (cryptoConfig?.brokers?.crypto) {
+            if (!config.brokers) config.brokers = {};
+            config.brokers.crypto = cryptoConfig.brokers.crypto;
+        }
+    } catch { /* crypto bot offline — leave crypto section unconfigured */ }
+    return config;
 }
 
 async function updateRisk(payload: { tier: string; stopLoss?: number; profitTarget?: number; positionSize?: number; maxPositions?: number }) {
@@ -918,7 +928,10 @@ export default function SettingsPage() {
             toast.success(`${vars.broker.charAt(0).toUpperCase() + vars.broker.slice(1)} credentials saved`);
             void queryClient.invalidateQueries('botConfig');
         },
-        onError: () => { toast.error('Failed to save — is the Stock Bot running?'); },
+        onError: (_err, vars) => {
+            const botName = vars.broker === 'crypto' ? 'Crypto Bot' : vars.broker === 'forex' ? 'Forex Bot' : 'Stock Bot';
+            toast.error(`Failed to save — is the ${botName} running?`);
+        },
     });
 
     const isPaper = config?.trading?.mode !== 'live';
