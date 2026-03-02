@@ -701,7 +701,13 @@ class CryptoTradingEngine {
                 this.config.maxPositionSizeUSD
             );
             console.log(`   [Kelly Sizing] WinRate: ${(runningWinRate * 100).toFixed(1)}% → multiplier ${sizingMultiplier.toFixed(2)}x → $${positionSizeUSD.toFixed(0)}`);
-            const quantity = positionSizeUSD / signal.price;
+
+            // [v3.5] Crypto slippage model — Kraken taker fee is 0.26%; market orders
+            // also move the book. Model as 0.30% total execution cost.
+            // Adjusts effective entry price so stop/target R:R is realistic after fees.
+            const CRYPTO_SLIPPAGE = 0.003; // 0.30% taker fee + market impact
+            const effectiveEntry = signal.price * (1 + CRYPTO_SLIPPAGE);
+            const quantity = positionSizeUSD / effectiveEntry;
 
             console.log(`\n📈 EXECUTING CRYPTO TRADE:`);
             console.log(`   Symbol: ${signal.symbol}`);

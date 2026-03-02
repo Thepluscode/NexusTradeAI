@@ -1093,15 +1093,10 @@ async function scanMomentumBreakouts() {
             const maxPositions = 8;
             if (positions.size < maxPositions) {
                 const available = maxPositions - positions.size;
-                // Sort: prefer higher tiers (bigger moves) and higher volume ratio
+                // Sort: by composite score (tier × momentum × volumeRatio × rsi bonus), desc
                 const ranked = movers
                     .filter(m => !positions.has(m.symbol) && canTrade(m.symbol, 'buy'))
-                    .sort((a, b) => {
-                        const tierScore = { tier3: 3, tier2: 2, tier1: 1 };
-                        const scoreDiff = (tierScore[b.tier] || 0) - (tierScore[a.tier] || 0);
-                        if (scoreDiff !== 0) return scoreDiff;
-                        return parseFloat(b.volumeRatio) - parseFloat(a.volumeRatio);
-                    });
+                    .sort((a, b) => (b.score || 0) - (a.score || 0));
 
                 for (const mover of ranked.slice(0, available)) {
                     await executeTrade(mover, 'momentum');
@@ -1221,6 +1216,24 @@ async function analyzeMomentum(symbol) {
             console.log(`[MACD Override] ${symbol} — RSI divergence overrides bearish MACD, proceeding`);
         }
 
+        // [v3.5] Multi-timeframe filter — require intraday momentum to align with daily uptrend
+        // Fetch last 20 daily bars; current price must be above 20-day SMA
+        // Prevents buying intraday momentum that fights the larger trend
+        try {
+            const dailyResp = await axios.get(barUrl, {
+                headers: { 'APCA-API-KEY-ID': alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': alpacaConfig.secretKey },
+                params: { timeframe: '1Day', limit: 20, feed: 'sip' }
+            });
+            const dailyBars = dailyResp.data?.bars || [];
+            if (dailyBars.length >= 10) {
+                const sma20d = dailyBars.map(b => b.c).reduce((a, v) => a + v, 0) / dailyBars.length;
+                if (current < sma20d * 0.995) { // small tolerance to avoid noise at the boundary
+                    console.log(`[Daily Filter] ${symbol} below 20-day SMA ($${sma20d.toFixed(2)}) — counter-trend, skipping`);
+                    return null;
+                }
+            }
+        } catch { /* daily bars unavailable — proceed on intraday signal */ }
+
         // [v3.2] ATR-based stop/target — adapts to each stock's volatility
         const atr = calculateATR(bars);
         let atrStop = null, atrTarget = null;
@@ -1281,6 +1294,12 @@ async function analyzeMomentum(symbol) {
             console.log(`[Bridge] ${symbol} advisory: ${bridgeResult.direction} conf:${(bridgeResult.confidence || 0).toFixed(2)}`);
         }
 
+        // [v3.5] Composite signal score — used for ranking when multiple signals compete
+        // Higher tier → multiplier 1/2/3; stronger move × volume surge; RSI mid-zone bonus
+        const tierMultiplier = { tier1: 1, tier2: 2, tier3: 3 }[tier] || 1;
+        const rsiBonus = rsi >= 45 && rsi <= 65 ? 1.15 : 1.0; // reward "goldilocks" RSI zone
+        const score = tierMultiplier * parseFloat(percentChange) * parseFloat(volumeRatio.toFixed(2)) * rsiBonus;
+
         return {
             symbol,
             price: current,
@@ -1290,6 +1309,7 @@ async function analyzeMomentum(symbol) {
             rsi: rsi.toFixed(2),
             vwap: vwap ? vwap.toFixed(2) : null,
             tier,
+            score: parseFloat(score.toFixed(3)),
             strategy: 'momentum',
             config,
             entryVolume: volumeToday,
@@ -1316,12 +1336,31 @@ async function executeTrade(signal, strategy) {
         });
 
         const equity = parseFloat(accountResponse.data.equity);
-        const positionSize = equity * config.positionSize;
+
+        // [v3.5] Kelly-criterion position sizing — scales with bot performance after 10+ trades
+        // Uses fractional Kelly (25%) to stay conservative; clamps multiplier to [0.25x, 2.0x]
+        let kellyMultiplier = 1.0;
+        if (perfData.totalTrades >= 10 && perfData.winRate > 0 && perfData.profitFactor > 0) {
+            const w = perfData.winRate / 100;           // win probability
+            const avgWin  = perfData.totalWinAmount  / Math.max(perfData.winningTrades, 1);
+            const avgLoss = perfData.totalLossAmount / Math.max(perfData.losingTrades, 1);
+            const b = avgLoss > 0 ? avgWin / avgLoss : 1; // win/loss ratio
+            const fullKelly = (w * b - (1 - w)) / b;
+            const fracKelly = Math.max(0, fullKelly) * 0.25; // 25% of full Kelly
+            kellyMultiplier = Math.max(0.25, Math.min(2.0, fracKelly > 0 ? fracKelly / config.positionSize : 1.0));
+        }
+
+        // [v3.5] Slippage model — market orders typically fill ~0.05% above ask for stocks
+        // Adjusts effective entry price so stop/target calculations are realistic
+        const STOCK_SLIPPAGE = 0.0005; // 0.05% — conservative estimate for liquid stocks
+        const effectiveEntry = signal.price * (1 + STOCK_SLIPPAGE);
+
+        const positionSize = equity * config.positionSize * kellyMultiplier;
         if (!signal.price || signal.price <= 0) {
             console.log(`⚠️  [SKIP] ${signal.symbol}: invalid price ${signal.price}`);
             return null;
         }
-        const shares = Math.floor(positionSize / signal.price);
+        const shares = Math.floor(positionSize / effectiveEntry);
 
         if (shares < 1) {
             console.log(`⚠️  [SKIP] ${signal.symbol}: position size $${positionSize.toFixed(0)} too small to buy 1 share @ $${signal.price} (need $${Math.ceil(signal.price)} min)`);
@@ -1329,9 +1368,11 @@ async function executeTrade(signal, strategy) {
         }
 
         // [v3.2] Prefer ATR-based stops when they provide >= 1.8:1 R:R, else use config defaults
-        const stopPrice = (signal.atrStop || signal.price * (1 - config.stopLoss)).toFixed(2);
-        const targetPrice = (signal.atrTarget || signal.price * (1 + config.profitTarget)).toFixed(2);
+        // [v3.5] Stops/targets computed from effectiveEntry (includes slippage) for realistic R:R
+        const stopPrice = (signal.atrStop || effectiveEntry * (1 - config.stopLoss)).toFixed(2);
+        const targetPrice = (signal.atrTarget || effectiveEntry * (1 + config.profitTarget)).toFixed(2);
         if (signal.atrStop) console.log(`   [ATR Stops] Using volatility-adapted: Stop $${stopPrice}, Target $${targetPrice}`);
+        if (kellyMultiplier !== 1.0) console.log(`   [Kelly] Size multiplier: ${kellyMultiplier.toFixed(2)}x (winRate:${perfData.winRate.toFixed(1)}% pf:${perfData.profitFactor.toFixed(2)})`);
 
         const orderUrl = `${alpacaConfig.baseURL}/v2/orders`;
         const orderResponse = await axios.post(orderUrl, {
@@ -2252,13 +2293,19 @@ app.post('/api/backtest/run', async (req, res) => {
     try {
         const results = [];
         const symbols = popularStocks.getAllSymbols().slice(0, 50); // cap at 50 to avoid rate limits
-        for (const symbol of symbols) {
-            try {
-                const signal = await analyzeMomentum(symbol);
-                if (signal) results.push({ symbol, tier: signal.tier, score: signal.score || 0,
-                    rsi: signal.rsi, volumeRatio: signal.volumeRatio, percentChange: signal.percentChange,
-                    price: signal.price });
-            } catch { /* skip failures */ }
+        const batchSize = 10; // parallel batches — same pattern as scanMomentumBreakouts
+        for (let i = 0; i < symbols.length; i += batchSize) {
+            const batch = symbols.slice(i, i + batchSize);
+            const settled = await Promise.allSettled(batch.map(s => analyzeMomentum(s)));
+            for (const r of settled) {
+                if (r.status === 'fulfilled' && r.value) {
+                    const signal = r.value;
+                    results.push({ symbol: signal.symbol, tier: signal.tier, score: signal.score || 0,
+                        rsi: signal.rsi, volumeRatio: signal.volumeRatio, percentChange: signal.percentChange,
+                        price: signal.price });
+                }
+            }
+            if (i + batchSize < symbols.length) await new Promise(r => setTimeout(r, 300)); // rate-limit pause
         }
         results.sort((a, b) => (b.score || 0) - (a.score || 0));
         const elapsed = ((Date.now() - started) / 1000).toFixed(1);

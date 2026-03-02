@@ -1001,12 +1001,20 @@ async function executeTrade(signal) {
 
     const balance = parseFloat(account.balance);
     const config = MOMENTUM_CONFIG[signal.tier];
+
+    // [v3.5] Forex slippage model — OANDA spreads typically 0.5-2 pips on majors.
+    // Model as 0.10% of entry price (conservative for practice account).
+    // Adjusts effective entry for stop/target R:R calculation; does not change actual fill.
+    const FOREX_SLIPPAGE = 0.001; // 0.10% — ~1 pip on 1.10 EURUSD = 0.0011
+    const slippageAdj = signal.direction === 'long' ? 1 + FOREX_SLIPPAGE : 1 - FOREX_SLIPPAGE;
+    const effectiveEntry = signal.entry * slippageAdj;
+
     const positionValue = balance * config.positionSize;
 
-    // Calculate units (forex uses lot sizes)
+    // Calculate units (forex uses lot sizes), sized from effective entry
     const units = signal.direction === 'long'
-        ? Math.floor(positionValue / signal.entry * 10000)  // Mini lots
-        : -Math.floor(positionValue / signal.entry * 10000);
+        ? Math.floor(positionValue / effectiveEntry * 10000)  // Mini lots
+        : -Math.floor(positionValue / effectiveEntry * 10000);
 
     console.log(`\n🎯 EXECUTING ${signal.direction.toUpperCase()} ${signal.pair} (${signal.tier})`);
     console.log(`   Entry: ${signal.entry.toFixed(5)}, Stop: ${signal.stopLoss.toFixed(5)}, Target: ${signal.takeProfit.toFixed(5)}`);
