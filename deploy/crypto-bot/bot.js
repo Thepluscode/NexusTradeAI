@@ -1246,6 +1246,22 @@ setInterval(() => {
     metrics.pnlGauge.set(parseFloat(status.netPnL));
 }, 10000);
 
+// ── Config read endpoint (used by SettingsPage to load broker state) ─────────
+app.get('/api/config', (req, res) => {
+    res.json({
+        success: true,
+        data: {
+            brokers: {
+                crypto: {
+                    configured: !!(process.env.CRYPTO_API_KEY && process.env.CRYPTO_API_SECRET),
+                    exchange: process.env.CRYPTO_EXCHANGE || 'kraken',
+                    testnet: process.env.CRYPTO_TESTNET !== 'false',
+                },
+            },
+        },
+    });
+});
+
 // ── Credentials management ──────────────────────────────────────────────────
 app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
     try {
@@ -1270,15 +1286,15 @@ app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
         console.log(`⚙️  Credentials updated: broker=${broker} keys=${updated}`);
         // If crypto keys were updated, reinitialise the exchange client and reconnect
         if (broker === 'crypto' && updated > 0) {
-            cryptoEngine.kraken = new KrakenClient({
+            engine.kraken = new KrakenClient({
                 apiKey: process.env.CRYPTO_API_KEY,
                 apiSecret: process.env.CRYPTO_API_SECRET,
             });
             // If currently in demo mode due to missing keys, attempt reconnect
-            if (cryptoEngine.demoMode) {
-                const account = await cryptoEngine.kraken.getAccountInfo();
+            if (engine.demoMode) {
+                const account = await engine.kraken.getAccountInfo();
                 if (account) {
-                    cryptoEngine.demoMode = false;
+                    engine.demoMode = false;
                     console.log('✅ Kraken reconnected after credential update — exiting DEMO MODE');
                 }
             }
