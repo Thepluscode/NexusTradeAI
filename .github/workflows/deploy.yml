@@ -4,16 +4,16 @@ name: Deploy
 #
 # What this does:
 #   1. Builds the React dashboard and commits the dist into deploy/dashboard/dist/
-#      so Railway serves the correct pre-built bundle (Railway must NOT run a build
-#      step on the dashboard service — it only runs `serve dist`).
-#   2. Deploys all 5 Railway services using the CLI with --path-as-root so each
-#      service gets its correct subdirectory, overriding Railway's GitHub auto-deploy
-#      which would otherwise pick up the repo root and fail.
-#   3. Waits for deployments to become healthy, then runs post-deploy smoke tests.
+#      Railway's GitHub auto-deploy picks this up and serves the pre-built bundle.
+#   2. Waits for Railway to deploy all services, then runs post-deploy smoke tests.
 #
-# Required GitHub secret:
-#   RAILWAY_TOKEN — create at railway.app → Account Settings → Tokens
-#   Add it at: github.com/<owner>/<repo>/settings/secrets/actions
+# Railway deploys automatically via GitHub integration — no CLI needed.
+# rootDirectory for each service is set in Railway dashboard settings:
+#   nexus-stock-bot      → deploy/stock-bot
+#   nexus-forex-bot      → deploy/forex-bot
+#   nexus-crypto-bot     → deploy/crypto-bot
+#   nexus-strategy-bridge → services/strategy-engine
+#   nexus-dashboard      → deploy/dashboard
 
 on:
   push:
@@ -113,73 +113,16 @@ jobs:
           git commit -m "chore: rebuild dashboard bundle ($BUNDLE) [skip ci]"
           git push origin main
 
-  # ── 2. Deploy all 5 Railway services ─────────────────────────────────────────
-  deploy:
-    name: Deploy to Railway
+  # ── 2. Smoke tests after Railway auto-deploys ─────────────────────────────────
+  smoke-test:
+    name: Post-deploy smoke tests
     runs-on: ubuntu-latest
     needs: build-dashboard
-    environment: production
 
     steps:
-      - uses: actions/checkout@v4
-        with:
-          # Pull latest so we get the bundle commit if it was just made
-          ref: main
-          fetch-depth: 1
-
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      # Deploy each service with --path-as-root pointing at its subdirectory.
-      # --detach means we don't wait inline — we'll poll health after all 5 kick off.
-      - name: Deploy — Stock Bot
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: |
-          railway up \
-            --service nexus-stock-bot \
-            --detach \
-            --path-as-root deploy/stock-bot
-
-      - name: Deploy — Forex Bot
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: |
-          railway up \
-            --service nexus-forex-bot \
-            --detach \
-            --path-as-root deploy/forex-bot
-
-      - name: Deploy — Crypto Bot
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: |
-          railway up \
-            --service nexus-crypto-bot \
-            --detach \
-            --path-as-root deploy/crypto-bot
-
-      - name: Deploy — Strategy Bridge
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: |
-          railway up \
-            --service nexus-strategy-bridge \
-            --detach \
-            --path-as-root services/strategy-engine
-
-      - name: Deploy — Dashboard
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: |
-          railway up \
-            --service nexus-dashboard \
-            --detach \
-            --path-as-root deploy/dashboard
-
-      # Give Railway time to build and start all services
-      - name: Wait for Railway deployments (90s)
-        run: sleep 90
+      # Wait for Railway to pick up the push and finish deploying
+      - name: Wait for Railway deployments (120s)
+        run: sleep 120
 
       # ── Post-deploy smoke tests ───────────────────────────────────────────────
       - name: Smoke test — Stock Bot
