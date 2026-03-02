@@ -1061,6 +1061,19 @@ async function managePositions() {
 
 async function scanMomentumBreakouts() {
     try {
+        // Drawdown circuit breaker — block new entries if drawdown limit exceeded
+        if (perfData.maxDrawdown >= MAX_DRAWDOWN_PCT) {
+            console.log(`🛑 [DRAWDOWN BREAKER] ${perfData.maxDrawdown.toFixed(1)}% >= limit ${MAX_DRAWDOWN_PCT}% — no new entries`);
+            perfData.circuitBreakerStatus = 'TRIPPED';
+            perfData.circuitBreakerReason = `Max drawdown ${perfData.maxDrawdown.toFixed(1)}% exceeded`;
+            return [];
+        }
+        if (perfData.circuitBreakerStatus === 'TRIPPED' && perfData.maxDrawdown < MAX_DRAWDOWN_PCT * 0.8) {
+            perfData.circuitBreakerStatus = 'OK';
+            perfData.circuitBreakerReason = null;
+            console.log(`✅ [DRAWDOWN BREAKER] Drawdown recovered — trading resumed`);
+        }
+
         const symbols = popularStocks.getAllSymbols();
         console.log(`\n🔍 Momentum Scan: Checking ${symbols.length} stocks...`);
 
@@ -1940,14 +1953,14 @@ app.post('/api/config/mode', requireApiSecret, async (req, res) => {
 app.post('/api/config/risk-limits', requireApiSecret, (req, res) => {
     try {
         const { maxDailyLoss, maxDrawdown, maxTradesPerDay } = req.body;
-        if (maxDailyLoss !== undefined && typeof maxDailyLoss === 'number' && maxDailyLoss > 0) {
-            MAX_DAILY_LOSS = maxDailyLoss;
+        if (maxDailyLoss !== undefined && typeof maxDailyLoss === 'number') {
+            MAX_DAILY_LOSS = Math.max(50, Math.min(50000, Math.abs(maxDailyLoss)));
         }
-        if (maxDrawdown !== undefined && typeof maxDrawdown === 'number' && maxDrawdown > 0 && maxDrawdown <= 100) {
-            MAX_DRAWDOWN_PCT = maxDrawdown;
+        if (maxDrawdown !== undefined && typeof maxDrawdown === 'number') {
+            MAX_DRAWDOWN_PCT = Math.max(1, Math.min(50, maxDrawdown));
         }
-        if (maxTradesPerDay !== undefined && typeof maxTradesPerDay === 'number' && maxTradesPerDay > 0) {
-            MAX_TRADES_PER_DAY = maxTradesPerDay;
+        if (maxTradesPerDay !== undefined && typeof maxTradesPerDay === 'number') {
+            MAX_TRADES_PER_DAY = Math.max(1, Math.min(30, Math.floor(maxTradesPerDay)));
         }
 
         // Persist to .env

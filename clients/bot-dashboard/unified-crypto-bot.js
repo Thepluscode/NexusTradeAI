@@ -173,7 +173,11 @@ const CRYPTO_CONFIG = {
     ],
 
     // Scan Interval (5 min for crypto)
-    scanInterval: 300000 // 5 minutes (300,000ms)
+    scanInterval: 300000, // 5 minutes (300,000ms)
+
+    // Time-based exit thresholds
+    maxHoldDays: 3,         // Force-exit loss positions after 3 days
+    stalePositionDays: 5    // Emergency close after 5 days regardless of P/L
 };
 
 // ============================================================================
@@ -796,6 +800,19 @@ class CryptoTradingEngine {
             const pnlPercent = ((currentPrice - position.entry) / position.entry) * 100;
             const pnlUSD = (currentPrice - position.entry) * position.quantity;
 
+            // Time-based exit: close stale or overdue positions
+            const holdDays = (Date.now() - (position.openTime?.getTime?.() ?? Date.now())) / (1000 * 60 * 60 * 24);
+            if (holdDays >= this.config.stalePositionDays) {
+                console.log(`⏰ ${symbol}: STALE EXIT after ${holdDays.toFixed(1)} days`);
+                await this.closePosition(symbol, currentPrice, 'Stale Position Timeout');
+                continue;
+            }
+            if (holdDays >= this.config.maxHoldDays && pnlPercent < 0) {
+                console.log(`⏰ ${symbol}: MAX HOLD EXIT after ${holdDays.toFixed(1)} days (loss position)`);
+                await this.closePosition(symbol, currentPrice, 'Max Hold Days - Loss Exit');
+                continue;
+            }
+
             // Check stop loss
             if (currentPrice <= position.stopLoss) {
                 console.log(`🚨 ${symbol}: STOP LOSS HIT at $${currentPrice.toFixed(2)} (${pnlPercent.toFixed(2)}%)`);
@@ -862,9 +879,11 @@ class CryptoTradingEngine {
                 return;
             }
 
-            // Calculate P/L
-            const pnlPercent = ((price - position.entry) / position.entry) * 100;
-            const pnlUSD = (price - position.entry) * position.quantity;
+            // Calculate P/L — apply slippage on exit (taker fee / spread)
+            const CRYPTO_SLIPPAGE = 0.003; // 0.30% taker fee on exit (sell fills below market)
+            const adjustedExitPrice = price * (1 - CRYPTO_SLIPPAGE);
+            const pnlUSD = (adjustedExitPrice - position.entry) * position.quantity;
+            const pnlPercent = ((adjustedExitPrice - position.entry) / position.entry) * 100;
 
             // Update stats
             if (pnlUSD > 0) {
@@ -877,10 +896,11 @@ class CryptoTradingEngine {
             }
 
             console.log(`✅ Position closed: ${symbol} - ${reason}`);
+            console.log(`   Exit: $${price.toFixed(2)} (adj $${adjustedExitPrice.toFixed(2)} after slippage)`);
             console.log(`   P/L: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}% ($${pnlUSD.toFixed(2)})`);
 
             // Persist close to DB (fire-and-forget)
-            dbCryptoClose(position.dbTradeId, price, pnlUSD, pnlPercent, reason).catch(() => {});
+            dbCryptoClose(position.dbTradeId, adjustedExitPrice, pnlUSD, pnlPercent, reason).catch(() => {});
 
             // Remove position
             this.positions.delete(symbol);
@@ -1504,6 +1524,47 @@ app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
+});
+
+app.get('/api/trades', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not configured', trades: [] });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+        const r = await dbPool.query(
+            `SELECT * FROM trades WHERE bot='crypto' ORDER BY created_at DESC LIMIT $1`, [limit]);
+        res.json({ success: true, trades: r.rows, count: r.rows.length });
+    } catch (e) { res.status(500).json({ success: false, error: e.message, trades: [] }); }
+});
+
+app.get('/api/trades/summary', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not configured', summary: [] });
+    try {
+        const days = Math.min(parseInt(req.query.days) || 30, 90);
+        const r = await dbPool.query(`
+            SELECT
+                DATE_TRUNC('day', COALESCE(exit_time, created_at)) AS day,
+                COUNT(*) FILTER (WHERE status='closed') AS closed_trades,
+                COUNT(*) FILTER (WHERE status='open')   AS open_trades,
+                COUNT(*) FILTER (WHERE status='closed' AND pnl_usd > 0) AS winners,
+                COUNT(*) FILTER (WHERE status='closed' AND pnl_usd <= 0) AS losers,
+                COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed'), 0)::FLOAT AS daily_pnl,
+                COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd > 0), 0)::FLOAT AS gross_profit,
+                COALESCE(ABS(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd < 0)), 0)::FLOAT AS gross_loss
+            FROM trades
+            WHERE bot='crypto' AND created_at >= NOW() - INTERVAL '1 day' * $1
+            GROUP BY day ORDER BY day DESC
+        `, [days]);
+        const totals = await dbPool.query(`
+            SELECT
+                COUNT(*) FILTER (WHERE status='closed') AS total_trades,
+                COUNT(*) FILTER (WHERE status='closed' AND pnl_usd > 0) AS winners,
+                COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed'), 0)::FLOAT AS total_pnl,
+                COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd > 0), 0)::FLOAT AS gross_profit,
+                COALESCE(ABS(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd < 0)), 0)::FLOAT AS gross_loss
+            FROM trades WHERE bot='crypto'
+        `);
+        res.json({ success: true, daily: r.rows, totals: totals.rows });
+    } catch (e) { res.status(500).json({ success: false, error: e.message, daily: [], totals: [] }); }
 });
 
 app.get('/metrics', async (req, res) => {

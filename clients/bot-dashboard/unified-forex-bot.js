@@ -1269,6 +1269,14 @@ async function tradingLoop() {
         return;
     }
 
+    // Drawdown circuit breaker
+    const fxDrawdownPct = parseFloat(process.env.MAX_DRAWDOWN_PCT || '10');
+    const fxDailyLossPct = simEquity > 0 ? (Math.abs(Math.min(dailyLoss, 0)) / simEquity) * 100 : 0;
+    if (fxDailyLossPct >= fxDrawdownPct) {
+        console.log(`🛑 [FOREX DRAWDOWN] ${fxDailyLossPct.toFixed(1)}% >= limit ${fxDrawdownPct}% — no new entries`);
+        return;
+    }
+
     try {
         // Scan for new signals
         const signals = await scanForSignals();
@@ -1574,6 +1582,47 @@ app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
+});
+
+app.get('/api/trades', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not configured', trades: [] });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+        const r = await dbPool.query(
+            `SELECT * FROM trades WHERE bot='forex' ORDER BY created_at DESC LIMIT $1`, [limit]);
+        res.json({ success: true, trades: r.rows, count: r.rows.length });
+    } catch (e) { res.status(500).json({ success: false, error: e.message, trades: [] }); }
+});
+
+app.get('/api/trades/summary', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not configured', summary: [] });
+    try {
+        const days = Math.min(parseInt(req.query.days) || 30, 90);
+        const r = await dbPool.query(`
+            SELECT
+                DATE_TRUNC('day', COALESCE(exit_time, created_at)) AS day,
+                COUNT(*) FILTER (WHERE status='closed') AS closed_trades,
+                COUNT(*) FILTER (WHERE status='open')   AS open_trades,
+                COUNT(*) FILTER (WHERE status='closed' AND pnl_usd > 0) AS winners,
+                COUNT(*) FILTER (WHERE status='closed' AND pnl_usd <= 0) AS losers,
+                COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed'), 0)::FLOAT AS daily_pnl,
+                COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd > 0), 0)::FLOAT AS gross_profit,
+                COALESCE(ABS(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd < 0)), 0)::FLOAT AS gross_loss
+            FROM trades
+            WHERE bot='forex' AND created_at >= NOW() - INTERVAL '1 day' * $1
+            GROUP BY day ORDER BY day DESC
+        `, [days]);
+        const totals = await dbPool.query(`
+            SELECT
+                COUNT(*) FILTER (WHERE status='closed') AS total_trades,
+                COUNT(*) FILTER (WHERE status='closed' AND pnl_usd > 0) AS winners,
+                COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed'), 0)::FLOAT AS total_pnl,
+                COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd > 0), 0)::FLOAT AS gross_profit,
+                COALESCE(ABS(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd < 0)), 0)::FLOAT AS gross_loss
+            FROM trades WHERE bot='forex'
+        `);
+        res.json({ success: true, daily: r.rows, totals: totals.rows });
+    } catch (e) { res.status(500).json({ success: false, error: e.message, daily: [], totals: [] }); }
 });
 
 app.get('/metrics', async (req, res) => {
