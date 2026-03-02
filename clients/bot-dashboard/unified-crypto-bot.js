@@ -16,6 +16,46 @@ const smsAlerts = getSMSAlertService();
 const promClient = require('prom-client');
 const register = promClient.register; // Use default register
 
+// ── PostgreSQL trade persistence (optional — requires DATABASE_URL) ──────────
+const { Pool: PgPool } = require('pg');
+let dbPool = null;
+
+async function initTradeDb() {
+    if (!process.env.DATABASE_URL) return;
+    try {
+        dbPool = new PgPool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+        await dbPool.query('SELECT 1');
+        console.log('✅ Crypto bot: DB connected for trade persistence');
+    } catch (e) {
+        console.warn('⚠️  Crypto DB init failed:', e.message);
+        dbPool = null;
+    }
+}
+
+async function dbCryptoOpen(symbol, tier, entry, stopLoss, takeProfit, quantity, positionSize) {
+    if (!dbPool) return null;
+    try {
+        const r = await dbPool.query(
+            `INSERT INTO trades (bot,symbol,direction,tier,status,entry_price,quantity,
+             position_size_usd,stop_loss,take_profit,entry_time)
+             VALUES ('crypto',$1,'long',$2,'open',$3,$4,$5,$6,$7,NOW()) RETURNING id`,
+            [symbol, tier, entry, quantity, positionSize, stopLoss, takeProfit]
+        );
+        return r.rows[0]?.id;
+    } catch (e) { console.warn('DB crypto open failed:', e.message); return null; }
+}
+
+async function dbCryptoClose(id, exitPrice, pnlUsd, pnlPct, reason) {
+    if (!dbPool || !id) return;
+    try {
+        await dbPool.query(
+            `UPDATE trades SET status='closed',exit_price=$1,pnl_usd=$2,pnl_pct=$3,
+             exit_time=NOW(),close_reason=$4 WHERE id=$5`,
+            [exitPrice, pnlUsd, pnlPct, reason, id]
+        );
+    } catch (e) { console.warn('DB crypto close failed:', e.message); }
+}
+
 /**
  * UNIFIED CRYPTO TRADING BOT
  * v3.2 - Crypto Council Improvements:
@@ -677,6 +717,11 @@ class CryptoTradingEngine {
 
             this.positions.set(signal.symbol, position);
 
+            // Persist trade opening to DB (fire-and-forget)
+            dbCryptoOpen(signal.symbol, signal.tier, signal.price, signal.stopLoss, signal.takeProfit, quantity, positionSizeUSD)
+                .then(id => { const p = this.positions.get(signal.symbol); if (p) p.dbTradeId = id; })
+                .catch(() => {});
+
             // Update tracking
             this.dailyTradeCount++;
             this.totalTrades++;
@@ -803,6 +848,9 @@ class CryptoTradingEngine {
 
             console.log(`✅ Position closed: ${symbol} - ${reason}`);
             console.log(`   P/L: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}% ($${pnlUSD.toFixed(2)})`);
+
+            // Persist close to DB (fire-and-forget)
+            dbCryptoClose(position.dbTradeId, price, pnlUSD, pnlPercent, reason).catch(() => {});
 
             // Remove position
             this.positions.delete(symbol);
@@ -947,6 +995,7 @@ class CryptoTradingEngine {
             if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
             fs.writeFileSync(this.stateFile, JSON.stringify({
                 running: this.isRunning,
+                demoMode: this.demoMode,
                 totalTrades: this.totalTrades,
                 winningTrades: this.winningTrades,
                 losingTrades: this.losingTrades,
@@ -974,6 +1023,8 @@ class CryptoTradingEngine {
                 if (saved.losingTrades != null) this.losingTrades = saved.losingTrades;
                 if (saved.totalProfit != null) this.totalProfit = saved.totalProfit;
                 if (saved.totalLoss != null) this.totalLoss = saved.totalLoss;
+                // Restore demoMode so a prior credential save survives restart
+                if (saved.demoMode != null) this.demoMode = saved.demoMode;
                 // Restore daily counters only if saved on the same UTC day
                 if (saved.savedDate) {
                     const savedDay = new Date(saved.savedDate).toISOString().slice(0, 10);
@@ -1293,16 +1344,24 @@ app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
                 apiKey: process.env.CRYPTO_API_KEY,
                 apiSecret: process.env.CRYPTO_API_SECRET,
             });
-            // If currently in demo mode due to missing keys, attempt reconnect
             if (engine.demoMode) {
-                const account = await engine.kraken.getAccountInfo();
-                if (account) {
-                    engine.demoMode = false;
-                    console.log('✅ Kraken reconnected after credential update — exiting DEMO MODE');
+                try {
+                    const account = await engine.kraken.getAccountInfo();
+                    if (account) {
+                        engine.demoMode = false;
+                        engine.saveState();
+                        console.log('✅ Kraken reconnected after credential update — exiting DEMO MODE');
+                        return res.json({ success: true, updated, reconnected: true, demoMode: false });
+                    }
+                    return res.json({ success: true, updated, reconnected: false, demoMode: true,
+                        warning: 'Keys saved but Kraken rejected them — check permissions/IP whitelist' });
+                } catch (reconnectErr) {
+                    return res.json({ success: true, updated, reconnected: false, demoMode: true,
+                        warning: reconnectErr.message });
                 }
             }
         }
-        res.json({ success: true, updated });
+        res.json({ success: true, updated, reconnected: false, demoMode: engine.demoMode || false });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -1343,6 +1402,9 @@ app.listen(PORT, () => {
     console.log(`\n💎 Crypto pairs: ${CRYPTO_CONFIG.symbols.join(', ')}`);
     console.log(`📈 BTC correlation: Altcoins only trade when BTC is bullish`);
     console.log(`⚠️  ${CRYPTO_CONFIG.exchange.testnet ? 'Using TESTNET - Safe to experiment!' : 'LIVE TRADING - Real money at risk!'}`);
+
+    // Connect DB for trade persistence (non-blocking)
+    initTradeDb().catch(e => console.warn('⚠️  Crypto DB init error:', e.message));
 
     // Auto-start only if previously running (persistent state)
     if (engine.loadState()) {

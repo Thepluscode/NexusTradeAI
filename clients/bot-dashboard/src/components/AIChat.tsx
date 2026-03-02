@@ -39,7 +39,8 @@ async function fetchBotContext() {
 
 // ── Local AI answering from live bot data ──────────────────────────────────
 
-function generateResponse(message: string, ctx: any): string {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function generateResponse(message: string, ctx: Record<string, any>): string {
     const q = message.toLowerCase();
     const stock = ctx?.stock;
     const config = ctx?.config;
@@ -89,6 +90,7 @@ function generateResponse(message: string, ctx: any): string {
         if (positions === 0) {
             return `📭 No open positions right now.\n\nThe bot scans 110+ symbols every 60 seconds for momentum setups. Trades open when a stock meets all entry criteria: momentum threshold, volume ratio, RSI range (30–70), and price above VWAP.`;
         }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const posDetails = (stock?.positions || []).slice(0, 5).map((p: any) =>
             `• ${p.symbol}: ${p.qty || p.quantity} shares @ $${(p.avg_entry_price || p.entryPrice || 0).toFixed(2)}`
         ).join('\n');
@@ -216,7 +218,7 @@ export const AIChat: React.FC = () => {
         setInput('');
         setThinking(true);
         setTimeout(() => {
-            const response = generateResponse(text.trim(), ctx);
+            const response = generateResponse(text.trim(), ctx ?? {});
             setMessages(prev => [...prev, { role: 'assistant', text: response }]);
             setThinking(false);
         }, 350);

@@ -150,41 +150,46 @@ class PairsTradingStrategy(BaseStrategy):
     def calculate_half_life(self, spread: pd.Series) -> float:
         """
         Estimate mean reversion half-life using Ornstein-Uhlenbeck process.
-        
-        half_life = -ln(2) / theta
+        Prefers MLE via OUEstimator; falls back to OLS regression.
+
+        half_life = ln(2) / theta
         where theta is the mean reversion speed
         """
+        try:
+            from ou_estimator import OUEstimator
+            ou = OUEstimator()
+            result = ou.fit(spread)
+            if result['status'] == 'fitted' and result['is_mean_reverting']:
+                return float(result['half_life'])
+        except Exception:
+            pass
+
+        # Fallback to original OLS method
         if len(spread) < 30:
             return float('inf')
-        
+
         spread_lag = spread.shift(1).dropna()
         spread_diff = spread.diff().dropna()
-        
+
         # Align series
         spread_lag = spread_lag.iloc[1:]
         spread_diff = spread_diff.iloc[1:]
-        
+
         if len(spread_lag) < 20:
             return float('inf')
-        
+
         try:
-            # OLS: delta_spread = theta * (mean - spread_lag) + epsilon
-            # Simplified: delta_spread = alpha + beta * spread_lag
             X = np.column_stack([np.ones(len(spread_lag)), spread_lag.values])
             y = spread_diff.values
-            
             beta = np.linalg.lstsq(X, y, rcond=None)[0]
             theta = -beta[1]
-            
             if theta <= 0:
                 return float('inf')
-            
             half_life = -np.log(2) / np.log(1 + theta)
-            
         except (np.linalg.LinAlgError, RuntimeWarning):
             half_life = float('inf')
-        
-        return max(1, float(half_life))
+
+        return max(1.0, float(half_life))
     
     def test_cointegration(
         self,

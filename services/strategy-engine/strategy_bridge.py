@@ -37,11 +37,13 @@ except ImportError:
 
 import pandas as pd
 import numpy as np
+from typing import Dict, List
 
 # Import strategies
 from RegimeBasedMomentumStrategy import RegimeBasedMomentumStrategy, create_regime_momentum_strategy
 from PairsTradingStrategy import PairsTradingStrategy, get_recommended_pairs
 from VolatilityArbitrageStrategy import VolatilityArbitrageStrategy, create_volatility_strategy
+from ou_estimator import fit_ou_to_pair
 
 # Import base types
 from strategy_framework import MarketData, SignalType
@@ -95,6 +97,19 @@ class EnsembleResponse(BaseModel):
 momentum_strategy = create_regime_momentum_strategy(use_pretrained_detector=False)
 volatility_strategy = create_volatility_strategy(conservative=True)
 pairs_strategy = PairsTradingStrategy()
+
+# Price cache: symbol → last 100 closes (populated on each /signal call)
+_price_cache: Dict[str, List[float]] = {}
+
+# Known cointegrated pairs for ensemble voting
+KNOWN_PAIRS = {
+    'XOM': 'CVX', 'CVX': 'XOM',
+    'JPM': 'BAC', 'BAC': 'JPM',
+    'AAPL': 'MSFT', 'MSFT': 'AAPL',
+    'KO': 'PEP', 'PEP': 'KO',
+    'HD': 'LOW', 'LOW': 'HD',
+    'V': 'MA', 'MA': 'V',
+}
 
 # ========================================
 # HELPER FUNCTIONS
@@ -163,6 +178,10 @@ if FASTAPI_AVAILABLE:
         market_data = prices_to_market_data(req.prices, req.symbol)
         strategies_results = []
 
+        # Cache closes for pairs trading
+        closes = [p.close for p in req.prices]
+        _price_cache[req.symbol] = closes[-100:]
+
         # Strategy 1: Regime-Based Momentum
         try:
             prices_series = pd.Series([p.close for p in market_data])
@@ -223,10 +242,41 @@ if FASTAPI_AVAILABLE:
                 reason=f"Error: {str(e)}"
             ))
 
+        # Strategy 3: Pairs Trading (only when companion price data is cached)
+        companion = KNOWN_PAIRS.get(req.symbol)
+        if companion and companion in _price_cache:
+            try:
+                s1 = pd.Series(closes)
+                s2 = pd.Series(_price_cache[companion])
+                min_len = min(len(s1), len(s2))
+                if min_len >= 30:
+                    ou = fit_ou_to_pair(s1.tail(min_len).reset_index(drop=True),
+                                        s2.tail(min_len).reset_index(drop=True))
+                    if ou['status'] == 'fitted' and ou['is_mean_reverting']:
+                        z = ou['z_score']
+                        sig = 'BUY' if ou['trade_signal'] == 'LONG_SPREAD' else \
+                              'SELL' if ou['trade_signal'] == 'SHORT_SPREAD' else 'NEUTRAL'
+                        conf = min(0.85, 0.5 + abs(z) * 0.1) if sig != 'NEUTRAL' else 0
+                        strategies_results.append(StrategySignalResponse(
+                            strategy="pairs_trading", signal=sig, confidence=conf,
+                            reason=f"OU pairs {req.symbol}/{companion}: z={z:.2f} hl={ou['half_life']:.1f}d",
+                            metadata={'z_score': z, 'half_life': ou['half_life'], 'companion': companion}
+                        ))
+                    else:
+                        strategies_results.append(StrategySignalResponse(
+                            strategy="pairs_trading", signal="NEUTRAL", confidence=0,
+                            reason=f"Pair not mean-reverting ({ou.get('status','')})"
+                        ))
+            except Exception as e:
+                logger.error(f"Pairs trading error: {e}")
+                strategies_results.append(StrategySignalResponse(
+                    strategy="pairs_trading", signal="NEUTRAL", confidence=0, reason=f"Error: {e}"
+                ))
+
         # Ensemble: weighted voting
         buy_score = 0
         sell_score = 0
-        weights = {"regime_momentum": 0.6, "volatility_arbitrage": 0.4}
+        weights = {"regime_momentum": 0.50, "volatility_arbitrage": 0.30, "pairs_trading": 0.20}
 
         for s in strategies_results:
             w = weights.get(s.strategy, 0.5)

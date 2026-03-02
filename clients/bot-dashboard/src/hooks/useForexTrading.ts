@@ -55,9 +55,10 @@ export function useForexTrading() {
 
     const fetchStatus = useCallback(async () => {
         try {
-            const data = await apiClient.getForexStatus();
+            const raw = await apiClient.getForexStatus();
+            const data = raw as unknown as ForexStatus;
             setStatus(data);
-            setPositions(data?.positions || []);
+            setPositions((raw['positions'] as ForexPosition[]) || []);
             setError(null);
         } catch (err) {
             setError(err as Error);

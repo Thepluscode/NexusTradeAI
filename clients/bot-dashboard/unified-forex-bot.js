@@ -4,6 +4,46 @@ const axios = require('axios');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
+// ── PostgreSQL trade persistence (optional — requires DATABASE_URL) ──────────
+const { Pool: PgPool } = require('pg');
+let dbPool = null;
+
+async function initTradeDb() {
+    if (!process.env.DATABASE_URL) return;
+    try {
+        dbPool = new PgPool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+        await dbPool.query('SELECT 1'); // connection test
+        console.log('✅ Forex bot: DB connected for trade persistence');
+    } catch (e) {
+        console.warn('⚠️  Forex DB init failed:', e.message);
+        dbPool = null;
+    }
+}
+
+async function dbForexOpen(pair, direction, tier, entry, stopLoss, takeProfit, units, session) {
+    if (!dbPool) return null;
+    try {
+        const r = await dbPool.query(
+            `INSERT INTO trades (bot,symbol,direction,tier,status,entry_price,quantity,
+             stop_loss,take_profit,entry_time,session)
+             VALUES ('forex',$1,$2,$3,'open',$4,$5,$6,$7,NOW(),$8) RETURNING id`,
+            [pair, direction, tier, entry, Math.abs(units), stopLoss, takeProfit, session || null]
+        );
+        return r.rows[0]?.id;
+    } catch (e) { console.warn('DB forex open failed:', e.message); return null; }
+}
+
+async function dbForexClose(id, exitPrice, pnlUsd, pnlPct, reason) {
+    if (!dbPool || !id) return;
+    try {
+        await dbPool.query(
+            `UPDATE trades SET status='closed',exit_price=$1,pnl_usd=$2,pnl_pct=$3,
+             exit_time=NOW(),close_reason=$4 WHERE id=$5`,
+            [exitPrice, pnlUsd, pnlPct, reason, id]
+        );
+    } catch (e) { console.warn('DB forex close failed:', e.message); }
+}
+
 // ===== PRODUCTION INFRASTRUCTURE =====
 const memoryManager = require('./infrastructure/memory/MemoryManager');
 const { metrics, createMetricsServer } = require('./infrastructure/monitoring/metrics');
@@ -694,28 +734,19 @@ async function scanForSignals() {
                 console.log(`[Candle Filter] ${pair} LONG skipped — last candle not bullish`);
                 continue;
             }
-            if (bb && currentPrice < bb.upper * 0.999) {
-                console.log(`[BB Filter] ${pair} LONG skipped — not breaking above BB upper ${bb.upper.toFixed(5)}`);
+            if (bb && currentPrice < bb.middle) {
+                console.log(`[BB Filter] ${pair} LONG skipped — below BB midline ${bb.middle.toFixed(5)}`);
                 continue;
             }
-            // [v3.2] Strategy Bridge confirmation
+            // [v3.3] Strategy Bridge advisory — only block if bridge explicitly signals SHORT with high confidence
             const bridgeLong = await queryStrategyBridge(pair, 'long');
-            if (bridgeLong !== null) {
-                if (!bridgeLong.should_enter || bridgeLong.direction !== 'long') {
-                    console.log(`[Bridge] ${pair} LONG rejected — bridge: ${bridgeLong.direction} (conf: ${(bridgeLong.confidence || 0).toFixed(2)})`);
-                    // fall through to SHORT check
-                } else {
-                    console.log(`[Bridge] ${pair} LONG confirmed ✓ conf: ${(bridgeLong.confidence || 0).toFixed(2)}`);
-                    signals.push({
-                        pair, direction: 'long', tier,
-                        entry: currentPrice,
-                        stopLoss:   currentPrice * (1 - atrStop),
-                        takeProfit: currentPrice * (1 + atrTarget),
-                        rsi, trendStrength, atrPct, h1Trend,
-                        session: session.name
-                    });
-                }
+            if (bridgeLong !== null && bridgeLong.direction === 'short' && bridgeLong.confidence > 0.7) {
+                console.log(`[Bridge] ${pair} LONG rejected — bridge explicit SHORT conf:${bridgeLong.confidence.toFixed(2)}`);
+                // fall through to SHORT check
             } else {
+                if (bridgeLong !== null) {
+                    console.log(`[Bridge] ${pair} LONG advisory: ${bridgeLong.direction} conf:${(bridgeLong.confidence || 0).toFixed(2)}`);
+                }
                 signals.push({
                     pair, direction: 'long', tier,
                     entry: currentPrice,
@@ -737,27 +768,18 @@ async function scanForSignals() {
                 console.log(`[Candle Filter] ${pair} SHORT skipped — last candle not bearish`);
                 continue;
             }
-            if (bb && currentPrice > bb.lower * 1.001) {
-                console.log(`[BB Filter] ${pair} SHORT skipped — not breaking below BB lower ${bb.lower.toFixed(5)}`);
+            if (bb && currentPrice > bb.middle) {
+                console.log(`[BB Filter] ${pair} SHORT skipped — above BB midline ${bb.middle.toFixed(5)}`);
                 continue;
             }
-            // [v3.2] Strategy Bridge confirmation
+            // [v3.3] Strategy Bridge advisory — only block if bridge explicitly signals LONG with high confidence
             const bridgeShort = await queryStrategyBridge(pair, 'short');
-            if (bridgeShort !== null) {
-                if (!bridgeShort.should_enter || bridgeShort.direction !== 'short') {
-                    console.log(`[Bridge] ${pair} SHORT rejected — bridge: ${bridgeShort.direction} (conf: ${(bridgeShort.confidence || 0).toFixed(2)})`);
-                } else {
-                    console.log(`[Bridge] ${pair} SHORT confirmed ✓ conf: ${(bridgeShort.confidence || 0).toFixed(2)}`);
-                    signals.push({
-                        pair, direction: 'short', tier,
-                        entry: currentPrice,
-                        stopLoss:   currentPrice * (1 + atrStop),
-                        takeProfit: currentPrice * (1 - atrTarget),
-                        rsi, trendStrength, atrPct, h1Trend,
-                        session: session.name
-                    });
-                }
+            if (bridgeShort !== null && bridgeShort.direction === 'long' && bridgeShort.confidence > 0.7) {
+                console.log(`[Bridge] ${pair} SHORT rejected — bridge explicit LONG conf:${bridgeShort.confidence.toFixed(2)}`);
             } else {
+                if (bridgeShort !== null) {
+                    console.log(`[Bridge] ${pair} SHORT advisory: ${bridgeShort.direction} conf:${(bridgeShort.confidence || 0).toFixed(2)}`);
+                }
                 signals.push({
                     pair, direction: 'short', tier,
                     entry: currentPrice,
@@ -812,6 +834,11 @@ async function executeTrade(signal) {
             entryTime: new Date(),
             session: signal.session
         });
+
+        // Persist trade opening to DB (fire-and-forget)
+        dbForexOpen(signal.pair, signal.direction, signal.tier, signal.entry, signal.stopLoss, signal.takeProfit, units, signal.session)
+            .then(id => { const p = positions.get(signal.pair); if (p) p.dbTradeId = id; })
+            .catch(() => {});
 
         // Update tracking
         totalTradesToday++;
@@ -915,6 +942,15 @@ async function closePositionWithReason(pair, reason) {
             simDailyPnL += tradePnL;
         }
         saveForexPerf();
+
+        // Persist close to DB — use unrealizedPL as proxy for exit PnL
+        if (pos) {
+            const exitPnl = pos.unrealizedPL ?? 0;
+            const exitEntry = pos.entry ?? 0;
+            const exitPct = exitEntry > 0 ? (exitPnl / (exitEntry * Math.abs(pos.units ?? 1))) * 100 : 0;
+            const exitPrice = pos.currentPrice ?? exitEntry;
+            dbForexClose(pos.dbTradeId, exitPrice, exitPnl, exitPct, reason).catch(() => {});
+        }
 
         positions.delete(pair);
 
@@ -1365,6 +1401,9 @@ app.listen(PORT, async () => {
     console.log(`📊 Pairs: ${FOREX_PAIRS.join(', ')}`);
     console.log(`🌍 Best session: London/NY Overlap (8 AM - 12 PM EST)`);
     console.log(`⚠️  Set OANDA_ACCOUNT_ID and OANDA_ACCESS_TOKEN in .env`);
+
+    // Connect DB for trade persistence (non-blocking)
+    initTradeDb().catch(e => console.warn('⚠️  Forex DB init error:', e.message));
 
     // Initial scan
     setTimeout(() => tradingLoop().catch(e => console.error('❌ Forex loop crashed:', e)), 5000);

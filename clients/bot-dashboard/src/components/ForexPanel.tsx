@@ -84,7 +84,7 @@ export const ForexPanel: React.FC = () => {
                         <Chip
                             icon={<AccessTime />}
                             label={status?.session || 'Unknown'}
-                            color={sessionColor(status?.session || '') as any}
+                            color={sessionColor(status?.session || '') as 'success' | 'primary' | 'warning' | 'default'}
                             variant="filled"
                         />
                         <Chip

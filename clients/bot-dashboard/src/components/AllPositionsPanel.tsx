@@ -52,49 +52,59 @@ export const AllPositionsPanel: React.FC = () => {
     // Combine positions from all markets
     const allPositions: UnifiedPosition[] = [
         // Stock positions — bot sends `quantity` (not `qty`)
-        ...(stockPositions || []).map((pos: any) => ({
-            symbol: pos.symbol,
-            market: 'stocks' as const,
-            side: pos.side || 'long',
-            quantity: pos.quantity || pos.qty || 0,
-            entryPrice: pos.avg_entry_price || pos.entry || pos.entryPrice || 0,
-            currentPrice: pos.current_price || pos.currentPrice || 0,
-            unrealizedPnL: pos.unrealized_pl ?? pos.unrealizedPnL ?? pos.pnl ?? 0,
-            unrealizedPnLPercent: (pos.unrealized_plpc != null ? pos.unrealized_plpc * 100 : null) ?? pos.pnlPercent ?? 0,
-            strategy: pos.strategy || 'momentum',
-        })),
+        ...(stockPositions || []).map((rawPos) => {
+            const pos = rawPos as unknown as Record<string, unknown>;
+            const plpc = pos['unrealized_plpc'] as number | null ?? null;
+            return {
+                symbol: pos['symbol'] as string,
+                market: 'stocks' as const,
+                side: (pos['side'] as string) || 'long',
+                quantity: (pos['quantity'] as number) || (pos['qty'] as number) || 0,
+                entryPrice: (pos['avg_entry_price'] as number) || (pos['entry'] as number) || (pos['entryPrice'] as number) || 0,
+                currentPrice: (pos['current_price'] as number) || (pos['currentPrice'] as number) || 0,
+                unrealizedPnL: (pos['unrealized_pl'] as number) ?? (pos['unrealizedPnL'] as number) ?? (pos['pnl'] as number) ?? 0,
+                unrealizedPnLPercent: plpc != null ? plpc * 100 : (pos['pnlPercent'] as number) ?? 0,
+                strategy: (pos['strategy'] as string) || 'momentum',
+            };
+        }),
         // Forex positions — bot sends `unrealizedPL` (no lowercase n) and `qty`
-        ...(forexPositions || []).map((pos: any) => ({
-            symbol: pos.symbol?.replace('_', '/') || pos.symbol,
-            market: 'forex' as const,
-            side: pos.side || 'long',
-            quantity: Math.abs(pos.units ?? pos.qty ?? 0),
-            entryPrice: pos.entryPrice ?? pos.entry ?? 0,
-            currentPrice: pos.currentPrice || 0,
-            unrealizedPnL: pos.unrealizedPL ?? pos.unrealizedPnL ?? 0,
-            unrealizedPnLPercent: pos.unrealizedPLPct != null
-                ? pos.unrealizedPLPct
-                : (pos.entryPrice ?? pos.entry ?? 0) > 0 && Math.abs(pos.units ?? pos.qty ?? 0) > 0
-                    ? ((pos.unrealizedPL ?? pos.unrealizedPnL ?? 0) / ((pos.entryPrice ?? pos.entry ?? 0) * Math.abs(pos.units ?? pos.qty ?? 0))) * 100
-                    : 0,
-            strategy: pos.strategy || 'forex-trend',
-        })),
+        ...(forexPositions || []).map((rawPos) => {
+            const pos = rawPos as unknown as Record<string, unknown>;
+            const entryP = (pos['entryPrice'] as number) ?? (pos['entry'] as number) ?? 0;
+            const units = Math.abs((pos['units'] as number) ?? (pos['qty'] as number) ?? 0);
+            const uPL = (pos['unrealizedPL'] as number) ?? (pos['unrealizedPnL'] as number) ?? 0;
+            const uPLPct = pos['unrealizedPLPct'] as number | null ?? null;
+            return {
+                symbol: ((pos['symbol'] as string)?.replace('_', '/')) || (pos['symbol'] as string),
+                market: 'forex' as const,
+                side: (pos['side'] as string) || 'long',
+                quantity: units,
+                entryPrice: entryP,
+                currentPrice: (pos['currentPrice'] as number) || 0,
+                unrealizedPnL: uPL,
+                unrealizedPnLPercent: uPLPct != null ? uPLPct : entryP > 0 && units > 0 ? (uPL / (entryP * units)) * 100 : 0,
+                strategy: (pos['strategy'] as string) || 'forex-trend',
+            };
+        }),
         // Crypto positions — bot sends `quantity` (not `qty`)
-        ...(cryptoPositions || []).map((pos: any) => ({
-            symbol: pos.symbol,
-            market: 'crypto' as const,
-            side: pos.side || 'long',
-            quantity: pos.quantity || pos.qty || 0,
-            entryPrice: pos.entry ?? pos.entryPrice ?? 0,
-            currentPrice: pos.currentPrice || 0,
-            unrealizedPnL: pos.unrealizedPnL ?? 0,
-            unrealizedPnLPercent: pos.unrealizedPnLPct != null
-                ? pos.unrealizedPnLPct
-                : (pos.entry ?? pos.entryPrice ?? 0) > 0 && (pos.quantity ?? pos.qty ?? 0) > 0
-                    ? ((pos.unrealizedPnL ?? 0) / ((pos.entry ?? pos.entryPrice ?? 0) * (pos.quantity ?? pos.qty ?? 0))) * 100
-                    : 0,
-            strategy: pos.strategy || 'crypto-momentum',
-        })),
+        ...(cryptoPositions || []).map((rawPos) => {
+            const pos = rawPos as unknown as Record<string, unknown>;
+            const entryP = (pos['entry'] as number) ?? (pos['entryPrice'] as number) ?? 0;
+            const qty = (pos['quantity'] as number) || (pos['qty'] as number) || 0;
+            const uPnL = (pos['unrealizedPnL'] as number) ?? 0;
+            const uPct = pos['unrealizedPnLPct'] as number | null ?? null;
+            return {
+                symbol: pos['symbol'] as string,
+                market: 'crypto' as const,
+                side: (pos['side'] as string) || 'long',
+                quantity: qty,
+                entryPrice: entryP,
+                currentPrice: (pos['currentPrice'] as number) || 0,
+                unrealizedPnL: uPnL,
+                unrealizedPnLPercent: uPct != null ? uPct : entryP > 0 && qty > 0 ? (uPnL / (entryP * qty)) * 100 : 0,
+                strategy: (pos['strategy'] as string) || 'crypto-momentum',
+            };
+        }),
     ];
 
     // Filter positions
@@ -319,7 +329,7 @@ export const AllPositionsPanel: React.FC = () => {
                             sx={{ mr: 1 }}
                         />
                         <Typography variant="body2" color="text.secondary">
-                            Alpaca Paper Trading • {(stockStatus as any)?.stats?.totalTrades ?? stockStatus?.performance?.totalTrades ?? 0} trades today
+                            Alpaca Paper Trading • {(stockStatus?.stats as { totalTrades?: number } | undefined)?.totalTrades ?? stockStatus?.performance?.totalTrades ?? 0} trades today
                         </Typography>
                     </Paper>
                 </Grid>

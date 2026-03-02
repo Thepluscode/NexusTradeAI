@@ -7,6 +7,8 @@ import type {
   AutomationStatus,
   ServiceHealth,
   AlpacaPosition,
+  BotConfig,
+  BacktestReport,
 } from '@/types';
 
 // ── Service URLs ─────────────────────────────────────────────────────────────
@@ -55,9 +57,9 @@ async function tryRefreshToken(): Promise<string | null> {
     localStorage.setItem('nexus_access_token', data.accessToken);
     localStorage.setItem('nexus_refresh_token', data.refreshToken);
     return data.accessToken;
-  } catch (err: any) {
+  } catch (err: unknown) {
     // Only clear session on explicit auth rejection (401/403), not network errors
-    const status = err?.response?.status;
+    const status = (err as { response?: { status?: number } })?.response?.status;
     if (status === 401 || status === 403) {
       localStorage.removeItem('nexus_access_token');
       localStorage.removeItem('nexus_refresh_token');
@@ -166,7 +168,7 @@ class APIClient {
     return response.data; // flat: { success, message }
   }
 
-  async getBotConfig(): Promise<any> {
+  async getBotConfig(): Promise<BotConfig | null> {
     try {
       const response = await this.tradingEngine.get('/api/config');
       return response.data.data;
@@ -175,7 +177,7 @@ class APIClient {
     }
   }
 
-  async getBacktestReport(): Promise<any> {
+  async getBacktestReport(): Promise<BacktestReport | null> {
     try {
       const response = await this.tradingEngine.get('/api/backtest/report');
       return response.data.data;
@@ -243,7 +245,7 @@ class APIClient {
 
   // ── Forex Bot (port 3005) ─────────────────────────────────────────────────
 
-  async getForexStatus(): Promise<any> {
+  async getForexStatus(): Promise<Record<string, unknown>> {
     try {
       const response = await this.forexService.get('/api/forex/status');
       // Forex bot sends flat JSON (no {data:} wrapper)
@@ -258,16 +260,16 @@ class APIClient {
     }
   }
 
-  async getForexPositions(): Promise<any[]> {
+  async getForexPositions(): Promise<Position[]> {
     try {
       const response = await this.forexService.get('/api/forex/status');
-      return response.data?.positions || [];
+      return (response.data?.positions as Position[]) || [];
     } catch {
       return [];
     }
   }
 
-  async getForexAccount(): Promise<any> {
+  async getForexAccount(): Promise<Record<string, unknown>> {
     try {
       const response = await this.forexService.get('/api/accounts/summary');
       return response.data.data;
@@ -284,7 +286,7 @@ class APIClient {
     await this.forexService.post('/api/forex/stop');
   }
 
-  async scanForexSignals(): Promise<any[]> {
+  async scanForexSignals(): Promise<Record<string, unknown>[]> {
     try {
       const response = await this.forexService.post('/api/forex/scan');
       return response.data.signals || [];
@@ -295,7 +297,7 @@ class APIClient {
 
   // ── Crypto Bot (port 3006) ────────────────────────────────────────────────
 
-  async getCryptoStatus(): Promise<any> {
+  async getCryptoStatus(): Promise<Record<string, unknown>> {
     try {
       const response = await this.cryptoService.get('/api/crypto/status');
       return response.data;

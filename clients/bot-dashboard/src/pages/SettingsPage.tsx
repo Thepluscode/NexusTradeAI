@@ -542,7 +542,7 @@ async function saveRiskLimits(payload: { maxDailyLoss: number; maxDrawdown: numb
     return res.data;
 }
 
-function FundManagement({ config }: { config: any }) {
+function FundManagement({ config }: { config: import('@/types').BotConfig | null | undefined }) {
     const queryClient = useQueryClient();
     const isPaper = config?.trading?.mode !== 'live';
 
@@ -558,7 +558,7 @@ function FundManagement({ config }: { config: any }) {
             setMaxDrawdown(config.riskLimits.maxDrawdown ?? 10);
             setMaxTrades(config.riskLimits.maxTradesPerDay ?? 15);
         }
-    }, [config?.riskLimits?.maxDailyLoss, config?.riskLimits?.maxDrawdown, config?.riskLimits?.maxTradesPerDay]);
+    }, [config?.riskLimits, config?.riskLimits?.maxDailyLoss, config?.riskLimits?.maxDrawdown, config?.riskLimits?.maxTradesPerDay]);
 
     const { data: balances, isLoading: balLoading } = useQuery('allBalances', fetchAllBalances, {
         refetchInterval: 15000,
@@ -938,9 +938,17 @@ export default function SettingsPage() {
         onError: () => { toast.error('Failed to switch mode — is the Stock Bot running?'); },
     });
 
-    const { mutate: saveCreds, isLoading: savingCreds, variables: savingFor } = useMutation(saveCredentials, {
-        onSuccess: (_, vars) => {
-            toast.success(`${vars.broker.charAt(0).toUpperCase() + vars.broker.slice(1)} credentials saved`);
+    const { mutate: saveCreds, isLoading: savingCreds, variables: savingFor } = useMutation<
+        import('@/types').SaveCredentialsResult, Error, import('@/types').SaveCredentialsPayload
+    >(saveCredentials, {
+        onSuccess: (data, vars) => {
+            if (vars.broker === 'crypto') {
+                if (data?.demoMode === false) toast.success('Kraken connected — live trading enabled');
+                else if (data?.warning) toast.error(`Keys saved — ${data.warning}`);
+                else toast.success('Crypto credentials saved');
+            } else {
+                toast.success(`${vars.broker.charAt(0).toUpperCase() + vars.broker.slice(1)} credentials saved`);
+            }
             void queryClient.invalidateQueries('botConfig');
         },
         onError: (_err, vars) => {
@@ -1263,7 +1271,7 @@ export default function SettingsPage() {
                                     if (alpacaSecret) creds.ALPACA_SECRET_KEY = alpacaSecret;
                                     saveCreds({ broker: 'alpaca', credentials: creds });
                                 }}
-                                isSaving={savingCreds && (savingFor as any)?.broker === 'alpaca'}
+                                isSaving={savingCreds && savingFor?.broker === 'alpaca'}
                             >
                                 {config?.brokers?.alpaca?.configured && (
                                     <Alert severity="success" sx={{ borderRadius: 2, py: 0.5 }}>
@@ -1315,7 +1323,7 @@ export default function SettingsPage() {
                                     if (oandaToken) creds.OANDA_ACCESS_TOKEN = oandaToken;
                                     saveCreds({ broker: 'oanda', credentials: creds });
                                 }}
-                                isSaving={savingCreds && (savingFor as any)?.broker === 'oanda'}
+                                isSaving={savingCreds && savingFor?.broker === 'oanda'}
                             >
                                 {config?.brokers?.oanda?.configured && (
                                     <Alert severity="success" sx={{ borderRadius: 2, py: 0.5 }}>
@@ -1369,7 +1377,7 @@ export default function SettingsPage() {
                                     if (cryptoSecret) creds.CRYPTO_API_SECRET = cryptoSecret;
                                     saveCreds({ broker: 'crypto', credentials: creds });
                                 }}
-                                isSaving={savingCreds && (savingFor as any)?.broker === 'crypto'}
+                                isSaving={savingCreds && savingFor?.broker === 'crypto'}
                             >
                                 {config?.brokers?.crypto?.configured && (
                                     <Alert severity="success" sx={{ borderRadius: 2, py: 0.5 }}>
@@ -1450,7 +1458,7 @@ export default function SettingsPage() {
                                     if (telegramChatId) creds.TELEGRAM_CHAT_ID = telegramChatId;
                                     saveCreds({ broker: 'telegram', credentials: creds });
                                 }}
-                                isSaving={savingCreds && (savingFor as any)?.broker === 'telegram'}
+                                isSaving={savingCreds && savingFor?.broker === 'telegram'}
                                 helpSteps={[
                                     'Open Telegram and search for @BotFather',
                                     'Send /newbot — BotFather will ask for a name and username',
@@ -1526,7 +1534,7 @@ export default function SettingsPage() {
                                     if (smsTo) creds.ALERT_PHONE_NUMBER = smsTo;
                                     saveCreds({ broker: 'sms', credentials: creds });
                                 }}
-                                isSaving={savingCreds && (savingFor as any)?.broker === 'sms'}
+                                isSaving={savingCreds && savingFor?.broker === 'sms'}
                                 helpSteps={[
                                     'Sign up at twilio.com — free trial credits included',
                                     'Create a Twilio phone number (free trial number available)',

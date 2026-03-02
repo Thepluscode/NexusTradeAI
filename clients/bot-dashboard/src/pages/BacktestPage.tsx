@@ -29,6 +29,7 @@ import {
 } from '@mui/icons-material';
 import { apiClient } from '@/services/api';
 import { MetricCard } from '@/components/MetricCard';
+import type { BacktestSymbolResult, BacktestTrade } from '@/types';
 
 function ValidationChecklist({ checks }: { checks: Record<string, boolean> }) {
     const labels: Record<string, string> = {
@@ -91,7 +92,7 @@ export default function BacktestPage() {
     }
 
     const isLive = report.type === 'live';
-    const { summary = {}, validation, symbolResults = [], trades = [] } = report;
+    const { summary = {} as import('@/types').BacktestSummary, validation, symbolResults = [], trades = [] } = report;
     const recentTrades = trades.slice(-20);
     const noTradesYet = (summary.totalTrades ?? 0) === 0;
 
@@ -247,7 +248,7 @@ export default function BacktestPage() {
                                         </TableRow>
                                     </TableHead>
                                     <TableBody>
-                                        {symbolResults.map((s: any) => (
+                                        {symbolResults.map((s: BacktestSymbolResult) => (
                                             <TableRow key={s.symbol} hover>
                                                 <TableCell>
                                                     <Typography fontWeight={600}>{s.symbol}</Typography>
@@ -308,7 +309,7 @@ export default function BacktestPage() {
                                         </TableRow>
                                     </TableHead>
                                     <TableBody>
-                                        {recentTrades.map((t: any, idx: number) => (
+                                        {recentTrades.map((t: BacktestTrade, idx: number) => (
                                             <TableRow key={idx} hover>
                                                 <TableCell><Typography fontWeight={600}>{t.symbol}</Typography></TableCell>
                                                 <TableCell>

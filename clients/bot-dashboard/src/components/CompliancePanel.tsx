@@ -298,7 +298,7 @@ export const CompliancePanel: React.FC = () => {
             </Card>
 
             {/* Backtest results summary if available */}
-            {backtest?.symbolResults?.length > 0 && (
+            {(backtest?.symbolResults?.length ?? 0) > 0 && (
                 <Card>
                     <CardContent>
                         <Typography variant="subtitle2" fontWeight={600} gutterBottom>
@@ -316,7 +316,7 @@ export const CompliancePanel: React.FC = () => {
                                     </TableRow>
                                 </TableHead>
                                 <TableBody>
-                                    {backtest.symbolResults.slice(0, 10).map((row: any) => (
+                                    {(backtest?.symbolResults ?? []).slice(0, 10).map((row) => (
                                         <TableRow key={row.symbol} hover>
                                             <TableCell>
                                                 <Typography variant="body2" fontWeight={600}>{row.symbol}</Typography>
@@ -325,7 +325,7 @@ export const CompliancePanel: React.FC = () => {
                                             <TableCell align="right">
                                                 <Typography
                                                     variant="body2"
-                                                    color={row.overallWinRate >= 0.5 ? 'success.main' : 'error.main'}
+                                                    color={(row.overallWinRate ?? 0) >= 0.5 ? 'success.main' : 'error.main'}
                                                 >
                                                     {row.overallWinRate != null ? `${(row.overallWinRate * 100).toFixed(1)}%` : '—'}
                                                 </Typography>

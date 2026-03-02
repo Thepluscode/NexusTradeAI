@@ -95,7 +95,7 @@ export interface RiskAlert {
   id: string;
   type: string;
   severity: 'info' | 'warning' | 'error' | 'critical';
-  details: Record<string, any>;
+  details: Record<string, unknown>;
   message?: string;
   timestamp: number;
 }
@@ -183,7 +183,7 @@ export interface AIChatResponse {
 
 export interface MarketDataStatus {
   connected: boolean;
-  providers: Record<string, any>;
+  providers: Record<string, unknown>;
   totalQuotes: number;
   dataQuality: string;
   avgLatency: number;
@@ -216,7 +216,7 @@ export interface Strategy {
 
 export interface StrategyConfig {
   strategyName: string;
-  parameters: Record<string, any>;
+  parameters: Record<string, unknown>;
   riskSettings: {
     maxPositionSize: number;
     stopLoss: number;
@@ -438,4 +438,101 @@ export interface RegisterRequest {
   email: string;
   password: string;
   name?: string;
+}
+
+// ============================================
+// Bot Config Types
+// ============================================
+
+export interface TierConfig {
+  stopLoss: number;
+  profitTarget: number;
+  positionSize: number;
+  maxPositions: number;
+}
+
+export interface BotConfig {
+  trading?: { mode?: string; maxTradesPerDay?: number; maxTradesPerSymbol?: number; minTimeBetweenTradesMins?: number };
+  risk?: { tier1?: TierConfig; tier2?: TierConfig; tier3?: TierConfig };
+  riskLimits?: { maxDailyLoss?: number; maxDrawdown?: number; maxTradesPerDay?: number };
+  brokers?: {
+    alpaca?: { configured: boolean };
+    oanda?: { configured: boolean; mode?: string };
+    crypto?: { configured: boolean; exchange?: string; testnet?: boolean };
+  };
+  notifications?: { telegram?: { enabled?: boolean }; sms?: { enabled?: boolean } };
+}
+
+// ============================================
+// Backtest Types
+// ============================================
+
+export interface BacktestSymbolResult {
+  symbol: string;
+  totalTrades: number;
+  overallWinRate?: number;
+  avgSharpe?: number;
+  avgDrawdown?: number;
+  profitFactor?: number;
+  avgReturn?: number;
+}
+
+export interface BacktestTrade {
+  symbol?: string;
+  type?: string;
+  entryDate?: string;
+  exitDate?: string;
+  returnPct?: number;
+  profit?: number;
+}
+
+export interface BacktestSummary {
+  totalTrades?: number;
+  winningTrades?: number;
+  losingTrades?: number;
+  overallWinRate?: number;
+  profitFactor?: number;
+  totalProfit?: number;
+  totalWinAmount?: number;
+  totalLossAmount?: number;
+  consecutiveLosses?: number;
+  maxConsecutiveLosses?: number;
+  avgDrawdown?: number;
+  symbolsTested?: number;
+}
+
+export interface BacktestConfig {
+  fastMA?: number;
+  slowMA?: number;
+  stopLossPct?: number;
+  profitTargetPct?: number;
+  positionSizePct?: number;
+  initialCapital?: number;
+}
+
+export interface BacktestReport {
+  type?: string;
+  timestamp?: string;
+  summary?: BacktestSummary;
+  validation?: { passed: boolean; checks: Record<string, boolean> };
+  config?: BacktestConfig;
+  symbolResults?: BacktestSymbolResult[];
+  trades?: BacktestTrade[];
+}
+
+// ============================================
+// Credentials Types
+// ============================================
+
+export interface SaveCredentialsPayload {
+  broker: string;
+  credentials: Record<string, string>;
+}
+
+export interface SaveCredentialsResult {
+  success: boolean;
+  updated: number;
+  reconnected?: boolean;
+  demoMode?: boolean;
+  warning?: string;
 }

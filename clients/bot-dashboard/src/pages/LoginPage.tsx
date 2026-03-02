@@ -39,8 +39,9 @@ export default function LoginPage() {
       localStorage.setItem('nexus_access_token', data.accessToken);
       localStorage.setItem('nexus_refresh_token', data.refreshToken);
       navigate('/');
-    } catch (err: any) {
-      setError(err?.response?.data?.error || 'Something went wrong. Try again.');
+    } catch (err: unknown) {
+      const errData = (err as { response?: { data?: { error?: string } } })?.response?.data;
+      setError(errData?.error || 'Something went wrong. Try again.');
     } finally {
       setLoading(false);
     }

@@ -53,21 +53,25 @@ export function useCryptoTrading() {
 
     const fetchStatus = useCallback(async () => {
         try {
-            const data = await apiClient.getCryptoStatus();
+            const raw = await apiClient.getCryptoStatus();
+            const data = raw as unknown as CryptoStatus;
             setStatus(data);
             // Crypto positions may be nested under data.positions or be a map
-            const rawPositions = data?.positions || [];
+            const rawPositions = (raw.positions as unknown[]) || [];
             const mapped: CryptoPosition[] = Array.isArray(rawPositions)
-                ? rawPositions.map((p: any) => ({
-                    symbol: p.symbol,
-                    side: p.side || (p.direction === 'short' ? 'short' : 'long'),
-                    quantity: p.quantity ?? p.qty ?? p.amount ?? 0,
-                    entryPrice: p.entryPrice ?? p.entry ?? 0,
-                    currentPrice: p.currentPrice ?? p.current_price ?? 0,
-                    unrealizedPnL: p.unrealizedPnL ?? p.unrealized_pl ?? p.pnl ?? 0,
-                    strategy: p.strategy || 'crypto-momentum',
-                    tier: p.tier,
-                }))
+                ? rawPositions.map((p) => {
+                    const pos = p as Record<string, unknown>;
+                    return ({
+                    symbol: pos['symbol'] as string,
+                    side: (pos['side'] || (pos['direction'] === 'short' ? 'short' : 'long')) as 'long' | 'short',
+                    quantity: (pos['quantity'] ?? pos['qty'] ?? pos['amount'] ?? 0) as number,
+                    entryPrice: (pos['entryPrice'] ?? pos['entry'] ?? 0) as number,
+                    currentPrice: (pos['currentPrice'] ?? pos['current_price'] ?? 0) as number,
+                    unrealizedPnL: (pos['unrealizedPnL'] ?? pos['unrealized_pl'] ?? pos['pnl'] ?? 0) as number,
+                    strategy: (pos['strategy'] || 'crypto-momentum') as string,
+                    tier: pos['tier'] as string | undefined,
+                } satisfies CryptoPosition);
+                })
                 : [];
             setPositions(mapped);
             setError(null);
