@@ -62,12 +62,20 @@ const authHeaders = API_SECRET ? { Authorization: `Bearer ${API_SECRET}` } : {};
 async function fetchConfig() {
     const res = await axios.get(`${API_BASE}/api/config`, { timeout: 5000 });
     const config = res.data.data;
-    // Merge crypto broker state from the crypto bot (stock bot doesn't know about it)
+    if (!config.brokers) config.brokers = {};
+    // Merge OANDA config from forex-bot (stock-bot doesn't know about it)
+    try {
+        const forexRes = await axios.get(`${SERVICE_URLS.forexBot}/api/config`, { timeout: 5000 });
+        const forexConfig = forexRes.data?.data;
+        if (forexConfig?.brokers?.oanda) {
+            config.brokers.oanda = forexConfig.brokers.oanda;
+        }
+    } catch { /* forex bot offline — leave oanda section unconfigured */ }
+    // Merge crypto config from crypto-bot (stock-bot doesn't know about it)
     try {
         const cryptoRes = await axios.get(`${SERVICE_URLS.cryptoBot}/api/config`, { timeout: 5000 });
         const cryptoConfig = cryptoRes.data?.data;
         if (cryptoConfig?.brokers?.crypto) {
-            if (!config.brokers) config.brokers = {};
             config.brokers.crypto = cryptoConfig.brokers.crypto;
         }
     } catch { /* crypto bot offline — leave crypto section unconfigured */ }

@@ -1296,6 +1296,21 @@ app.post('/test-telegram', async (req, res) => {
     }
 });
 
+// ── Config status (for Settings page) ───────────────────────────────────────
+app.get('/api/config', (req, res) => {
+    res.json({
+        success: true,
+        data: {
+            brokers: {
+                oanda: {
+                    configured: !!(process.env.OANDA_ACCOUNT_ID && process.env.OANDA_ACCESS_TOKEN),
+                    mode: process.env.OANDA_PRACTICE === 'false' ? 'live' : 'practice',
+                },
+            },
+        },
+    });
+});
+
 // ── Credentials management ──────────────────────────────────────────────────
 app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
     try {
