@@ -91,6 +91,36 @@ async function initDb() {
             )
         `);
         console.log('✅ Auth DB ready');
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS trades (
+                id SERIAL PRIMARY KEY,
+                bot VARCHAR(20) NOT NULL,
+                symbol VARCHAR(20) NOT NULL,
+                direction VARCHAR(10) NOT NULL,
+                tier VARCHAR(10),
+                status VARCHAR(10) NOT NULL DEFAULT 'open',
+                entry_price DECIMAL(20,8),
+                exit_price DECIMAL(20,8),
+                quantity DECIMAL(20,8),
+                position_size_usd DECIMAL(12,2),
+                pnl_usd DECIMAL(12,2),
+                pnl_pct DECIMAL(8,4),
+                stop_loss DECIMAL(20,8),
+                take_profit DECIMAL(20,8),
+                entry_time TIMESTAMPTZ,
+                exit_time TIMESTAMPTZ,
+                close_reason VARCHAR(100),
+                session VARCHAR(30),
+                rsi DECIMAL(6,2),
+                volume_ratio DECIMAL(6,2),
+                momentum_pct DECIMAL(8,4),
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_trades_bot ON trades(bot);
+            CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
+            CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time);
+        `);
+        console.log('✅ Trades table ready');
     } catch (e) {
         console.warn('⚠️  Auth DB init failed:', e.message);
         dbPool = null;
@@ -364,6 +394,35 @@ function recordTradeClose(symbol, entryPrice, exitPrice, shares, reason) {
     savePerfData();
 }
 
+// ===== DB TRADE HELPERS =====
+
+async function dbTradeOpen(symbol, entryPrice, shares, config, signal, tier) {
+    if (!dbPool) return null;
+    try {
+        const r = await dbPool.query(
+            `INSERT INTO trades (bot,symbol,direction,tier,status,entry_price,quantity,
+             position_size_usd,stop_loss,take_profit,entry_time,rsi,volume_ratio,momentum_pct)
+             VALUES ('stock',$1,'long',$2,'open',$3,$4,$5,$6,$7,NOW(),$8,$9,$10) RETURNING id`,
+            [symbol, tier, entryPrice, shares, shares * entryPrice,
+             config.stopLoss ? entryPrice * (1 - config.stopLoss) : null,
+             config.profitTarget ? entryPrice * (1 + config.profitTarget) : null,
+             signal.rsi || null, signal.volumeRatio || null, signal.percentChange || null]
+        );
+        return r.rows[0]?.id;
+    } catch (e) { console.warn('DB open failed:', e.message); return null; }
+}
+
+async function dbTradeClose(id, exitPrice, pnlUsd, pnlPct, reason) {
+    if (!dbPool || !id) return;
+    try {
+        await dbPool.query(
+            `UPDATE trades SET status='closed',exit_price=$1,pnl_usd=$2,pnl_pct=$3,
+             exit_time=NOW(),close_reason=$4 WHERE id=$5`,
+            [exitPrice, pnlUsd, pnlPct, reason, id]
+        );
+    } catch (e) { console.warn('DB close failed:', e.message); }
+}
+
 // ===== REGISTER DATA STRUCTURES WITH MEMORY MANAGER =====
 memoryManager.register('positions', positions, { maxSize: 100, maxAge: 7 * 24 * 60 * 60 * 1000 }); // 7 days
 memoryManager.register('recentTrades', recentTrades, { maxSize: 500, maxAge: 24 * 60 * 60 * 1000 }); // 1 day
@@ -431,10 +490,10 @@ const EXIT_CONFIG = {
 const MOMENTUM_CONFIG = {
     tier1: {
         threshold: 2.5,
-        minVolume: 500000,
-        volumeRatio: 1.5,
-        rsiMax: 65,  // v3.2: tightened from 70 — avoid overbought exhaustion
-        rsiMin: 40,  // v3.2: tightened from 30 — avoid oversold reversals
+        minVolume: 300000,
+        volumeRatio: 1.2,
+        rsiMax: 70,  // v3.3: relaxed from 65 — allow more entries
+        rsiMin: 35,  // v3.3: relaxed from 40 — allow more entries
         positionSize: 0.005,
         stopLoss: 0.04,
         profitTarget: 0.08,
@@ -442,10 +501,10 @@ const MOMENTUM_CONFIG = {
     },
     tier2: {
         threshold: 5.0,
-        minVolume: 750000,
-        volumeRatio: 2.0,
-        rsiMax: 65,  // v3.2: tightened from 70
-        rsiMin: 40,  // v3.2: tightened from 30
+        minVolume: 500000,
+        volumeRatio: 1.5,
+        rsiMax: 70,  // v3.3: relaxed from 65
+        rsiMin: 35,  // v3.3: relaxed from 40
         positionSize: 0.0075,
         stopLoss: 0.05,
         profitTarget: 0.10,
@@ -453,10 +512,10 @@ const MOMENTUM_CONFIG = {
     },
     tier3: {
         threshold: 10.0,
-        minVolume: 1000000,
-        volumeRatio: 2.5,
-        rsiMax: 65,
-        rsiMin: 40,  // v3.2: tightened from 35
+        minVolume: 750000,
+        volumeRatio: 2.0,
+        rsiMax: 72,  // v3.3: relaxed from 65
+        rsiMin: 35,  // v3.3: relaxed from 40
         positionSize: 0.01,
         stopLoss: 0.06,
         profitTarget: 0.15,
@@ -1128,14 +1187,14 @@ async function analyzeMomentum(symbol) {
 
         if (tierPositions >= config.maxPositions) return null;
 
-        // [v3.2] Strategy Bridge confirmation — ensemble signal from Python strategies
+        // [v3.3] Strategy Bridge advisory — only block if bridge explicitly signals SHORT with high confidence
         const bridgeResult = await queryStrategyBridge(symbol, bars, 'stock');
         if (bridgeResult !== null) {
-            if (!bridgeResult.should_enter || bridgeResult.direction !== 'long') {
-                console.log(`[Bridge] ${symbol} rejected — bridge says ${bridgeResult.direction} (conf: ${(bridgeResult.confidence || 0).toFixed(2)}): ${bridgeResult.reason || ''}`);
+            if (bridgeResult.direction === 'short' && bridgeResult.confidence > 0.7) {
+                console.log(`[Bridge] ${symbol} rejected — bridge explicit SHORT conf:${bridgeResult.confidence.toFixed(2)}`);
                 return null;
             }
-            console.log(`[Bridge] ${symbol} confirmed ✓ conf: ${(bridgeResult.confidence || 0).toFixed(2)}`);
+            console.log(`[Bridge] ${symbol} advisory: ${bridgeResult.direction} conf:${(bridgeResult.confidence || 0).toFixed(2)}`);
         }
 
         return {
@@ -1223,6 +1282,11 @@ async function executeTrade(signal, strategy) {
         });
         savePositions();
 
+        // Persist trade opening to DB (fire-and-forget)
+        dbTradeOpen(signal.symbol, signal.price, shares, config, signal, tier)
+            .then(id => { const p = positions.get(signal.symbol); if (p) p.dbTradeId = id; })
+            .catch(() => {});
+
         const tradeRecord = {
             time: Date.now(),
             side: 'buy',
@@ -1293,6 +1357,9 @@ async function closePosition(symbol, qty, reason = 'Manual') {
         // Record performance data (fix: now tracks wins/losses)
         if (position && currentPrice) {
             recordTradeClose(symbol, position.entry, currentPrice, parseFloat(qty), reason);
+            const pnlUsd = (currentPrice - position.entry) * parseFloat(qty);
+            const pnlPct = ((currentPrice - position.entry) / position.entry) * 100;
+            dbTradeClose(position?.dbTradeId, currentPrice, pnlUsd, pnlPct, reason).catch(() => {});
         }
 
         console.log(`✅ Position closed: ${symbol} (${reason})`);
@@ -2041,6 +2108,19 @@ async function tradingLoop() {
 
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 }
+
+app.get('/api/trades', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not configured', trades: [] });
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+        const bot = req.query.bot;
+        const q = bot
+            ? 'SELECT * FROM trades WHERE bot=$1 ORDER BY created_at DESC LIMIT $2'
+            : 'SELECT * FROM trades ORDER BY created_at DESC LIMIT $1';
+        const r = await dbPool.query(q, bot ? [bot, limit] : [limit]);
+        res.json({ success: true, trades: r.rows, count: r.rows.length });
+    } catch (e) { res.status(500).json({ success: false, error: e.message, trades: [] }); }
+});
 
 app.listen(PORT, async () => {
     console.log('\n╔════════════════════════════════════════════════════════════╗');

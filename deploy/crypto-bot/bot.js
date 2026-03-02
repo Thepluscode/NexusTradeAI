@@ -2,6 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 // Telegram alerts
@@ -15,6 +17,60 @@ const smsAlerts = getSMSAlertService();
 // Prometheus metrics
 const promClient = require('prom-client');
 const register = promClient.register; // Use default register
+
+// ── PostgreSQL trade persistence (optional — requires DATABASE_URL) ──────────
+const { Pool: PgPool } = require('pg');
+let dbPool = null;
+
+async function initTradeDb() {
+    if (!process.env.DATABASE_URL) {
+        console.log('⚠️  DATABASE_URL not set — auth + trade persistence disabled');
+        return;
+    }
+    try {
+        dbPool = new PgPool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                name VARCHAR(100),
+                role VARCHAR(20) DEFAULT 'user',
+                refresh_token TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                last_login TIMESTAMPTZ
+            )
+        `);
+        console.log('✅ Crypto bot: Auth DB ready');
+    } catch (e) {
+        console.warn('⚠️  Crypto DB init failed:', e.message);
+        dbPool = null;
+    }
+}
+
+async function dbCryptoOpen(symbol, tier, entry, stopLoss, takeProfit, quantity, positionSize) {
+    if (!dbPool) return null;
+    try {
+        const r = await dbPool.query(
+            `INSERT INTO trades (bot,symbol,direction,tier,status,entry_price,quantity,
+             position_size_usd,stop_loss,take_profit,entry_time)
+             VALUES ('crypto',$1,'long',$2,'open',$3,$4,$5,$6,$7,NOW()) RETURNING id`,
+            [symbol, tier, entry, quantity, positionSize, stopLoss, takeProfit]
+        );
+        return r.rows[0]?.id;
+    } catch (e) { console.warn('DB crypto open failed:', e.message); return null; }
+}
+
+async function dbCryptoClose(id, exitPrice, pnlUsd, pnlPct, reason) {
+    if (!dbPool || !id) return;
+    try {
+        await dbPool.query(
+            `UPDATE trades SET status='closed',exit_price=$1,pnl_usd=$2,pnl_pct=$3,
+             exit_time=NOW(),close_reason=$4 WHERE id=$5`,
+            [exitPrice, pnlUsd, pnlPct, reason, id]
+        );
+    } catch (e) { console.warn('DB crypto close failed:', e.message); }
+}
 
 /**
  * UNIFIED CRYPTO TRADING BOT
@@ -677,6 +733,11 @@ class CryptoTradingEngine {
 
             this.positions.set(signal.symbol, position);
 
+            // Persist trade opening to DB (fire-and-forget)
+            dbCryptoOpen(signal.symbol, signal.tier, signal.price, signal.stopLoss, signal.takeProfit, quantity, positionSizeUSD)
+                .then(id => { const p = this.positions.get(signal.symbol); if (p) p.dbTradeId = id; })
+                .catch(() => {});
+
             // Update tracking
             this.dailyTradeCount++;
             this.totalTrades++;
@@ -803,6 +864,9 @@ class CryptoTradingEngine {
 
             console.log(`✅ Position closed: ${symbol} - ${reason}`);
             console.log(`   P/L: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}% ($${pnlUSD.toFixed(2)})`);
+
+            // Persist close to DB (fire-and-forget)
+            dbCryptoClose(position.dbTradeId, price, pnlUSD, pnlPercent, reason).catch(() => {});
 
             // Remove position
             this.positions.delete(symbol);
@@ -947,6 +1011,7 @@ class CryptoTradingEngine {
             if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
             fs.writeFileSync(this.stateFile, JSON.stringify({
                 running: this.isRunning,
+                demoMode: this.demoMode,
                 totalTrades: this.totalTrades,
                 winningTrades: this.winningTrades,
                 losingTrades: this.losingTrades,
@@ -974,6 +1039,8 @@ class CryptoTradingEngine {
                 if (saved.losingTrades != null) this.losingTrades = saved.losingTrades;
                 if (saved.totalProfit != null) this.totalProfit = saved.totalProfit;
                 if (saved.totalLoss != null) this.totalLoss = saved.totalLoss;
+                // Restore demoMode so a prior credential save survives restart
+                if (saved.demoMode != null) this.demoMode = saved.demoMode;
                 // Restore daily counters only if saved on the same UTC day
                 if (saved.savedDate) {
                     const savedDay = new Date(saved.savedDate).toISOString().slice(0, 10);
@@ -1106,6 +1173,115 @@ async function persistEnvVar(name, value) {
         console.warn(`⚠️  Railway env var persist failed for ${name}: ${e.message}`);
     }
 }
+
+// ── JWT Auth Helpers ─────────────────────────────────────────────────────────
+function signTokens(userId, email) {
+    const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+    const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret-change-me';
+    const accessToken = jwt.sign({ sub: userId, email }, JWT_SECRET, { expiresIn: '24h' });
+    const refreshToken = jwt.sign({ sub: userId, email }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+    return { accessToken, refreshToken };
+}
+
+function requireJwt(req, res, next) {
+    const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+    const auth = req.headers.authorization || '';
+    if (!auth.startsWith('Bearer ')) return res.status(401).json({ success: false, error: 'Missing token' });
+    try {
+        req.user = jwt.verify(auth.slice(7), JWT_SECRET);
+        next();
+    } catch {
+        return res.status(401).json({ success: false, error: 'Invalid or expired token' });
+    }
+}
+
+// ── Auth Endpoints ────────────────────────────────────────────────────────────
+
+app.post('/api/auth/register', async (req, res) => {
+    if (!dbPool) return res.status(503).json({ success: false, error: 'Auth service unavailable' });
+    const { email, password, name } = req.body || {};
+    if (!email || !password) return res.status(400).json({ success: false, error: 'Email and password required' });
+    if (password.length < 8) return res.status(400).json({ success: false, error: 'Password must be at least 8 characters' });
+    try {
+        const hash = await bcrypt.hash(password, 12);
+        const result = await dbPool.query(
+            'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id, email, name, role',
+            [email.toLowerCase().trim(), hash, name || null]
+        );
+        const user = result.rows[0];
+        const tokens = signTokens(user.id, user.email);
+        await dbPool.query('UPDATE users SET refresh_token=$1, last_login=NOW() WHERE id=$2', [tokens.refreshToken, user.id]);
+        res.json({ success: true, user: { id: user.id, email: user.email, name: user.name, role: user.role }, ...tokens });
+    } catch (e) {
+        if (e.code === '23505') return res.status(409).json({ success: false, error: 'Email already registered' });
+        console.error('Register error:', e.message);
+        res.status(500).json({ success: false, error: 'Registration failed' });
+    }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+    if (!dbPool) return res.status(503).json({ success: false, error: 'Auth service unavailable' });
+    const { email, password } = req.body || {};
+    if (!email || !password) return res.status(400).json({ success: false, error: 'Email and password required' });
+    try {
+        const result = await dbPool.query('SELECT * FROM users WHERE email=$1', [email.toLowerCase().trim()]);
+        const user = result.rows[0];
+        if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+            return res.status(401).json({ success: false, error: 'Invalid email or password' });
+        }
+        const tokens = signTokens(user.id, user.email);
+        await dbPool.query('UPDATE users SET refresh_token=$1, last_login=NOW() WHERE id=$2', [tokens.refreshToken, user.id]);
+        res.json({ success: true, user: { id: user.id, email: user.email, name: user.name, role: user.role }, ...tokens });
+    } catch (e) {
+        console.error('Login error:', e.message);
+        res.status(500).json({ success: false, error: 'Login failed' });
+    }
+});
+
+app.post('/api/auth/refresh', async (req, res) => {
+    if (!dbPool) return res.status(503).json({ success: false, error: 'Auth service unavailable' });
+    const { refreshToken } = req.body || {};
+    if (!refreshToken) return res.status(400).json({ success: false, error: 'Refresh token required' });
+    const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret-change-me';
+    try {
+        const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
+        const result = await dbPool.query('SELECT * FROM users WHERE id=$1 AND refresh_token=$2', [payload.sub, refreshToken]);
+        if (!result.rows[0]) return res.status(401).json({ success: false, error: 'Invalid refresh token' });
+        const user = result.rows[0];
+        const tokens = signTokens(user.id, user.email);
+        await dbPool.query('UPDATE users SET refresh_token=$1 WHERE id=$2', [tokens.refreshToken, user.id]);
+        res.json({ success: true, ...tokens });
+    } catch {
+        res.status(401).json({ success: false, error: 'Invalid or expired refresh token' });
+    }
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+    if (dbPool) {
+        const { refreshToken } = req.body || {};
+        if (refreshToken) {
+            const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret-change-me';
+            try {
+                const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
+                await dbPool.query('UPDATE users SET refresh_token=NULL WHERE id=$1', [payload.sub]);
+            } catch {}
+        }
+    }
+    res.json({ success: true });
+});
+
+app.get('/api/auth/me', requireJwt, async (req, res) => {
+    if (!dbPool) return res.status(503).json({ success: false, error: 'Auth service unavailable' });
+    try {
+        const result = await dbPool.query('SELECT id, email, name, role FROM users WHERE id=$1', [req.user.sub]);
+        if (!result.rows[0]) return res.status(404).json({ success: false, error: 'User not found' });
+        res.json({ success: true, user: result.rows[0] });
+    } catch (e) {
+        res.status(500).json({ success: false, error: 'Failed to fetch user' });
+    }
+});
+
+// ── End Auth Endpoints ────────────────────────────────────────────────────────
 
 const engine = new CryptoTradingEngine(CRYPTO_CONFIG);
 
@@ -1293,16 +1469,24 @@ app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
                 apiKey: process.env.CRYPTO_API_KEY,
                 apiSecret: process.env.CRYPTO_API_SECRET,
             });
-            // If currently in demo mode due to missing keys, attempt reconnect
             if (engine.demoMode) {
-                const account = await engine.kraken.getAccountInfo();
-                if (account) {
-                    engine.demoMode = false;
-                    console.log('✅ Kraken reconnected after credential update — exiting DEMO MODE');
+                try {
+                    const account = await engine.kraken.getAccountInfo();
+                    if (account) {
+                        engine.demoMode = false;
+                        engine.saveState();
+                        console.log('✅ Kraken reconnected after credential update — exiting DEMO MODE');
+                        return res.json({ success: true, updated, reconnected: true, demoMode: false });
+                    }
+                    return res.json({ success: true, updated, reconnected: false, demoMode: true,
+                        warning: 'Keys saved but Kraken rejected them — check permissions/IP whitelist' });
+                } catch (reconnectErr) {
+                    return res.json({ success: true, updated, reconnected: false, demoMode: true,
+                        warning: reconnectErr.message });
                 }
             }
         }
-        res.json({ success: true, updated });
+        res.json({ success: true, updated, reconnected: false, demoMode: engine.demoMode || false });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -1343,6 +1527,9 @@ app.listen(PORT, () => {
     console.log(`\n💎 Crypto pairs: ${CRYPTO_CONFIG.symbols.join(', ')}`);
     console.log(`📈 BTC correlation: Altcoins only trade when BTC is bullish`);
     console.log(`⚠️  ${CRYPTO_CONFIG.exchange.testnet ? 'Using TESTNET - Safe to experiment!' : 'LIVE TRADING - Real money at risk!'}`);
+
+    // Connect DB for trade persistence (non-blocking)
+    initTradeDb().catch(e => console.warn('⚠️  Crypto DB init error:', e.message));
 
     // Auto-start only if previously running (persistent state)
     if (engine.loadState()) {

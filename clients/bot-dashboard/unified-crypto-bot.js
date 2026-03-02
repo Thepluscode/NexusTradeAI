@@ -2,6 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 // Telegram alerts
@@ -21,11 +23,25 @@ const { Pool: PgPool } = require('pg');
 let dbPool = null;
 
 async function initTradeDb() {
-    if (!process.env.DATABASE_URL) return;
+    if (!process.env.DATABASE_URL) {
+        console.log('⚠️  DATABASE_URL not set — auth + trade persistence disabled');
+        return;
+    }
     try {
         dbPool = new PgPool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
-        await dbPool.query('SELECT 1');
-        console.log('✅ Crypto bot: DB connected for trade persistence');
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                name VARCHAR(100),
+                role VARCHAR(20) DEFAULT 'user',
+                refresh_token TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                last_login TIMESTAMPTZ
+            )
+        `);
+        console.log('✅ Crypto bot: Auth DB ready');
     } catch (e) {
         console.warn('⚠️  Crypto DB init failed:', e.message);
         dbPool = null;
@@ -1157,6 +1173,115 @@ async function persistEnvVar(name, value) {
         console.warn(`⚠️  Railway env var persist failed for ${name}: ${e.message}`);
     }
 }
+
+// ── JWT Auth Helpers ─────────────────────────────────────────────────────────
+function signTokens(userId, email) {
+    const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+    const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret-change-me';
+    const accessToken = jwt.sign({ sub: userId, email }, JWT_SECRET, { expiresIn: '24h' });
+    const refreshToken = jwt.sign({ sub: userId, email }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+    return { accessToken, refreshToken };
+}
+
+function requireJwt(req, res, next) {
+    const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+    const auth = req.headers.authorization || '';
+    if (!auth.startsWith('Bearer ')) return res.status(401).json({ success: false, error: 'Missing token' });
+    try {
+        req.user = jwt.verify(auth.slice(7), JWT_SECRET);
+        next();
+    } catch {
+        return res.status(401).json({ success: false, error: 'Invalid or expired token' });
+    }
+}
+
+// ── Auth Endpoints ────────────────────────────────────────────────────────────
+
+app.post('/api/auth/register', async (req, res) => {
+    if (!dbPool) return res.status(503).json({ success: false, error: 'Auth service unavailable' });
+    const { email, password, name } = req.body || {};
+    if (!email || !password) return res.status(400).json({ success: false, error: 'Email and password required' });
+    if (password.length < 8) return res.status(400).json({ success: false, error: 'Password must be at least 8 characters' });
+    try {
+        const hash = await bcrypt.hash(password, 12);
+        const result = await dbPool.query(
+            'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id, email, name, role',
+            [email.toLowerCase().trim(), hash, name || null]
+        );
+        const user = result.rows[0];
+        const tokens = signTokens(user.id, user.email);
+        await dbPool.query('UPDATE users SET refresh_token=$1, last_login=NOW() WHERE id=$2', [tokens.refreshToken, user.id]);
+        res.json({ success: true, user: { id: user.id, email: user.email, name: user.name, role: user.role }, ...tokens });
+    } catch (e) {
+        if (e.code === '23505') return res.status(409).json({ success: false, error: 'Email already registered' });
+        console.error('Register error:', e.message);
+        res.status(500).json({ success: false, error: 'Registration failed' });
+    }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+    if (!dbPool) return res.status(503).json({ success: false, error: 'Auth service unavailable' });
+    const { email, password } = req.body || {};
+    if (!email || !password) return res.status(400).json({ success: false, error: 'Email and password required' });
+    try {
+        const result = await dbPool.query('SELECT * FROM users WHERE email=$1', [email.toLowerCase().trim()]);
+        const user = result.rows[0];
+        if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+            return res.status(401).json({ success: false, error: 'Invalid email or password' });
+        }
+        const tokens = signTokens(user.id, user.email);
+        await dbPool.query('UPDATE users SET refresh_token=$1, last_login=NOW() WHERE id=$2', [tokens.refreshToken, user.id]);
+        res.json({ success: true, user: { id: user.id, email: user.email, name: user.name, role: user.role }, ...tokens });
+    } catch (e) {
+        console.error('Login error:', e.message);
+        res.status(500).json({ success: false, error: 'Login failed' });
+    }
+});
+
+app.post('/api/auth/refresh', async (req, res) => {
+    if (!dbPool) return res.status(503).json({ success: false, error: 'Auth service unavailable' });
+    const { refreshToken } = req.body || {};
+    if (!refreshToken) return res.status(400).json({ success: false, error: 'Refresh token required' });
+    const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret-change-me';
+    try {
+        const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
+        const result = await dbPool.query('SELECT * FROM users WHERE id=$1 AND refresh_token=$2', [payload.sub, refreshToken]);
+        if (!result.rows[0]) return res.status(401).json({ success: false, error: 'Invalid refresh token' });
+        const user = result.rows[0];
+        const tokens = signTokens(user.id, user.email);
+        await dbPool.query('UPDATE users SET refresh_token=$1 WHERE id=$2', [tokens.refreshToken, user.id]);
+        res.json({ success: true, ...tokens });
+    } catch {
+        res.status(401).json({ success: false, error: 'Invalid or expired refresh token' });
+    }
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+    if (dbPool) {
+        const { refreshToken } = req.body || {};
+        if (refreshToken) {
+            const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret-change-me';
+            try {
+                const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
+                await dbPool.query('UPDATE users SET refresh_token=NULL WHERE id=$1', [payload.sub]);
+            } catch {}
+        }
+    }
+    res.json({ success: true });
+});
+
+app.get('/api/auth/me', requireJwt, async (req, res) => {
+    if (!dbPool) return res.status(503).json({ success: false, error: 'Auth service unavailable' });
+    try {
+        const result = await dbPool.query('SELECT id, email, name, role FROM users WHERE id=$1', [req.user.sub]);
+        if (!result.rows[0]) return res.status(404).json({ success: false, error: 'User not found' });
+        res.json({ success: true, user: result.rows[0] });
+    } catch (e) {
+        res.status(500).json({ success: false, error: 'Failed to fetch user' });
+    }
+});
+
+// ── End Auth Endpoints ────────────────────────────────────────────────────────
 
 const engine = new CryptoTradingEngine(CRYPTO_CONFIG);
 
