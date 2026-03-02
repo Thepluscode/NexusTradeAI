@@ -93,7 +93,7 @@ export default function BacktestPage() {
     const isLive = report.type === 'live';
     const { summary = {}, validation, symbolResults = [], trades = [] } = report;
     const recentTrades = trades.slice(-20);
-    const noTradesYet = isLive && (summary.totalTrades ?? 0) === 0;
+    const noTradesYet = (summary.totalTrades ?? 0) === 0;
 
     return (
         <Box sx={{ p: { xs: 1.5, sm: 2 } }}>
@@ -116,9 +116,7 @@ export default function BacktestPage() {
                 </Box>
                 {!noTradesYet && validation && (
                     <Chip
-                        label={validation.passed
-                            ? `PASSING (${validation.passedChecks}/${validation.totalChecks})`
-                            : `NEEDS WORK (${validation.passedChecks}/${validation.totalChecks})`}
+                        label={validation.passed ? 'PASSING' : 'NEEDS WORK'}
                         color={validation.passed ? 'success' : 'warning'}
                         sx={{ ml: { xs: 0, sm: 'auto' }, fontWeight: 700 }}
                     />
@@ -181,8 +179,8 @@ export default function BacktestPage() {
             </Box>
 
             <Grid container spacing={3}>
-                {/* Validation checklist */}
-                {validation?.checks && (
+                {/* Validation checklist — only show when there are real trades */}
+                {!noTradesYet && validation?.checks && (
                     <Grid item xs={12} md={4}>
                         <Paper sx={{ p: 3, height: '100%' }}>
                             <Typography variant="h6" fontWeight={600} sx={{ mb: 1 }}>
@@ -195,7 +193,7 @@ export default function BacktestPage() {
                 )}
 
                 {/* Config / Stats summary */}
-                <Grid item xs={12} md={validation?.checks ? 8 : 12}>
+                <Grid item xs={12} md={(!noTradesYet && validation?.checks) ? 8 : 12}>
                     <Paper sx={{ p: 3, height: '100%' }}>
                         <Typography variant="h6" fontWeight={600} sx={{ mb: 1 }}>
                             {isLive ? 'Performance Breakdown' : 'Backtest Configuration'}
@@ -228,7 +226,7 @@ export default function BacktestPage() {
                     </Paper>
                 </Grid>
 
-                {/* Per-symbol results table (backtest mode only) */}
+                {/* Per-symbol results table (backtest mode only, only when populated) */}
                 {!isLive && symbolResults.length > 0 && (
                     <Grid item xs={12}>
                         <Paper sx={{ p: 2 }}>
