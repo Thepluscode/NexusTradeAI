@@ -39,11 +39,13 @@ async function initTradeDb() {
 async function dbForexOpen(pair, direction, tier, entry, stopLoss, takeProfit, units, session) {
     if (!dbPool) return null;
     try {
+        const absUnits = Math.abs(units);
+        const positionSizeUsd = entry > 0 ? parseFloat((absUnits * entry).toFixed(2)) : null;
         const r = await dbPool.query(
             `INSERT INTO trades (bot,symbol,direction,tier,status,entry_price,quantity,
-             stop_loss,take_profit,entry_time,session)
-             VALUES ('forex',$1,$2,$3,'open',$4,$5,$6,$7,NOW(),$8) RETURNING id`,
-            [pair, direction, tier, entry, Math.abs(units), stopLoss, takeProfit, session || null]
+             position_size_usd,stop_loss,take_profit,entry_time,session)
+             VALUES ('forex',$1,$2,$3,'open',$4,$5,$6,$7,$8,NOW(),$9) RETURNING id`,
+            [pair, direction, tier, entry, absUnits, positionSizeUsd, stopLoss, takeProfit, session || null]
         );
         return r.rows[0]?.id;
     } catch (e) { console.warn('DB forex open failed:', e.message); return null; }
@@ -714,8 +716,17 @@ async function getH1Trend(pair) {
     }
 }
 
-// ===== STRATEGY BRIDGE (port 3010) =====
+// ===== STRATEGY BRIDGE =====
 // Non-blocking ensemble confirmation — if bridge is offline, local signals are used as-is
+
+const BRIDGE_URL = (() => {
+    const raw = process.env.STRATEGY_BRIDGE_URL
+        || process.env.RAILWAY_SERVICE_NEXUS_STRATEGY_BRIDGE_URL
+        || 'localhost:3010';
+    if (raw.startsWith('http')) return raw;
+    if (raw.includes('railway.app')) return `https://${raw}`;
+    return `http://${raw}`;
+})();
 
 async function queryStrategyBridge(pair, _direction) {
     try {
@@ -729,9 +740,9 @@ async function queryStrategyBridge(pair, _direction) {
             close:  parseFloat(c.mid.c) || 0,
             volume: parseFloat(c.volume) || 0
         }));
-        const response = await axios.post('http://localhost:3010/signal',
+        const response = await axios.post(`${BRIDGE_URL}/signal`,
             { symbol: pair, prices, asset_class: 'forex' },
-            { timeout: 3000 }
+            { timeout: 5000 }
         );
         return response.data;
     } catch (e) {
@@ -1529,6 +1540,38 @@ app.listen(PORT, async () => {
 
     // Connect DB for trade persistence (non-blocking)
     initTradeDb().catch(e => console.warn('⚠️  Forex DB init error:', e.message));
+
+    // Re-hydrate positions map from OANDA on startup (prevents duplicate entries after redeploy)
+    try {
+        const openPos = await getOpenPositions();
+        for (const p of openPos) {
+            const instrument = p.instrument;
+            const longUnits = parseInt(p.long?.units || '0');
+            const shortUnits = parseInt(p.short?.units || '0');
+            if (longUnits > 0) {
+                const avgPrice = parseFloat(p.long.averagePrice || '0');
+                positions.set(instrument, {
+                    instrument, direction: 'long', tier: 'tier1',
+                    entry: avgPrice, stopLoss: avgPrice * 0.985, takeProfit: avgPrice * 1.03,
+                    units: longUnits, entryTime: new Date(), session: 'restored'
+                });
+                tradesPerPair.set(instrument, MAX_TRADES_PER_PAIR); // block further entries
+                console.log(`🔄 Restored position: ${instrument} LONG ${longUnits} units @ ${avgPrice}`);
+            } else if (shortUnits < 0) {
+                const avgPrice = parseFloat(p.short.averagePrice || '0');
+                positions.set(instrument, {
+                    instrument, direction: 'short', tier: 'tier1',
+                    entry: avgPrice, stopLoss: avgPrice * 1.015, takeProfit: avgPrice * 0.97,
+                    units: shortUnits, entryTime: new Date(), session: 'restored'
+                });
+                tradesPerPair.set(instrument, MAX_TRADES_PER_PAIR);
+                console.log(`🔄 Restored position: ${instrument} SHORT ${Math.abs(shortUnits)} units @ ${avgPrice}`);
+            }
+        }
+        if (openPos.length > 0) console.log(`✅ Hydrated ${positions.size} position(s) from OANDA`);
+    } catch (e) {
+        console.warn('⚠️  Position hydration failed (will proceed):', e.message);
+    }
 
     // Initial scan
     setTimeout(() => tradingLoop().catch(e => console.error('❌ Forex loop crashed:', e)), 5000);

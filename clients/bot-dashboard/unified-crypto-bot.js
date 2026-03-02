@@ -413,7 +413,7 @@ class CryptoTradingEngine {
     }
 
     // ========================================================================
-    // STRATEGY BRIDGE (port 3010)
+    // STRATEGY BRIDGE
     // ========================================================================
 
     // Non-blocking ensemble confirmation from Python strategy bridge.
@@ -421,13 +421,21 @@ class CryptoTradingEngine {
     async queryStrategyBridge(symbol, prices) {
         try {
             if (!prices || prices.length < 30) return null;
+            const bridgeUrl = (() => {
+                const raw = process.env.STRATEGY_BRIDGE_URL
+                    || process.env.RAILWAY_SERVICE_NEXUS_STRATEGY_BRIDGE_URL
+                    || 'localhost:3010';
+                if (raw.startsWith('http')) return raw;
+                if (raw.includes('railway.app')) return `https://${raw}`;
+                return `http://${raw}`;
+            })();
             const priceData = prices.map((close, i) => ({
                 timestamp: new Date(Date.now() - (prices.length - 1 - i) * 5 * 60000).toISOString(),
                 open: close, high: close, low: close, close, volume: 0
             }));
-            const response = await axios.post('http://localhost:3010/signal',
+            const response = await axios.post(`${bridgeUrl}/signal`,
                 { symbol, prices: priceData, asset_class: 'crypto' },
-                { timeout: 3000 }
+                { timeout: 5000 }
             );
             return response.data;
         } catch (e) {

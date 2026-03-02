@@ -700,8 +700,19 @@ function calculateVWAP(bars) {
     }
 }
 
-// ===== STRATEGY BRIDGE (port 3010) =====
+// ===== STRATEGY BRIDGE =====
 // Non-blocking ensemble confirmation — if bridge is offline, local signals are used as-is
+
+// Resolve bridge URL: Railway injects RAILWAY_SERVICE_NEXUS_STRATEGY_BRIDGE_URL automatically
+const BRIDGE_URL = (() => {
+    const raw = process.env.STRATEGY_BRIDGE_URL
+        || process.env.RAILWAY_SERVICE_NEXUS_STRATEGY_BRIDGE_URL
+        || 'localhost:3010';
+    // Ensure https:// prefix for Railway URLs
+    if (raw.startsWith('http')) return raw;
+    if (raw.includes('railway.app')) return `https://${raw}`;
+    return `http://${raw}`;
+})();
 
 async function queryStrategyBridge(symbol, bars, assetClass = 'stock') {
     try {
@@ -714,9 +725,9 @@ async function queryStrategyBridge(symbol, bars, assetClass = 'stock') {
             close: parseFloat(b.c) || 0,
             volume: parseFloat(b.v) || 0
         }));
-        const response = await axios.post('http://localhost:3010/signal',
+        const response = await axios.post(`${BRIDGE_URL}/signal`,
             { symbol, prices, asset_class: assetClass },
-            { timeout: 3000 }
+            { timeout: 5000 }
         );
         return response.data; // { should_enter, direction, confidence, reason, strategies }
     } catch (e) {
@@ -2167,7 +2178,7 @@ app.post('/api/backtest/run', async (req, res) => {
     const started = Date.now();
     try {
         const results = [];
-        const symbols = MOMENTUM_SYMBOLS.slice(0, 50); // cap at 50 to avoid rate limits
+        const symbols = popularStocks.getAllSymbols().slice(0, 50); // cap at 50 to avoid rate limits
         for (const symbol of symbols) {
             try {
                 const signal = await analyzeMomentum(symbol);
@@ -2187,6 +2198,35 @@ app.post('/api/backtest/run', async (req, res) => {
     }
 });
 
+// Pre-seed strategy bridge _price_cache for all KNOWN_PAIRS symbols
+// so pairs trading activates immediately rather than waiting for organic scan coverage
+const KNOWN_PAIRS_SYMBOLS = ['XOM','CVX','JPM','BAC','AAPL','MSFT','KO','PEP','HD','LOW','V','MA'];
+app.post('/api/bridge/warmup', async (req, res) => {
+    const results = { seeded: [], failed: [], bridgeUrl: BRIDGE_URL };
+    for (const symbol of KNOWN_PAIRS_SYMBOLS) {
+        try {
+            const barUrl = `${alpacaConfig.dataURL}/v2/stocks/${symbol}/bars`;
+            const barResp = await axios.get(barUrl, {
+                headers: { 'APCA-API-KEY-ID': alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': alpacaConfig.secretKey },
+                params: { timeframe: '1Day', limit: 100, feed: 'sip' }
+            });
+            const bars = barResp.data?.bars || [];
+            if (bars.length < 30) { results.failed.push(`${symbol}: only ${bars.length} bars`); continue; }
+            const prices = bars.map(b => ({
+                timestamp: b.t, open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v
+            }));
+            await axios.post(`${BRIDGE_URL}/signal`,
+                { symbol, prices, asset_class: 'stock' },
+                { timeout: 8000 }
+            );
+            results.seeded.push(symbol);
+        } catch (e) {
+            results.failed.push(`${symbol}: ${e.message}`);
+        }
+    }
+    res.json({ success: true, ...results });
+});
+
 app.listen(PORT, async () => {
     console.log('\n╔════════════════════════════════════════════════════════════╗');
     console.log('║     🚀 IMPROVED UNIFIED TRADING BOT - STARTED             ║');
@@ -2201,6 +2241,14 @@ app.listen(PORT, async () => {
     console.log('╚════════════════════════════════════════════════════════════╝\n');
 
     initDb().catch(e => console.warn('Auth DB init error:', e.message));
+
+    // Pre-seed strategy bridge pairs cache 30s after startup (non-blocking)
+    setTimeout(() => {
+        axios.post(`http://localhost:${PORT}/api/bridge/warmup`, {}, { timeout: 120000 })
+            .then(r => console.log(`✅ Bridge warm-up: seeded ${r.data?.seeded?.length ?? 0} symbols, failed ${r.data?.failed?.length ?? 0}`))
+            .catch(e => console.warn('⚠️  Bridge warm-up failed:', e.message));
+    }, 30000);
+
     await tradingLoop();
     setInterval(() => tradingLoop().catch(e => console.error('❌ Stock loop crashed:', e)), 60000);
 });

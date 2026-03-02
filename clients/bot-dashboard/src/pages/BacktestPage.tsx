@@ -31,6 +31,7 @@ import {
     TrendingDown,
     ShowChart,
     PlayArrow,
+    Bolt,
 } from '@mui/icons-material';
 import { apiClient } from '@/services/api';
 import { MetricCard } from '@/components/MetricCard';
@@ -82,6 +83,9 @@ export default function BacktestPage() {
     const [scanResult, setScanResult] = useState<BacktestScanResult | null>(null);
     const [scanError, setScanError] = useState<string | null>(null);
 
+    const [warming, setWarming] = useState(false);
+    const [warmResult, setWarmResult] = useState<{ seeded: string[]; failed: string[] } | null>(null);
+
     const runScan = async () => {
         setScanning(true);
         setScanError(null);
@@ -94,6 +98,19 @@ export default function BacktestPage() {
             setScanError('Could not reach the stock bot');
         } finally {
             setScanning(false);
+        }
+    };
+
+    const warmupPairs = async () => {
+        setWarming(true);
+        setWarmResult(null);
+        try {
+            const result = await apiClient.warmupBridge();
+            setWarmResult(result ?? { seeded: [], failed: ['No response'] });
+        } catch {
+            setWarmResult({ seeded: [], failed: ['Could not reach stock bot'] });
+        } finally {
+            setWarming(false);
         }
     };
 
@@ -147,6 +164,16 @@ export default function BacktestPage() {
                             sx={{ fontWeight: 700 }}
                         />
                     )}
+                    <Button
+                        variant="outlined"
+                        startIcon={warming ? <CircularProgress size={16} color="inherit" /> : <Bolt />}
+                        onClick={warmupPairs}
+                        disabled={warming}
+                        size="small"
+                        title="Fetch 100-day price history for XOM/CVX/JPM/BAC/etc. and send to strategy bridge to activate pairs trading"
+                    >
+                        {warming ? 'Seeding…' : 'Warm Pairs Cache'}
+                    </Button>
                     <Button
                         variant="contained"
                         startIcon={scanning ? <CircularProgress size={16} color="inherit" /> : <PlayArrow />}
@@ -213,6 +240,21 @@ export default function BacktestPage() {
                     icon={<TrendingDown />}
                 />
             </Box>
+
+            {/* Pairs cache warm-up result */}
+            {warmResult && (
+                <Alert
+                    severity={warmResult.failed.length === 0 ? 'success' : warmResult.seeded.length > 0 ? 'warning' : 'error'}
+                    sx={{ mb: 2 }}
+                    onClose={() => setWarmResult(null)}
+                >
+                    {warmResult.seeded.length > 0
+                        ? `Pairs cache seeded: ${warmResult.seeded.join(', ')}`
+                        : 'No symbols seeded'
+                    }
+                    {warmResult.failed.length > 0 && ` · Failed: ${warmResult.failed.join(', ')}`}
+                </Alert>
+            )}
 
             {/* Live signal scan progress + results */}
             {scanning && <LinearProgress sx={{ mb: 2, borderRadius: 1 }} />}

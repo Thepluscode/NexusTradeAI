@@ -216,6 +216,15 @@ class APIClient {
     }
   }
 
+  async warmupBridge(): Promise<{ seeded: string[]; failed: string[] } | null> {
+    try {
+      const response = await this.tradingEngine.post('/api/bridge/warmup');
+      return response.data;
+    } catch {
+      return null;
+    }
+  }
+
   // Automation — proxied through the real trading start/stop endpoints
   async getAutomationStatus(): Promise<AutomationStatus> {
     try {
