@@ -11,13 +11,13 @@ import {
     TableContainer,
     TableHead,
     TableRow,
-    Alert,
     CircularProgress,
     Divider,
     List,
     ListItem,
     ListItemIcon,
     ListItemText,
+    Alert,
 } from '@mui/material';
 import {
     CheckCircle,
@@ -25,6 +25,7 @@ import {
     Assessment,
     TrendingUp,
     TrendingDown,
+    ShowChart,
 } from '@mui/icons-material';
 import { apiClient } from '@/services/api';
 import { MetricCard } from '@/components/MetricCard';
@@ -32,11 +33,13 @@ import { MetricCard } from '@/components/MetricCard';
 function ValidationChecklist({ checks }: { checks: Record<string, boolean> }) {
     const labels: Record<string, string> = {
         sufficientTrades: 'Sufficient trades (≥30)',
-        winRateOK: 'Win rate acceptable (≥45%)',
+        winRateOK: 'Win rate ≥ 45%',
         sharpeOK: 'Sharpe ratio ≥ 0.5',
         drawdownOK: 'Max drawdown ≤ 20%',
         profitFactorOK: 'Profit factor ≥ 1.2',
         expectancyPositive: 'Positive expectancy',
+        profitPositive: 'Total profit > $0',
+        noCircuitBreaker: 'Circuit breaker OK',
     };
 
     return (
@@ -66,7 +69,7 @@ export default function BacktestPage() {
     const { data: report, isLoading, isError } = useQuery(
         'backtestReport',
         () => apiClient.getBacktestReport(),
-        { staleTime: 5 * 60 * 1000, retry: 1 }
+        { staleTime: 60 * 1000, retry: 1, refetchInterval: 30 * 1000 }
     );
 
     if (isLoading) {
@@ -80,38 +83,56 @@ export default function BacktestPage() {
     if (isError || !report) {
         return (
             <Box sx={{ p: 3 }}>
-                <Alert severity="info">
-                    No backtest report found. Run the backtesting framework first:
-                    <br />
-                    <code>node services/trading/enhanced-backtester.js</code>
+                <Alert severity="warning">
+                    Could not connect to the stock bot. Check that it is running.
                 </Alert>
             </Box>
         );
     }
 
+    const isLive = report.type === 'live';
     const { summary = {}, validation, symbolResults = [], trades = [] } = report;
     const recentTrades = trades.slice(-20);
+    const noTradesYet = isLive && (summary.totalTrades ?? 0) === 0;
 
     return (
         <Box sx={{ p: { xs: 1.5, sm: 2 } }}>
             {/* Header */}
             <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'flex-start', sm: 'center' }, gap: 2, mb: 3 }}>
-                <Assessment sx={{ fontSize: 32, color: 'primary.main' }} />
+                {isLive
+                    ? <ShowChart sx={{ fontSize: 32, color: 'primary.main' }} />
+                    : <Assessment sx={{ fontSize: 32, color: 'primary.main' }} />
+                }
                 <Box>
                     <Typography variant="h5" fontWeight={700}>
-                        Backtest Report
+                        {isLive ? 'Live Performance' : 'Backtest Report'}
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
-                        Generated: {report.timestamp ? new Date(report.timestamp).toLocaleString() : 'Unknown'}
+                        {isLive
+                            ? 'Real-time stats from the stock bot'
+                            : `Generated: ${report.timestamp ? new Date(report.timestamp).toLocaleString() : 'Unknown'}`
+                        }
                     </Typography>
                 </Box>
-                <Chip
-                    label={validation?.passed ? `PASSED (${validation.passedChecks}/${validation.totalChecks})` : `FAILED (${validation.passedChecks}/${validation.totalChecks})`}
-                    color={validation?.passed ? 'success' : 'error'}
-                    sx={{ ml: { xs: 0, sm: 'auto' }, fontWeight: 700 }}
-                />
+                {!noTradesYet && validation && (
+                    <Chip
+                        label={validation.passed
+                            ? `PASSING (${validation.passedChecks}/${validation.totalChecks})`
+                            : `NEEDS WORK (${validation.passedChecks}/${validation.totalChecks})`}
+                        color={validation.passed ? 'success' : 'warning'}
+                        sx={{ ml: { xs: 0, sm: 'auto' }, fontWeight: 700 }}
+                    />
+                )}
             </Box>
 
+            {/* Empty state — bot hasn't traded yet */}
+            {noTradesYet && (
+                <Alert severity="info" sx={{ mb: 3 }}>
+                    No trades recorded yet. The stock bot will begin tracking performance as soon as it executes its first trade during market hours (9:30 AM – 4:00 PM EST).
+                </Alert>
+            )}
+
+            {/* Metric cards */}
             <Box
                 sx={{
                     display: 'grid',
@@ -125,65 +146,70 @@ export default function BacktestPage() {
                     mb: 3
                 }}
             >
-                {/* Summary metrics */}
                 <MetricCard
                     title="Win Rate"
                     value={((summary.overallWinRate ?? 0) * 100).toFixed(1)}
                     suffix="%"
-                    color={(summary.overallWinRate ?? 0) >= 0.5 ? 'success' : 'warning'}
+                    color={(summary.overallWinRate ?? 0) >= 0.5 ? 'success' : noTradesYet ? undefined : 'warning'}
                     icon={<TrendingUp />}
                 />
                 <MetricCard
                     title="Profit Factor"
                     value={(summary.profitFactor ?? 0).toFixed(2)}
-                    color={(summary.profitFactor ?? 0) >= 1.5 ? 'success' : (summary.profitFactor ?? 0) >= 1.2 ? 'warning' : 'error'}
+                    color={(summary.profitFactor ?? 0) >= 1.5 ? 'success' : (summary.profitFactor ?? 0) >= 1.2 ? 'warning' : noTradesYet ? undefined : 'error'}
                     icon={<Assessment />}
                 />
                 <MetricCard
-                    title="Avg Sharpe"
-                    value={(summary.avgSharpe ?? 0).toFixed(2)}
-                    color={(summary.avgSharpe ?? 0) >= 1.0 ? 'success' : (summary.avgSharpe ?? 0) >= 0.5 ? 'warning' : 'error'}
+                    title="Total Trades"
+                    value={String(summary.totalTrades ?? 0)}
+                    color={(summary.totalTrades ?? 0) >= 30 ? 'success' : undefined}
                     icon={<Assessment />}
+                />
+                <MetricCard
+                    title="Total P&L"
+                    value={`$${((summary.totalProfit ?? 0)).toFixed(2)}`}
+                    color={(summary.totalProfit ?? 0) > 0 ? 'success' : noTradesYet ? undefined : 'error'}
+                    icon={(summary.totalProfit ?? 0) >= 0 ? <TrendingUp /> : <TrendingDown />}
                 />
                 <MetricCard
                     title="Max Drawdown"
                     value={((summary.avgDrawdown ?? 0) * 100).toFixed(2)}
                     suffix="%"
-                    color={(summary.avgDrawdown ?? 0) <= 0.1 ? 'success' : (summary.avgDrawdown ?? 0) <= 0.2 ? 'warning' : 'error'}
+                    color={(summary.avgDrawdown ?? 0) <= 0.1 ? 'success' : (summary.avgDrawdown ?? 0) <= 0.2 ? 'warning' : noTradesYet ? undefined : 'error'}
                     icon={<TrendingDown />}
-                />
-                <MetricCard
-                    title="Expectancy"
-                    value={((summary.expectancy ?? 0) * 100).toFixed(2)}
-                    suffix="%"
-                    color={(summary.expectancy ?? 0) > 0 ? 'success' : 'error'}
-                    icon={<Assessment />}
                 />
             </Box>
 
             <Grid container spacing={3}>
                 {/* Validation checklist */}
-                <Grid item xs={12} md={4}>
-                    <Paper sx={{ p: 3, height: '100%' }}>
-                        <Typography variant="h6" fontWeight={600} sx={{ mb: 1 }}>
-                            Validation Checks
-                        </Typography>
-                        <Divider sx={{ mb: 1 }} />
-                        {validation?.checks && (
+                {validation?.checks && (
+                    <Grid item xs={12} md={4}>
+                        <Paper sx={{ p: 3, height: '100%' }}>
+                            <Typography variant="h6" fontWeight={600} sx={{ mb: 1 }}>
+                                Health Checks
+                            </Typography>
+                            <Divider sx={{ mb: 1 }} />
                             <ValidationChecklist checks={validation.checks} />
-                        )}
-                    </Paper>
-                </Grid>
+                        </Paper>
+                    </Grid>
+                )}
 
-                {/* Config summary */}
-                <Grid item xs={12} md={8}>
+                {/* Config / Stats summary */}
+                <Grid item xs={12} md={validation?.checks ? 8 : 12}>
                     <Paper sx={{ p: 3, height: '100%' }}>
                         <Typography variant="h6" fontWeight={600} sx={{ mb: 1 }}>
-                            Backtest Configuration
+                            {isLive ? 'Performance Breakdown' : 'Backtest Configuration'}
                         </Typography>
                         <Divider sx={{ mb: 2 }} />
                         <Grid container spacing={2}>
-                            {[
+                            {isLive ? [
+                                ['Winning Trades', summary.winningTrades ?? 0],
+                                ['Losing Trades', summary.losingTrades ?? 0],
+                                ['Win Amount', `$${(summary.totalWinAmount ?? 0).toFixed(2)}`],
+                                ['Loss Amount', `$${(summary.totalLossAmount ?? 0).toFixed(2)}`],
+                                ['Consec. Losses', summary.consecutiveLosses ?? 0],
+                                ['Max Consec. Losses', summary.maxConsecutiveLosses ?? 0],
+                            ] : [
                                 ['Symbols Tested', summary.symbolsTested],
                                 ['Total Trades', summary.totalTrades],
                                 ['Fast MA', report.config?.fastMA],
@@ -192,96 +218,79 @@ export default function BacktestPage() {
                                 ['Profit Target', report.config?.profitTargetPct != null ? `${(report.config.profitTargetPct * 100).toFixed(0)}%` : '—'],
                                 ['Position Size', report.config?.positionSizePct != null ? `${(report.config.positionSizePct * 100).toFixed(0)}%` : '—'],
                                 ['Initial Capital', `$${(report.config?.initialCapital || 0).toLocaleString()}`],
-                                ['Walk-Forward Windows', report.config?.walkForwardWindows ?? '—'],
-                                ['In-Sample Ratio', report.config?.inSampleRatio != null ? `${(report.config.inSampleRatio * 100).toFixed(0)}%` : '—'],
                             ].map(([label, value]) => (
                                 <Grid item xs={6} sm={4} md={3} key={String(label)}>
-                                    <Typography variant="caption" color="text.secondary">
-                                        {label}
-                                    </Typography>
-                                    <Typography variant="body2" fontWeight={600}>
-                                        {String(value ?? '—')}
-                                    </Typography>
+                                    <Typography variant="caption" color="text.secondary">{label}</Typography>
+                                    <Typography variant="body2" fontWeight={600}>{String(value ?? '—')}</Typography>
                                 </Grid>
                             ))}
                         </Grid>
                     </Paper>
                 </Grid>
 
-                {/* Per-symbol results table */}
-                <Grid item xs={12}>
-                    <Paper sx={{ p: 2 }}>
-                        <Typography variant="h6" fontWeight={600} sx={{ mb: 2 }}>
-                            Per-Symbol Results ({symbolResults.length} symbols)
-                        </Typography>
-                        <TableContainer>
-                            <Table size="small">
-                                <TableHead>
-                                    <TableRow>
-                                        <TableCell>Symbol</TableCell>
-                                        <TableCell align="right">Trades</TableCell>
-                                        <TableCell align="right">Win Rate</TableCell>
-                                        <TableCell align="right">Avg Sharpe</TableCell>
-                                        <TableCell align="right">Drawdown</TableCell>
-                                        <TableCell align="right">Profit Factor</TableCell>
-                                        <TableCell align="right">Avg Return</TableCell>
-                                        <TableCell align="right">Beat B&H</TableCell>
-                                    </TableRow>
-                                </TableHead>
-                                <TableBody>
-                                    {symbolResults.map((s: any) => (
-                                        <TableRow key={s.symbol} hover>
-                                            <TableCell>
-                                                <Typography fontWeight={600}>{s.symbol}</Typography>
-                                            </TableCell>
-                                            <TableCell align="right">{s.totalTrades}</TableCell>
-                                            <TableCell align="right">
-                                                <Chip
-                                                    label={`${((s.overallWinRate ?? 0) * 100).toFixed(0)}%`}
-                                                    size="small"
-                                                    color={(s.overallWinRate ?? 0) >= 0.5 ? 'success' : 'warning'}
-                                                    variant="outlined"
-                                                />
-                                            </TableCell>
-                                            <TableCell align="right">
-                                                <Typography
-                                                    variant="body2"
-                                                    color={(s.avgSharpe ?? 0) >= 0.5 ? 'success.main' : 'error.main'}
-                                                >
-                                                    {(s.avgSharpe ?? 0).toFixed(2)}
-                                                </Typography>
-                                            </TableCell>
-                                            <TableCell align="right">
-                                                <Typography
-                                                    variant="body2"
-                                                    color={(s.avgDrawdown ?? 0) <= 0.1 ? 'success.main' : 'warning.main'}
-                                                >
-                                                    {((s.avgDrawdown ?? 0) * 100).toFixed(2)}%
-                                                </Typography>
-                                            </TableCell>
-                                            <TableCell align="right">
-                                                <Typography
-                                                    variant="body2"
-                                                    color={(s.profitFactor ?? 0) >= 1.2 ? 'success.main' : 'error.main'}
-                                                >
-                                                    {(s.profitFactor ?? 0).toFixed(2)}
-                                                </Typography>
-                                            </TableCell>
-                                            <TableCell align="right">
-                                                {((s.avgReturn ?? 0) * 100).toFixed(3)}%
-                                            </TableCell>
-                                            <TableCell align="right">
-                                                {s.beatBuyHoldCount}/{s.totalTrades > 0 ? Math.ceil(s.totalTrades / (report.config?.walkForwardWindows || 5)) : 0}
-                                            </TableCell>
+                {/* Per-symbol results table (backtest mode only) */}
+                {!isLive && symbolResults.length > 0 && (
+                    <Grid item xs={12}>
+                        <Paper sx={{ p: 2 }}>
+                            <Typography variant="h6" fontWeight={600} sx={{ mb: 2 }}>
+                                Per-Symbol Results ({symbolResults.length} symbols)
+                            </Typography>
+                            <TableContainer>
+                                <Table size="small">
+                                    <TableHead>
+                                        <TableRow>
+                                            <TableCell>Symbol</TableCell>
+                                            <TableCell align="right">Trades</TableCell>
+                                            <TableCell align="right">Win Rate</TableCell>
+                                            <TableCell align="right">Avg Sharpe</TableCell>
+                                            <TableCell align="right">Drawdown</TableCell>
+                                            <TableCell align="right">Profit Factor</TableCell>
+                                            <TableCell align="right">Avg Return</TableCell>
                                         </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
-                        </TableContainer>
-                    </Paper>
-                </Grid>
+                                    </TableHead>
+                                    <TableBody>
+                                        {symbolResults.map((s: any) => (
+                                            <TableRow key={s.symbol} hover>
+                                                <TableCell>
+                                                    <Typography fontWeight={600}>{s.symbol}</Typography>
+                                                </TableCell>
+                                                <TableCell align="right">{s.totalTrades}</TableCell>
+                                                <TableCell align="right">
+                                                    <Chip
+                                                        label={`${((s.overallWinRate ?? 0) * 100).toFixed(0)}%`}
+                                                        size="small"
+                                                        color={(s.overallWinRate ?? 0) >= 0.5 ? 'success' : 'warning'}
+                                                        variant="outlined"
+                                                    />
+                                                </TableCell>
+                                                <TableCell align="right">
+                                                    <Typography variant="body2" color={(s.avgSharpe ?? 0) >= 0.5 ? 'success.main' : 'error.main'}>
+                                                        {(s.avgSharpe ?? 0).toFixed(2)}
+                                                    </Typography>
+                                                </TableCell>
+                                                <TableCell align="right">
+                                                    <Typography variant="body2" color={(s.avgDrawdown ?? 0) <= 0.1 ? 'success.main' : 'warning.main'}>
+                                                        {((s.avgDrawdown ?? 0) * 100).toFixed(2)}%
+                                                    </Typography>
+                                                </TableCell>
+                                                <TableCell align="right">
+                                                    <Typography variant="body2" color={(s.profitFactor ?? 0) >= 1.2 ? 'success.main' : 'error.main'}>
+                                                        {(s.profitFactor ?? 0).toFixed(2)}
+                                                    </Typography>
+                                                </TableCell>
+                                                <TableCell align="right">
+                                                    {((s.avgReturn ?? 0) * 100).toFixed(3)}%
+                                                </TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </TableContainer>
+                        </Paper>
+                    </Grid>
+                )}
 
-                {/* Recent trades table (if available) */}
+                {/* Recent trades table */}
                 {recentTrades.length > 0 && (
                     <Grid item xs={12}>
                         <Paper sx={{ p: 2 }}>
@@ -312,25 +321,15 @@ export default function BacktestPage() {
                                                         variant="outlined"
                                                     />
                                                 </TableCell>
-                                                <TableCell>
-                                                    {t.entryDate ? new Date(t.entryDate).toLocaleDateString() : '—'}
-                                                </TableCell>
-                                                <TableCell>
-                                                    {t.exitDate ? new Date(t.exitDate).toLocaleDateString() : '—'}
-                                                </TableCell>
+                                                <TableCell>{t.entryDate ? new Date(t.entryDate).toLocaleDateString() : '—'}</TableCell>
+                                                <TableCell>{t.exitDate ? new Date(t.exitDate).toLocaleDateString() : '—'}</TableCell>
                                                 <TableCell align="right">
-                                                    <Typography
-                                                        variant="body2"
-                                                        color={(t.returnPct || 0) >= 0 ? 'success.main' : 'error.main'}
-                                                    >
+                                                    <Typography variant="body2" color={(t.returnPct || 0) >= 0 ? 'success.main' : 'error.main'}>
                                                         {((t.returnPct || 0) * 100).toFixed(2)}%
                                                     </Typography>
                                                 </TableCell>
                                                 <TableCell align="right">
-                                                    <Typography
-                                                        variant="body2"
-                                                        color={(t.profit || 0) >= 0 ? 'success.main' : 'error.main'}
-                                                    >
+                                                    <Typography variant="body2" color={(t.profit || 0) >= 0 ? 'success.main' : 'error.main'}>
                                                         ${(t.profit || 0).toFixed(2)}
                                                     </Typography>
                                                 </TableCell>
