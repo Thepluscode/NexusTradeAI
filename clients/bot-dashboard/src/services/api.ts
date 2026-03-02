@@ -55,10 +55,14 @@ async function tryRefreshToken(): Promise<string | null> {
     localStorage.setItem('nexus_access_token', data.accessToken);
     localStorage.setItem('nexus_refresh_token', data.refreshToken);
     return data.accessToken;
-  } catch {
-    localStorage.removeItem('nexus_access_token');
-    localStorage.removeItem('nexus_refresh_token');
-    window.location.href = '/login';
+  } catch (err: any) {
+    // Only clear session on explicit auth rejection (401/403), not network errors
+    const status = err?.response?.status;
+    if (status === 401 || status === 403) {
+      localStorage.removeItem('nexus_access_token');
+      localStorage.removeItem('nexus_refresh_token');
+      window.location.href = '/login';
+    }
     return null;
   }
 }

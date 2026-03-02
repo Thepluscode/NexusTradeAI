@@ -100,7 +100,7 @@ async function initDb() {
 function signTokens(userId, email) {
     const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
     const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret-change-me';
-    const accessToken = jwt.sign({ sub: userId, email }, JWT_SECRET, { expiresIn: '15m' });
+    const accessToken = jwt.sign({ sub: userId, email }, JWT_SECRET, { expiresIn: '24h' });
     const refreshToken = jwt.sign({ sub: userId, email }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
     return { accessToken, refreshToken };
 }

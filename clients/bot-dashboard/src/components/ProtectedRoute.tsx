@@ -6,9 +6,19 @@ interface ProtectedRouteProps {
 }
 
 export default function ProtectedRoute({ children }: ProtectedRouteProps) {
-  const { accessToken } = getStoredTokens();
-  if (!accessToken || !isTokenValid(accessToken)) {
-    return <Navigate to="/login" replace />;
+  const { accessToken, refreshToken } = getStoredTokens();
+
+  // Allow through if access token is valid
+  if (accessToken && isTokenValid(accessToken)) {
+    return <>{children}</>;
   }
-  return <>{children}</>;
+
+  // Also allow through if refresh token exists — the axios interceptor will
+  // silently renew the access token on the next API call. Kicking the user
+  // to /login here would log them out even though they have a valid session.
+  if (refreshToken) {
+    return <>{children}</>;
+  }
+
+  return <Navigate to="/login" replace />;
 }
