@@ -125,7 +125,7 @@ let lastEquity = null; // null means not initialized yet
 let cachedLiveDailyPnL = 0; // updated by status endpoint for circuit breaker
 
 // Daily loss circuit breaker — halt new entries once this is exceeded
-const MAX_DAILY_LOSS_FOREX = parseFloat(process.env.MAX_DAILY_LOSS || '500');
+const MAX_DAILY_LOSS_FOREX = Math.abs(parseFloat(process.env.MAX_DAILY_LOSS || '500'));
 
 // Persistent bot state (survives restarts)
 const BOT_STATE_FILE = path.join(__dirname, 'data/forex-bot-state.json');

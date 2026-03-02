@@ -856,7 +856,7 @@ class CryptoTradingEngine {
                 }
 
                 // Daily loss circuit breaker
-                const maxDailyLoss = parseFloat(process.env.MAX_DAILY_LOSS || '500');
+                const maxDailyLoss = Math.abs(parseFloat(process.env.MAX_DAILY_LOSS || '500'));
                 if (this.dailyLoss >= maxDailyLoss) {
                     console.log(`🛑 [CIRCUIT BREAKER] Crypto daily loss $${this.dailyLoss.toFixed(2)} exceeds limit $${maxDailyLoss} — no new entries today`);
                     if (this.positions.size > 0) await this.managePositions();
@@ -1058,7 +1058,7 @@ class CryptoTradingEngine {
                 maxPositions: this.config.maxTotalPositions,
                 stopLoss: this.config.tiers.tier1.stopLoss,
                 profitTarget: this.config.tiers.tier1.profitTarget,
-                dailyLossLimit: parseFloat(process.env.MAX_DAILY_LOSS || '500')
+                dailyLossLimit: Math.abs(parseFloat(process.env.MAX_DAILY_LOSS || '500'))
             },
             scanCount: this.scanCount,
             dailyTrades: this.dailyTradeCount,
