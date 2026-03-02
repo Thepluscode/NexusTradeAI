@@ -54,14 +54,48 @@ jobs:
         working-directory: clients/bot-dashboard
         run: npm install
 
+      # Only rebuild if frontend source files actually changed since the last bundle commit.
+      # Walk back through git history skipping [skip ci] bundle commits to find the last
+      # real source commit, then diff against it. This prevents a new bundle hash on every
+      # bot-only push and eliminates rebase conflicts from concurrent bundle commits.
+      - name: Check if frontend source changed
+        id: src-changed
+        run: |
+          # Find the last commit that is NOT a [skip ci] bundle commit
+          LAST_SRC_COMMIT=$(git log --oneline | grep -v '\[skip ci\]' | head -1 | awk '{print $1}')
+          PREV_SRC_COMMIT=$(git log --oneline | grep -v '\[skip ci\]' | sed -n '2p' | awk '{print $1}')
+          echo "Last real commit: $LAST_SRC_COMMIT  Previous: $PREV_SRC_COMMIT"
+
+          if [ -z "$PREV_SRC_COMMIT" ]; then
+            echo "rebuild=true" >> $GITHUB_OUTPUT
+            echo "No previous real commit found — rebuilding"
+          else
+            CHANGED=$(git diff --name-only "$PREV_SRC_COMMIT" "$LAST_SRC_COMMIT" -- \
+              clients/bot-dashboard/src/ \
+              clients/bot-dashboard/index.html \
+              clients/bot-dashboard/vite.config.ts \
+              clients/bot-dashboard/package.json \
+              2>/dev/null)
+            if [ -z "$CHANGED" ]; then
+              echo "rebuild=false" >> $GITHUB_OUTPUT
+              echo "Frontend source unchanged since last real commit — reusing existing dist"
+            else
+              echo "rebuild=true" >> $GITHUB_OUTPUT
+              echo "Frontend source changed — rebuilding"
+              echo "$CHANGED"
+            fi
+          fi
+
       - name: Build
+        if: steps.src-changed.outputs.rebuild == 'true'
         working-directory: clients/bot-dashboard
         env:
           VITE_NEXUS_API_SECRET: ${{ secrets.NEXUS_API_SECRET }}
         run: npm run build
 
-      # Verify the bundle has no localhost:PORT URLs before deploying
+      # Verify the bundle has no localhost:PORT URLs before deploying (only when rebuilt)
       - name: Assert no localhost URLs in bundle
+        if: steps.src-changed.outputs.rebuild == 'true'
         run: |
           BUNDLE=$(ls clients/bot-dashboard/dist/assets/index-*.js)
           if grep -qo 'localhost:[0-9][0-9]*' "$BUNDLE"; then
@@ -71,8 +105,9 @@ jobs:
           fi
           echo "OK — no localhost:PORT in bundle"
 
-      # Verify all 4 Railway service URLs are baked in
+      # Verify all 4 Railway service URLs are baked in (only when rebuilt)
       - name: Assert Railway URLs in bundle
+        if: steps.src-changed.outputs.rebuild == 'true'
         run: |
           BUNDLE=$(ls clients/bot-dashboard/dist/assets/index-*.js)
           for URL in \
@@ -87,6 +122,7 @@ jobs:
           echo "OK — all Railway URLs present"
 
       - name: Copy dist to deploy/dashboard/
+        if: steps.src-changed.outputs.rebuild == 'true'
         run: |
           # Remove old bundle files (keep any static assets)
           rm -f deploy/dashboard/dist/assets/index-*.js
@@ -205,3 +241,16 @@ jobs:
             exit 1
           fi
           echo "OK — live bundle has no localhost:PORT URLs"
+
+      # Trigger bridge warmup after all services are up so pairs trading cache is seeded.
+      # Non-fatal: warmup may fail if Alpaca/OANDA creds not set, but services are still up.
+      - name: Seed strategy bridge pairs cache
+        continue-on-error: true
+        run: |
+          RESP=$(curl -s --max-time 90 -X POST \
+            -H "Content-Type: application/json" \
+            https://nexus-stock-bot-production.up.railway.app/api/bridge/warmup)
+          echo "Warmup response: $RESP"
+          SEEDED=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('seeded',[])))" 2>/dev/null || echo "?")
+          FAILED=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('failed',[])))" 2>/dev/null || echo "?")
+          echo "Bridge warmup: seeded=$SEEDED failed=$FAILED"
