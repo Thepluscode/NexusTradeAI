@@ -685,6 +685,43 @@ function calculateATR(candles, period = 14) {
     return tr / period;
 }
 
+// [v3.4] EMA on a raw number array (needed by MACD)
+function calculateEMAArray(values, period) {
+    if (values.length < period) return null;
+    const mult = 2 / (period + 1);
+    let ema = values.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    for (let i = period; i < values.length; i++) ema = (values[i] - ema) * mult + ema;
+    return ema;
+}
+
+// [v3.4] MACD(12,26,9) — momentum confirmation for forex M15 candles
+// Enter LONG only when histogram is positive AND rising (momentum accelerating)
+function calculateMACDForex(candles, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
+    if (candles.length < slowPeriod + signalPeriod) return null;
+    const closes = candles.map(c => parseFloat(c.mid.c));
+    const macdLine = [];
+    for (let i = slowPeriod - 1; i < closes.length; i++) {
+        const slice = closes.slice(0, i + 1);
+        const fast = calculateEMAArray(slice, fastPeriod);
+        const slow = calculateEMAArray(slice, slowPeriod);
+        if (fast !== null && slow !== null) macdLine.push(fast - slow);
+    }
+    if (macdLine.length < signalPeriod) return null;
+    const signalLine = calculateEMAArray(macdLine, signalPeriod);
+    if (signalLine === null) return null;
+    const histogram = macdLine[macdLine.length - 1] - signalLine;
+    const prevHistogram = macdLine.length > 1
+        ? macdLine[macdLine.length - 2] - calculateEMAArray(macdLine.slice(0, -1), signalPeriod)
+        : histogram;
+    return {
+        macd: macdLine[macdLine.length - 1],
+        signal: signalLine,
+        histogram,
+        bullish:  histogram > 0 && histogram > (prevHistogram || 0),
+        bearish:  histogram < 0 && histogram < (prevHistogram || 0)
+    };
+}
+
 // [v3.2] Bollinger Bands — detects genuine breakouts from ranging price action
 function calculateBollingerBands(candles, period = 20, numStdDev = 2) {
     if (candles.length < period) return null;
@@ -811,9 +848,12 @@ async function analyzePair(pair) {
     const lastCandleBullish = parseFloat(lastCandle.mid.c) > parseFloat(lastCandle.mid.o);
     const lastCandleBearish = parseFloat(lastCandle.mid.c) < parseFloat(lastCandle.mid.o);
 
+    // [v3.4] MACD(12,26,9) confirmation — momentum must be accelerating in signal direction
+    const macd = calculateMACDForex(candles);
+
     return {
         pair, currentPrice, sma10, sma20, sma50, rsi, atr,
-        atrPct, bb,
+        atrPct, bb, macd,
         isUptrend, isDowntrend, trendStrength,
         lastCandleBullish, lastCandleBearish
     };
@@ -829,21 +869,28 @@ async function scanForSignals() {
         return signals;
     }
 
-    for (const pair of FOREX_PAIRS) {
-        const canTradeResult = canTrade(pair);
-        if (!canTradeResult.allowed) continue;
-        if (positions.has(pair)) continue;
+    // [v3.4] Parallelize M15 analysis + H1 trend fetch for all pairs simultaneously
+    // Previously sequential (~2s × 12 pairs = 24s lag); now concurrent (~2-3s total)
+    const tradablePairs = FOREX_PAIRS.filter(pair => !positions.has(pair) && canTrade(pair).allowed);
 
-        const analysis = await analyzePair(pair);
-        if (!analysis) continue;
+    const pairResults = await Promise.allSettled(
+        tradablePairs.map(async pair => {
+            const [analysis, h1Trend] = await Promise.all([
+                analyzePair(pair),
+                getH1Trend(pair)
+            ]);
+            return { pair, analysis, h1Trend };
+        })
+    );
 
+    for (const result of pairResults) {
+        if (result.status === 'rejected' || !result.value.analysis) continue;
+
+        const { pair, analysis, h1Trend } = result.value;
         const {
             currentPrice, rsi, isUptrend, isDowntrend, trendStrength,
-            atrPct, bb, lastCandleBullish, lastCandleBearish
+            atrPct, bb, macd, lastCandleBullish, lastCandleBearish
         } = analysis;
-
-        // [v3.2] H1 trend confirmation — fetch once per pair
-        const h1Trend = await getH1Trend(pair);
 
         // Determine tier
         let tier = null;
@@ -857,7 +904,7 @@ async function scanForSignals() {
         if (tierPositions >= config.maxPositions) continue;
 
         // [v3.2] ATR-based stops/targets — adapts to each pair's volatility
-        const atrStop  = atrPct > 0 ? atrPct * 1.5 : config.stopLoss;
+        const atrStop   = atrPct > 0 ? atrPct * 1.5 : config.stopLoss;
         const atrTarget = atrPct > 0 ? atrPct * 3.0 : config.profitTarget;
 
         // LONG Signal
@@ -872,6 +919,11 @@ async function scanForSignals() {
             }
             if (bb && currentPrice < bb.middle) {
                 console.log(`[BB Filter] ${pair} LONG skipped — below BB midline ${bb.middle.toFixed(5)}`);
+                continue;
+            }
+            // [v3.4] MACD confirmation — only enter when momentum is accelerating bullishly
+            if (macd !== null && !macd.bullish) {
+                console.log(`[MACD Filter] ${pair} LONG skipped — MACD histogram not bullish/rising (${macd.histogram.toFixed(6)})`);
                 continue;
             }
             // [v3.3] Strategy Bridge advisory — only block if bridge explicitly signals SHORT with high confidence
@@ -889,6 +941,7 @@ async function scanForSignals() {
                     stopLoss:   currentPrice * (1 - atrStop),
                     takeProfit: currentPrice * (1 + atrTarget),
                     rsi, trendStrength, atrPct, h1Trend,
+                    macdHistogram: macd ? macd.histogram : null,
                     session: session.name
                 });
             }
@@ -908,6 +961,11 @@ async function scanForSignals() {
                 console.log(`[BB Filter] ${pair} SHORT skipped — above BB midline ${bb.middle.toFixed(5)}`);
                 continue;
             }
+            // [v3.4] MACD confirmation — only enter when momentum is accelerating bearishly
+            if (macd !== null && !macd.bearish) {
+                console.log(`[MACD Filter] ${pair} SHORT skipped — MACD histogram not bearish/falling (${macd.histogram.toFixed(6)})`);
+                continue;
+            }
             // [v3.3] Strategy Bridge advisory — only block if bridge explicitly signals LONG with high confidence
             const bridgeShort = await queryStrategyBridge(pair, 'short');
             if (bridgeShort !== null && bridgeShort.direction === 'long' && bridgeShort.confidence > 0.7) {
@@ -922,6 +980,7 @@ async function scanForSignals() {
                     stopLoss:   currentPrice * (1 + atrStop),
                     takeProfit: currentPrice * (1 - atrTarget),
                     rsi, trendStrength, atrPct, h1Trend,
+                    macdHistogram: macd ? macd.histogram : null,
                     session: session.name
                 });
             }

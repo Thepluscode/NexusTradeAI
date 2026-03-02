@@ -101,14 +101,34 @@ pairs_strategy = PairsTradingStrategy()
 # Price cache: symbol → last 100 closes (populated on each /signal call)
 _price_cache: Dict[str, List[float]] = {}
 
-# Known cointegrated pairs for ensemble voting
+# Known cointegrated pairs for ensemble voting.
+# Each symbol maps to its companion — both directions listed so either symbol lookup works.
+# Pairs selected for documented long-run cointegration and similar business exposure.
 KNOWN_PAIRS = {
+    # Energy — same commodity exposure (crude oil)
     'XOM': 'CVX', 'CVX': 'XOM',
+    # Banks — same US macro exposure
     'JPM': 'BAC', 'BAC': 'JPM',
+    # Big Tech — similar revenue mix
     'AAPL': 'MSFT', 'MSFT': 'AAPL',
+    # Consumer staples — direct beverage competitors
     'KO': 'PEP', 'PEP': 'KO',
+    # Home improvement retail — identical TAM
     'HD': 'LOW', 'LOW': 'HD',
+    # Payment networks — same transaction infrastructure
     'V': 'MA', 'MA': 'V',
+    # Investment banks — same market-making exposure
+    'GS': 'MS', 'MS': 'GS',
+    # Telecom — same US wireless duopoly
+    'T': 'VZ', 'VZ': 'T',
+    # Retail mass-market — same consumer base
+    'WMT': 'TGT', 'TGT': 'WMT',
+    # Precious metals ETFs — same underlying (gold/silver ratio mean-reverts)
+    'GLD': 'SLV', 'SLV': 'GLD',
+    # Index ETFs — QQQ/SPY spread is a classic mean-reverting risk-on/off spread
+    'SPY': 'QQQ', 'QQQ': 'SPY',
+    # Airlines — same fuel cost / demand exposure
+    'DAL': 'UAL', 'UAL': 'DAL',
 }
 
 # ========================================

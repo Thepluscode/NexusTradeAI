@@ -222,28 +222,49 @@ class VolatilityArbitrageStrategy(BaseStrategy):
                     }
                 )
         
-        # LOW VOL EXPANSION: Bet on vol increasing
+        # LOW VOL EXPANSION: Realized vol compressing below historical norms and starting to expand.
+        # This signals a vol spike is imminent. Direction is determined by recent price momentum:
+        # if recent return is negative → expect downside vol spike → SELL
+        # if recent return is positive → direction uncertain → NEUTRAL (don't bet direction)
         elif not vol_state.is_elevated and not vol_state.is_contracting:
             if vol_ratio < (1 / self.entry_threshold):
-                # Low realized vol, expanding - expect spike
-                # Stay neutral or hedge, as direction uncertain
+                prices = pd.Series([d.close for d in market_data])
+                recent_return = (prices.iloc[-1] - prices.iloc[-5]) / prices.iloc[-5] if len(prices) >= 5 else 0.0
                 confidence = min(0.7, 0.3 + (1 - vol_state.vol_percentile) * 0.4)
-                
-                # Signal to reduce exposure or add hedges
-                signal = TradingSignal(
-                    signal_type=SignalType.NEUTRAL,
-                    symbol=market_data[-1].symbol if hasattr(market_data[-1], 'symbol') else 'UNKNOWN',
-                    price=current_price,
-                    confidence=confidence,
-                    strategy_name=self.name,
-                    metadata={
-                        'vol_ratio': vol_ratio,
-                        'realized_vol': vol_state.realized_vol,
-                        'forecast_vol': vol_state.forecast_vol,
-                        'vol_percentile': vol_state.vol_percentile,
-                        'signal_reason': 'low_vol_expansion_warning'
-                    }
-                )
+
+                if recent_return < -0.005:
+                    # Negative momentum + low expanding vol → downside vol spike → SELL
+                    signal = TradingSignal(
+                        signal_type=SignalType.SELL,
+                        symbol=market_data[-1].symbol if hasattr(market_data[-1], 'symbol') else 'UNKNOWN',
+                        price=current_price,
+                        confidence=confidence,
+                        strategy_name=self.name,
+                        metadata={
+                            'vol_ratio': vol_ratio,
+                            'realized_vol': vol_state.realized_vol,
+                            'forecast_vol': vol_state.forecast_vol,
+                            'vol_percentile': vol_state.vol_percentile,
+                            'recent_return': recent_return,
+                            'signal_reason': 'low_vol_expansion_bearish'
+                        }
+                    )
+                else:
+                    # Direction uncertain — stay neutral, reduce exposure
+                    signal = TradingSignal(
+                        signal_type=SignalType.NEUTRAL,
+                        symbol=market_data[-1].symbol if hasattr(market_data[-1], 'symbol') else 'UNKNOWN',
+                        price=current_price,
+                        confidence=confidence,
+                        strategy_name=self.name,
+                        metadata={
+                            'vol_ratio': vol_ratio,
+                            'realized_vol': vol_state.realized_vol,
+                            'forecast_vol': vol_state.forecast_vol,
+                            'vol_percentile': vol_state.vol_percentile,
+                            'signal_reason': 'low_vol_expansion_warning'
+                        }
+                    )
         
         return signal
     

@@ -683,6 +683,69 @@ function calculateADX(bars, period = 14) {
     return adx;
 }
 
+// [v3.4] MACD(12,26,9) — momentum confirmation; enter only when histogram is bullish & rising
+// Identical logic to crypto bot's implementation, adapted for bar objects {c: close}
+function calculateMACD(bars, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
+    if (bars.length < slowPeriod + signalPeriod) return null;
+    const closes = bars.map(b => b.c);
+    // Build MACD line over entire bar history (skip first slowPeriod-1 bars)
+    const macdLine = [];
+    for (let i = slowPeriod - 1; i < closes.length; i++) {
+        const slice = closes.slice(0, i + 1);
+        const fast = calculateEMA(slice, fastPeriod);
+        const slow = calculateEMA(slice, slowPeriod);
+        if (fast !== null && slow !== null) macdLine.push(fast - slow);
+    }
+    if (macdLine.length < signalPeriod) return null;
+    const signalLine = calculateEMA(macdLine, signalPeriod);
+    if (signalLine === null) return null;
+    const histogram = macdLine[macdLine.length - 1] - signalLine;
+    const prevHistogram = macdLine.length > 1
+        ? macdLine[macdLine.length - 2] - calculateEMA(macdLine.slice(0, -1), signalPeriod)
+        : histogram;
+    return {
+        macd: macdLine[macdLine.length - 1],
+        signal: signalLine,
+        histogram,
+        bullish: histogram > 0 && histogram > (prevHistogram || 0)
+    };
+}
+
+// [v3.4] Bullish RSI divergence — price makes a lower low but RSI makes a higher low
+// Signals exhaustion of selling pressure and probable reversal — strong entry confirmation
+function detectRSIBullishDivergence(bars, lookback = 20) {
+    if (bars.length < lookback + 5) return false;
+    const window = bars.slice(-lookback);
+    const closes = window.map(b => b.c);
+
+    // Find the two lowest price points in window
+    let low1Idx = 0, low2Idx = 0;
+    for (let i = 1; i < closes.length - 1; i++) {
+        if (closes[i] < closes[low1Idx]) { low2Idx = low1Idx; low1Idx = i; }
+        else if (closes[i] < closes[low2Idx] && i !== low1Idx) low2Idx = i;
+    }
+    if (low1Idx === low2Idx) return false;
+
+    // Ensure low1 is earlier, low2 is later
+    const earlyIdx = Math.min(low1Idx, low2Idx);
+    const lateIdx  = Math.max(low1Idx, low2Idx);
+    if (lateIdx - earlyIdx < 3) return false; // Must be separated by at least 3 bars
+
+    // Price must have made a lower low (bearish price structure)
+    if (closes[lateIdx] >= closes[earlyIdx]) return false;
+
+    // Calculate RSI at each swing low (need surrounding bars for proper RSI)
+    const barsAtEarly = bars.slice(Math.max(0, bars.length - lookback + earlyIdx - 14), bars.length - lookback + earlyIdx + 1);
+    const barsAtLate  = bars.slice(Math.max(0, bars.length - lookback + lateIdx - 14),  bars.length - lookback + lateIdx + 1);
+    const rsiEarly = calculateRSI(barsAtEarly);
+    const rsiLate  = calculateRSI(barsAtLate);
+
+    // RSI must have made a higher low (bullish momentum structure) while price made lower low
+    const hasDivergence = rsiLate > rsiEarly + 2; // Require meaningful RSI improvement (2+ pts)
+    if (hasDivergence) console.log(`[RSI Divergence] Bullish divergence detected: price ${closes[earlyIdx].toFixed(2)}→${closes[lateIdx].toFixed(2)}, RSI ${rsiEarly.toFixed(1)}→${rsiLate.toFixed(1)}`);
+    return hasDivergence;
+}
+
 // Calculate VWAP for today's bars
 function calculateVWAP(bars) {
     try {
@@ -1146,6 +1209,16 @@ async function analyzeMomentum(symbol) {
         const adx = calculateADX(bars);
         if (adx !== null && adx < 20) {
             return null;
+        }
+
+        // [v3.4] MACD(12,26,9) confirmation — only enter when momentum is accelerating bullishly
+        // Histogram must be positive AND rising (not just crossing zero)
+        const macd = calculateMACD(bars);
+        if (macd !== null && !macd.bullish) {
+            // MACD bearish/flat — skip unless RSI divergence overrides (strong reversal signal)
+            const hasDivergence = detectRSIBullishDivergence(bars);
+            if (!hasDivergence) return null;
+            console.log(`[MACD Override] ${symbol} — RSI divergence overrides bearish MACD, proceeding`);
         }
 
         // [v3.2] ATR-based stop/target — adapts to each stock's volatility
@@ -2200,7 +2273,11 @@ app.post('/api/backtest/run', async (req, res) => {
 
 // Pre-seed strategy bridge _price_cache for all KNOWN_PAIRS symbols + major forex pairs
 // so pairs trading and forex bridge advisory activates immediately on startup
-const KNOWN_PAIRS_SYMBOLS = ['XOM','CVX','JPM','BAC','AAPL','MSFT','KO','PEP','HD','LOW','V','MA'];
+// All unique symbols from KNOWN_PAIRS in strategy_bridge.py — keep in sync
+const KNOWN_PAIRS_SYMBOLS = [
+    'XOM','CVX','JPM','BAC','AAPL','MSFT','KO','PEP','HD','LOW','V','MA',
+    'GS','MS','T','VZ','WMT','TGT','GLD','SLV','SPY','QQQ','DAL','UAL'
+];
 const FOREX_WARMUP_PAIRS  = ['EUR_USD','GBP_USD','USD_JPY','USD_CHF','AUD_USD','USD_CAD','NZD_USD','EUR_JPY','GBP_JPY','EUR_GBP','AUD_JPY','EUR_AUD'];
 
 app.post('/api/bridge/warmup', async (req, res) => {
