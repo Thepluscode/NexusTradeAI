@@ -16,3 +16,6 @@ clients/bot-dashboard/data/
 
 # Next.js build cache
 clients/web-app/.next/
+
+# Stock bot runtime data
+deploy/stock-bot/data/*.json

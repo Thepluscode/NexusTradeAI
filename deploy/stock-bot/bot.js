@@ -289,8 +289,10 @@ let cachedDailyPnL = 0;
 
 // Performance tracking (in-memory, persisted to performance.json)
 const fs = require('fs');
-const PERF_FILE = path.join(__dirname, '../../services/trading/data/performance.json');
-const RISK_CONFIG_FILE = path.join(__dirname, 'data/risk-config.json');
+const DATA_DIR = path.join(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+const PERF_FILE = path.join(DATA_DIR, 'performance.json');
+const RISK_CONFIG_FILE = path.join(DATA_DIR, 'risk-config.json');
 let perfData = {
     totalTrades: 0,
     winningTrades: 0,
@@ -1867,7 +1869,7 @@ app.post('/api/config/test-notification', requireApiSecret, async (req, res) => 
 
 app.get('/api/backtest/report', (req, res) => {
     try {
-        const reportPath = path.join(__dirname, '../../services/trading/backtest-report.json');
+        const reportPath = path.join(DATA_DIR, 'backtest-report.json');
         const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
         res.json({ success: true, data: report });
     } catch {
