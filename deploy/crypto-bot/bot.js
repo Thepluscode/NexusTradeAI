@@ -1268,6 +1268,21 @@ app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
             updated++;
         }
         console.log(`⚙️  Credentials updated: broker=${broker} keys=${updated}`);
+        // If crypto keys were updated, reinitialise the exchange client and reconnect
+        if (broker === 'crypto' && updated > 0) {
+            cryptoEngine.kraken = new KrakenClient({
+                apiKey: process.env.CRYPTO_API_KEY,
+                apiSecret: process.env.CRYPTO_API_SECRET,
+            });
+            // If currently in demo mode due to missing keys, attempt reconnect
+            if (cryptoEngine.demoMode) {
+                const account = await cryptoEngine.kraken.getAccountInfo();
+                if (account) {
+                    cryptoEngine.demoMode = false;
+                    console.log('✅ Kraken reconnected after credential update — exiting DEMO MODE');
+                }
+            }
+        }
         res.json({ success: true, updated });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });

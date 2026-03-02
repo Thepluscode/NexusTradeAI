@@ -848,7 +848,7 @@ export default function SettingsPage() {
     // ── Crypto credentials state ──
     const [cryptoKey, setCryptoKey] = useState('');
     const [cryptoSecret, setCryptoSecret] = useState('');
-    const [cryptoExchange, setCryptoExchange] = useState('binance');
+    const [cryptoExchange, setCryptoExchange] = useState('kraken');
     const [cryptoTestnet, setCryptoTestnet] = useState(true);
 
     // ── Telegram credentials state ──
@@ -1330,8 +1330,8 @@ export default function SettingsPage() {
                                 description="Crypto pairs · BTC-correlated momentum · 24/7"
                                 accentColor="#f59e0b"
                                 configured={!!config?.brokers?.crypto?.configured}
-                                setupUrl="https://testnet.binance.vision/"
-                                setupLabel="Binance Testnet"
+                                setupUrl="https://www.kraken.com/u/security/api"
+                                setupLabel="Get Kraken API Key"
                                 onSave={() => {
                                     const creds: Record<string, string> = {
                                         CRYPTO_EXCHANGE: cryptoExchange,
@@ -1356,10 +1356,10 @@ export default function SettingsPage() {
                                         onChange={e => setCryptoExchange(e.target.value)}
                                         sx={{ borderRadius: 2 }}
                                     >
-                                        <MenuItem value="binance">Binance</MenuItem>
+                                        <MenuItem value="kraken">Kraken (Recommended)</MenuItem>
                                         <MenuItem value="coinbase">Coinbase Advanced</MenuItem>
-                                        <MenuItem value="kraken">Kraken</MenuItem>
                                         <MenuItem value="bybit">Bybit</MenuItem>
+                                        <MenuItem value="binance">Binance (US blocked ⚠️)</MenuItem>
                                     </Select>
                                 </FormControl>
                                 <CredentialField
