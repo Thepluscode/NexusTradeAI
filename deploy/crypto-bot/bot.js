@@ -1092,7 +1092,10 @@ async function persistEnvVar(name, value) {
     const project = process.env.RAILWAY_PROJECT_ID;
     const env     = process.env.RAILWAY_ENVIRONMENT_ID;
     const service = process.env.RAILWAY_SERVICE_ID;
-    if (!token || !project || !env || !service) return;
+    if (!token || !project || !env || !service) {
+        console.warn(`⚠️  persistEnvVar: missing Railway vars (token=${!!token} project=${!!project} env=${!!env} service=${!!service}) — ${name} saved in-memory only`);
+        return;
+    }
     const query = `mutation { variableUpsert(input: { projectId: "${project}", environmentId: "${env}", serviceId: "${service}", name: "${name}", value: "${value.replace(/"/g, '\\"')}" }) }`;
     try {
         await axios.post('https://backboard.railway.app/graphql/v2',

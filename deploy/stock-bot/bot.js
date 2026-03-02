@@ -387,7 +387,7 @@ let MAX_TRADES_PER_DAY = parseInt(process.env.MAX_TRADES_PER_DAY || '15');
 const MAX_TRADES_PER_SYMBOL = 3;
 const MIN_TIME_BETWEEN_TRADES = 10 * 60 * 1000;
 const MIN_TIME_AFTER_STOP = 60 * 60 * 1000;
-let MAX_DAILY_LOSS = parseFloat(process.env.MAX_DAILY_LOSS || '500');   // $ amount
+let MAX_DAILY_LOSS = Math.abs(parseFloat(process.env.MAX_DAILY_LOSS || '500'));   // $ amount (always positive)
 let MAX_DRAWDOWN_PCT = parseFloat(process.env.MAX_DRAWDOWN_PCT || '10'); // percent
 
 // ===== NEW: TIME-BASED EXIT CONFIGURATION =====
