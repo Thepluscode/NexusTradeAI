@@ -200,7 +200,7 @@ export default function BacktestPage() {
                         </Typography>
                         <Divider sx={{ mb: 2 }} />
                         <Grid container spacing={2}>
-                            {isLive ? [
+                            {(isLive ? [
                                 ['Winning Trades', summary.winningTrades ?? 0],
                                 ['Losing Trades', summary.losingTrades ?? 0],
                                 ['Win Amount', `$${(summary.totalWinAmount ?? 0).toFixed(2)}`],
@@ -216,7 +216,7 @@ export default function BacktestPage() {
                                 ['Profit Target', report.config?.profitTargetPct != null ? `${(report.config.profitTargetPct * 100).toFixed(0)}%` : '—'],
                                 ['Position Size', report.config?.positionSizePct != null ? `${(report.config.positionSizePct * 100).toFixed(0)}%` : '—'],
                                 ['Initial Capital', `$${(report.config?.initialCapital || 0).toLocaleString()}`],
-                            ].map(([label, value]) => (
+                            ]).map(([label, value]) => (
                                 <Grid item xs={6} sm={4} md={3} key={String(label)}>
                                     <Typography variant="caption" color="text.secondary">{label}</Typography>
                                     <Typography variant="body2" fontWeight={600}>{String(value ?? '—')}</Typography>
