@@ -244,24 +244,26 @@ function BrokerForm({
 
             <Divider sx={{ mb: 2.5 }} />
 
-            <Stack spacing={2}>
-                {children}
-            </Stack>
+            <Box component="form" onSubmit={e => { e.preventDefault(); onSave(); }}>
+                <Stack spacing={2}>
+                    {children}
+                </Stack>
 
-            <Box sx={{ mt: 2.5 }}>
-                <Button
-                    variant="contained"
-                    size="small"
-                    startIcon={isSaving ? <CircularProgress size={13} color="inherit" /> : <Save fontSize="small" />}
-                    disabled={isSaving}
-                    onClick={onSave}
-                    sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
-                >
-                    Save Credentials
-                </Button>
-                <Typography variant="caption" color="text.secondary" sx={{ ml: 1.5 }}>
-                    Keys saved to <code style={{ background: '#ffffff12', padding: '1px 5px', borderRadius: 3 }}>.env</code> — never transmitted externally
-                </Typography>
+                <Box sx={{ mt: 2.5 }}>
+                    <Button
+                        type="submit"
+                        variant="contained"
+                        size="small"
+                        startIcon={isSaving ? <CircularProgress size={13} color="inherit" /> : <Save fontSize="small" />}
+                        disabled={isSaving}
+                        sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
+                    >
+                        Save Credentials
+                    </Button>
+                    <Typography variant="caption" color="text.secondary" sx={{ ml: 1.5 }}>
+                        Keys saved to <code style={{ background: '#ffffff12', padding: '1px 5px', borderRadius: 3 }}>.env</code> — never transmitted externally
+                    </Typography>
+                </Box>
             </Box>
         </Paper>
     );
@@ -330,28 +332,30 @@ function NotifForm({
 
             <Divider sx={{ mb: 2.5 }} />
 
-            <Stack spacing={2}>
-                {children}
-            </Stack>
+            <Box component="form" onSubmit={e => { e.preventDefault(); onSave(); }}>
+                <Stack spacing={2}>
+                    {children}
+                </Stack>
 
-            <Box sx={{ mt: 2.5, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-                <Button
-                    variant="contained"
-                    size="small"
-                    startIcon={isSaving ? <CircularProgress size={13} color="inherit" /> : <Save fontSize="small" />}
-                    disabled={isSaving}
-                    onClick={onSave}
-                    sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
-                >
-                    Save
-                </Button>
-                <Button
-                    size="small"
-                    onClick={() => setShowHelp(p => !p)}
-                    sx={{ textTransform: 'none', fontSize: 12, color: 'text.secondary', borderRadius: 2 }}
-                >
-                    {showHelp ? 'Hide setup guide' : 'How to set up'}
-                </Button>
+                <Box sx={{ mt: 2.5, display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+                    <Button
+                        type="submit"
+                        variant="contained"
+                        size="small"
+                        startIcon={isSaving ? <CircularProgress size={13} color="inherit" /> : <Save fontSize="small" />}
+                        disabled={isSaving}
+                        sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
+                    >
+                        Save
+                    </Button>
+                    <Button
+                        size="small"
+                        onClick={() => setShowHelp(p => !p)}
+                        sx={{ textTransform: 'none', fontSize: 12, color: 'text.secondary', borderRadius: 2 }}
+                    >
+                        {showHelp ? 'Hide setup guide' : 'How to set up'}
+                    </Button>
+                </Box>
             </Box>
 
             {showHelp && (

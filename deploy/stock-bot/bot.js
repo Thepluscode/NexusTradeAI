@@ -1682,7 +1682,7 @@ app.get('/api/config', (req, res) => {
                 },
                 crypto: {
                     configured: !!(process.env.CRYPTO_API_KEY && process.env.CRYPTO_API_SECRET),
-                    exchange: process.env.CRYPTO_EXCHANGE || 'binance',
+                    exchange: process.env.CRYPTO_EXCHANGE || 'kraken',
                     testnet: process.env.CRYPTO_TESTNET !== 'false',
                 },
             },
