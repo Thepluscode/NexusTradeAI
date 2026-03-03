@@ -1598,7 +1598,7 @@ console.log('✅ Prometheus metrics initialized');
 // ============================================================================
 
 const PORT = process.env.PORT || process.env.CRYPTO_PORT || 3006;
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
     console.log(`
 ╔════════════════════════════════════════════════════════════════╗
 ║           UNIFIED CRYPTO TRADING BOT - LIVE 24/7              ║
@@ -1631,6 +1631,32 @@ app.listen(PORT, () => {
         engine.start();
     } else {
         console.log('⏸️  Bot was stopped before restart - not auto-starting. POST /api/trading/start to begin.');
+    }
+
+    // ── DB Reconciliation: close orphaned 'open' trades not in memory ──
+    // Runs after loadState so engine.positions is populated from saved state.
+    try {
+        if (dbPool) {
+            const orphaned = await dbPool.query(
+                `SELECT id, symbol FROM trades WHERE bot='crypto' AND status='open'`
+            );
+            let closedCount = 0;
+            for (const row of orphaned.rows) {
+                if (!engine.positions.has(row.symbol)) {
+                    await dbPool.query(
+                        `UPDATE trades SET status='closed', exit_price=entry_price, pnl_usd=0, pnl_pct=0,
+                         close_reason='orphaned_restart', exit_time=NOW() WHERE id=$1`,
+                        [row.id]
+                    );
+                    closedCount++;
+                }
+            }
+            if (closedCount > 0) {
+                console.log(`🧹 Closed ${closedCount} orphaned DB trade(s) from previous session`);
+            }
+        }
+    } catch (e) {
+        console.warn('⚠️  DB reconciliation failed:', e.message);
     }
 });
 

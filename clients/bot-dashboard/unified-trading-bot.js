@@ -2468,6 +2468,33 @@ app.listen(PORT, async () => {
 
     initDb().catch(e => console.warn('Auth DB init error:', e.message));
 
+    // ── DB Reconciliation: close orphaned 'open' trades not in memory ──
+    // Runs at startup after positions are loaded from disk.
+    // Any DB row still 'open' for a symbol we don't track = orphaned on restart.
+    try {
+        if (dbPool) {
+            const orphaned = await dbPool.query(
+                `SELECT id, symbol FROM trades WHERE bot='stock' AND status='open'`
+            );
+            let closedCount = 0;
+            for (const row of orphaned.rows) {
+                if (!positions.has(row.symbol)) {
+                    await dbPool.query(
+                        `UPDATE trades SET status='closed', exit_price=entry_price, pnl_usd=0, pnl_pct=0,
+                         close_reason='orphaned_restart', exit_time=NOW() WHERE id=$1`,
+                        [row.id]
+                    );
+                    closedCount++;
+                }
+            }
+            if (closedCount > 0) {
+                console.log(`🧹 Closed ${closedCount} orphaned DB trade(s) from previous session`);
+            }
+        }
+    } catch (e) {
+        console.warn('⚠️  DB reconciliation failed:', e.message);
+    }
+
     // Pre-seed strategy bridge pairs cache 30s after startup (non-blocking)
     setTimeout(() => {
         axios.post(`http://localhost:${PORT}/api/bridge/warmup`, {}, { timeout: 120000 })

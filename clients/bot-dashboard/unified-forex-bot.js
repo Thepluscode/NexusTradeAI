@@ -1703,6 +1703,33 @@ app.listen(PORT, async () => {
         console.warn('⚠️  Position hydration failed (will proceed):', e.message);
     }
 
+    // ── DB Reconciliation: close orphaned 'open' trades not in memory ──
+    // Runs after position hydration so in-memory positions map is complete.
+    // Any DB row still 'open' for a pair we don't track = orphaned on restart.
+    try {
+        if (dbPool) {
+            const orphaned = await dbPool.query(
+                `SELECT id, symbol FROM trades WHERE bot='forex' AND status='open'`
+            );
+            let closedCount = 0;
+            for (const row of orphaned.rows) {
+                if (!positions.has(row.symbol)) {
+                    await dbPool.query(
+                        `UPDATE trades SET status='closed', exit_price=entry_price, pnl_usd=0, pnl_pct=0,
+                         close_reason='orphaned_restart', exit_time=NOW() WHERE id=$1`,
+                        [row.id]
+                    );
+                    closedCount++;
+                }
+            }
+            if (closedCount > 0) {
+                console.log(`🧹 Closed ${closedCount} orphaned DB trade(s) from previous session`);
+            }
+        }
+    } catch (e) {
+        console.warn('⚠️  DB reconciliation failed:', e.message);
+    }
+
     // Initial scan
     setTimeout(() => tradingLoop().catch(e => console.error('❌ Forex loop crashed:', e)), 5000);
 
