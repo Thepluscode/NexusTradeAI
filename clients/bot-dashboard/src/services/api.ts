@@ -218,7 +218,7 @@ class APIClient {
 
   async warmupBridge(): Promise<{ seeded: string[]; failed: string[] } | null> {
     try {
-      const response = await this.tradingEngine.post('/api/bridge/warmup');
+      const response = await this.tradingEngine.post('/api/bridge/warmup', {}, { timeout: 60000 });
       return response.data;
     } catch {
       return null;

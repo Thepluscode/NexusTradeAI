@@ -2364,10 +2364,10 @@ const FOREX_WARMUP_PAIRS  = ['EUR_USD','GBP_USD','USD_JPY','USD_CHF','AUD_USD','
 app.post('/api/bridge/warmup', async (req, res) => {
     const results = { seeded: [], failed: [], bridgeUrl: BRIDGE_URL };
 
-    // ── Stock pairs (Alpaca daily bars) ─────────────────────────────────────
+    // ── Stock pairs (Alpaca daily bars) — parallel fetches ──────────────────
     // Must supply start= — Alpaca returns null bars without it
     const warmupStart = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    for (const symbol of KNOWN_PAIRS_SYMBOLS) {
+    await Promise.allSettled(KNOWN_PAIRS_SYMBOLS.map(async (symbol) => {
         try {
             const barUrl = `${alpacaConfig.dataURL}/v2/stocks/${symbol}/bars`;
             const barResp = await axios.get(barUrl, {
@@ -2375,7 +2375,7 @@ app.post('/api/bridge/warmup', async (req, res) => {
                 params: { timeframe: '1Day', limit: 100, start: warmupStart, feed: 'sip' }
             });
             const bars = barResp.data?.bars || [];
-            if (bars.length < 30) { results.failed.push(`${symbol}: only ${bars.length} bars`); continue; }
+            if (bars.length < 30) { results.failed.push(`${symbol}: only ${bars.length} bars`); return; }
             const prices = bars.map(b => ({
                 timestamp: b.t, open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v
             }));
@@ -2384,7 +2384,7 @@ app.post('/api/bridge/warmup', async (req, res) => {
         } catch (e) {
             results.failed.push(`${symbol}: ${e.message}`);
         }
-    }
+    }));
 
     // ── Forex pairs (OANDA H1 candles — only if creds available) ────────────
     const oandaToken   = process.env.OANDA_ACCESS_TOKEN;
@@ -2393,14 +2393,14 @@ app.post('/api/bridge/warmup', async (req, res) => {
         : 'https://api-fxtrade.oanda.com';
 
     if (oandaToken) {
-        for (const pair of FOREX_WARMUP_PAIRS) {
+        await Promise.allSettled(FOREX_WARMUP_PAIRS.map(async (pair) => {
             try {
                 const candleResp = await axios.get(
                     `${oandaBase}/v3/instruments/${pair}/candles?granularity=H1&count=100&price=M`,
                     { headers: { 'Authorization': `Bearer ${oandaToken}` }, timeout: 8000 }
                 );
                 const candles = candleResp.data?.candles || [];
-                if (candles.length < 30) { results.failed.push(`${pair}: only ${candles.length} candles`); continue; }
+                if (candles.length < 30) { results.failed.push(`${pair}: only ${candles.length} candles`); return; }
                 const prices = candles.map(c => ({
                     timestamp: c.time,
                     open:   parseFloat(c.mid.o),
@@ -2414,7 +2414,7 @@ app.post('/api/bridge/warmup', async (req, res) => {
             } catch (e) {
                 results.failed.push(`${pair}: ${e.message}`);
             }
-        }
+        }));
     } else {
         results.failed.push('forex: OANDA_ACCESS_TOKEN not set — skipped forex pairs');
     }
