@@ -2248,7 +2248,7 @@ async function tradingLoop() {
             const now = getESTDate();
             const isWeekend = now.getDay() === 0 || now.getDay() === 6;
             if (!isWeekend) {
-                console.log(`⏸  Market not in optimal trading window (${now.toLocaleTimeString('en-US', { timeZone: 'America/New_York' })} EST) - skipping scan`);
+                console.log(`⏸  Market not in optimal trading window (${now.toLocaleTimeString()} EST) - skipping scan`);
             }
         }
     } catch (err) {
