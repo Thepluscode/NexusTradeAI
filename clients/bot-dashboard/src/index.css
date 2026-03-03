@@ -23,7 +23,7 @@
   --nx-cyan:    #06b6d4;
 
   /* Glass tokens */
-  --nx-glass-bg:      rgba(15, 20, 30, 0.55);
+  --nx-glass-bg:      rgba(13, 17, 23, 0.72);
   --nx-glass-border:  rgba(255, 255, 255, 0.08);
   --nx-glass-blur:    16px;
   --nx-glass-bg-lite: rgba(255, 255, 255, 0.03);
@@ -32,9 +32,10 @@
   --nx-shadow-sm:  0 2px 8px rgba(0, 0, 0, 0.3);
   --nx-shadow-md:  0 8px 24px rgba(0, 0, 0, 0.4);
   --nx-shadow-lg:  0 16px 48px rgba(0, 0, 0, 0.5);
-  --nx-shadow-glow-blue:   0 0 20px rgba(59, 130, 246, 0.15);
-  --nx-shadow-glow-green:  0 0 20px rgba(16, 185, 129, 0.15);
-  --nx-shadow-glow-purple: 0 0 20px rgba(139, 92, 246, 0.15);
+  --nx-shadow-xl:  0 24px 64px rgba(0, 0, 0, 0.6);
+  --nx-shadow-glow-blue:   0 0 24px rgba(59, 130, 246, 0.2);
+  --nx-shadow-glow-green:  0 0 24px rgba(16, 185, 129, 0.2);
+  --nx-shadow-glow-purple: 0 0 24px rgba(139, 92, 246, 0.2);
 
   /* Transitions */
   --nx-ease:     cubic-bezier(0.4, 0, 0.2, 1);
@@ -51,6 +52,7 @@ html {
   scroll-behavior: smooth;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 body {
@@ -64,24 +66,24 @@ body {
 
 /* ── Custom Scrollbar ──────────────────────────────────────────── */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.18);
 }
 
 /* Firefox */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.08) transparent;
 }
 
 /* ── Keyframe Animations ───────────────────────────────────────── */
@@ -91,7 +93,7 @@ body {
 }
 
 @keyframes slideUp {
-  from { opacity: 0; transform: translateY(24px); }
+  from { opacity: 0; transform: translateY(20px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
@@ -101,8 +103,8 @@ body {
 }
 
 @keyframes pulseGlow {
-  0%, 100% { box-shadow: 0 0 4px currentColor; opacity: 1; }
-  50%      { box-shadow: 0 0 12px currentColor; opacity: 0.7; }
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.6; transform: scale(1.08); }
 }
 
 @keyframes shimmer {
@@ -136,6 +138,32 @@ body {
   to   { opacity: 1; transform: scale(1); }
 }
 
+/* ── NEW: Floating orb animation (login page background) ────────── */
+@keyframes floatOrb {
+  0%, 100% { transform: translate(0, 0) scale(1);     opacity: 0.45; }
+  25%      { transform: translate(25px, -18px) scale(1.04); opacity: 0.6;  }
+  50%      { transform: translate(-15px, 20px) scale(0.97); opacity: 0.5;  }
+  75%      { transform: translate(20px, 10px) scale(1.02);  opacity: 0.55; }
+}
+
+/* ── NEW: Ripple expand animation (online status badge) ─────────── */
+@keyframes rippleExpand {
+  0%   { transform: scale(1);   opacity: 0.7; }
+  100% { transform: scale(3.2); opacity: 0;   }
+}
+
+/* ── NEW: Rotating gradient border (login logo ring) ────────────── */
+@keyframes rotateBorder {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* ── NEW: Count-up shimmer on metric values ─────────────────────── */
+@keyframes valueShimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
 /* ── Utility Classes ───────────────────────────────────────────── */
 .nx-glass {
   background: var(--nx-glass-bg);
@@ -152,7 +180,7 @@ body {
 }
 
 .nx-animate-in {
-  animation: slideUp 0.5s var(--nx-ease) both;
+  animation: slideUp 0.45s var(--nx-ease) both;
 }
 
 .nx-stagger-1 { animation-delay: 0.05s; }
@@ -160,6 +188,7 @@ body {
 .nx-stagger-3 { animation-delay: 0.15s; }
 .nx-stagger-4 { animation-delay: 0.20s; }
 .nx-stagger-5 { animation-delay: 0.25s; }
+.nx-stagger-6 { animation-delay: 0.30s; }
 
 .nx-gradient-text {
   background: linear-gradient(135deg, var(--nx-blue), var(--nx-purple));
@@ -191,7 +220,7 @@ body {
     radial-gradient(ellipse at 80% 20%, rgba(139, 92, 246, 0.06) 0%, transparent 50%),
     radial-gradient(ellipse at 60% 80%, rgba(16, 185, 129, 0.05) 0%, transparent 50%);
   pointer-events: none;
-  animation: gradientShift 15s ease infinite;
+  animation: gradientShift 18s ease infinite;
   background-size: 200% 200%;
 }
 
@@ -205,4 +234,10 @@ body {
 ::selection {
   background: rgba(59, 130, 246, 0.3);
   color: white;
+}
+
+/* ── Gradient border utility (applied via JS class) ─────────────── */
+.nx-gradient-border {
+  border: 1px solid transparent !important;
+  background-clip: padding-box;
 }

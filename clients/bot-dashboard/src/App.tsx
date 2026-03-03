@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { QueryClient, QueryClientProvider } from 'react-query';
-import { ThemeProvider, createTheme, CssBaseline, alpha } from '@mui/material';
+import { ThemeProvider, CssBaseline, alpha } from '@mui/material';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import {
   Box,
@@ -32,6 +32,7 @@ import {
   Logout,
   Bolt,
 } from '@mui/icons-material';
+import darkTheme from './theme';
 import { Toaster } from 'react-hot-toast';
 
 // Pages
@@ -55,172 +56,27 @@ const queryClient = new QueryClient({
   },
 });
 
-// ── Premium Dark Theme ────────────────────────────────────────────────────────
-const darkTheme = createTheme({
-  palette: {
-    mode: 'dark',
-    primary: {
-      main: '#3b82f6',
-      light: '#60a5fa',
-      dark: '#2563eb',
-    },
-    secondary: {
-      main: '#8b5cf6',
-      light: '#a78bfa',
-      dark: '#7c3aed',
-    },
-    success: {
-      main: '#10b981',
-      light: '#34d399',
-      dark: '#059669',
-    },
-    error: {
-      main: '#ef4444',
-      light: '#f87171',
-      dark: '#dc2626',
-    },
-    warning: {
-      main: '#f59e0b',
-      light: '#fbbf24',
-      dark: '#d97706',
-    },
-    info: {
-      main: '#06b6d4',
-      light: '#22d3ee',
-      dark: '#0891b2',
-    },
-    background: {
-      default: '#06080d',
-      paper: '#0d1117',
-    },
-    divider: 'rgba(255, 255, 255, 0.06)',
-    text: {
-      primary: '#e6edf3',
-      secondary: '#8b949e',
-    },
-  },
-  shape: {
-    borderRadius: 12,
-  },
-  typography: {
-    fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-    h4: { fontWeight: 800, letterSpacing: '-0.02em' },
-    h5: { fontWeight: 700, letterSpacing: '-0.01em' },
-    h6: { fontWeight: 700, letterSpacing: '-0.01em' },
-    subtitle1: { fontWeight: 600 },
-    subtitle2: { fontWeight: 600, fontSize: '0.8rem' },
-    body2: { color: '#8b949e' },
-    button: { fontWeight: 600, textTransform: 'none' as const },
-  },
-  components: {
-    MuiCssBaseline: {
-      styleOverrides: {
-        body: {
-          backgroundImage: 'none',
-        },
-      },
-    },
-    MuiCard: {
-      styleOverrides: {
-        root: {
-          backgroundImage: 'none',
-          borderRadius: 16,
-          border: '1px solid rgba(255, 255, 255, 0.06)',
-          backgroundColor: 'rgba(13, 17, 23, 0.7)',
-          backdropFilter: 'blur(12px)',
-          WebkitBackdropFilter: 'blur(12px)',
-          transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.3s ease',
-          '&:hover': {
-            borderColor: 'rgba(59, 130, 246, 0.2)',
-          },
-        },
-      },
-    },
-    MuiPaper: {
-      styleOverrides: {
-        root: {
-          backgroundImage: 'none',
-          backgroundColor: 'rgba(13, 17, 23, 0.7)',
-          backdropFilter: 'blur(12px)',
-          WebkitBackdropFilter: 'blur(12px)',
-          border: '1px solid rgba(255, 255, 255, 0.06)',
-          borderRadius: 16,
-        },
-      },
-    },
-    MuiButton: {
-      styleOverrides: {
-        root: {
-          borderRadius: 10,
-          textTransform: 'none' as const,
-          fontWeight: 600,
-          padding: '8px 20px',
-          transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
-        },
-        contained: {
-          boxShadow: 'none',
-          '&:hover': {
-            boxShadow: '0 4px 16px rgba(59, 130, 246, 0.3)',
-            transform: 'translateY(-1px)',
-          },
-        },
-      },
-    },
-    MuiChip: {
-      styleOverrides: {
-        root: {
-          fontWeight: 600,
-          borderRadius: 8,
-        },
-      },
-    },
-    MuiTextField: {
-      styleOverrides: {
-        root: {
-          '& .MuiOutlinedInput-root': {
-            borderRadius: 10,
-            transition: 'box-shadow 0.25s ease',
-            '&.Mui-focused': {
-              boxShadow: '0 0 0 3px rgba(59, 130, 246, 0.15)',
-            },
-          },
-        },
-      },
-    },
-    MuiTableCell: {
-      styleOverrides: {
-        root: {
-          borderColor: 'rgba(255, 255, 255, 0.06)',
-        },
-      },
-    },
-    MuiDivider: {
-      styleOverrides: {
-        root: {
-          borderColor: 'rgba(255, 255, 255, 0.06)',
-        },
-      },
-    },
-    MuiSkeleton: {
-      styleOverrides: {
-        root: {
-          backgroundColor: 'rgba(255, 255, 255, 0.04)',
-        },
-      },
-    },
-    MuiTooltip: {
-      styleOverrides: {
-        tooltip: {
-          backgroundColor: '#1c2333',
-          border: '1px solid rgba(255, 255, 255, 0.08)',
-          borderRadius: 8,
-          fontSize: '0.75rem',
-          fontWeight: 500,
-        },
-      },
-    },
-  },
-});
+// ── Live UTC Clock ────────────────────────────────────────────────────────────
+function LiveClock() {
+  const [time, setTime] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <Typography
+      variant="caption"
+      sx={{
+        color: 'text.secondary',
+        fontSize: '0.62rem',
+        letterSpacing: '0.04em',
+        fontVariantNumeric: 'tabular-nums',
+      }}
+    >
+      {time.toUTCString().slice(17, 25)} UTC
+    </Typography>
+  );
+}
 
 const DRAWER_WIDTH = 272;
 
@@ -258,7 +114,7 @@ function Navigation() {
         >
           <Bolt sx={{ color: '#fff', fontSize: 22 }} />
         </Box>
-        <Box>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography
             variant="subtitle1"
             sx={{
@@ -272,9 +128,7 @@ function Navigation() {
           >
             NexusTradeAI
           </Typography>
-          <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.65rem', letterSpacing: '0.05em' }}>
-            TRADING PLATFORM
-          </Typography>
+          <LiveClock />
         </Box>
       </Box>
 
@@ -347,6 +201,7 @@ function Navigation() {
                       borderRadius: '50%',
                       bgcolor: item.color,
                       boxShadow: `0 0 6px ${item.color}`,
+                      animation: 'pulseDot 2s ease-in-out infinite',
                     }}
                   />
                 )}
@@ -445,10 +300,6 @@ function Navigation() {
   const drawerStyles = {
     '& .MuiDrawer-paper': {
       width: DRAWER_WIDTH,
-      background: 'rgba(13, 17, 23, 0.85)',
-      backdropFilter: 'blur(20px)',
-      WebkitBackdropFilter: 'blur(20px)',
-      borderRight: '1px solid rgba(255, 255, 255, 0.06)',
       boxShadow: '4px 0 24px rgba(0, 0, 0, 0.3)',
     },
   };
@@ -553,7 +404,6 @@ function Navigation() {
           minHeight: '100vh',
           bgcolor: 'background.default',
           position: 'relative',
-          // Subtle mesh gradient on the content area
           '&::before': {
             content: '""',
             position: 'fixed',
@@ -569,7 +419,13 @@ function Navigation() {
           },
         }}
       >
-        <Box sx={{ position: 'relative', zIndex: 1 }}>
+        <Box
+          sx={{
+            position: 'relative',
+            zIndex: 1,
+            animation: 'fadeIn 0.3s cubic-bezier(0.4, 0, 0.2, 1) both',
+          }}
+        >
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/" element={<ProtectedRoute><OverviewPage /></ProtectedRoute>} />
@@ -597,7 +453,7 @@ function App() {
           width: '100vw',
           overflowX: 'hidden',
           display: 'flex',
-          flexDirection: 'column'
+          flexDirection: 'column',
         }}>
           <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
             <Navigation />

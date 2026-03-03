@@ -143,6 +143,11 @@ export const MetricCard: React.FC<MetricCardProps> = ({
                 flexShrink: 0,
                 transition: 'all 0.3s ease',
                 '& svg': { fontSize: 22 },
+                '.MuiCard-root:hover &': {
+                  background: `linear-gradient(135deg, ${alpha(accent, 0.25)}, ${alpha(accent, 0.10)})`,
+                  boxShadow: `0 0 16px ${alpha(accent, 0.25)}`,
+                  transform: 'scale(1.08)',
+                },
               }}
             >
               {icon}
