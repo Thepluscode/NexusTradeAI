@@ -61,17 +61,24 @@ export default function TradesPage() {
     );
 
     const totals = summary?.totals ?? [];
-    const allTotal = totals.reduce<TradeBotTotal>((acc, t) => ({
-        bot: 'all',
-        total_trades: String(parseInt(acc.total_trades) + parseInt(t.total_trades)),
-        winners: String(parseInt(acc.winners) + parseInt(t.winners)),
-        total_pnl: acc.total_pnl + t.total_pnl,
-        gross_profit: acc.gross_profit + t.gross_profit,
-        gross_loss: acc.gross_loss + t.gross_loss,
-    }), { bot: 'all', total_trades: '0', winners: '0', total_pnl: 0, gross_profit: 0, gross_loss: 0 });
+    const allTotal = totals.reduce<TradeBotTotal & { total_all_trades?: string; open_trades?: string }>((acc, t) => {
+        const tAny = t as TradeBotTotal & { total_all_trades?: string; open_trades?: string };
+        return {
+            bot: 'all',
+            total_all_trades: String(parseInt(acc.total_all_trades || '0') + parseInt(tAny.total_all_trades || tAny.total_trades || '0')),
+            open_trades: String(parseInt(acc.open_trades || '0') + parseInt(tAny.open_trades || '0')),
+            total_trades: String(parseInt(acc.total_trades) + parseInt(t.total_trades)),
+            winners: String(parseInt(acc.winners) + parseInt(t.winners)),
+            total_pnl: acc.total_pnl + t.total_pnl,
+            gross_profit: acc.gross_profit + t.gross_profit,
+            gross_loss: acc.gross_loss + t.gross_loss,
+        };
+    }, { bot: 'all', total_all_trades: '0', open_trades: '0', total_trades: '0', winners: '0', total_pnl: 0, gross_profit: 0, gross_loss: 0 });
 
-    const totalTrades = parseInt(allTotal.total_trades);
-    const winRate = totalTrades > 0 ? parseInt(allTotal.winners) / totalTrades : 0;
+    const allTradesCount = parseInt(allTotal.total_all_trades || allTotal.total_trades);
+    const closedTradesCount = parseInt(allTotal.total_trades);
+    const openTradesCount = parseInt(allTotal.open_trades || '0');
+    const winRate = closedTradesCount > 0 ? parseInt(allTotal.winners) / closedTradesCount : 0;
     const profitFactor = allTotal.gross_loss > 0 ? allTotal.gross_profit / allTotal.gross_loss : allTotal.gross_profit > 0 ? Infinity : 0;
 
     const isLoading = tradesLoading || summaryLoading;
@@ -104,27 +111,28 @@ export default function TradesPage() {
                     <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,1fr)', md: 'repeat(4,1fr)' }, gap: 3, mb: 3 }}>
                         <MetricCard
                             title="Total Trades"
-                            value={String(totalTrades)}
-                            color={totalTrades >= 30 ? 'success' : undefined}
+                            value={String(allTradesCount)}
+                            suffix={openTradesCount > 0 ? ` (${openTradesCount} open)` : undefined}
+                            color={allTradesCount >= 30 ? 'success' : undefined}
                             icon={<Receipt />}
                         />
                         <MetricCard
                             title="Win Rate"
                             value={(winRate * 100).toFixed(1)}
                             suffix="%"
-                            color={winRate >= 0.5 ? 'success' : totalTrades > 0 ? 'warning' : undefined}
+                            color={winRate >= 0.5 ? 'success' : closedTradesCount > 0 ? 'warning' : undefined}
                             icon={<TrendingUp />}
                         />
                         <MetricCard
                             title="Total P&L"
                             value={fmt(allTotal.total_pnl)}
-                            color={allTotal.total_pnl > 0 ? 'success' : totalTrades > 0 ? 'error' : undefined}
+                            color={allTotal.total_pnl > 0 ? 'success' : closedTradesCount > 0 ? 'error' : undefined}
                             icon={allTotal.total_pnl >= 0 ? <TrendingUp /> : <TrendingDown />}
                         />
                         <MetricCard
                             title="Profit Factor"
                             value={isFinite(profitFactor) ? profitFactor.toFixed(2) : '∞'}
-                            color={profitFactor >= 1.5 ? 'success' : profitFactor >= 1.2 ? 'warning' : totalTrades > 0 ? 'error' : undefined}
+                            color={profitFactor >= 1.5 ? 'success' : profitFactor >= 1.2 ? 'warning' : closedTradesCount > 0 ? 'error' : undefined}
                             icon={<TrendingUp />}
                         />
                     </Box>
@@ -133,14 +141,18 @@ export default function TradesPage() {
                     {totals.length > 0 && (
                         <Grid container spacing={2} sx={{ mb: 3 }}>
                             {totals.map(t => {
+                                const tAny = t as TradeBotTotal & { total_all_trades?: string; open_trades?: string };
                                 const tt = parseInt(t.total_trades);
+                                const openTt = parseInt(tAny.open_trades || '0');
                                 const wr = tt > 0 ? parseInt(t.winners) / tt : 0;
                                 return (
                                     <Grid item xs={12} sm={4} key={t.bot}>
                                         <Paper sx={{ p: 2 }}>
                                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
                                                 <Chip label={t.bot.toUpperCase()} size="small" color={BOT_COLORS[t.bot] ?? 'default'} />
-                                                <Typography variant="body2" color="text.secondary">{tt} closed trades</Typography>
+                                                <Typography variant="body2" color="text.secondary">
+                                                    {tt} closed trades{openTt > 0 ? ` · ${openTt} open` : ''}
+                                                </Typography>
                                             </Box>
                                             <Box sx={{ display: 'flex', gap: 3 }}>
                                                 <Box>
