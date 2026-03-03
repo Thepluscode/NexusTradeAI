@@ -559,9 +559,20 @@ const TRADING_HOURS = {
 };
 
 function getESTDate() {
-    // Always use America/New_York (handles EST/EDT automatically)
-    const estStr = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
-    return new Date(estStr);
+    // Build a Date whose .getHours()/.getMinutes()/.getDay() return EST/EDT values
+    // toLocaleString gives e.g. "3/3/2026, 9:05:00 AM" in NY time.
+    // Re-parsing that string with new Date() would treat it as LOCAL (UTC on Railway),
+    // so we extract the parts manually instead.
+    const now = new Date();
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false
+    }).formatToParts(now);
+    const get = type => parseInt(parts.find(p => p.type === type).value, 10);
+    // Construct a plain Date in local time using NY values — only used for .getHours() etc.
+    return new Date(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
 }
 
 function isGoodTradingTime() {
