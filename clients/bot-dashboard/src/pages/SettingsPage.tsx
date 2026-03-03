@@ -45,7 +45,10 @@ import {
     Save,
     Send,
     WarningAmber,
+    Logout,
 } from '@mui/icons-material';
+import { alpha } from '@mui/material/styles';
+import { useAuth } from '@/hooks/useAuth';
 import axios from 'axios';
 import { SERVICE_URLS } from '@/services/api';
 import toast from 'react-hot-toast';
@@ -92,8 +95,8 @@ async function saveCredentials(payload: { broker: string; credentials: Record<st
     // Route to the correct bot based on broker type
     const botUrl =
         (payload.broker === 'oanda') ? SERVICE_URLS.forexBot :
-        (payload.broker === 'crypto') ? SERVICE_URLS.cryptoBot :
-        API_BASE;
+            (payload.broker === 'crypto') ? SERVICE_URLS.cryptoBot :
+                API_BASE;
     const res = await axios.post(`${botUrl}/api/config/credentials`, payload, { headers: authHeaders });
     return res.data;
 }
@@ -861,6 +864,7 @@ const NAV: { id: Section; label: string }[] = [
 ];
 
 export default function SettingsPage() {
+    const { user, logout } = useAuth();
     const [activeSection, setActiveSection] = useState<Section>('mode');
     const queryClient = useQueryClient();
 
@@ -1642,6 +1646,101 @@ export default function SettingsPage() {
                         <FundManagement config={config} />
                     </Box>
                 )}
+
+                {/* ── BOT STATUS / USER PROFILE FOOTER ── */}
+                <Paper
+                    sx={{
+                        mt: 6,
+                        p: 3,
+                        borderRadius: 3,
+                        border: '1px solid',
+                        borderColor: 'divider',
+                        background: 'rgba(13, 17, 23, 0.5)',
+                        backdropFilter: 'blur(8px)',
+                    }}
+                >
+                    {/* Bot Status + Version */}
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2.5 }}>
+                        <Box>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                                <Box
+                                    sx={{
+                                        width: 10,
+                                        height: 10,
+                                        borderRadius: '50%',
+                                        bgcolor: '#10b981',
+                                        boxShadow: '0 0 8px rgba(16, 185, 129, 0.6)',
+                                        animation: 'pulseGlow 2s ease-in-out infinite',
+                                    }}
+                                />
+                                <Typography variant="body1" fontWeight={600}>Bot Active</Typography>
+                            </Box>
+                            <Typography variant="caption" color="text.secondary">Version 1.0.0</Typography>
+                        </Box>
+                    </Box>
+
+                    <Divider sx={{ mb: 2.5 }} />
+
+                    {/* User Profile */}
+                    {user && (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                            <Avatar
+                                sx={{
+                                    width: 48,
+                                    height: 48,
+                                    fontSize: '1.1rem',
+                                    fontWeight: 700,
+                                    bgcolor: alpha('#10b981', 0.15),
+                                    color: '#34d399',
+                                    border: `2px solid ${alpha('#10b981', 0.3)}`,
+                                }}
+                            >
+                                {(user.name || user.email)?.[0]?.toUpperCase() || 'U'}
+                            </Avatar>
+                            <Box sx={{ flex: 1, minWidth: 0 }}>
+                                <Typography
+                                    variant="body1"
+                                    fontWeight={600}
+                                    sx={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                                >
+                                    {user.name || user.email?.split('@')[0]}
+                                </Typography>
+                                <Typography
+                                    variant="body2"
+                                    color="text.secondary"
+                                    sx={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                                >
+                                    {user.email}
+                                </Typography>
+                            </Box>
+                        </Box>
+                    )}
+
+                    {/* Logout Button */}
+                    <Button
+                        variant="outlined"
+                        fullWidth
+                        startIcon={<Logout />}
+                        onClick={logout}
+                        sx={{
+                            mt: 2.5,
+                            py: 1.2,
+                            borderRadius: 2.5,
+                            borderColor: alpha('#ef4444', 0.3),
+                            color: '#f87171',
+                            textTransform: 'none',
+                            fontWeight: 600,
+                            fontSize: '0.9rem',
+                            transition: 'all 0.2s ease',
+                            '&:hover': {
+                                borderColor: '#ef4444',
+                                bgcolor: alpha('#ef4444', 0.08),
+                            },
+                        }}
+                    >
+                        Logout
+                    </Button>
+                </Paper>
             </Box>
         </Box>
     );
