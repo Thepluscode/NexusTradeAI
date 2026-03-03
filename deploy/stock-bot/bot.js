@@ -1140,11 +1140,21 @@ async function scanMomentumBreakouts() {
     }
 }
 
-async function analyzeMomentum(symbol) {
+async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
     try {
-        if (!isGoodTradingTime()) return null;
+        if (!backtestMode && !isGoodTradingTime()) return null;
 
-        const today = new Date().toISOString().split('T')[0];
+        // For backtest mode outside market hours, use last 2 trading days so we get bars
+        const scanDate = new Date();
+        if (backtestMode) {
+            // Go back up to 7 calendar days to find a trading day with data
+            scanDate.setDate(scanDate.getDate() - 1);
+            // Skip weekends
+            while (scanDate.getDay() === 0 || scanDate.getDay() === 6) {
+                scanDate.setDate(scanDate.getDate() - 1);
+            }
+        }
+        const today = scanDate.toISOString().split('T')[0];
         const barUrl = `${alpacaConfig.dataURL}/v2/stocks/${symbol}/bars`;
 
         const barResponse = await axios.get(barUrl, {
@@ -2320,7 +2330,7 @@ app.post('/api/backtest/run', async (req, res) => {
         const batchSize = 10; // parallel batches — same pattern as scanMomentumBreakouts
         for (let i = 0; i < symbols.length; i += batchSize) {
             const batch = symbols.slice(i, i + batchSize);
-            const settled = await Promise.allSettled(batch.map(s => analyzeMomentum(s)));
+            const settled = await Promise.allSettled(batch.map(s => analyzeMomentum(s, { backtestMode: true })));
             for (const r of settled) {
                 if (r.status === 'fulfilled' && r.value) {
                     const signal = r.value;
@@ -2355,12 +2365,14 @@ app.post('/api/bridge/warmup', async (req, res) => {
     const results = { seeded: [], failed: [], bridgeUrl: BRIDGE_URL };
 
     // ── Stock pairs (Alpaca daily bars) ─────────────────────────────────────
+    // Must supply start= — Alpaca returns null bars without it
+    const warmupStart = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     for (const symbol of KNOWN_PAIRS_SYMBOLS) {
         try {
             const barUrl = `${alpacaConfig.dataURL}/v2/stocks/${symbol}/bars`;
             const barResp = await axios.get(barUrl, {
                 headers: { 'APCA-API-KEY-ID': alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': alpacaConfig.secretKey },
-                params: { timeframe: '1Day', limit: 100, feed: 'sip' }
+                params: { timeframe: '1Day', limit: 100, start: warmupStart, feed: 'sip' }
             });
             const bars = barResp.data?.bars || [];
             if (bars.length < 30) { results.failed.push(`${symbol}: only ${bars.length} bars`); continue; }
