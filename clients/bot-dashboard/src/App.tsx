@@ -278,8 +278,30 @@ function Navigation() {
             <ListItemText primary="Settings" primaryTypographyProps={{ fontSize: '0.875rem' }} />
           </ListItemButton>
         </ListItem>
+
+        {/* Bot Status + Version */}
+        <Box sx={{ px: 2, pt: 2, pb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.3 }}>
+            <Box
+              sx={{
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                bgcolor: '#10b981',
+                boxShadow: '0 0 6px rgba(16, 185, 129, 0.6)',
+                animation: 'pulseDot 2s ease-in-out infinite',
+              }}
+            />
+            <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.8rem' }}>Bot Active</Typography>
+          </Box>
+          <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.65rem', pl: 2.2 }}>
+            Version 1.0.0
+          </Typography>
+        </Box>
+
+        {/* User Profile + Logout */}
         {user && (
-          <ListItem disablePadding sx={{ mt: 1 }}>
+          <ListItem disablePadding sx={{ mt: 0.5 }}>
             <Tooltip title="Sign out" placement="right" arrow>
               <ListItemButton
                 onClick={logout}
@@ -293,14 +315,14 @@ function Navigation() {
               >
                 <Avatar
                   sx={{
-                    width: 32,
-                    height: 32,
+                    width: 36,
+                    height: 36,
                     mr: 1.5,
-                    fontSize: '0.75rem',
+                    fontSize: '0.85rem',
                     fontWeight: 700,
-                    bgcolor: alpha('#3b82f6', 0.15),
-                    color: '#60a5fa',
-                    border: '1px solid rgba(59, 130, 246, 0.2)',
+                    bgcolor: alpha('#10b981', 0.15),
+                    color: '#34d399',
+                    border: `2px solid ${alpha('#10b981', 0.3)}`,
                   }}
                 >
                   {(user.name || user.email)?.[0]?.toUpperCase() || 'U'}
@@ -309,7 +331,7 @@ function Navigation() {
                   <Typography
                     variant="body2"
                     sx={{
-                      fontWeight: 500,
+                      fontWeight: 600,
                       fontSize: '0.8rem',
                       color: 'text.primary',
                       whiteSpace: 'nowrap',
