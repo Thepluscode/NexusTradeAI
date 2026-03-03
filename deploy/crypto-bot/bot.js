@@ -258,7 +258,7 @@ class KrakenClient {
             return {
                 lastPrice: lastPrice.toString(),
                 highPrice: t.h[1],
-                lowPrice: t.l[1],
+                lowPrice:  t.l[1],
                 quoteVolume: (parseFloat(t.v[1]) * lastPrice).toString(), // approx 24h USD volume
                 priceChangePercent: priceChangePercent.toFixed(4),
             };
@@ -754,7 +754,7 @@ class CryptoTradingEngine {
             // Persist trade opening to DB (fire-and-forget)
             dbCryptoOpen(signal.symbol, signal.tier, signal.price, signal.stopLoss, signal.takeProfit, quantity, positionSizeUSD)
                 .then(id => { const p = this.positions.get(signal.symbol); if (p) p.dbTradeId = id; })
-                .catch(() => { });
+                .catch(() => {});
 
             // Update tracking
             this.dailyTradeCount++;
@@ -900,7 +900,7 @@ class CryptoTradingEngine {
             console.log(`   P/L: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}% ($${pnlUSD.toFixed(2)})`);
 
             // Persist close to DB (fire-and-forget)
-            dbCryptoClose(position.dbTradeId, adjustedExitPrice, pnlUSD, pnlPercent, reason).catch(() => { });
+            dbCryptoClose(position.dbTradeId, adjustedExitPrice, pnlUSD, pnlPercent, reason).catch(() => {});
 
             // Remove position
             this.positions.delete(symbol);
@@ -1189,9 +1189,9 @@ function requireApiSecret(req, res, next) {
 
 // ── Persist env var to Railway (survives redeploys) ────────────────────────
 async function persistEnvVar(name, value) {
-    const token = process.env.RAILWAY_TOKEN;
+    const token   = process.env.RAILWAY_TOKEN;
     const project = process.env.RAILWAY_PROJECT_ID;
-    const env = process.env.RAILWAY_ENVIRONMENT_ID;
+    const env     = process.env.RAILWAY_ENVIRONMENT_ID;
     const service = process.env.RAILWAY_SERVICE_ID;
     if (!token || !project || !env || !service) {
         console.warn(`⚠️  persistEnvVar: missing Railway vars (token=${!!token} project=${!!project} env=${!!env} service=${!!service}) — ${name} saved in-memory only`);
@@ -1298,7 +1298,7 @@ app.post('/api/auth/logout', async (req, res) => {
             try {
                 const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
                 await dbPool.query('UPDATE users SET refresh_token=NULL WHERE id=$1', [payload.sub]);
-            } catch { }
+            } catch {}
         }
     }
     res.json({ success: true });
@@ -1481,9 +1481,9 @@ app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
         const { broker, credentials, fields } = req.body;
         const creds = credentials || fields;
         const ALLOWED_KEYS = {
-            crypto: ['CRYPTO_API_KEY', 'CRYPTO_API_SECRET', 'CRYPTO_EXCHANGE', 'CRYPTO_TESTNET'],
+            crypto:   ['CRYPTO_API_KEY', 'CRYPTO_API_SECRET', 'CRYPTO_EXCHANGE', 'CRYPTO_TESTNET'],
             telegram: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_ALERTS_ENABLED'],
-            sms: ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'ALERT_PHONE_NUMBER', 'SMS_ALERTS_ENABLED'],
+            sms:      ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'ALERT_PHONE_NUMBER', 'SMS_ALERTS_ENABLED'],
         };
         const allowed = ALLOWED_KEYS[broker];
         if (!allowed) return res.status(400).json({ success: false, error: 'Unknown broker' });
@@ -1512,15 +1512,11 @@ app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
                         console.log('✅ Kraken reconnected after credential update — exiting DEMO MODE');
                         return res.json({ success: true, updated, reconnected: true, demoMode: false });
                     }
-                    return res.json({
-                        success: true, updated, reconnected: false, demoMode: true,
-                        warning: 'Keys saved but Kraken rejected them — check permissions/IP whitelist'
-                    });
+                    return res.json({ success: true, updated, reconnected: false, demoMode: true,
+                        warning: 'Keys saved but Kraken rejected them — check permissions/IP whitelist' });
                 } catch (reconnectErr) {
-                    return res.json({
-                        success: true, updated, reconnected: false, demoMode: true,
-                        warning: reconnectErr.message
-                    });
+                    return res.json({ success: true, updated, reconnected: false, demoMode: true,
+                        warning: reconnectErr.message });
                 }
             }
         }
@@ -1560,9 +1556,6 @@ app.get('/api/trades/summary', async (req, res) => {
         `, [days]);
         const totals = await dbPool.query(`
             SELECT
-                'crypto' AS bot,
-                COUNT(*) AS total_all_trades,
-                COUNT(*) FILTER (WHERE status='open') AS open_trades,
                 COUNT(*) FILTER (WHERE status='closed') AS total_trades,
                 COUNT(*) FILTER (WHERE status='closed' AND pnl_usd > 0) AS winners,
                 COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed'), 0)::FLOAT AS total_pnl,

@@ -108,9 +108,9 @@ function requireApiSecret(req, res, next) {
 
 // ── Persist env var to Railway (survives redeploys) ────────────────────────
 async function persistEnvVar(name, value) {
-    const token = process.env.RAILWAY_TOKEN;
+    const token   = process.env.RAILWAY_TOKEN;
     const project = process.env.RAILWAY_PROJECT_ID;
-    const env = process.env.RAILWAY_ENVIRONMENT_ID;
+    const env     = process.env.RAILWAY_ENVIRONMENT_ID;
     const service = process.env.RAILWAY_SERVICE_ID;
     if (!token || !project || !env || !service) return;
     const query = `mutation { variableUpsert(input: { projectId: "${project}", environmentId: "${env}", serviceId: "${service}", name: "${name}", value: "${value.replace(/"/g, '\\"')}" }) }`;
@@ -214,7 +214,7 @@ app.post('/api/auth/logout', async (req, res) => {
             try {
                 const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
                 await dbPool.query('UPDATE users SET refresh_token=NULL WHERE id=$1', [payload.sub]);
-            } catch { }
+            } catch {}
         }
     }
     res.json({ success: true });
@@ -300,7 +300,7 @@ function loadBotState() {
             const saved = JSON.parse(require('fs').readFileSync(BOT_STATE_FILE, 'utf8'));
             return { running: saved.running !== false, paused: saved.paused === true };
         }
-    } catch { }
+    } catch {}
     return { running: true, paused: false };
 }
 function saveBotState() {
@@ -308,7 +308,7 @@ function saveBotState() {
         const dir = require('path').dirname(BOT_STATE_FILE);
         if (!require('fs').existsSync(dir)) require('fs').mkdirSync(dir, { recursive: true });
         require('fs').writeFileSync(BOT_STATE_FILE, JSON.stringify({ running: botRunning, paused: botPaused }));
-    } catch { }
+    } catch {}
 }
 const _initState = loadBotState();
 let botRunning = _initState.running;
@@ -340,7 +340,7 @@ function loadForexPerf() {
             // Don't restore equity or dailyPnL — those are session-specific
             console.log(`📊 Forex perf restored: ${simTotalTrades} trades, ${simWinners}W/${simLosers}L`);
         }
-    } catch { }
+    } catch {}
 }
 
 function saveForexPerf() {
@@ -355,7 +355,7 @@ function saveForexPerf() {
             shortTrades: simShortTrades,
             lastUpdate: new Date().toISOString()
         }));
-    } catch { }
+    } catch {}
 }
 
 // Load on startup
@@ -717,8 +717,8 @@ function calculateMACDForex(candles, fastPeriod = 12, slowPeriod = 26, signalPer
         macd: macdLine[macdLine.length - 1],
         signal: signalLine,
         histogram,
-        bullish: histogram > 0 && histogram > (prevHistogram || 0),
-        bearish: histogram < 0 && histogram < (prevHistogram || 0)
+        bullish:  histogram > 0 && histogram > (prevHistogram || 0),
+        bearish:  histogram < 0 && histogram < (prevHistogram || 0)
     };
 }
 
@@ -771,10 +771,10 @@ async function queryStrategyBridge(pair, _direction) {
         if (!candles || candles.length < 30) return null;
         const prices = candles.map(c => ({
             timestamp: c.time || new Date().toISOString(),
-            open: parseFloat(c.mid.o) || 0,
-            high: parseFloat(c.mid.h) || 0,
-            low: parseFloat(c.mid.l) || 0,
-            close: parseFloat(c.mid.c) || 0,
+            open:   parseFloat(c.mid.o) || 0,
+            high:   parseFloat(c.mid.h) || 0,
+            low:    parseFloat(c.mid.l) || 0,
+            close:  parseFloat(c.mid.c) || 0,
             volume: parseFloat(c.volume) || 0
         }));
         const response = await axios.post(`${BRIDGE_URL}/signal`,
@@ -904,7 +904,7 @@ async function scanForSignals() {
         if (tierPositions >= config.maxPositions) continue;
 
         // [v3.2] ATR-based stops/targets — adapts to each pair's volatility
-        const atrStop = atrPct > 0 ? atrPct * 1.5 : config.stopLoss;
+        const atrStop   = atrPct > 0 ? atrPct * 1.5 : config.stopLoss;
         const atrTarget = atrPct > 0 ? atrPct * 3.0 : config.profitTarget;
 
         // LONG Signal
@@ -938,7 +938,7 @@ async function scanForSignals() {
                 signals.push({
                     pair, direction: 'long', tier,
                     entry: currentPrice,
-                    stopLoss: currentPrice * (1 - atrStop),
+                    stopLoss:   currentPrice * (1 - atrStop),
                     takeProfit: currentPrice * (1 + atrTarget),
                     rsi, trendStrength, atrPct, h1Trend,
                     macdHistogram: macd ? macd.histogram : null,
@@ -977,7 +977,7 @@ async function scanForSignals() {
                 signals.push({
                     pair, direction: 'short', tier,
                     entry: currentPrice,
-                    stopLoss: currentPrice * (1 + atrStop),
+                    stopLoss:   currentPrice * (1 + atrStop),
                     takeProfit: currentPrice * (1 - atrTarget),
                     rsi, trendStrength, atrPct, h1Trend,
                     macdHistogram: macd ? macd.histogram : null,
@@ -1041,7 +1041,7 @@ async function executeTrade(signal) {
         // Persist trade opening to DB (fire-and-forget)
         dbForexOpen(signal.pair, signal.direction, signal.tier, signal.entry, signal.stopLoss, signal.takeProfit, units, signal.session)
             .then(id => { const p = positions.get(signal.pair); if (p) p.dbTradeId = id; })
-            .catch(() => { });
+            .catch(() => {});
 
         // Update tracking
         totalTradesToday++;
@@ -1152,7 +1152,7 @@ async function closePositionWithReason(pair, reason) {
             const exitEntry = pos.entry ?? 0;
             const exitPct = exitEntry > 0 ? (exitPnl / (exitEntry * Math.abs(pos.units ?? 1))) * 100 : 0;
             const exitPrice = pos.currentPrice ?? exitEntry;
-            dbForexClose(pos.dbTradeId, exitPrice, exitPnl, exitPct, reason).catch(() => { });
+            dbForexClose(pos.dbTradeId, exitPrice, exitPnl, exitPct, reason).catch(() => {});
         }
 
         positions.delete(pair);
@@ -1328,9 +1328,9 @@ app.get('/api/forex/status', async (req, res) => {
         const hasCredentials = oandaConfig.accessToken && oandaConfig.accountId;
         const session = getCurrentSession();
         const sessionLabel = session.quality === 'best' ? 'OVERLAP' :
-            session.name === 'London' ? 'LONDON' :
-                session.name === 'New York' ? 'NEW_YORK' :
-                    session.name === 'Tokyo' ? 'TOKYO' : 'OFF_PEAK';
+                             session.name === 'London' ? 'LONDON' :
+                             session.name === 'New York' ? 'NEW_YORK' :
+                             session.name === 'Tokyo' ? 'TOKYO' : 'OFF_PEAK';
 
         // --- Demo/simulation mode (no OANDA credentials) ---
         if (!hasCredentials) {
@@ -1562,9 +1562,9 @@ app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
         const { broker, credentials, fields } = req.body;
         const creds = credentials || fields;
         const ALLOWED_KEYS = {
-            oanda: ['OANDA_ACCOUNT_ID', 'OANDA_ACCESS_TOKEN', 'OANDA_PRACTICE'],
+            oanda:    ['OANDA_ACCOUNT_ID', 'OANDA_ACCESS_TOKEN', 'OANDA_PRACTICE'],
             telegram: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_ALERTS_ENABLED'],
-            sms: ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'ALERT_PHONE_NUMBER', 'SMS_ALERTS_ENABLED'],
+            sms:      ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'ALERT_PHONE_NUMBER', 'SMS_ALERTS_ENABLED'],
         };
         const allowed = ALLOWED_KEYS[broker];
         if (!allowed) return res.status(400).json({ success: false, error: 'Unknown broker' });
@@ -1614,9 +1614,6 @@ app.get('/api/trades/summary', async (req, res) => {
         `, [days]);
         const totals = await dbPool.query(`
             SELECT
-                'forex' AS bot,
-                COUNT(*) AS total_all_trades,
-                COUNT(*) FILTER (WHERE status='open') AS open_trades,
                 COUNT(*) FILTER (WHERE status='closed') AS total_trades,
                 COUNT(*) FILTER (WHERE status='closed' AND pnl_usd > 0) AS winners,
                 COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed'), 0)::FLOAT AS total_pnl,
