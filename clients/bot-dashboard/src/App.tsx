@@ -300,66 +300,64 @@ function Navigation() {
         </Box>
 
         {/* User Profile + Logout */}
-        {user && (
-          <ListItem disablePadding sx={{ mt: 0.5 }}>
-            <Tooltip title="Sign out" placement="right" arrow>
-              <ListItemButton
-                onClick={logout}
+        <ListItem disablePadding sx={{ mt: 0.5 }}>
+          <Tooltip title="Sign out" placement="right" arrow>
+            <ListItemButton
+              onClick={logout}
+              sx={{
+                borderRadius: '12px',
+                py: 1,
+                px: 1.5,
+                transition: 'all 0.2s ease',
+                '&:hover': { bgcolor: alpha('#ef4444', 0.08) },
+              }}
+            >
+              <Avatar
                 sx={{
-                  borderRadius: '12px',
-                  py: 1,
-                  px: 1.5,
-                  transition: 'all 0.2s ease',
-                  '&:hover': { bgcolor: alpha('#ef4444', 0.08) },
+                  width: 36,
+                  height: 36,
+                  mr: 1.5,
+                  fontSize: '0.85rem',
+                  fontWeight: 700,
+                  bgcolor: alpha('#10b981', 0.15),
+                  color: '#34d399',
+                  border: `2px solid ${alpha('#10b981', 0.3)}`,
                 }}
               >
-                <Avatar
+                {(user?.name || user?.email)?.[0]?.toUpperCase() || 'U'}
+              </Avatar>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography
+                  variant="body2"
                   sx={{
-                    width: 36,
-                    height: 36,
-                    mr: 1.5,
-                    fontSize: '0.85rem',
-                    fontWeight: 700,
-                    bgcolor: alpha('#10b981', 0.15),
-                    color: '#34d399',
-                    border: `2px solid ${alpha('#10b981', 0.3)}`,
+                    fontWeight: 600,
+                    fontSize: '0.8rem',
+                    color: 'text.primary',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
                   }}
                 >
-                  {(user.name || user.email)?.[0]?.toUpperCase() || 'U'}
-                </Avatar>
-                <Box sx={{ flex: 1, minWidth: 0 }}>
-                  <Typography
-                    variant="body2"
-                    sx={{
-                      fontWeight: 600,
-                      fontSize: '0.8rem',
-                      color: 'text.primary',
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                    }}
-                  >
-                    {user.name || user.email?.split('@')[0]}
-                  </Typography>
-                  <Typography
-                    variant="caption"
-                    sx={{
-                      fontSize: '0.65rem',
-                      color: 'text.secondary',
-                      display: 'block',
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                    }}
-                  >
-                    {user.email}
-                  </Typography>
-                </Box>
-                <Logout sx={{ fontSize: 16, color: 'text.secondary', ml: 0.5 }} />
-              </ListItemButton>
-            </Tooltip>
-          </ListItem>
-        )}
+                  {user?.name || user?.email?.split('@')[0] || 'User'}
+                </Typography>
+                <Typography
+                  variant="caption"
+                  sx={{
+                    fontSize: '0.65rem',
+                    color: 'text.secondary',
+                    display: 'block',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
+                  {user?.email || ''}
+                </Typography>
+              </Box>
+              <Logout sx={{ fontSize: 16, color: 'text.secondary', ml: 0.5 }} />
+            </ListItemButton>
+          </Tooltip>
+        </ListItem>
       </List>
     </Box>
   );
