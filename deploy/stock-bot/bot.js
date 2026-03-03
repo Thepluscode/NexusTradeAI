@@ -52,9 +52,9 @@ function requireApiSecret(req, res, next) {
 
 // ── Persist env var to Railway (survives redeploys) ────────────────────────
 async function persistEnvVar(name, value) {
-    const token   = process.env.RAILWAY_TOKEN;
+    const token = process.env.RAILWAY_TOKEN;
     const project = process.env.RAILWAY_PROJECT_ID;
-    const env     = process.env.RAILWAY_ENVIRONMENT_ID;
+    const env = process.env.RAILWAY_ENVIRONMENT_ID;
     const service = process.env.RAILWAY_SERVICE_ID;
     if (!token || !project || !env || !service) return; // not on Railway — skip
     const query = `mutation { variableUpsert(input: { projectId: "${project}", environmentId: "${env}", serviceId: "${service}", name: "${name}", value: "${value.replace(/"/g, '\\"')}" }) }`;
@@ -216,7 +216,7 @@ app.post('/api/auth/logout', async (req, res) => {
             try {
                 const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
                 await dbPool.query('UPDATE users SET refresh_token=NULL WHERE id=$1', [payload.sub]);
-            } catch {}
+            } catch { }
         }
     }
     res.json({ success: true });
@@ -260,7 +260,7 @@ function loadBotState() {
             const saved = JSON.parse(require('fs').readFileSync(BOT_STATE_FILE, 'utf8'));
             return { running: saved.running !== false, paused: saved.paused === true };
         }
-    } catch {}
+    } catch { }
     return { running: true, paused: false };
 }
 function saveBotState() {
@@ -268,7 +268,7 @@ function saveBotState() {
         const dir = require('path').dirname(BOT_STATE_FILE);
         if (!require('fs').existsSync(dir)) require('fs').mkdirSync(dir, { recursive: true });
         require('fs').writeFileSync(BOT_STATE_FILE, JSON.stringify({ running: botRunning, paused: botPaused }));
-    } catch {}
+    } catch { }
 }
 const _initState = loadBotState();
 let botRunning = _initState.running;
@@ -288,7 +288,7 @@ function savePositions() {
             };
         }
         require('fs').writeFileSync(POSITIONS_FILE, JSON.stringify(snapshot, null, 2));
-    } catch {}
+    } catch { }
 }
 function loadPositions() {
     try {
@@ -304,7 +304,7 @@ function loadPositions() {
                 console.log(`📂 Restored ${positions.size} position(s) from disk: ${[...positions.keys()].join(', ')}`);
             }
         }
-    } catch {}
+    } catch { }
 }
 loadPositions();
 
@@ -408,9 +408,9 @@ async function dbTradeOpen(symbol, entryPrice, shares, config, signal, tier) {
              position_size_usd,stop_loss,take_profit,entry_time,rsi,volume_ratio,momentum_pct)
              VALUES ('stock',$1,'long',$2,'open',$3,$4,$5,$6,$7,NOW(),$8,$9,$10) RETURNING id`,
             [symbol, tier, entryPrice, shares, shares * entryPrice,
-             config.stopLoss ? entryPrice * (1 - config.stopLoss) : null,
-             config.profitTarget ? entryPrice * (1 + config.profitTarget) : null,
-             signal.rsi || null, signal.volumeRatio || null, signal.percentChange || null]
+                config.stopLoss ? entryPrice * (1 - config.stopLoss) : null,
+                config.profitTarget ? entryPrice * (1 + config.profitTarget) : null,
+                signal.rsi || null, signal.volumeRatio || null, signal.percentChange || null]
         );
         return r.rows[0]?.id;
     } catch (e) { console.warn('DB open failed:', e.message); return null; }
@@ -750,7 +750,7 @@ function detectRSIBullishDivergence(bars, lookback = 20) {
 
     // Ensure low1 is earlier, low2 is later
     const earlyIdx = Math.min(low1Idx, low2Idx);
-    const lateIdx  = Math.max(low1Idx, low2Idx);
+    const lateIdx = Math.max(low1Idx, low2Idx);
     if (lateIdx - earlyIdx < 3) return false; // Must be separated by at least 3 bars
 
     // Price must have made a lower low (bearish price structure)
@@ -758,9 +758,9 @@ function detectRSIBullishDivergence(bars, lookback = 20) {
 
     // Calculate RSI at each swing low (need surrounding bars for proper RSI)
     const barsAtEarly = bars.slice(Math.max(0, bars.length - lookback + earlyIdx - 14), bars.length - lookback + earlyIdx + 1);
-    const barsAtLate  = bars.slice(Math.max(0, bars.length - lookback + lateIdx - 14),  bars.length - lookback + lateIdx + 1);
+    const barsAtLate = bars.slice(Math.max(0, bars.length - lookback + lateIdx - 14), bars.length - lookback + lateIdx + 1);
     const rsiEarly = calculateRSI(barsAtEarly);
-    const rsiLate  = calculateRSI(barsAtLate);
+    const rsiLate = calculateRSI(barsAtLate);
 
     // RSI must have made a higher low (bullish momentum structure) while price made lower low
     const hasDivergence = rsiLate > rsiEarly + 2; // Require meaningful RSI improvement (2+ pts)
@@ -806,7 +806,7 @@ async function queryStrategyBridge(symbol, bars, assetClass = 'stock') {
             timestamp: b.t || new Date().toISOString(),
             open: parseFloat(b.o) || 0,
             high: parseFloat(b.h) || 0,
-            low:  parseFloat(b.l) || 0,
+            low: parseFloat(b.l) || 0,
             close: parseFloat(b.c) || 0,
             volume: parseFloat(b.v) || 0
         }));
@@ -1402,7 +1402,7 @@ async function executeTrade(signal, strategy) {
         let kellyMultiplier = 1.0;
         if (perfData.totalTrades >= 10 && perfData.winRate > 0 && perfData.profitFactor > 0) {
             const w = perfData.winRate / 100;
-            const avgWin  = perfData.totalWinAmount  / Math.max(perfData.winningTrades, 1);
+            const avgWin = perfData.totalWinAmount / Math.max(perfData.winningTrades, 1);
             const avgLoss = perfData.totalLossAmount / Math.max(perfData.losingTrades, 1);
             const b = avgLoss > 0 ? avgWin / avgLoss : 1;
             const fullKelly = (w * b - (1 - w)) / b;        // optimal fraction of equity
@@ -1475,7 +1475,7 @@ async function executeTrade(signal, strategy) {
         // Persist trade opening to DB (fire-and-forget)
         dbTradeOpen(signal.symbol, signal.price, shares, config, signal, tier)
             .then(id => { const p = positions.get(signal.symbol); if (p) p.dbTradeId = id; })
-            .catch(() => {});
+            .catch(() => { });
 
         const tradeRecord = {
             time: Date.now(),
@@ -1549,7 +1549,7 @@ async function closePosition(symbol, qty, reason = 'Manual') {
             recordTradeClose(symbol, position.entry, currentPrice, parseFloat(qty), reason);
             const pnlUsd = (currentPrice - position.entry) * parseFloat(qty);
             const pnlPct = ((currentPrice - position.entry) / position.entry) * 100;
-            dbTradeClose(position?.dbTradeId, currentPrice, pnlUsd, pnlPct, reason).catch(() => {});
+            dbTradeClose(position?.dbTradeId, currentPrice, pnlUsd, pnlPct, reason).catch(() => { });
         }
 
         console.log(`✅ Position closed: ${symbol} (${reason})`);
@@ -2049,11 +2049,11 @@ app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
         const { broker, credentials, fields } = req.body;
         const creds = credentials || fields;
         const ALLOWED_KEYS = {
-            alpaca:   ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_BASE_URL'],
-            oanda:    ['OANDA_ACCOUNT_ID', 'OANDA_ACCESS_TOKEN', 'OANDA_PRACTICE'],
-            crypto:   ['CRYPTO_API_KEY', 'CRYPTO_API_SECRET', 'CRYPTO_EXCHANGE', 'CRYPTO_TESTNET'],
+            alpaca: ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_BASE_URL'],
+            oanda: ['OANDA_ACCOUNT_ID', 'OANDA_ACCESS_TOKEN', 'OANDA_PRACTICE'],
+            crypto: ['CRYPTO_API_KEY', 'CRYPTO_API_SECRET', 'CRYPTO_EXCHANGE', 'CRYPTO_TESTNET'],
             telegram: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_ALERTS_ENABLED'],
-            sms:      ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'ALERT_PHONE_NUMBER', 'SMS_ALERTS_ENABLED'],
+            sms: ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'ALERT_PHONE_NUMBER', 'SMS_ALERTS_ENABLED'],
         };
 
         const allowed = ALLOWED_KEYS[broker];
@@ -2075,9 +2075,9 @@ app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
 
         // Refresh in-memory broker config
         if (broker === 'alpaca') {
-            if (creds.ALPACA_API_KEY)    alpacaConfig.apiKey    = creds.ALPACA_API_KEY;
+            if (creds.ALPACA_API_KEY) alpacaConfig.apiKey = creds.ALPACA_API_KEY;
             if (creds.ALPACA_SECRET_KEY) alpacaConfig.secretKey = creds.ALPACA_SECRET_KEY;
-            if (creds.ALPACA_BASE_URL)   alpacaConfig.baseURL   = creds.ALPACA_BASE_URL;
+            if (creds.ALPACA_BASE_URL) alpacaConfig.baseURL = creds.ALPACA_BASE_URL;
         }
 
         res.json({ success: true, updated });
@@ -2103,10 +2103,10 @@ app.post('/api/config/test-notification', requireApiSecret, async (req, res) => 
             return res.json({ success: true });
         }
         if (channel === 'sms') {
-            const sid  = process.env.TWILIO_ACCOUNT_SID;
+            const sid = process.env.TWILIO_ACCOUNT_SID;
             const auth = process.env.TWILIO_AUTH_TOKEN;
             const from = process.env.TWILIO_PHONE_NUMBER;
-            const to   = process.env.ALERT_PHONE_NUMBER;
+            const to = process.env.ALERT_PHONE_NUMBER;
             if (!sid || !auth || !from || !to) {
                 return res.status(400).json({ success: false, error: 'SMS not fully configured' });
             }
@@ -2131,7 +2131,7 @@ app.get('/api/backtest/report', (req, res) => {
         const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
         const hasTrades = (report.summary?.totalTrades ?? 0) > 0 || (report.trades?.length ?? 0) > 0;
         if (hasTrades) return res.json({ success: true, data: report });
-    } catch {}
+    } catch { }
 
     // Fall back: return live performance stats so the dashboard always has data
     const pf = perfData.profitFactor || 0;
@@ -2365,17 +2365,21 @@ app.post('/api/backtest/run', async (req, res) => {
             for (const r of settled) {
                 if (r.status === 'fulfilled' && r.value) {
                     const signal = r.value;
-                    results.push({ symbol: signal.symbol, tier: signal.tier, score: signal.score || 0,
+                    results.push({
+                        symbol: signal.symbol, tier: signal.tier, score: signal.score || 0,
                         rsi: signal.rsi, volumeRatio: signal.volumeRatio, percentChange: signal.percentChange,
-                        price: signal.price });
+                        price: signal.price
+                    });
                 }
             }
             if (i + batchSize < symbols.length) await new Promise(r => setTimeout(r, 300)); // rate-limit pause
         }
         results.sort((a, b) => (b.score || 0) - (a.score || 0));
         const elapsed = ((Date.now() - started) / 1000).toFixed(1);
-        res.json({ success: true, signals: results, scanned: symbols.length, elapsed: `${elapsed}s`,
-            timestamp: new Date().toISOString() });
+        res.json({
+            success: true, signals: results, scanned: symbols.length, elapsed: `${elapsed}s`,
+            timestamp: new Date().toISOString()
+        });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
     } finally {
@@ -2387,10 +2391,10 @@ app.post('/api/backtest/run', async (req, res) => {
 // so pairs trading and forex bridge advisory activates immediately on startup
 // All unique symbols from KNOWN_PAIRS in strategy_bridge.py — keep in sync
 const KNOWN_PAIRS_SYMBOLS = [
-    'XOM','CVX','JPM','BAC','AAPL','MSFT','KO','PEP','HD','LOW','V','MA',
-    'GS','MS','T','VZ','WMT','TGT','GLD','SLV','SPY','QQQ','DAL','UAL'
+    'XOM', 'CVX', 'JPM', 'BAC', 'AAPL', 'MSFT', 'KO', 'PEP', 'HD', 'LOW', 'V', 'MA',
+    'GS', 'MS', 'T', 'VZ', 'WMT', 'TGT', 'GLD', 'SLV', 'SPY', 'QQQ', 'DAL', 'UAL'
 ];
-const FOREX_WARMUP_PAIRS  = ['EUR_USD','GBP_USD','USD_JPY','USD_CHF','AUD_USD','USD_CAD','NZD_USD','EUR_JPY','GBP_JPY','EUR_GBP','AUD_JPY','EUR_AUD'];
+const FOREX_WARMUP_PAIRS = ['EUR_USD', 'GBP_USD', 'USD_JPY', 'USD_CHF', 'AUD_USD', 'USD_CAD', 'NZD_USD', 'EUR_JPY', 'GBP_JPY', 'EUR_GBP', 'AUD_JPY', 'EUR_AUD'];
 
 app.post('/api/bridge/warmup', async (req, res) => {
     const results = { seeded: [], failed: [], bridgeUrl: BRIDGE_URL };
@@ -2418,8 +2422,8 @@ app.post('/api/bridge/warmup', async (req, res) => {
     }));
 
     // ── Forex pairs (OANDA H1 candles — only if creds available) ────────────
-    const oandaToken   = process.env.OANDA_ACCESS_TOKEN;
-    const oandaBase    = process.env.OANDA_PRACTICE !== 'false'
+    const oandaToken = process.env.OANDA_ACCESS_TOKEN;
+    const oandaBase = process.env.OANDA_PRACTICE !== 'false'
         ? 'https://api-fxpractice.oanda.com'
         : 'https://api-fxtrade.oanda.com';
 
@@ -2434,10 +2438,10 @@ app.post('/api/bridge/warmup', async (req, res) => {
                 if (candles.length < 30) { results.failed.push(`${pair}: only ${candles.length} candles`); return; }
                 const prices = candles.map(c => ({
                     timestamp: c.time,
-                    open:   parseFloat(c.mid.o),
-                    high:   parseFloat(c.mid.h),
-                    low:    parseFloat(c.mid.l),
-                    close:  parseFloat(c.mid.c),
+                    open: parseFloat(c.mid.o),
+                    high: parseFloat(c.mid.h),
+                    low: parseFloat(c.mid.l),
+                    close: parseFloat(c.mid.c),
                     volume: c.volume || 1
                 }));
                 await axios.post(`${BRIDGE_URL}/signal`, { symbol: pair, prices, asset_class: 'forex' }, { timeout: 8000 });
@@ -2467,6 +2471,31 @@ app.listen(PORT, async () => {
     console.log('╚════════════════════════════════════════════════════════════╝\n');
 
     initDb().catch(e => console.warn('Auth DB init error:', e.message));
+
+    // ── DB Reconciliation: close orphaned 'open' trades not in memory ──
+    try {
+        if (dbPool) {
+            const orphaned = await dbPool.query(
+                `SELECT id, symbol FROM trades WHERE bot='stock' AND status='open'`
+            );
+            let closedCount = 0;
+            for (const row of orphaned.rows) {
+                if (!positions.has(row.symbol)) {
+                    await dbPool.query(
+                        `UPDATE trades SET status='closed', exit_price=entry_price, pnl_usd=0, pnl_pct=0,
+                         close_reason='orphaned_restart', exit_time=NOW() WHERE id=$1`,
+                        [row.id]
+                    );
+                    closedCount++;
+                }
+            }
+            if (closedCount > 0) {
+                console.log(`🧹 Closed ${closedCount} orphaned DB trade(s) from previous session`);
+            }
+        }
+    } catch (e) {
+        console.warn('⚠️  DB reconciliation failed:', e.message);
+    }
 
     // Pre-seed strategy bridge pairs cache 30s after startup (non-blocking)
     setTimeout(() => {
