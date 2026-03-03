@@ -88,6 +88,7 @@ async function updateRisk(payload: { tier: string; stopLoss?: number; profitTarg
 }
 
 async function saveCredentials(payload: { broker: string; credentials: Record<string, string> }) {
+    if (!API_SECRET) throw new Error('Dashboard was built without VITE_NEXUS_API_SECRET — redeploy required before credentials can be saved');
     // Route to the correct bot based on broker type
     const botUrl =
         (payload.broker === 'oanda') ? SERVICE_URLS.forexBot :
