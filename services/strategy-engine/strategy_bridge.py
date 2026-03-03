@@ -98,8 +98,10 @@ momentum_strategy = create_regime_momentum_strategy(use_pretrained_detector=Fals
 volatility_strategy = create_volatility_strategy(conservative=True)
 pairs_strategy = PairsTradingStrategy()
 
-# Price cache: symbol → last 100 closes (populated on each /signal call)
-_price_cache: Dict[str, List[float]] = {}
+# Price cache: symbol → {prices: last 100 closes, ts: epoch seconds}
+# Entries older than CACHE_TTL_SECONDS are considered stale (e.g. after restart / redeploy)
+CACHE_TTL_SECONDS = 3600  # 1 hour
+_price_cache: Dict[str, Dict] = {}
 
 # Known cointegrated pairs for ensemble voting.
 # Each symbol maps to its companion — both directions listed so either symbol lookup works.
@@ -182,11 +184,13 @@ if FASTAPI_AVAILABLE:
 
     @app.get("/health")
     def health():
+        import time as _time
         cached_symbols = list(_price_cache.keys())
         pairs_ready = [
             f"{s}/{KNOWN_PAIRS[s]}"
             for s in cached_symbols
             if s in KNOWN_PAIRS and KNOWN_PAIRS[s] in _price_cache
+            and (_time.time() - _price_cache[KNOWN_PAIRS[s]].get("ts", 0)) < CACHE_TTL_SECONDS
         ]
         # Deduplicate (XOM/CVX and CVX/XOM are the same pair)
         seen = set()
@@ -219,9 +223,10 @@ if FASTAPI_AVAILABLE:
         market_data = prices_to_market_data(req.prices, req.symbol)
         strategies_results = []
 
-        # Cache closes for pairs trading
+        # Cache closes for pairs trading (with timestamp for TTL validation)
+        import time as _time
         closes = [p.close for p in req.prices]
-        _price_cache[req.symbol] = closes[-100:]
+        _price_cache[req.symbol] = {"prices": closes[-100:], "ts": _time.time()}
 
         # Strategy 1: Regime-Based Momentum
         try:
@@ -283,26 +288,45 @@ if FASTAPI_AVAILABLE:
                 reason=f"Error: {str(e)}"
             ))
 
-        # Strategy 3: Pairs Trading (only when companion price data is cached)
+        # Strategy 3: Pairs Trading (only when companion price data is cached and fresh)
         companion = KNOWN_PAIRS.get(req.symbol)
-        if companion and companion in _price_cache:
+        import time as _time
+        companion_entry = _price_cache.get(companion) if companion else None
+        companion_fresh = (
+            companion_entry is not None and
+            isinstance(companion_entry, dict) and
+            (_time.time() - companion_entry.get("ts", 0)) < CACHE_TTL_SECONDS
+        )
+        if companion and companion_fresh:
             try:
                 s1 = pd.Series(closes)
-                s2 = pd.Series(_price_cache[companion])
+                s2 = pd.Series(companion_entry["prices"])
                 min_len = min(len(s1), len(s2))
                 if min_len >= 30:
                     ou = fit_ou_to_pair(s1.tail(min_len).reset_index(drop=True),
                                         s2.tail(min_len).reset_index(drop=True))
                     if ou['status'] == 'fitted' and ou['is_mean_reverting']:
-                        z = ou['z_score']
-                        sig = 'BUY' if ou['trade_signal'] == 'LONG_SPREAD' else \
-                              'SELL' if ou['trade_signal'] == 'SHORT_SPREAD' else 'NEUTRAL'
-                        conf = min(0.85, 0.5 + abs(z) * 0.1) if sig != 'NEUTRAL' else 0
-                        strategies_results.append(StrategySignalResponse(
-                            strategy="pairs_trading", signal=sig, confidence=conf,
-                            reason=f"OU pairs {req.symbol}/{companion}: z={z:.2f} hl={ou['half_life']:.1f}d",
-                            metadata={'z_score': z, 'half_life': ou['half_life'], 'companion': companion}
-                        ))
+                        half_life = ou['half_life']
+                        # Only act on pairs that revert within 30 days — longer half-lives
+                        # mean the spread may never close within our hold period
+                        if half_life > 30:
+                            strategies_results.append(StrategySignalResponse(
+                                strategy="pairs_trading", signal="NEUTRAL", confidence=0,
+                                reason=f"Half-life {half_life:.1f}d too long (>30d) — spread unlikely to close"
+                            ))
+                        else:
+                            z = ou['z_score']
+                            sig = 'BUY' if ou['trade_signal'] == 'LONG_SPREAD' else \
+                                  'SELL' if ou['trade_signal'] == 'SHORT_SPREAD' else 'NEUTRAL'
+                            # Confidence: z-score strength × half-life speed factor
+                            # Short half-life + large z-score → high confidence
+                            hl_factor = min(1.0, 15.0 / max(half_life, 1))
+                            conf = min(0.85, (0.5 + abs(z) * 0.1) * hl_factor) if sig != 'NEUTRAL' else 0
+                            strategies_results.append(StrategySignalResponse(
+                                strategy="pairs_trading", signal=sig, confidence=conf,
+                                reason=f"OU pairs {req.symbol}/{companion}: z={z:.2f} hl={half_life:.1f}d",
+                                metadata={'z_score': z, 'half_life': half_life, 'companion': companion}
+                            ))
                     else:
                         strategies_results.append(StrategySignalResponse(
                             strategy="pairs_trading", signal="NEUTRAL", confidence=0,

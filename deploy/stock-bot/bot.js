@@ -1207,10 +1207,9 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
         if (current < 1.0 || current > 1000) return null;
         if (volumeToday < 500000) return null;
 
-        // VWAP filter: price must be at or above VWAP (not just 0.5% below)
+        // VWAP filter: allow up to 0.5% below VWAP — catches pullbacks that are reclaiming it
         const vwap = calculateVWAP(bars);
-        if (vwap && current < vwap) {
-            // Price trading below VWAP = distribution/weakness, skip
+        if (vwap && current < vwap * 0.995) {
             return null;
         }
 
@@ -1234,9 +1233,10 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
             return null;
         }
 
-        // [v3.2] ADX filter — only trade trending markets (ADX > 20), skip choppy/ranging
+        // ADX filter — require minimum trend strength; lowered to 15 to avoid filtering
+        // valid momentum moves in quiet pre-breakout markets (RSI/volume already confirm intent)
         const adx = calculateADX(bars);
-        if (adx !== null && adx < 20) {
+        if (adx !== null && adx < 15) {
             return null;
         }
 
@@ -1259,10 +1259,13 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                 params: { timeframe: '1Day', limit: 20, feed: 'sip' }
             });
             const dailyBars = dailyResp.data?.bars || [];
-            if (dailyBars.length >= 10) {
-                const sma20d = dailyBars.map(b => b.c).reduce((a, v) => a + v, 0) / dailyBars.length;
-                if (current < sma20d * 0.995) { // small tolerance to avoid noise at the boundary
-                    console.log(`[Daily Filter] ${symbol} below 20-day SMA ($${sma20d.toFixed(2)}) — counter-trend, skipping`);
+            if (dailyBars.length >= 5) {
+                // Use 9-day SMA (faster response) + 1% tolerance — avoids filtering intraday
+                // breakouts that are just starting to reclaim the trend line
+                const lookback = Math.min(9, dailyBars.length);
+                const sma9d = dailyBars.slice(-lookback).map(b => b.c).reduce((a, v) => a + v, 0) / lookback;
+                if (current < sma9d * 0.99) {
+                    console.log(`[Daily Filter] ${symbol} below 9-day SMA ($${sma9d.toFixed(2)}) — counter-trend, skipping`);
                     return null;
                 }
             }
@@ -1282,32 +1285,26 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
             }
         }
 
+        // Tier assignment with fallback: start at the highest qualifying tier,
+        // fall back to lower tiers if secondary filters (volume ratio, RSI) fail.
+        // Prevents a strong Tier3 move from being rejected just because ADX is 16 not 20.
         let tier = null;
         let config = null;
 
-        if (percentChange >= MOMENTUM_CONFIG.tier3.threshold) {
-            if (volumeRatio >= MOMENTUM_CONFIG.tier3.volumeRatio &&
-                volumeToday >= MOMENTUM_CONFIG.tier3.minVolume &&
-                rsi >= MOMENTUM_CONFIG.tier3.rsiMin &&
-                rsi <= MOMENTUM_CONFIG.tier3.rsiMax) {
-                tier = 'tier3';
-                config = MOMENTUM_CONFIG.tier3;
-            }
-        } else if (percentChange >= MOMENTUM_CONFIG.tier2.threshold) {
-            if (volumeRatio >= MOMENTUM_CONFIG.tier2.volumeRatio &&
-                volumeToday >= MOMENTUM_CONFIG.tier2.minVolume &&
-                rsi >= MOMENTUM_CONFIG.tier2.rsiMin &&
-                rsi <= MOMENTUM_CONFIG.tier2.rsiMax) {
-                tier = 'tier2';
-                config = MOMENTUM_CONFIG.tier2;
-            }
-        } else if (percentChange >= MOMENTUM_CONFIG.tier1.threshold) {
-            if (volumeRatio >= MOMENTUM_CONFIG.tier1.volumeRatio &&
-                volumeToday >= MOMENTUM_CONFIG.tier1.minVolume &&
-                rsi >= MOMENTUM_CONFIG.tier1.rsiMin &&
-                rsi <= MOMENTUM_CONFIG.tier1.rsiMax) {
-                tier = 'tier1';
-                config = MOMENTUM_CONFIG.tier1;
+        const tierCandidates = [];
+        if (percentChange >= MOMENTUM_CONFIG.tier3.threshold) tierCandidates.push('tier3');
+        if (percentChange >= MOMENTUM_CONFIG.tier2.threshold) tierCandidates.push('tier2');
+        if (percentChange >= MOMENTUM_CONFIG.tier1.threshold) tierCandidates.push('tier1');
+
+        for (const candidate of tierCandidates) {
+            const c = MOMENTUM_CONFIG[candidate];
+            if (volumeRatio >= c.volumeRatio &&
+                volumeToday >= c.minVolume &&
+                rsi >= c.rsiMin &&
+                rsi <= c.rsiMax) {
+                tier = candidate;
+                config = c;
+                break; // use the highest qualifying tier
             }
         }
 

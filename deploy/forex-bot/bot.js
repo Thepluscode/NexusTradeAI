@@ -514,10 +514,14 @@ function isNearHighImpactEvent() {
 }
 
 function canTrade(pair, direction = 'long') {
-    // Check stop-out cooldown
-    const stopTime = stoppedOutPairs.get(pair);
-    if (stopTime && Date.now() - stopTime < MIN_TIME_AFTER_STOP) {
-        return { allowed: false, reason: 'Stop-out cooldown' };
+    // Check stop-out cooldown (dynamic: 30min for small losses, 2h for large)
+    const stopEntry = stoppedOutPairs.get(pair);
+    if (stopEntry) {
+        const { time, cooldownMs } = typeof stopEntry === 'object' ? stopEntry : { time: stopEntry, cooldownMs: MIN_TIME_AFTER_STOP };
+        if (Date.now() - time < cooldownMs) {
+            const minsLeft = Math.ceil((cooldownMs - (Date.now() - time)) / 60000);
+            return { allowed: false, reason: `Stop-out cooldown (${minsLeft}m left)` };
+        }
     }
 
     // Check daily limit
@@ -1009,7 +1013,9 @@ async function executeTrade(signal) {
     const slippageAdj = signal.direction === 'long' ? 1 + FOREX_SLIPPAGE : 1 - FOREX_SLIPPAGE;
     const effectiveEntry = signal.entry * slippageAdj;
 
-    const positionValue = balance * config.positionSize;
+    // Session multiplier: increase size 1.5x during London/NY overlap (best liquidity + trend)
+    const sessionMultiplier = signal.session === 'London/NY Overlap' ? 1.5 : 1.0;
+    const positionValue = balance * config.positionSize * sessionMultiplier;
 
     // Calculate units (forex uses lot sizes), sized from effective entry
     const units = signal.direction === 'long'
@@ -1158,7 +1164,10 @@ async function closePositionWithReason(pair, reason) {
         positions.delete(pair);
 
         if (reason.toLowerCase().includes('stop')) {
-            stoppedOutPairs.set(pair, Date.now());
+            // Dynamic cooldown: small loss (<1%) → 30 min; large loss (>2%) → 2h
+            const lossPct = pos ? Math.abs(pos.unrealizedPL ?? 0) / (parseFloat(pos.entry ?? 1) * Math.abs(pos.units ?? 1)) * 100 : 1;
+            const cooldownMs = lossPct >= 2 ? MIN_TIME_AFTER_STOP : 30 * 60 * 1000;
+            stoppedOutPairs.set(pair, { time: Date.now(), cooldownMs });
         }
 
         console.log(`✅ Position ${pair} closed successfully`);

@@ -807,9 +807,18 @@ class CryptoTradingEngine {
                 await this.closePosition(symbol, currentPrice, 'Stale Position Timeout');
                 continue;
             }
+            // Exit losing positions after maxHoldDays — prevents dead capital in declining trades
+            // Exit winning positions after stalePositionDays (handled above) — winners can ride
+            // longer but must still eventually free capital for new opportunities
             if (holdDays >= this.config.maxHoldDays && pnlPercent < 0) {
-                console.log(`⏰ ${symbol}: MAX HOLD EXIT after ${holdDays.toFixed(1)} days (loss position)`);
+                console.log(`⏰ ${symbol}: MAX HOLD EXIT after ${holdDays.toFixed(1)} days (loss: ${pnlPercent.toFixed(2)}%)`);
                 await this.closePosition(symbol, currentPrice, 'Max Hold Days - Loss Exit');
+                continue;
+            }
+            // Winners that are near breakeven after maxHoldDays are dead capital — exit them too
+            if (holdDays >= this.config.maxHoldDays && pnlPercent < 2) {
+                console.log(`⏰ ${symbol}: MAX HOLD EXIT after ${holdDays.toFixed(1)} days (flat/marginal winner: ${pnlPercent.toFixed(2)}%)`);
+                await this.closePosition(symbol, currentPrice, 'Max Hold Days - Flat Exit');
                 continue;
             }
 
