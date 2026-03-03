@@ -256,7 +256,9 @@ function BrokerForm({
 
             <Divider sx={{ mb: 2.5 }} />
 
-            <Box component="form" onSubmit={e => { e.preventDefault(); onSave(); }}>
+            <Box component="form" autoComplete="off" onSubmit={e => { e.preventDefault(); onSave(); }}>
+                {/* Hidden username field satisfies browser accessibility requirement for password forms */}
+                <input type="text" autoComplete="username" style={{ display: 'none' }} readOnly tabIndex={-1} />
                 <Stack spacing={2}>
                     {children}
                 </Stack>
@@ -344,7 +346,8 @@ function NotifForm({
 
             <Divider sx={{ mb: 2.5 }} />
 
-            <Box component="form" onSubmit={e => { e.preventDefault(); onSave(); }}>
+            <Box component="form" autoComplete="off" onSubmit={e => { e.preventDefault(); onSave(); }}>
+                <input type="text" autoComplete="username" style={{ display: 'none' }} readOnly tabIndex={-1} />
                 <Stack spacing={2}>
                     {children}
                 </Stack>
