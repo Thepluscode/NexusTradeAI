@@ -307,12 +307,14 @@ if FASTAPI_AVAILABLE:
                                         s2.tail(min_len).reset_index(drop=True))
                     if ou['status'] == 'fitted' and ou['is_mean_reverting']:
                         half_life = ou['half_life']
-                        # Only act on pairs that revert within 30 days — longer half-lives
-                        # mean the spread may never close within our hold period
-                        if half_life > 30:
+                        # Only act on pairs that revert within 45 days — longer half-lives
+                        # mean the spread may never close within our hold period.
+                        # 45d allows pairs that revert in ~6 weeks while still filtering
+                        # pairs that are effectively non-stationary (>45d half-life).
+                        if half_life > 45:
                             strategies_results.append(StrategySignalResponse(
                                 strategy="pairs_trading", signal="NEUTRAL", confidence=0,
-                                reason=f"Half-life {half_life:.1f}d too long (>30d) — spread unlikely to close"
+                                reason=f"Half-life {half_life:.1f}d too long (>45d) — spread unlikely to close"
                             ))
                         else:
                             z = ou['z_score']

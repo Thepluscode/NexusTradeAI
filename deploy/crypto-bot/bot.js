@@ -985,10 +985,22 @@ class CryptoTradingEngine {
                     continue;
                 }
 
-                // Daily loss circuit breaker
+                // Daily loss circuit breaker — realised losses
                 const maxDailyLoss = Math.abs(parseFloat(process.env.MAX_DAILY_LOSS || '500'));
                 if (this.dailyLoss >= maxDailyLoss) {
                     console.log(`🛑 [CIRCUIT BREAKER] Crypto daily loss $${this.dailyLoss.toFixed(2)} exceeds limit $${maxDailyLoss} — no new entries today`);
+                    if (this.positions.size > 0) await this.managePositions();
+                    await new Promise(resolve => setTimeout(resolve, this.config.scanInterval));
+                    continue;
+                }
+
+                // Proactive unrealised-loss gate — block new entries if open positions
+                // are already deep underwater, even before they close and hit dailyLoss.
+                // Uses 80% of the daily limit so there's room to exit without breaching.
+                const unrealisedLoss = Array.from(this.positions.values())
+                    .reduce((sum, p) => sum + Math.min(0, p.unrealizedPnL || 0), 0);
+                if (Math.abs(unrealisedLoss) >= maxDailyLoss * 0.8) {
+                    console.log(`⚠️  [UNREALISED GATE] Open positions down $${Math.abs(unrealisedLoss).toFixed(2)} (≥80% of $${maxDailyLoss} limit) — no new entries`);
                     if (this.positions.size > 0) await this.managePositions();
                     await new Promise(resolve => setTimeout(resolve, this.config.scanInterval));
                     continue;
