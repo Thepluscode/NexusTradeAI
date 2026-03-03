@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useQuery } from 'react-query';
 import {
     Box,
@@ -20,8 +20,10 @@ import {
     MenuItem,
     FormControl,
     InputLabel,
+    Button,
+    Tooltip,
 } from '@mui/material';
-import { TrendingUp, TrendingDown, Receipt } from '@mui/icons-material';
+import { TrendingUp, TrendingDown, Receipt, Download } from '@mui/icons-material';
 import { apiClient } from '@/services/api';
 import { MetricCard } from '@/components/MetricCard';
 import type { TradeRecord, TradeBotTotal } from '@/types';
@@ -42,6 +44,31 @@ function pnlColor(val: number | string | null) {
 function fmt(val: number | string | null, prefix = '$') {
     const n = parseFloat(String(val ?? 0));
     return `${n >= 0 ? '' : '-'}${prefix}${Math.abs(n).toFixed(2)}`;
+}
+
+function exportTradesToCSV(rows: TradeRecord[]) {
+    const headers = [
+        'id', 'bot', 'symbol', 'direction', 'tier', 'status',
+        'entry_price', 'exit_price', 'quantity', 'position_size_usd',
+        'pnl_usd', 'pnl_pct', 'stop_loss', 'take_profit',
+        'entry_time', 'exit_time', 'close_reason', 'session',
+    ];
+    const escape = (v: string | number | null) => {
+        if (v == null) return '';
+        const s = String(v);
+        return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const csv = [
+        headers.join(','),
+        ...rows.map(r => headers.map(h => escape(r[h as keyof TradeRecord])).join(',')),
+    ].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `nexus-trades-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
 }
 
 export default function TradesPage() {
@@ -82,6 +109,10 @@ export default function TradesPage() {
     const profitFactor = allTotal.gross_loss > 0 ? allTotal.gross_profit / allTotal.gross_loss : allTotal.gross_profit > 0 ? Infinity : 0;
 
     const isLoading = tradesLoading || summaryLoading;
+
+    const handleExport = useCallback(() => {
+        exportTradesToCSV(trades as TradeRecord[]);
+    }, [trades]);
 
     return (
         <Box sx={{ p: { xs: 1.5, sm: 2 } }}>
@@ -182,7 +213,7 @@ export default function TradesPage() {
                     )}
 
                     {/* Trade filter */}
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2, flexWrap: 'wrap' }}>
                         <Typography variant="body2" color="text.secondary">Filter:</Typography>
                         <ToggleButtonGroup
                             value={botFilter}
@@ -198,6 +229,20 @@ export default function TradesPage() {
                         <Typography variant="body2" color="text.secondary" sx={{ ml: 'auto' }}>
                             {trades.length} records
                         </Typography>
+                        <Tooltip title="Export visible rows as CSV">
+                            <span>
+                                <Button
+                                    size="small"
+                                    variant="outlined"
+                                    startIcon={<Download />}
+                                    onClick={handleExport}
+                                    disabled={trades.length === 0}
+                                    sx={{ fontSize: '0.75rem', height: 32 }}
+                                >
+                                    Export CSV
+                                </Button>
+                            </span>
+                        </Tooltip>
                     </Box>
 
                     {/* Trades table */}

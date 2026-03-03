@@ -27,8 +27,18 @@ import {
     BarChart,
 } from '@mui/icons-material';
 import axios from 'axios';
-import { SERVICE_URLS } from '@/services/api';
+import { SERVICE_URLS, apiClient } from '@/services/api';
 import { useQuery } from 'react-query';
+import {
+    AreaChart,
+    Area,
+    XAxis,
+    YAxis,
+    CartesianGrid,
+    Tooltip as RechartsTooltip,
+    ResponsiveContainer,
+} from 'recharts';
+import type { TradeDaySummary } from '@/types';
 import { useNavigate } from 'react-router-dom';
 
 interface BotHealth {
@@ -210,6 +220,91 @@ function BotStatItem({ label, value, color, icon }: { label: string; value: stri
                 </Typography>
             </Stack>
         </Box>
+    );
+}
+
+// ── P&L Equity Curve ────────────────────────────────────────────────────────
+function PnLChart({ days = 30 }: { days?: number }) {
+    const { data: summary, isLoading } = useQuery(
+        ['overviewPnL', days],
+        () => apiClient.getTradesSummary(days),
+        { staleTime: 60 * 1000, refetchInterval: 120 * 1000 }
+    );
+
+    if (isLoading) {
+        return <Skeleton variant="rectangular" height={200} sx={{ borderRadius: 2 }} />;
+    }
+
+    const daily: TradeDaySummary[] = summary?.daily ?? [];
+
+    if (daily.length === 0) {
+        return (
+            <Box sx={{ height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Typography variant="body2" color="text.secondary">
+                    No closed trades yet — P&L curve will appear once positions are closed.
+                </Typography>
+            </Box>
+        );
+    }
+
+    // Sort ascending by day, then compute running cumulative P&L via reduce (no mutation)
+    const sorted = [...daily].sort((a, b) => a.day.localeCompare(b.day));
+    const chartData = sorted.reduce<{ day: string; cumPnL: number }[]>((acc, row) => {
+        const prev = acc.length > 0 ? acc[acc.length - 1].cumPnL : 0;
+        return [...acc, {
+            day: new Date(row.day).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+            cumPnL: parseFloat((prev + row.daily_pnl).toFixed(2)),
+        }];
+    }, []);
+
+    const isPositive = chartData[chartData.length - 1]?.cumPnL >= 0;
+    const color = isPositive ? '#10b981' : '#ef4444';
+
+    return (
+        <ResponsiveContainer width="100%" height={200}>
+            <AreaChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+                <defs>
+                    <linearGradient id="pnlGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor={color} stopOpacity={0.22} />
+                        <stop offset="95%" stopColor={color} stopOpacity={0} />
+                    </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                <XAxis
+                    dataKey="day"
+                    tick={{ fill: '#8b949e', fontSize: 11 }}
+                    axisLine={false}
+                    tickLine={false}
+                    interval="preserveStartEnd"
+                />
+                <YAxis
+                    tick={{ fill: '#8b949e', fontSize: 11 }}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(v: number) => `$${v >= 0 ? '+' : ''}${v.toFixed(0)}`}
+                    width={60}
+                />
+                <RechartsTooltip
+                    contentStyle={{
+                        background: 'rgba(13,17,23,0.96)',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        borderRadius: 8,
+                        fontSize: 12,
+                    }}
+                    labelStyle={{ color: '#e6edf3', fontWeight: 600 }}
+                    formatter={(val: number) => [`$${val >= 0 ? '+' : ''}${val.toFixed(2)}`, 'Cumulative P&L']}
+                />
+                <Area
+                    type="monotone"
+                    dataKey="cumPnL"
+                    stroke={color}
+                    strokeWidth={2}
+                    fill="url(#pnlGrad)"
+                    dot={false}
+                    activeDot={{ r: 4, fill: color }}
+                />
+            </AreaChart>
+        </ResponsiveContainer>
     );
 }
 
@@ -653,6 +748,38 @@ export default function OverviewPage() {
                     );
                 })}
             </Grid>
+
+            {/* ── P&L Equity Curve ─────────────────────────────────── */}
+            <Box sx={{ mt: 5, animation: 'slideUp 0.5s ease 0.25s both' }}>
+                <Stack direction="row" alignItems="center" spacing={1.5} sx={{ mb: 2.5 }}>
+                    <Typography variant="h5" sx={{ fontWeight: 700 }}>
+                        Cumulative P&amp;L
+                    </Typography>
+                    <Chip
+                        size="small"
+                        label="30d"
+                        sx={{
+                            fontSize: '0.65rem',
+                            fontWeight: 700,
+                            height: 22,
+                            bgcolor: alpha('#3b82f6', 0.1),
+                            color: '#3b82f6',
+                            border: `1px solid ${alpha('#3b82f6', 0.2)}`,
+                        }}
+                    />
+                </Stack>
+                <Paper
+                    elevation={0}
+                    sx={{
+                        p: { xs: 2, sm: 3 },
+                        borderRadius: '16px',
+                        border: '1px solid rgba(255,255,255,0.06)',
+                        background: 'rgba(255,255,255,0.02)',
+                    }}
+                >
+                    <PnLChart days={30} />
+                </Paper>
+            </Box>
 
             {/* ── Strategy Performance ─────────────────────────────── */}
             <Box sx={{ mt: 5, animation: 'slideUp 0.5s ease 0.3s both' }}>
