@@ -710,19 +710,24 @@ function calculateMACDForex(candles, fastPeriod = 12, slowPeriod = 26, signalPer
         const slow = calculateEMAArray(slice, slowPeriod);
         if (fast !== null && slow !== null) macdLine.push(fast - slow);
     }
-    if (macdLine.length < signalPeriod) return null;
+    if (macdLine.length < signalPeriod + 1) return null; // +1 for valid prevHistogram
     const signalLine = calculateEMAArray(macdLine, signalPeriod);
     if (signalLine === null) return null;
     const histogram = macdLine[macdLine.length - 1] - signalLine;
-    const prevHistogram = macdLine.length > 1
-        ? macdLine[macdLine.length - 2] - calculateEMAArray(macdLine.slice(0, -1), signalPeriod)
+
+    // Compute prior signal line from macdLine without the latest bar,
+    // then pair it with the second-to-last MACD value for a true prevHistogram.
+    const prevSignalLine = calculateEMAArray(macdLine.slice(0, -1), signalPeriod);
+    const prevHistogram = prevSignalLine !== null
+        ? macdLine[macdLine.length - 2] - prevSignalLine
         : histogram;
+
     return {
         macd: macdLine[macdLine.length - 1],
         signal: signalLine,
         histogram,
-        bullish:  histogram > 0 && histogram > (prevHistogram || 0),
-        bearish:  histogram < 0 && histogram < (prevHistogram || 0)
+        bullish:  histogram > 0 && histogram > prevHistogram,
+        bearish:  histogram < 0 && histogram < prevHistogram
     };
 }
 

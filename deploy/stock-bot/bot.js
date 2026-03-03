@@ -384,9 +384,13 @@ function recordTradeClose(symbol, entryPrice, exitPrice, shares, reason) {
         ? (perfData.winningTrades / perfData.totalTrades) * 100
         : 0;
 
-    perfData.profitFactor = perfData.totalLossAmount > 0
-        ? perfData.totalWinAmount / perfData.totalLossAmount
-        : perfData.totalWinAmount > 0 ? 999 : 0;
+    // Profit factor: show 0 when there's insufficient data (<5 trades) to avoid misleading
+    // 999x or 0x readings in the UI during the bot's first few trades.
+    perfData.profitFactor = perfData.totalTrades < 5
+        ? 0
+        : perfData.totalLossAmount > 0
+            ? perfData.totalWinAmount / perfData.totalLossAmount
+            : perfData.totalWinAmount > 0 ? 9.99 : 0; // cap at 9.99 (no losses yet)
 
     console.log(`📈 TRADE CLOSED: ${symbol} | ${isWin ? 'WIN' : 'LOSS'} ${pnlPct.toFixed(2)}% ($${pnlDollar.toFixed(2)}) | Reason: ${reason}`);
     console.log(`📊 Running stats: ${perfData.winningTrades}W/${perfData.losingTrades}L | WR: ${perfData.winRate.toFixed(1)}% | PF: ${perfData.profitFactor.toFixed(2)}`);
@@ -707,18 +711,25 @@ function calculateMACD(bars, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9)
         const slow = calculateEMA(slice, slowPeriod);
         if (fast !== null && slow !== null) macdLine.push(fast - slow);
     }
-    if (macdLine.length < signalPeriod) return null;
+    if (macdLine.length < signalPeriod + 1) return null; // need at least 2 bars for prevHistogram
     const signalLine = calculateEMA(macdLine, signalPeriod);
     if (signalLine === null) return null;
     const histogram = macdLine[macdLine.length - 1] - signalLine;
-    const prevHistogram = macdLine.length > 1
-        ? macdLine[macdLine.length - 2] - calculateEMA(macdLine.slice(0, -1), signalPeriod)
+
+    // prevHistogram: signal line one bar back, computed from macdLine without the latest value.
+    // Using macdLine.slice(0,-1) with its own EMA gives the correct prior signal value —
+    // the key fix is we use macdLine[length-2] against THIS prior signal (not recombined with current).
+    const prevSignalLine = calculateEMA(macdLine.slice(0, -1), signalPeriod);
+    const prevHistogram = prevSignalLine !== null
+        ? macdLine[macdLine.length - 2] - prevSignalLine
         : histogram;
+
     return {
         macd: macdLine[macdLine.length - 1],
         signal: signalLine,
         histogram,
-        bullish: histogram > 0 && histogram > (prevHistogram || 0)
+        // Require histogram strictly positive AND rising — both conditions must be true
+        bullish: histogram > 0 && histogram > prevHistogram
     };
 }
 
@@ -993,6 +1004,11 @@ async function managePositions() {
                 // Position exists on Alpaca but not in our Map (e.g. after restart).
                 // Reconstruct with sensible defaults; real entry params are persisted
                 // to positions-state.json so this fallback should rarely fire.
+                // Use Alpaca's created_at for entryTime — new Date() would make holdDays=0 forever
+                // and break all time-based exit logic. Fall back to 1 day ago as a safe estimate.
+                const restoredEntry = alpacaPos.created_at
+                    ? new Date(alpacaPos.created_at)
+                    : new Date(Date.now() - 24 * 60 * 60 * 1000);
                 position = {
                     symbol,
                     entry: avgEntry,
@@ -1000,7 +1016,7 @@ async function managePositions() {
                     stopLoss: avgEntry * 0.93,
                     target: avgEntry * 1.20,
                     strategy: 'existing',
-                    entryTime: new Date()
+                    entryTime: restoredEntry
                 };
                 positions.set(symbol, position);
                 savePositions();
@@ -1167,7 +1183,8 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                 timeframe: '1Min',
                 feed: 'sip',
                 limit: 10000
-            }
+            },
+            timeout: 12000  // 12s — prevent scan loop from hanging on slow Alpaca responses
         });
 
         if (!barResponse.data?.bars || barResponse.data.bars.length === 0) return null;
@@ -1195,7 +1212,8 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                 timeframe: '1Day',
                 feed: 'sip',
                 limit: 1
-            }
+            },
+            timeout: 8000
         });
 
         const prevVolume = prevBarResponse.data?.bars?.[0]?.v || volumeToday;
@@ -1271,18 +1289,26 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
             }
         } catch { /* daily bars unavailable — proceed on intraday signal */ }
 
-        // [v3.2] ATR-based stop/target — adapts to each stock's volatility
+        // ATR-based stop/target — adapts to each stock's volatility.
+        // Hard cap: ATR stop must not exceed 1.5× the tier's config stopLoss.
+        // Without this cap, volatile stocks (ATR 10%+) get stops 2-3x wider than intended,
+        // breaking position sizing assumptions (sized for a 4-6% stop, not a 15% stop).
         const atr = calculateATR(bars);
         let atrStop = null, atrTarget = null;
         if (atr !== null && current > 0) {
             const atrPct = atr / current;
             const candidateStop = current * (1 - atrPct * 1.5);
             const candidateTarget = current * (1 + atrPct * 3.0);
-            const rr = (candidateTarget - current) / (current - candidateStop);
-            if (rr >= 1.8) {
+            const maxStopDistance = config.stopLoss * 1.5; // cap at 1.5× tier config
+            const actualStopPct = (current - candidateStop) / current;
+            const rr = candidateStop > 0
+                ? (candidateTarget - current) / (current - candidateStop)
+                : 0;
+            if (rr >= 1.8 && actualStopPct <= maxStopDistance) {
                 atrStop = candidateStop;
                 atrTarget = candidateTarget;
             }
+            // If ATR stop is too wide, fall through to tier config defaults (atrStop stays null)
         }
 
         // Tier assignment with fallback: start at the highest qualifying tier,
@@ -1368,17 +1394,25 @@ async function executeTrade(signal, strategy) {
 
         const equity = parseFloat(accountResponse.data.equity);
 
-        // [v3.5] Kelly-criterion position sizing — scales with bot performance after 10+ trades
-        // Uses fractional Kelly (25%) to stay conservative; clamps multiplier to [0.25x, 2.0x]
+        // Kelly-criterion position sizing — scales with bot performance after 10+ trades.
+        // fracKelly is the optimal fraction of equity to risk. We express it as a multiplier
+        // relative to config.positionSize so it plugs cleanly into positionSize below.
+        // Critically: clamp the multiplier DIRECTLY to [0.25x, 2.0x] — never divide an
+        // unclamped fracKelly by positionSize, which can produce 50x+ intermediate values.
         let kellyMultiplier = 1.0;
         if (perfData.totalTrades >= 10 && perfData.winRate > 0 && perfData.profitFactor > 0) {
-            const w = perfData.winRate / 100;           // win probability
+            const w = perfData.winRate / 100;
             const avgWin  = perfData.totalWinAmount  / Math.max(perfData.winningTrades, 1);
             const avgLoss = perfData.totalLossAmount / Math.max(perfData.losingTrades, 1);
-            const b = avgLoss > 0 ? avgWin / avgLoss : 1; // win/loss ratio
-            const fullKelly = (w * b - (1 - w)) / b;
-            const fracKelly = Math.max(0, fullKelly) * 0.25; // 25% of full Kelly
-            kellyMultiplier = Math.max(0.25, Math.min(2.0, fracKelly > 0 ? fracKelly / config.positionSize : 1.0));
+            const b = avgLoss > 0 ? avgWin / avgLoss : 1;
+            const fullKelly = (w * b - (1 - w)) / b;        // optimal fraction of equity
+            const fracKelly = Math.max(0, fullKelly) * 0.25; // 25% Kelly for safety
+            // Express as a multiplier: fracKelly / config.positionSize tells us "how many
+            // config-sized units to risk". Clamp to [0.25, 2.0] and guard against NaN/Infinity
+            // (e.g. if avgLoss=0 or winRate=100%).
+            const rawMultiplier = fracKelly > 0 ? fracKelly / config.positionSize : 1.0;
+            const safeMultiplier = isFinite(rawMultiplier) && !isNaN(rawMultiplier) ? rawMultiplier : 1.0;
+            kellyMultiplier = Math.max(0.25, Math.min(2.0, safeMultiplier));
         }
 
         // [v3.5] Slippage model — market orders typically fill ~0.05% above ask for stocks

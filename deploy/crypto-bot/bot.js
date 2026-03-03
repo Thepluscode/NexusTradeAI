@@ -298,7 +298,15 @@ class KrakenClient {
                 ordertype: 'market',
                 volume: quantity.toFixed(8),
             });
-            return { orderId: result.txid?.[0], ...result };
+            // Kraken returns txid as an array; validate it's non-empty before returning.
+            // An empty or missing txid means the order was not accepted — treat as failure
+            // rather than silently recording an undefined orderId (which causes state corruption).
+            if (!Array.isArray(result?.txid) || result.txid.length === 0) {
+                const msg = result?.error?.length ? result.error.join(', ') : 'empty txid';
+                console.error(`❌ Kraken rejected order for ${symbol}: ${msg}`);
+                return null;
+            }
+            return { orderId: result.txid[0], ...result };
         } catch (error) {
             console.error(`❌ Failed to place order for ${symbol}:`, error.message);
             return null;
@@ -614,11 +622,13 @@ class CryptoTradingEngine {
 
                 // OPPORTUNITY FOUND — run bridge confirmation before committing
                 const bridgeResult = await this.queryStrategyBridge(symbol, data.prices);
-                if (bridgeResult !== null) {
-                    if (!bridgeResult.should_enter || bridgeResult.direction !== 'long') {
-                        console.log(`[Bridge] ${symbol} rejected — bridge: ${bridgeResult.direction} (conf: ${(bridgeResult.confidence || 0).toFixed(2)}): ${bridgeResult.reason || ''}`);
-                        break;
-                    }
+                if (bridgeResult === null) {
+                    // Bridge offline or slow — proceed on local signal (non-blocking by design)
+                    console.log(`[Bridge] Offline/timeout for ${symbol} — proceeding on local signal`);
+                } else if (!bridgeResult.should_enter || bridgeResult.direction !== 'long') {
+                    console.log(`[Bridge] ${symbol} rejected — bridge: ${bridgeResult.direction} (conf: ${(bridgeResult.confidence || 0).toFixed(2)}): ${bridgeResult.reason || ''}`);
+                    break;
+                } else {
                     console.log(`[Bridge] ${symbol} confirmed ✓ conf: ${(bridgeResult.confidence || 0).toFixed(2)}`);
                 }
 

@@ -338,17 +338,23 @@ if FASTAPI_AVAILABLE:
                     strategy="pairs_trading", signal="NEUTRAL", confidence=0, reason=f"Error: {e}"
                 ))
 
-        # Ensemble: weighted voting
+        # Ensemble: weighted voting — skip any signal with non-finite confidence to prevent
+        # a single corrupted strategy (NaN/inf from degenerate OU fit) poisoning the whole ensemble.
+        import math as _math
         buy_score = 0
         sell_score = 0
         weights = {"regime_momentum": 0.50, "volatility_arbitrage": 0.30, "pairs_trading": 0.20}
 
         for s in strategies_results:
+            conf = s.confidence or 0
+            if not _math.isfinite(conf) or conf < 0 or conf > 1:
+                logger.warning(f"Skipping strategy {s.strategy}: invalid confidence {conf}")
+                continue
             w = weights.get(s.strategy, 0.5)
             if s.signal == "BUY":
-                buy_score += s.confidence * w
+                buy_score += conf * w
             elif s.signal == "SELL":
-                sell_score += s.confidence * w
+                sell_score += conf * w
 
         total = buy_score + sell_score
         if total > 0:

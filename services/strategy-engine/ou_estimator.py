@@ -93,20 +93,29 @@ class OUEstimator:
         residuals = Y - X_with_const @ beta
         sigma_residuals = np.std(residuals)
         
-        # Check for stationarity: |b| must be < 1
-        if abs(b) >= 1.0 or b <= 0:
-            return self._default_result(f"Non-stationary (b={b:.4f})")
-        
+        # Check for stationarity: |b| must be < 1 and far enough from 1.0 to avoid
+        # division-by-zero in (1-b) and (1-b**2) downstream. b > 0.9999 → half-life > 1900
+        # days which is practically infinite — not tradeable.
+        if abs(b) >= 1.0 or b <= 0 or b > 0.9999:
+            return self._default_result(f"Non-stationary or near-unit-root (b={b:.6f})")
+
         # MLE parameter estimates
         self.theta = -np.log(b) / self.dt
         self.mu = a / (1 - b)
         self.sigma = sigma_residuals * np.sqrt(-2 * np.log(b) / (self.dt * (1 - b**2)))
         self.half_life = np.log(2) / self.theta
-        
-        # Current z-score
+
+        # Guard against NaN/Inf that can slip through edge cases
+        if not (np.isfinite(self.mu) and np.isfinite(self.sigma) and np.isfinite(self.half_life)):
+            return self._default_result("OU parameters non-finite — degenerate series")
+
+        # Current z-score — require meaningful spread variance (low-variance = noise, not signal)
+        MIN_SPREAD_STD = 1e-4
         current_value = spread[-1]
         spread_std = np.std(spread[-30:]) if len(spread) >= 30 else np.std(spread)
-        z_score = (current_value - self.mu) / spread_std if spread_std > 0 else 0
+        if spread_std < MIN_SPREAD_STD:
+            return self._default_result(f"Spread variance too low ({spread_std:.2e}) — not tradeable")
+        z_score = (current_value - self.mu) / spread_std
         
         # Log-likelihood (for model comparison)
         sigma_eq = sigma_residuals  # equilibrium volatility
