@@ -1393,6 +1393,10 @@ async function executeTrade(signal, strategy) {
         });
 
         const equity = parseFloat(accountResponse.data.equity);
+        if (!equity || equity <= 0) {
+            console.log(`⚠️  [SKIP] ${signal.symbol}: account equity $${equity} is invalid — skipping trade`);
+            return null;
+        }
 
         // Kelly-criterion position sizing — scales with bot performance after 10+ trades.
         // fracKelly is the optimal fraction of equity to risk. We express it as a multiplier
@@ -1544,12 +1548,14 @@ async function closePosition(symbol, qty, reason = 'Manual') {
             }
         });
 
-        // Record performance data (fix: now tracks wins/losses)
+        // Record performance data — apply exit slippage (market sell fills ~0.05% below bid)
         if (position && currentPrice) {
-            recordTradeClose(symbol, position.entry, currentPrice, parseFloat(qty), reason);
-            const pnlUsd = (currentPrice - position.entry) * parseFloat(qty);
-            const pnlPct = ((currentPrice - position.entry) / position.entry) * 100;
-            dbTradeClose(position?.dbTradeId, currentPrice, pnlUsd, pnlPct, reason).catch(() => {});
+            const STOCK_EXIT_SLIPPAGE = 0.0005; // 0.05% — matches entry slippage assumption
+            const adjustedExitPrice = currentPrice * (1 - STOCK_EXIT_SLIPPAGE);
+            recordTradeClose(symbol, position.entry, adjustedExitPrice, parseFloat(qty), reason);
+            const pnlUsd = (adjustedExitPrice - position.entry) * parseFloat(qty);
+            const pnlPct = ((adjustedExitPrice - position.entry) / position.entry) * 100;
+            dbTradeClose(position?.dbTradeId, adjustedExitPrice, pnlUsd, pnlPct, reason).catch(() => {});
         }
 
         console.log(`✅ Position closed: ${symbol} (${reason})`);

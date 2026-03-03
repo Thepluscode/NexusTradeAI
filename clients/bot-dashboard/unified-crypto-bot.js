@@ -723,6 +723,19 @@ class CryptoTradingEngine {
             const effectiveEntry = signal.price * (1 + CRYPTO_SLIPPAGE);
             const quantity = positionSizeUSD / effectiveEntry;
 
+            // Kraken minimum order sizes per symbol (in base asset units)
+            const KRAKEN_MIN_QTY = {
+                XBTUSD: 0.0001, ETHUSD: 0.01, SOLUSD: 0.1,
+                ADAUSD: 10,     XRPUSD: 10,   AVAXUSD: 0.1,
+                LINKUSD: 0.5,   DOTUSD: 0.5,  UNIUSD: 0.5,
+                ATOMUSD: 0.5,   MATICUSD: 5,  LTCUSD: 0.05
+            };
+            const minQty = KRAKEN_MIN_QTY[signal.symbol] ?? 0.0001;
+            if (quantity < minQty) {
+                console.log(`⚠️  [SKIP] ${signal.symbol}: quantity ${quantity.toFixed(8)} below Kraken minimum ${minQty} (position $${positionSizeUSD.toFixed(0)} too small)`);
+                return null;
+            }
+
             console.log(`\n📈 EXECUTING CRYPTO TRADE:`);
             console.log(`   Symbol: ${signal.symbol}`);
             console.log(`   Tier: ${signal.tier}`);
