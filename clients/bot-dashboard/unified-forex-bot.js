@@ -750,11 +750,14 @@ async function getH1Trend(pair) {
         const period = 20;
         const sma20 = closes.slice(-period).reduce((a, b) => a + b, 0) / period;
         const last3 = closes.slice(-3);
-        const allAbove = last3.every(c => c > sma20);
-        const allBelow = last3.every(c => c < sma20);
+        // Majority rule: 2-of-3 closes above/below SMA20 + slope confirms direction.
+        // Requiring ALL 3 is too strict — a single hourly dip during a clear uptrend
+        // would mark the pair 'neutral' and block a valid LONG signal.
+        const aboveCount = last3.filter(c => c > sma20).length;
+        const belowCount = last3.filter(c => c < sma20).length;
         const risingSlope = last3[2] > last3[0];
-        if (allAbove && risingSlope) return 'up';
-        if (allBelow && !risingSlope) return 'down';
+        if (aboveCount >= 2 && risingSlope) return 'up';
+        if (belowCount >= 2 && !risingSlope) return 'down';
         return 'neutral';
     } catch (e) {
         console.warn(`[H1 Trend] ${pair}: ${e.message}`);

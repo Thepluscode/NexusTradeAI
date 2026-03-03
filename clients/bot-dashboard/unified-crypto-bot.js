@@ -548,14 +548,14 @@ class CryptoTradingEngine {
         // Check BTC trend first (for altcoin correlation)
         const btcBullish = await this.isBTCBullish();
         if (!btcBullish) {
-            console.log('🔴 BTC is bearish - reducing altcoin exposure');
+            console.log('🔴 BTC is bearish/neutral — scanning all symbols but halving altcoin position size');
         }
 
         for (const symbol of this.config.symbols) {
-            // Skip altcoins if BTC is bearish (except BTC and ETH themselves)
-            if (!btcBullish && symbol !== 'XBTUSD' && symbol !== 'ETHUSD') {
-                continue;
-            }
+            // When BTC is bearish, reduce altcoin position size (50%) instead of hard-skipping.
+            // Hard-skipping 10/12 symbols leaves the bot idle for hours when BTC consolidates.
+            // We still trade altcoins but with tighter sizing to limit exposure.
+            const btcSizingFactor = (!btcBullish && symbol !== 'XBTUSD' && symbol !== 'ETHUSD') ? 0.5 : 1.0;
 
             // Skip if already have position
             if (this.positions.has(symbol)) {
@@ -585,21 +585,30 @@ class CryptoTradingEngine {
 
             if (!sma20 || !ema9) continue;
 
-            // [v3.2] MACD confirmation — only enter when momentum is accelerating bullishly
+            // [v3.2] MACD confirmation — prefer bullish MACD but don't hard-block.
+            // Hard-blocking meant zero signals during MACD consolidation phases.
+            // Instead: log a warning and apply a 0.7x size penalty if MACD is not bullish.
             const macd = this.calculateMACD(data.prices);
-            if (!macd || !macd.bullish) {
-                continue; // Skip when MACD histogram not bullish/rising
+            const macdBullish = macd && macd.bullish;
+            const macdSizingFactor = macdBullish ? 1.0 : 0.7;
+            if (!macdBullish) {
+                console.log(`[MACD] ${symbol}: histogram not bullish — reducing size to 70%`);
             }
 
-            // [v3.2] Volume surge filter — current bar must have 1.5x average volume
+            // [v3.2] Volume surge filter — lowered from 1.5x to 1.2x average.
+            // 1.5x coincides with MACD alignment only ~15% of bars; 1.2x is still
+            // above-average volume confirmation without requiring a spike.
             const avgVolume = data.volumes.length >= 20
                 ? data.volumes.slice(-20).reduce((a, b) => a + b, 0) / 20
                 : null;
             const currentBarVolume = data.volumes[data.volumes.length - 1];
             const volumeRatio = avgVolume > 0 ? currentBarVolume / avgVolume : 1;
-            if (volumeRatio < 1.5) {
-                continue; // Require volume surge on entry candle
+            if (volumeRatio < 1.2) {
+                continue; // Require above-average volume confirmation
             }
+
+            // Combined sizing factor for this symbol
+            const combinedSizingFactor = btcSizingFactor * macdSizingFactor;
 
             // Momentum calculation
             const momentum = (data.currentPrice - sma20) / sma20;
@@ -639,7 +648,8 @@ class CryptoTradingEngine {
                     momentum: momentum * 100,
                     rsi,
                     volume24h: data.volume24h,
-                    volumeRatio,  // [v3.2] volume surge ratio
+                    volumeRatio,
+                    sizingFactor: combinedSizingFactor, // BTC + MACD sizing penalty
                     stopLoss: data.currentPrice * (1 - tier.stopLoss),
                     takeProfit: data.currentPrice * (1 + tier.profitTarget),
                     stopLossPercent: tier.stopLoss * 100,
@@ -710,11 +720,12 @@ class CryptoTradingEngine {
                 ? this.winningTrades / totalClosedTrades
                 : 0.5;
             const sizingMultiplier = Math.max(0.25, Math.min(2.0, runningWinRate / 0.5));
+            const signalSizingFactor = signal.sizingFactor ?? 1.0;
             const positionSizeUSD = Math.min(
-                this.config.basePositionSizeUSD * sizingMultiplier,
+                this.config.basePositionSizeUSD * sizingMultiplier * signalSizingFactor,
                 this.config.maxPositionSizeUSD
             );
-            console.log(`   [Kelly Sizing] WinRate: ${(runningWinRate * 100).toFixed(1)}% → multiplier ${sizingMultiplier.toFixed(2)}x → $${positionSizeUSD.toFixed(0)}`);
+            console.log(`   [Kelly Sizing] WinRate: ${(runningWinRate * 100).toFixed(1)}% → kelly ${sizingMultiplier.toFixed(2)}x · signal ${signalSizingFactor.toFixed(2)}x → $${positionSizeUSD.toFixed(0)}`);
 
             // [v3.5] Crypto slippage model — Kraken taker fee is 0.26%; market orders
             // also move the book. Model as 0.30% total execution cost.

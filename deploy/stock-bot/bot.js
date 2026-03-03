@@ -2501,9 +2501,14 @@ app.listen(PORT, async () => {
         console.warn('⚠️  DB reconciliation failed:', e.message);
     }
 
-    // Pre-seed strategy bridge pairs cache 30s after startup (non-blocking)
+    // Pre-seed strategy bridge pairs cache 30s after startup (non-blocking).
+    // Use the Railway public URL if available so this works on Railway where
+    // localhost:<PORT> is not reachable from the same container via HTTP.
     setTimeout(() => {
-        axios.post(`http://localhost:${PORT}/api/bridge/warmup`, {}, { timeout: 120000 })
+        const selfUrl = process.env.RAILWAY_PUBLIC_DOMAIN
+            ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+            : `http://localhost:${PORT}`;
+        axios.post(`${selfUrl}/api/bridge/warmup`, {}, { timeout: 120000 })
             .then(r => console.log(`✅ Bridge warm-up: seeded ${r.data?.seeded?.length ?? 0} symbols, failed ${r.data?.failed?.length ?? 0}`))
             .catch(e => console.warn('⚠️  Bridge warm-up failed:', e.message));
     }, 30000);

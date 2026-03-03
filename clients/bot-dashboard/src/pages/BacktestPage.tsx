@@ -93,7 +93,7 @@ export default function BacktestPage() {
         try {
             const result = await apiClient.runBacktest();
             if (result?.success) setScanResult(result);
-            else setScanError(result?.signals ? 'No signals found' : 'Scan failed');
+            else setScanError(!result?.signals?.length ? 'No signals found' : 'Scan failed');
         } catch {
             setScanError('Could not reach the stock bot');
         } finally {
