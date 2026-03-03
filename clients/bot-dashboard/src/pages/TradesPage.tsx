@@ -226,7 +226,7 @@ export default function TradesPage() {
                                     </TableHead>
                                     <TableBody>
                                         {(trades as TradeRecord[]).map((t) => (
-                                            <TableRow key={t.id} hover>
+                                            <TableRow key={t.id} hover sx={{ opacity: t.status === 'open' ? 0.85 : 1 }}>
                                                 <TableCell>
                                                     <Chip label={t.bot} size="small" color={BOT_COLORS[t.bot] ?? 'default'} variant="outlined" />
                                                 </TableCell>
@@ -242,19 +242,33 @@ export default function TradesPage() {
                                                         variant={t.status === 'open' ? 'filled' : 'outlined'} />
                                                 </TableCell>
                                                 <TableCell align="right">{t.entry_price ? `$${parseFloat(t.entry_price).toFixed(4)}` : '—'}</TableCell>
-                                                <TableCell align="right">{t.exit_price ? `$${parseFloat(t.exit_price).toFixed(4)}` : '—'}</TableCell>
                                                 <TableCell align="right">
-                                                    <Typography variant="body2" color={pnlColor(t.pnl_usd)}>
-                                                        {t.pnl_usd != null ? fmt(t.pnl_usd) : '—'}
-                                                    </Typography>
+                                                    {t.exit_price
+                                                        ? `$${parseFloat(t.exit_price).toFixed(4)}`
+                                                        : <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>—</Typography>
+                                                    }
                                                 </TableCell>
                                                 <TableCell align="right">
-                                                    <Typography variant="body2" color={pnlColor(t.pnl_pct)}>
-                                                        {t.pnl_pct != null ? `${parseFloat(t.pnl_pct).toFixed(2)}%` : '—'}
-                                                    </Typography>
+                                                    {t.pnl_usd != null ? (
+                                                        <Typography variant="body2" color={pnlColor(t.pnl_usd)}>{fmt(t.pnl_usd)}</Typography>
+                                                    ) : (
+                                                        <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>Unrealized</Typography>
+                                                    )}
+                                                </TableCell>
+                                                <TableCell align="right">
+                                                    {t.pnl_pct != null ? (
+                                                        <Typography variant="body2" color={pnlColor(t.pnl_pct)}>{parseFloat(t.pnl_pct).toFixed(2)}%</Typography>
+                                                    ) : (
+                                                        <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>—</Typography>
+                                                    )}
                                                 </TableCell>
                                                 <TableCell>
-                                                    <Typography variant="caption" color="text.secondary">{t.close_reason ?? '—'}</Typography>
+                                                    {t.close_reason
+                                                        ? <Typography variant="caption" color="text.secondary">{t.close_reason}</Typography>
+                                                        : t.status === 'open'
+                                                            ? <Chip label="Active" size="small" color="primary" variant="outlined" sx={{ fontSize: '0.65rem', height: 22 }} />
+                                                            : <Typography variant="caption" color="text.secondary">—</Typography>
+                                                    }
                                                 </TableCell>
                                                 <TableCell>
                                                     <Typography variant="caption" color="text.secondary">
