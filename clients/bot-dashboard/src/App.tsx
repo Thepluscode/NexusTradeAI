@@ -31,6 +31,7 @@ import {
   Settings,
   Logout,
   Bolt,
+  FiberManualRecord,
 } from '@mui/icons-material';
 import darkTheme from './theme';
 import { Toaster } from 'react-hot-toast';
@@ -99,27 +100,45 @@ function Navigation() {
   const drawer = (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* ── Brand Header ─────────────────────────────────────────── */}
-      <Box sx={{ px: 2.5, py: 2.5, display: 'flex', alignItems: 'center', gap: 1.5 }}>
-        <Box
-          sx={{
-            width: 40,
-            height: 40,
-            borderRadius: '12px',
-            background: 'linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)',
-          }}
-        >
-          <Bolt sx={{ color: '#fff', fontSize: 22 }} />
+      <Box sx={{ px: 2.5, pt: 2.5, pb: 2, display: 'flex', alignItems: 'center', gap: 1.5 }}>
+        {/* Logo with ambient glow */}
+        <Box sx={{ position: 'relative', flexShrink: 0 }}>
+          <Box
+            sx={{
+              width: 40,
+              height: 40,
+              borderRadius: '12px',
+              background: 'linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: '0 4px 16px rgba(59, 130, 246, 0.35)',
+              position: 'relative',
+              zIndex: 1,
+            }}
+          >
+            <Bolt sx={{ color: '#fff', fontSize: 22 }} />
+          </Box>
+          {/* Ambient glow behind logo */}
+          <Box
+            sx={{
+              position: 'absolute',
+              inset: -4,
+              borderRadius: '16px',
+              background: 'linear-gradient(135deg, rgba(59,130,246,0.3), rgba(139,92,246,0.3))',
+              filter: 'blur(8px)',
+              zIndex: 0,
+              animation: 'pulseGlow 3s ease-in-out infinite',
+            }}
+          />
         </Box>
+
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography
             variant="subtitle1"
             sx={{
               fontWeight: 800,
-              fontSize: '1rem',
+              fontSize: '0.95rem',
               letterSpacing: '-0.02em',
               background: 'linear-gradient(135deg, #e6edf3 0%, #8b949e 100%)',
               WebkitBackgroundClip: 'text',
@@ -130,6 +149,27 @@ function Navigation() {
           </Typography>
           <LiveClock />
         </Box>
+
+        {/* LIVE chip */}
+        <Chip
+          size="small"
+          icon={
+            <FiberManualRecord sx={{ fontSize: '7px !important', color: '#10b981 !important', animation: 'pulseDot 2s ease-in-out infinite' }} />
+          }
+          label="LIVE"
+          sx={{
+            height: 20,
+            fontSize: '0.58rem',
+            fontWeight: 700,
+            letterSpacing: '0.05em',
+            bgcolor: alpha('#10b981', 0.1),
+            color: '#10b981',
+            border: `1px solid ${alpha('#10b981', 0.25)}`,
+            flexShrink: 0,
+            '& .MuiChip-label': { px: 0.8 },
+            '& .MuiChip-icon': { ml: 0.5 },
+          }}
+        />
       </Box>
 
       <Divider sx={{ mx: 2 }} />
@@ -180,6 +220,11 @@ function Navigation() {
                     color: isActive ? item.color : 'text.secondary',
                     minWidth: 40,
                     transition: 'color 0.2s ease',
+                    '& svg': {
+                      fontSize: 20,
+                      filter: isActive ? `drop-shadow(0 0 6px ${item.color})` : 'none',
+                      transition: 'filter 0.25s ease',
+                    },
                   }}
                 >
                   {item.icon}
