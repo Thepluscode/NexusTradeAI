@@ -175,7 +175,7 @@ function Navigation() {
       <Divider sx={{ mx: 2 }} />
 
       {/* ── Navigation Items ─────────────────────────────────────── */}
-      <List sx={{ flex: 1, px: 1.5, py: 1.5 }}>
+      <List sx={{ flex: 1, px: 1.5, py: 1.5, overflow: 'auto' }}>
         {NAV_ITEMS.map((item) => {
           const isActive = location.pathname === item.path;
           return (
@@ -259,7 +259,7 @@ function Navigation() {
       <Divider sx={{ mx: 2 }} />
 
       {/* ── Bottom Actions ────────────────────────────────────────── */}
-      <List sx={{ px: 1.5, pb: 2, pt: 1 }}>
+      <List sx={{ px: 1.5, pb: 2, pt: 1, flexShrink: 0 }}>
         <ListItem disablePadding>
           <ListItemButton
             onClick={() => { navigate('/settings'); if (isMobile) setMobileOpen(false); }}
