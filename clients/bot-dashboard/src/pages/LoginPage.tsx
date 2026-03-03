@@ -10,8 +10,9 @@ import {
   Alert,
   Divider,
   CircularProgress,
+  alpha,
 } from '@mui/material';
-import { Lock } from '@mui/icons-material';
+import { Bolt, Email, Lock, Person } from '@mui/icons-material';
 import axios from 'axios';
 import { SERVICE_URLS } from '@/services/api';
 
@@ -54,37 +55,106 @@ export default function LoginPage() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        bgcolor: 'background.default',
         px: 2,
+        position: 'relative',
+        overflow: 'hidden',
+        // Animated mesh background
+        '&::before': {
+          content: '""',
+          position: 'absolute',
+          inset: 0,
+          background:
+            'radial-gradient(ellipse at 20% 30%, rgba(59, 130, 246, 0.15) 0%, transparent 50%),' +
+            'radial-gradient(ellipse at 80% 70%, rgba(139, 92, 246, 0.12) 0%, transparent 50%),' +
+            'radial-gradient(ellipse at 50% 50%, rgba(16, 185, 129, 0.06) 0%, transparent 60%)',
+          animation: 'gradientShift 20s ease infinite',
+          backgroundSize: '200% 200%',
+          pointerEvents: 'none',
+        },
+        // Grid dot pattern
+        '&::after': {
+          content: '""',
+          position: 'absolute',
+          inset: 0,
+          backgroundImage:
+            'radial-gradient(circle, rgba(255, 255, 255, 0.03) 1px, transparent 1px)',
+          backgroundSize: '24px 24px',
+          pointerEvents: 'none',
+        },
       }}
     >
-      <Card sx={{ width: '100%', maxWidth: 420 }}>
-        <CardContent sx={{ p: 4 }}>
-          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 3 }}>
+      <Card
+        sx={{
+          width: '100%',
+          maxWidth: 440,
+          position: 'relative',
+          zIndex: 1,
+          animation: 'scaleIn 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) both',
+          background: 'rgba(13, 17, 23, 0.75)',
+          backdropFilter: 'blur(24px)',
+          WebkitBackdropFilter: 'blur(24px)',
+          border: '1px solid rgba(255, 255, 255, 0.08)',
+          boxShadow: '0 24px 64px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05) inset',
+        }}
+      >
+        <CardContent sx={{ p: { xs: 3, sm: 4 } }}>
+          {/* Brand Header */}
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 4 }}>
             <Box
               sx={{
-                width: 56,
-                height: 56,
-                borderRadius: '50%',
-                bgcolor: 'primary.main',
+                width: 64,
+                height: 64,
+                borderRadius: '18px',
+                background: 'linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                mb: 2,
+                mb: 2.5,
+                boxShadow: '0 8px 24px rgba(59, 130, 246, 0.35)',
+                position: 'relative',
+                '&::after': {
+                  content: '""',
+                  position: 'absolute',
+                  inset: -3,
+                  borderRadius: '21px',
+                  background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.4), rgba(139, 92, 246, 0.4))',
+                  filter: 'blur(8px)',
+                  opacity: 0.5,
+                  zIndex: -1,
+                  animation: 'pulseGlow 3s ease-in-out infinite',
+                },
               }}
             >
-              <Lock sx={{ color: '#fff', fontSize: 28 }} />
+              <Bolt sx={{ color: '#fff', fontSize: 32 }} />
             </Box>
-            <Typography variant="h5" sx={{ fontWeight: 700 }}>
+            <Typography
+              variant="h5"
+              sx={{
+                fontWeight: 800,
+                letterSpacing: '-0.02em',
+                background: 'linear-gradient(135deg, #e6edf3 0%, #8b949e 100%)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+              }}
+            >
               NexusTradeAI
             </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-              {mode === 'login' ? 'Sign in to your account' : 'Create a new account'}
+            <Typography variant="body2" sx={{ color: 'text.secondary', mt: 0.5, textAlign: 'center' }}>
+              {mode === 'login' ? 'Welcome back — sign in to your account' : 'Get started — create a new account'}
             </Typography>
           </Box>
 
           {error && (
-            <Alert severity="error" sx={{ mb: 2 }}>
+            <Alert
+              severity="error"
+              sx={{
+                mb: 2.5,
+                borderRadius: '12px',
+                bgcolor: alpha('#ef4444', 0.08),
+                border: `1px solid ${alpha('#ef4444', 0.2)}`,
+                '& .MuiAlert-icon': { color: '#ef4444' },
+              }}
+            >
               {error}
             </Alert>
           )}
@@ -92,17 +162,22 @@ export default function LoginPage() {
           <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {mode === 'register' && (
               <TextField
-                label="Name (optional)"
+                label="Name"
+                placeholder="John Doe"
                 value={name}
                 onChange={e => setName(e.target.value)}
                 fullWidth
                 size="small"
                 autoComplete="name"
+                InputProps={{
+                  startAdornment: <Person sx={{ color: 'text.secondary', mr: 1, fontSize: 18 }} />,
+                }}
               />
             )}
             <TextField
               label="Email"
               type="email"
+              placeholder="you@example.com"
               value={email}
               onChange={e => setEmail(e.target.value)}
               required
@@ -110,10 +185,14 @@ export default function LoginPage() {
               size="small"
               autoComplete="email"
               autoFocus={mode === 'login'}
+              InputProps={{
+                startAdornment: <Email sx={{ color: 'text.secondary', mr: 1, fontSize: 18 }} />,
+              }}
             />
             <TextField
               label="Password"
               type="password"
+              placeholder="••••••••"
               value={password}
               onChange={e => setPassword(e.target.value)}
               required
@@ -121,15 +200,35 @@ export default function LoginPage() {
               size="small"
               autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
               helperText={mode === 'register' ? 'At least 8 characters' : undefined}
+              InputProps={{
+                startAdornment: <Lock sx={{ color: 'text.secondary', mr: 1, fontSize: 18 }} />,
+              }}
             />
             <Button
               type="submit"
               variant="contained"
               fullWidth
               disabled={loading}
-              sx={{ mt: 1, py: 1.2, fontWeight: 600 }}
+              sx={{
+                mt: 1,
+                py: 1.4,
+                fontWeight: 700,
+                fontSize: '0.9rem',
+                background: 'linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%)',
+                boxShadow: '0 4px 16px rgba(59, 130, 246, 0.3)',
+                transition: 'all 0.3s ease',
+                '&:hover': {
+                  boxShadow: '0 6px 24px rgba(59, 130, 246, 0.45)',
+                  transform: 'translateY(-1px)',
+                },
+                '&:disabled': {
+                  background: 'rgba(255, 255, 255, 0.08)',
+                },
+              }}
             >
-              {loading ? <CircularProgress size={22} color="inherit" /> : mode === 'login' ? 'Sign In' : 'Create Account'}
+              {loading ? (
+                <CircularProgress size={22} sx={{ color: 'rgba(255,255,255,0.7)' }} />
+              ) : mode === 'login' ? 'Sign In' : 'Create Account'}
             </Button>
           </Box>
 
@@ -142,7 +241,18 @@ export default function LoginPage() {
                 variant="text"
                 size="small"
                 onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); }}
-                sx={{ p: 0, minWidth: 0, fontWeight: 600, textTransform: 'none', verticalAlign: 'baseline' }}
+                sx={{
+                  p: 0,
+                  minWidth: 0,
+                  fontWeight: 700,
+                  textTransform: 'none',
+                  verticalAlign: 'baseline',
+                  color: '#3b82f6',
+                  '&:hover': {
+                    color: '#60a5fa',
+                    background: 'transparent',
+                  },
+                }}
               >
                 {mode === 'login' ? 'Register' : 'Sign In'}
               </Button>

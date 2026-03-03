@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { QueryClient, QueryClientProvider } from 'react-query';
-import { ThemeProvider, createTheme, CssBaseline } from '@mui/material';
+import { ThemeProvider, createTheme, CssBaseline, alpha } from '@mui/material';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import {
   Box,
@@ -16,6 +16,9 @@ import {
   IconButton,
   Divider,
   useMediaQuery,
+  Avatar,
+  Tooltip,
+  Chip,
 } from '@mui/material';
 import {
   Dashboard,
@@ -27,6 +30,7 @@ import {
   Menu as MenuIcon,
   Settings,
   Logout,
+  Bolt,
 } from '@mui/icons-material';
 import { Toaster } from 'react-hot-toast';
 
@@ -46,54 +50,89 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
-      // No global onError — individual bots handle offline gracefully with fallback data.
-      // A global handler would fire a toast every 5s for every offline bot.
       retry: 1,
     },
   },
 });
 
+// ── Premium Dark Theme ────────────────────────────────────────────────────────
 const darkTheme = createTheme({
   palette: {
     mode: 'dark',
     primary: {
       main: '#3b82f6',
+      light: '#60a5fa',
+      dark: '#2563eb',
     },
     secondary: {
       main: '#8b5cf6',
+      light: '#a78bfa',
+      dark: '#7c3aed',
     },
     success: {
       main: '#10b981',
+      light: '#34d399',
+      dark: '#059669',
     },
     error: {
       main: '#ef4444',
+      light: '#f87171',
+      dark: '#dc2626',
     },
     warning: {
       main: '#f59e0b',
+      light: '#fbbf24',
+      dark: '#d97706',
+    },
+    info: {
+      main: '#06b6d4',
+      light: '#22d3ee',
+      dark: '#0891b2',
     },
     background: {
-      default: '#0a0a0f',
-      paper: '#12121a',
+      default: '#06080d',
+      paper: '#0d1117',
     },
+    divider: 'rgba(255, 255, 255, 0.06)',
+    text: {
+      primary: '#e6edf3',
+      secondary: '#8b949e',
+    },
+  },
+  shape: {
+    borderRadius: 12,
   },
   typography: {
-    fontFamily: '"Inter", "Roboto", "Helvetica", "Arial", sans-serif',
-    h4: {
-      fontWeight: 700,
-    },
-    h5: {
-      fontWeight: 600,
-    },
-    h6: {
-      fontWeight: 600,
-    },
+    fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    h4: { fontWeight: 800, letterSpacing: '-0.02em' },
+    h5: { fontWeight: 700, letterSpacing: '-0.01em' },
+    h6: { fontWeight: 700, letterSpacing: '-0.01em' },
+    subtitle1: { fontWeight: 600 },
+    subtitle2: { fontWeight: 600, fontSize: '0.8rem' },
+    body2: { color: '#8b949e' },
+    button: { fontWeight: 600, textTransform: 'none' as const },
   },
   components: {
+    MuiCssBaseline: {
+      styleOverrides: {
+        body: {
+          backgroundImage: 'none',
+        },
+      },
+    },
     MuiCard: {
       styleOverrides: {
         root: {
           backgroundImage: 'none',
-          borderRadius: 12,
+          borderRadius: 16,
+          border: '1px solid rgba(255, 255, 255, 0.06)',
+          backgroundColor: 'rgba(13, 17, 23, 0.7)',
+          backdropFilter: 'blur(12px)',
+          WebkitBackdropFilter: 'blur(12px)',
+          transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.3s ease',
+          '&:hover': {
+            borderColor: 'rgba(59, 130, 246, 0.2)',
+          },
         },
       },
     },
@@ -101,16 +140,92 @@ const darkTheme = createTheme({
       styleOverrides: {
         root: {
           backgroundImage: 'none',
+          backgroundColor: 'rgba(13, 17, 23, 0.7)',
+          backdropFilter: 'blur(12px)',
+          WebkitBackdropFilter: 'blur(12px)',
+          border: '1px solid rgba(255, 255, 255, 0.06)',
+          borderRadius: 16,
+        },
+      },
+    },
+    MuiButton: {
+      styleOverrides: {
+        root: {
+          borderRadius: 10,
+          textTransform: 'none' as const,
+          fontWeight: 600,
+          padding: '8px 20px',
+          transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+        },
+        contained: {
+          boxShadow: 'none',
+          '&:hover': {
+            boxShadow: '0 4px 16px rgba(59, 130, 246, 0.3)',
+            transform: 'translateY(-1px)',
+          },
+        },
+      },
+    },
+    MuiChip: {
+      styleOverrides: {
+        root: {
+          fontWeight: 600,
+          borderRadius: 8,
+        },
+      },
+    },
+    MuiTextField: {
+      styleOverrides: {
+        root: {
+          '& .MuiOutlinedInput-root': {
+            borderRadius: 10,
+            transition: 'box-shadow 0.25s ease',
+            '&.Mui-focused': {
+              boxShadow: '0 0 0 3px rgba(59, 130, 246, 0.15)',
+            },
+          },
+        },
+      },
+    },
+    MuiTableCell: {
+      styleOverrides: {
+        root: {
+          borderColor: 'rgba(255, 255, 255, 0.06)',
+        },
+      },
+    },
+    MuiDivider: {
+      styleOverrides: {
+        root: {
+          borderColor: 'rgba(255, 255, 255, 0.06)',
+        },
+      },
+    },
+    MuiSkeleton: {
+      styleOverrides: {
+        root: {
+          backgroundColor: 'rgba(255, 255, 255, 0.04)',
+        },
+      },
+    },
+    MuiTooltip: {
+      styleOverrides: {
+        tooltip: {
+          backgroundColor: '#1c2333',
+          border: '1px solid rgba(255, 255, 255, 0.08)',
+          borderRadius: 8,
+          fontSize: '0.75rem',
+          fontWeight: 500,
         },
       },
     },
   },
 });
 
-const DRAWER_WIDTH = 260;
+const DRAWER_WIDTH = 272;
 
 const NAV_ITEMS = [
-  { path: '/', label: 'Overview', icon: <Dashboard /> },
+  { path: '/', label: 'Overview', icon: <Dashboard />, color: '#3b82f6' },
   { path: '/stock', label: 'Stock Bot', icon: <ShowChart />, color: '#10b981' },
   { path: '/forex', label: 'Forex Bot', icon: <CurrencyExchange />, color: '#3b82f6' },
   { path: '/crypto', label: 'Crypto Bot', icon: <CurrencyBitcoin />, color: '#f59e0b' },
@@ -127,83 +242,216 @@ function Navigation() {
 
   const drawer = (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <Toolbar sx={{ px: 2 }}>
-        <Typography variant="h6" sx={{ fontWeight: 700 }}>
-          🎯 NexusTradeAI
-        </Typography>
-      </Toolbar>
-      <Divider />
-      <List sx={{ flex: 1, px: 1 }}>
-        {NAV_ITEMS.map((item) => (
-          <ListItem key={item.path} disablePadding sx={{ mb: 0.5 }}>
-            <ListItemButton
-              onClick={() => {
-                navigate(item.path);
-                if (isMobile) setMobileOpen(false);
-              }}
-              selected={location.pathname === item.path}
-              sx={{
-                borderRadius: 2,
-                '&.Mui-selected': {
-                  bgcolor: item.color ? `${item.color}20` : 'action.selected',
-                  '&:hover': {
-                    bgcolor: item.color ? `${item.color}30` : 'action.hover',
-                  },
-                },
-              }}
-            >
-              <ListItemIcon sx={{ color: item.color || 'inherit', minWidth: 40 }}>
-                {item.icon}
-              </ListItemIcon>
-              <ListItemText
-                primary={item.label}
-                primaryTypographyProps={{
-                  fontWeight: location.pathname === item.path ? 600 : 400,
-                  color: item.color && location.pathname === item.path ? item.color : 'inherit',
+      {/* ── Brand Header ─────────────────────────────────────────── */}
+      <Box sx={{ px: 2.5, py: 2.5, display: 'flex', alignItems: 'center', gap: 1.5 }}>
+        <Box
+          sx={{
+            width: 40,
+            height: 40,
+            borderRadius: '12px',
+            background: 'linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)',
+          }}
+        >
+          <Bolt sx={{ color: '#fff', fontSize: 22 }} />
+        </Box>
+        <Box>
+          <Typography
+            variant="subtitle1"
+            sx={{
+              fontWeight: 800,
+              fontSize: '1rem',
+              letterSpacing: '-0.02em',
+              background: 'linear-gradient(135deg, #e6edf3 0%, #8b949e 100%)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+            }}
+          >
+            NexusTradeAI
+          </Typography>
+          <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.65rem', letterSpacing: '0.05em' }}>
+            TRADING PLATFORM
+          </Typography>
+        </Box>
+      </Box>
+
+      <Divider sx={{ mx: 2 }} />
+
+      {/* ── Navigation Items ─────────────────────────────────────── */}
+      <List sx={{ flex: 1, px: 1.5, py: 1.5 }}>
+        {NAV_ITEMS.map((item) => {
+          const isActive = location.pathname === item.path;
+          return (
+            <ListItem key={item.path} disablePadding sx={{ mb: 0.5 }}>
+              <ListItemButton
+                onClick={() => {
+                  navigate(item.path);
+                  if (isMobile) setMobileOpen(false);
                 }}
-              />
-            </ListItemButton>
-          </ListItem>
-        ))}
+                selected={isActive}
+                sx={{
+                  borderRadius: '12px',
+                  py: 1.2,
+                  px: 1.5,
+                  position: 'relative',
+                  overflow: 'hidden',
+                  transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+                  '&::before': isActive ? {
+                    content: '""',
+                    position: 'absolute',
+                    left: 0,
+                    top: '20%',
+                    bottom: '20%',
+                    width: 3,
+                    borderRadius: '0 4px 4px 0',
+                    background: item.color,
+                    boxShadow: `0 0 8px ${item.color}`,
+                  } : {},
+                  '&.Mui-selected': {
+                    bgcolor: alpha(item.color, 0.08),
+                    '&:hover': {
+                      bgcolor: alpha(item.color, 0.12),
+                    },
+                  },
+                  '&:hover': {
+                    bgcolor: 'rgba(255, 255, 255, 0.04)',
+                  },
+                }}
+              >
+                <ListItemIcon
+                  sx={{
+                    color: isActive ? item.color : 'text.secondary',
+                    minWidth: 40,
+                    transition: 'color 0.2s ease',
+                  }}
+                >
+                  {item.icon}
+                </ListItemIcon>
+                <ListItemText
+                  primary={item.label}
+                  primaryTypographyProps={{
+                    fontWeight: isActive ? 600 : 400,
+                    fontSize: '0.875rem',
+                    color: isActive ? '#e6edf3' : 'text.secondary',
+                  }}
+                  sx={{ '& .MuiListItemText-primary': { transition: 'all 0.2s ease' } }}
+                />
+                {isActive && (
+                  <Box
+                    sx={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: '50%',
+                      bgcolor: item.color,
+                      boxShadow: `0 0 6px ${item.color}`,
+                    }}
+                  />
+                )}
+              </ListItemButton>
+            </ListItem>
+          );
+        })}
       </List>
-      <Divider />
-      <List sx={{ px: 1, pb: 2 }}>
+
+      <Divider sx={{ mx: 2 }} />
+
+      {/* ── Bottom Actions ────────────────────────────────────────── */}
+      <List sx={{ px: 1.5, pb: 2, pt: 1 }}>
         <ListItem disablePadding>
           <ListItemButton
             onClick={() => { navigate('/settings'); if (isMobile) setMobileOpen(false); }}
             selected={location.pathname === '/settings'}
-            sx={{ borderRadius: 2 }}
+            sx={{
+              borderRadius: '12px',
+              py: 1.2,
+              '&.Mui-selected': {
+                bgcolor: 'rgba(255, 255, 255, 0.06)',
+              },
+            }}
           >
-            <ListItemIcon sx={{ minWidth: 40 }}>
+            <ListItemIcon sx={{ minWidth: 40, color: 'text.secondary' }}>
               <Settings />
             </ListItemIcon>
-            <ListItemText primary="Settings" />
+            <ListItemText primary="Settings" primaryTypographyProps={{ fontSize: '0.875rem' }} />
           </ListItemButton>
         </ListItem>
         {user && (
-          <ListItem disablePadding sx={{ mt: 0.5 }}>
-            <ListItemButton
-              onClick={logout}
-              sx={{
-                borderRadius: 2,
-                '&:hover': { bgcolor: 'error.dark' },
-              }}
-            >
-              <ListItemIcon sx={{ color: 'error.main', minWidth: 40 }}>
-                <Logout />
-              </ListItemIcon>
-              <ListItemText
-                primary="Logout"
-                secondary={user.email}
-                primaryTypographyProps={{ color: 'error.main', fontWeight: 500 }}
-                secondaryTypographyProps={{ fontSize: '0.7rem', noWrap: true }}
-              />
-            </ListItemButton>
+          <ListItem disablePadding sx={{ mt: 1 }}>
+            <Tooltip title="Sign out" placement="right" arrow>
+              <ListItemButton
+                onClick={logout}
+                sx={{
+                  borderRadius: '12px',
+                  py: 1,
+                  px: 1.5,
+                  transition: 'all 0.2s ease',
+                  '&:hover': { bgcolor: alpha('#ef4444', 0.08) },
+                }}
+              >
+                <Avatar
+                  sx={{
+                    width: 32,
+                    height: 32,
+                    mr: 1.5,
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    bgcolor: alpha('#3b82f6', 0.15),
+                    color: '#60a5fa',
+                    border: '1px solid rgba(59, 130, 246, 0.2)',
+                  }}
+                >
+                  {(user.name || user.email)?.[0]?.toUpperCase() || 'U'}
+                </Avatar>
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      fontWeight: 500,
+                      fontSize: '0.8rem',
+                      color: 'text.primary',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {user.name || user.email?.split('@')[0]}
+                  </Typography>
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      fontSize: '0.65rem',
+                      color: 'text.secondary',
+                      display: 'block',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {user.email}
+                  </Typography>
+                </Box>
+                <Logout sx={{ fontSize: 16, color: 'text.secondary', ml: 0.5 }} />
+              </ListItemButton>
+            </Tooltip>
           </ListItem>
         )}
       </List>
     </Box>
   );
+
+  const drawerStyles = {
+    '& .MuiDrawer-paper': {
+      width: DRAWER_WIDTH,
+      background: 'rgba(13, 17, 23, 0.85)',
+      backdropFilter: 'blur(20px)',
+      WebkitBackdropFilter: 'blur(20px)',
+      borderRight: '1px solid rgba(255, 255, 255, 0.06)',
+      boxShadow: '4px 0 24px rgba(0, 0, 0, 0.3)',
+    },
+  };
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
@@ -211,25 +459,54 @@ function Navigation() {
       {isMobile && (
         <AppBar
           position="fixed"
+          elevation={0}
           sx={{
             display: { md: 'none' },
-            bgcolor: 'background.paper',
-            borderBottom: '1px solid',
-            borderColor: 'divider',
+            background: 'rgba(13, 17, 23, 0.8)',
+            backdropFilter: 'blur(20px)',
+            WebkitBackdropFilter: 'blur(20px)',
+            borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
           }}
         >
-          <Toolbar>
+          <Toolbar sx={{ gap: 1.5 }}>
             <IconButton
               color="inherit"
               edge="start"
               onClick={() => setMobileOpen(!mobileOpen)}
-              sx={{ mr: 2 }}
             >
               <MenuIcon />
             </IconButton>
-            <Typography variant="h6" sx={{ fontWeight: 700 }}>
-              🎯 NexusTradeAI
+            <Box
+              sx={{
+                width: 32,
+                height: 32,
+                borderRadius: '8px',
+                background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Bolt sx={{ color: '#fff', fontSize: 18 }} />
+            </Box>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700, letterSpacing: '-0.02em' }}>
+              NexusTradeAI
             </Typography>
+            <Box sx={{ flex: 1 }} />
+            <Chip
+              size="small"
+              label="LIVE"
+              sx={{
+                height: 22,
+                fontSize: '0.6rem',
+                fontWeight: 700,
+                bgcolor: alpha('#10b981', 0.15),
+                color: '#10b981',
+                border: '1px solid',
+                borderColor: alpha('#10b981', 0.3),
+                '& .MuiChip-label': { px: 1 },
+              }}
+            />
           </Toolbar>
         </AppBar>
       )}
@@ -247,10 +524,7 @@ function Navigation() {
           ModalProps={{ keepMounted: true }}
           sx={{
             display: { xs: 'block', md: 'none' },
-            '& .MuiDrawer-paper': {
-              width: DRAWER_WIDTH,
-              bgcolor: 'background.paper',
-            },
+            ...drawerStyles,
           }}
         >
           {drawer}
@@ -260,12 +534,7 @@ function Navigation() {
           variant="permanent"
           sx={{
             display: { xs: 'none', md: 'block' },
-            '& .MuiDrawer-paper': {
-              width: DRAWER_WIDTH,
-              bgcolor: 'background.paper',
-              borderRight: '1px solid',
-              borderColor: 'divider',
-            },
+            ...drawerStyles,
           }}
           open
         >
@@ -283,19 +552,36 @@ function Navigation() {
           mt: { xs: 7, md: 0 },
           minHeight: '100vh',
           bgcolor: 'background.default',
+          position: 'relative',
+          // Subtle mesh gradient on the content area
+          '&::before': {
+            content: '""',
+            position: 'fixed',
+            top: 0,
+            left: { xs: 0, md: `${DRAWER_WIDTH}px` },
+            right: 0,
+            bottom: 0,
+            background:
+              'radial-gradient(ellipse at 20% 0%, rgba(59, 130, 246, 0.04) 0%, transparent 50%),' +
+              'radial-gradient(ellipse at 80% 100%, rgba(139, 92, 246, 0.03) 0%, transparent 50%)',
+            pointerEvents: 'none',
+            zIndex: 0,
+          },
         }}
       >
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/" element={<ProtectedRoute><OverviewPage /></ProtectedRoute>} />
-          <Route path="/stock" element={<ProtectedRoute><StockBotPage /></ProtectedRoute>} />
-          <Route path="/forex" element={<ProtectedRoute><ForexBotPage /></ProtectedRoute>} />
-          <Route path="/crypto" element={<ProtectedRoute><CryptoBotPage /></ProtectedRoute>} />
-          <Route path="/backtest" element={<ProtectedRoute><BacktestPage /></ProtectedRoute>} />
-          <Route path="/trades" element={<ProtectedRoute><TradesPage /></ProtectedRoute>} />
-          <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <Box sx={{ position: 'relative', zIndex: 1 }}>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/" element={<ProtectedRoute><OverviewPage /></ProtectedRoute>} />
+            <Route path="/stock" element={<ProtectedRoute><StockBotPage /></ProtectedRoute>} />
+            <Route path="/forex" element={<ProtectedRoute><ForexBotPage /></ProtectedRoute>} />
+            <Route path="/crypto" element={<ProtectedRoute><CryptoBotPage /></ProtectedRoute>} />
+            <Route path="/backtest" element={<ProtectedRoute><BacktestPage /></ProtectedRoute>} />
+            <Route path="/trades" element={<ProtectedRoute><TradesPage /></ProtectedRoute>} />
+            <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Box>
       </Box>
     </Box>
   );
@@ -321,9 +607,14 @@ function App() {
             toastOptions={{
               duration: 4000,
               style: {
-                background: '#1a1a24',
-                color: '#fff',
+                background: 'rgba(28, 35, 51, 0.95)',
+                color: '#e6edf3',
                 borderRadius: '12px',
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                backdropFilter: 'blur(12px)',
+                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
+                fontSize: '0.875rem',
+                fontWeight: 500,
               },
             }}
           />
