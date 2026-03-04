@@ -967,7 +967,11 @@ export default function SettingsPage() {
                 else if (data?.warning) toast.error(`Keys saved — ${data.warning}`);
                 else toast.success('Crypto credentials saved');
             } else {
-                toast.success(`${vars.broker.charAt(0).toUpperCase() + vars.broker.slice(1)} credentials saved`);
+                const brokerLabel = vars.broker.charAt(0).toUpperCase() + vars.broker.slice(1);
+                toast.success(`${brokerLabel} credentials saved`);
+            }
+            if (data?.engineStarted) {
+                toast.success('Your personal trading engine is now active', { duration: 4000 });
             }
             void queryClient.invalidateQueries('botConfig');
         },

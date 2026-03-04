@@ -535,6 +535,8 @@ export interface SaveCredentialsResult {
   reconnected?: boolean;
   demoMode?: boolean;
   warning?: string;
+  engineStarted?: boolean;
+  storage?: 'database' | 'environment';
 }
 
 export interface BacktestSignal {

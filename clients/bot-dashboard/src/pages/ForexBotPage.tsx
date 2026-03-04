@@ -18,10 +18,12 @@ import {
     Stop,
     Casino,
     SwapVert,
+    Settings,
 } from '@mui/icons-material';
 import axios from 'axios';
-import { SERVICE_URLS } from '@/services/api';
+import { SERVICE_URLS, apiClient } from '@/services/api';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
+import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 
 interface Position {
@@ -72,6 +74,14 @@ const API_BASE = SERVICE_URLS.forexBot;
 
 export default function ForexBotPage() {
     const queryClient = useQueryClient();
+    const navigate = useNavigate();
+
+    const { data: engineStatus } = useQuery(
+        'forexEngineStatus',
+        () => apiClient.getForexEngineStatus(),
+        { refetchInterval: 15000, retry: false }
+    );
+    const credentialsRequired = engineStatus?.credentialsRequired === true;
 
     const { data: status, isLoading, error } = useQuery<BotStatus>(
         'forexBotStatus',
@@ -162,6 +172,25 @@ export default function ForexBotPage() {
 
     return (
         <Box sx={{ p: { xs: 1.5, sm: 2, md: 3 } }}>
+            {/* Credential prompt */}
+            {credentialsRequired && (
+                <Alert
+                    severity="info"
+                    sx={{ mb: 2 }}
+                    action={
+                        <Button
+                            color="inherit"
+                            size="small"
+                            startIcon={<Settings />}
+                            onClick={() => navigate('/settings')}
+                        >
+                            Add Credentials
+                        </Button>
+                    }
+                >
+                    Connect your OANDA account to activate your personal Forex Bot engine.
+                </Alert>
+            )}
             {/* Header */}
             <Paper
                 sx={{

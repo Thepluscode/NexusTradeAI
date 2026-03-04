@@ -19,10 +19,12 @@ import {
     Casino,
     SwapVert,
     AccessTime,
+    Settings,
 } from '@mui/icons-material';
 import axios from 'axios';
-import { SERVICE_URLS } from '@/services/api';
+import { SERVICE_URLS, apiClient } from '@/services/api';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
+import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 
 interface Position {
@@ -77,6 +79,14 @@ const API_BASE = SERVICE_URLS.cryptoBot;
 
 export default function CryptoBotPage() {
     const queryClient = useQueryClient();
+    const navigate = useNavigate();
+
+    const { data: engineStatus } = useQuery(
+        'cryptoEngineStatus',
+        () => apiClient.getCryptoEngineStatus(),
+        { refetchInterval: 15000, retry: false }
+    );
+    const credentialsRequired = engineStatus?.credentialsRequired === true;
 
     const { data: status, isLoading, error } = useQuery<BotStatus>(
         'cryptoBotStatus',
@@ -165,6 +175,25 @@ export default function CryptoBotPage() {
 
     return (
         <Box sx={{ p: { xs: 1.5, sm: 2, md: 3 } }}>
+            {/* Credential prompt */}
+            {credentialsRequired && (
+                <Alert
+                    severity="info"
+                    sx={{ mb: 2 }}
+                    action={
+                        <Button
+                            color="inherit"
+                            size="small"
+                            startIcon={<Settings />}
+                            onClick={() => navigate('/settings')}
+                        >
+                            Add Credentials
+                        </Button>
+                    }
+                >
+                    Connect your Kraken account to activate your personal Crypto Bot engine.
+                </Alert>
+            )}
             {/* Header */}
             <Paper
                 sx={{

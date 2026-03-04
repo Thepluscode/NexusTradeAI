@@ -25,6 +25,8 @@ import {
     AccountBalance,
     Speed,
     BarChart,
+    Person,
+    Settings,
 } from '@mui/icons-material';
 import axios from 'axios';
 import { SERVICE_URLS, apiClient } from '@/services/api';
@@ -318,6 +320,21 @@ export default function OverviewPage() {
             return { stock, forex, crypto };
         },
         { refetchInterval: 10000 }
+    );
+
+    // Per-user engine statuses — only fetch when logged in
+    const isLoggedIn = !!localStorage.getItem('nexus_access_token');
+    const { data: userEngines } = useQuery(
+        'overviewEngineStatus',
+        async () => {
+            const [stock, forex, crypto] = await Promise.all([
+                apiClient.getStockEngineStatus(),
+                apiClient.getForexEngineStatus(),
+                apiClient.getCryptoEngineStatus(),
+            ]);
+            return { stock, forex, crypto } as Record<string, Record<string, unknown>>;
+        },
+        { enabled: isLoggedIn, refetchInterval: 15000, retry: false }
     );
 
     const totalEquity = (status?.stock?.equity ?? 0) + (status?.forex?.equity ?? 0) + (status?.crypto?.equity ?? 0);
@@ -726,6 +743,36 @@ export default function OverviewPage() {
                                                 />
                                             ))}
                                         </Box>
+
+                                        {/* Per-user engine status badge */}
+                                        {isLoggedIn && (() => {
+                                            const eng = userEngines?.[bot.key];
+                                            if (!eng) return null;
+                                            if (eng.credentialsRequired) {
+                                                return (
+                                                    <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mb: 1.5 }}
+                                                        onClick={(e) => { e.stopPropagation(); navigate('/settings'); }}>
+                                                        <Settings sx={{ fontSize: 13, color: '#f59e0b' }} />
+                                                        <Typography variant="caption" sx={{ color: '#f59e0b', fontWeight: 600, fontSize: '0.68rem' }}>
+                                                            Add credentials to activate your engine
+                                                        </Typography>
+                                                    </Stack>
+                                                );
+                                            }
+                                            const running = eng.isRunning === true;
+                                            return (
+                                                <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mb: 1.5 }}>
+                                                    <Person sx={{ fontSize: 13, color: running ? '#10b981' : '#8b949e' }} />
+                                                    <Typography variant="caption" sx={{ color: running ? '#10b981' : '#8b949e', fontWeight: 600, fontSize: '0.68rem' }}>
+                                                        Your engine: {running ? 'Running' : 'Stopped'}
+                                                    </Typography>
+                                                    {eng.activePositions != null && Number(eng.activePositions) > 0 && (
+                                                        <Chip size="small" label={`${eng.activePositions} pos`}
+                                                            sx={{ height: 16, fontSize: '0.58rem', bgcolor: alpha(bot.accentColor, 0.12), color: bot.accentColor }} />
+                                                    )}
+                                                </Stack>
+                                            );
+                                        })()}
 
                                         <Typography
                                             variant="caption"

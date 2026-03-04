@@ -349,6 +349,109 @@ class APIClient {
     }
   }
 
+  // ── Per-user engine endpoints (JWT-scoped) ────────────────────────────────
+  // These endpoints return the calling user's personal engine state.
+  // Auth interceptor attaches the stored JWT Bearer token automatically.
+
+  async getStockEngineStatus(): Promise<Record<string, unknown>> {
+    try {
+      const response = await this.tradingEngine.get('/api/trading/engine/status');
+      return response.data;
+    } catch {
+      return { credentialsRequired: true };
+    }
+  }
+
+  async startStockEngine(): Promise<Record<string, unknown>> {
+    try {
+      const response = await this.tradingEngine.post('/api/trading/engine/start');
+      return response.data;
+    } catch {
+      return { success: false };
+    }
+  }
+
+  async stopStockEngine(): Promise<Record<string, unknown>> {
+    try {
+      const response = await this.tradingEngine.post('/api/trading/engine/stop');
+      return response.data;
+    } catch {
+      return { success: false };
+    }
+  }
+
+  async pauseStockEngine(): Promise<Record<string, unknown>> {
+    try {
+      const response = await this.tradingEngine.post('/api/trading/engine/pause');
+      return response.data;
+    } catch {
+      return { success: false };
+    }
+  }
+
+  async closeAllStockPositions(): Promise<Record<string, unknown>> {
+    try {
+      const response = await this.tradingEngine.post('/api/trading/engine/close-all');
+      return response.data;
+    } catch {
+      return { success: false };
+    }
+  }
+
+  async getForexEngineStatus(): Promise<Record<string, unknown>> {
+    try {
+      const response = await this.forexService.get('/api/forex/engine/status');
+      return response.data;
+    } catch {
+      return { credentialsRequired: true };
+    }
+  }
+
+  async startForexEngine(): Promise<Record<string, unknown>> {
+    try {
+      const response = await this.forexService.post('/api/forex/engine/start');
+      return response.data;
+    } catch {
+      return { success: false };
+    }
+  }
+
+  async stopForexEngine(): Promise<Record<string, unknown>> {
+    try {
+      const response = await this.forexService.post('/api/forex/engine/stop');
+      return response.data;
+    } catch {
+      return { success: false };
+    }
+  }
+
+  async getCryptoEngineStatus(): Promise<Record<string, unknown>> {
+    try {
+      const response = await this.cryptoService.get('/api/crypto/engine/status');
+      return response.data;
+    } catch {
+      return { credentialsRequired: true };
+    }
+  }
+
+  async startCryptoEngine(): Promise<Record<string, unknown>> {
+    try {
+      const response = await this.cryptoService.post('/api/crypto/engine/start');
+      return response.data;
+    } catch {
+      return { success: false };
+    }
+  }
+
+  async stopCryptoEngine(): Promise<Record<string, unknown>> {
+    try {
+      const response = await this.cryptoService.post('/api/crypto/engine/stop');
+      return response.data;
+    } catch {
+      return { success: false };
+    }
+  }
+
   // ── AI Service (port 5001 — optional) ────────────────────────────────────
 
   async getAIHealth(): Promise<AIServiceHealth> {
