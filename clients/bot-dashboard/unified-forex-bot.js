@@ -805,8 +805,8 @@ function calculateMACDForex(candles, fastPeriod = 12, slowPeriod = 26, signalPer
         macd: macdLine[macdLine.length - 1],
         signal: signalLine,
         histogram,
-        bullish:  histogram > 0 && histogram > prevHistogram,
-        bearish:  histogram < 0 && histogram < prevHistogram
+        bullish:  histogram > 0,  // positive histogram = bullish; rising check removed (too restrictive)
+        bearish:  histogram < 0   // negative histogram = bearish; falling check removed
     };
 }
 
