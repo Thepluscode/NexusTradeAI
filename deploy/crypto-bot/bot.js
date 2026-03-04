@@ -43,6 +43,50 @@ async function initTradeDb() {
         `);
         console.log('✅ Crypto bot: Auth DB ready');
         await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS trades (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                bot VARCHAR(20) NOT NULL,
+                symbol VARCHAR(20) NOT NULL,
+                direction VARCHAR(10) NOT NULL,
+                tier VARCHAR(10),
+                status VARCHAR(10) NOT NULL DEFAULT 'open',
+                entry_price DECIMAL(20,8),
+                exit_price DECIMAL(20,8),
+                quantity DECIMAL(20,8),
+                position_size_usd DECIMAL(12,2),
+                pnl_usd DECIMAL(12,2),
+                pnl_pct DECIMAL(8,4),
+                stop_loss DECIMAL(20,8),
+                take_profit DECIMAL(20,8),
+                entry_time TIMESTAMPTZ,
+                exit_time TIMESTAMPTZ,
+                close_reason VARCHAR(100),
+                session VARCHAR(30),
+                rsi DECIMAL(6,2),
+                volume_ratio DECIMAL(6,2),
+                momentum_pct DECIMAL(8,4),
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+            CREATE INDEX IF NOT EXISTS idx_trades_bot ON trades(bot);
+            CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
+            CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time);
+            CREATE INDEX IF NOT EXISTS idx_trades_user_id ON trades(user_id);
+            CREATE INDEX IF NOT EXISTS idx_trades_user_bot ON trades(user_id, bot);
+        `);
+        console.log('✅ Crypto bot: Trades table ready');
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS engine_state (
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                bot VARCHAR(20) NOT NULL,
+                state_json JSONB NOT NULL DEFAULT '{}',
+                updated_at TIMESTAMPTZ DEFAULT NOW(),
+                PRIMARY KEY (user_id, bot)
+            )
+        `);
+        console.log('✅ Crypto bot: Engine state table ready');
+        await dbPool.query(`
             CREATE TABLE IF NOT EXISTS user_credentials (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1679,7 +1723,23 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
                 }
             }
         }
-        res.json({ success: true, updated, reconnected: false, demoMode: engine.demoMode || false, storage: userId ? 'database' : 'environment' });
+        // Register or update per-user crypto engine
+        if (userId && broker === 'crypto') {
+            const existingEngine = cryptoEngineRegistry.get(String(userId));
+            if (existingEngine) {
+                existingEngine.kraken = new KrakenClient({
+                    apiKey: creds.CRYPTO_API_KEY || process.env.CRYPTO_API_KEY,
+                    apiSecret: creds.CRYPTO_API_SECRET || process.env.CRYPTO_API_SECRET,
+                });
+                console.log(`🔧 [CryptoEngine ${userId}] Kraken client updated`);
+            } else {
+                getOrCreateCryptoEngine(userId).then(eng => {
+                    if (eng) { eng.start().catch(() => {}); }
+                }).catch(() => {});
+            }
+        }
+
+        res.json({ success: true, updated, reconnected: false, demoMode: engine.demoMode || false, storage: userId ? 'database' : 'environment', engineStarted: !!userId });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -1758,6 +1818,127 @@ app.get('/metrics', async (req, res) => {
 
 console.log('✅ Prometheus metrics initialized');
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MULTI-USER CRYPTO ENGINE REGISTRY
+// Each user gets their own CryptoTradingEngine instance with isolated Kraken creds.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const cryptoEngineRegistry = new Map(); // userId → CryptoTradingEngine
+
+async function getOrCreateCryptoEngine(userId) {
+    const key = String(userId);
+    if (cryptoEngineRegistry.has(key)) return cryptoEngineRegistry.get(key);
+    if (!dbPool) return null;
+    try {
+        const creds = await loadUserCredentials(userId, 'crypto');
+        const apiKey    = creds.CRYPTO_API_KEY    || process.env.CRYPTO_API_KEY;
+        const apiSecret = creds.CRYPTO_API_SECRET || process.env.CRYPTO_API_SECRET;
+        if (!apiKey || !apiSecret) return null;
+        const userConfig = {
+            ...CRYPTO_CONFIG,
+            exchange: { ...CRYPTO_CONFIG.exchange, apiKey, apiSecret,
+                testnet: creds.CRYPTO_TESTNET !== 'false' && CRYPTO_CONFIG.exchange.testnet }
+        };
+        const userEngine = new CryptoTradingEngine(userConfig);
+        // Persist state to DB rather than filesystem
+        userEngine._userId = userId;
+        userEngine._saveStateToDB = async function() {
+            if (!dbPool) return;
+            try {
+                await dbPool.query(
+                    `INSERT INTO engine_state (user_id, bot, state_json, updated_at)
+                     VALUES ($1, 'crypto', $2, NOW())
+                     ON CONFLICT (user_id, bot) DO UPDATE SET state_json=$2, updated_at=NOW()`,
+                    [userId, JSON.stringify({ isRunning: this.isRunning, isPaused: this.isPaused,
+                        demoMode: this.demoMode, dailyTradeCount: this.dailyTradeCount,
+                        totalTrades: this.totalTrades, winningTrades: this.winningTrades,
+                        losingTrades: this.losingTrades, totalProfit: this.totalProfit })]
+                );
+            } catch (e) { /* non-critical */ }
+        };
+        // Patch dbCryptoOpen/Close to include user_id
+        userEngine._dbOpen = async function(symbol, tier, entry, stopLoss, takeProfit, quantity, positionSize) {
+            if (!dbPool) return null;
+            try {
+                const r = await dbPool.query(
+                    `INSERT INTO trades (user_id,bot,symbol,direction,tier,status,entry_price,quantity,
+                     position_size_usd,stop_loss,take_profit,entry_time)
+                     VALUES ($1,'crypto',$2,'long',$3,'open',$4,$5,$6,$7,$8,NOW()) RETURNING id`,
+                    [userId, symbol, tier, entry, quantity, positionSize, stopLoss, takeProfit]
+                );
+                return r.rows[0]?.id;
+            } catch (e) { console.warn('DB crypto open failed:', e.message); return null; }
+        };
+        userEngine._dbClose = async function(id, exitPrice, pnlUsd, pnlPct, reason) {
+            if (!dbPool || !id) return;
+            try {
+                await dbPool.query(
+                    `UPDATE trades SET status='closed',exit_price=$1,pnl_usd=$2,pnl_pct=$3,exit_time=NOW(),close_reason=$4 WHERE id=$5`,
+                    [exitPrice, pnlUsd, pnlPct, reason, id]
+                );
+            } catch (e) { console.warn('DB crypto close failed:', e.message); }
+        };
+        // Load saved state from DB
+        try {
+            const r = await dbPool.query('SELECT state_json FROM engine_state WHERE user_id=$1 AND bot=$2', [userId, 'crypto']);
+            if (r.rows.length > 0) {
+                const s = r.rows[0].state_json;
+                if (s.totalTrades !== undefined) userEngine.totalTrades = s.totalTrades;
+                if (s.winningTrades !== undefined) userEngine.winningTrades = s.winningTrades;
+                if (s.losingTrades !== undefined) userEngine.losingTrades = s.losingTrades;
+                if (s.totalProfit !== undefined) userEngine.totalProfit = s.totalProfit;
+            }
+        } catch (e) { /* non-critical */ }
+        cryptoEngineRegistry.set(key, userEngine);
+        console.log(`🔧 [CryptoRegistry] Engine registered for user ${userId} (${cryptoEngineRegistry.size} total)`);
+        return userEngine;
+    } catch (e) {
+        console.warn(`⚠️  [CryptoRegistry] Failed to create engine for user ${userId}:`, e.message);
+        return null;
+    }
+}
+
+let cryptoScanQueueRunning = false;
+async function runCryptoScanQueue() {
+    if (cryptoScanQueueRunning) return;
+    cryptoScanQueueRunning = true;
+    try {
+        for (const [userId, eng] of cryptoEngineRegistry) {
+            if (!eng.isRunning) continue;
+            try {
+                // Re-run tradingLoop for this user's engine by calling scan directly
+                // The engine already manages its own tradingLoop via setInterval — no-op here.
+                // We just ensure any new engines that haven't started yet get started.
+            } catch (e) { console.error(`❌ [CryptoQueue] Engine ${userId} crashed:`, e.message); }
+        }
+    } finally { cryptoScanQueueRunning = false; }
+}
+
+// ── Per-user crypto JWT endpoints ────────────────────────────────────────────
+app.get('/api/crypto/engine/status', requireJwt, async (req, res) => {
+    const userId = req.user.sub;
+    const userEngine = await getOrCreateCryptoEngine(userId);
+    if (!userEngine) return res.json({ success: true, credentialsRequired: true,
+        message: 'No Kraken credentials configured — visit Settings' });
+    const status = userEngine.getStatus();
+    res.json({ success: true, ...status, userId });
+});
+
+app.post('/api/crypto/engine/start', requireJwt, async (req, res) => {
+    const userId = req.user.sub;
+    const userEngine = await getOrCreateCryptoEngine(userId);
+    if (!userEngine) return res.status(404).json({ success: false, error: 'Configure Kraken credentials first' });
+    await userEngine.start();
+    res.json({ success: true, isRunning: userEngine.isRunning });
+});
+
+app.post('/api/crypto/engine/stop', requireJwt, async (req, res) => {
+    const userEngine = cryptoEngineRegistry.get(String(req.user.sub));
+    if (!userEngine) return res.status(404).json({ success: false, error: 'Engine not found' });
+    userEngine.stop();
+    res.json({ success: true, isRunning: false });
+});
+
 // ============================================================================
 // START SERVER
 // ============================================================================
@@ -1824,6 +2005,25 @@ app.listen(PORT, async () => {
     } else {
         console.log('⏸️  Bot was stopped before restart - not auto-starting. POST /api/trading/start to begin.');
     }
+
+    // Register engines for all existing users with Kraken credentials (staggered)
+    setTimeout(async () => {
+        try {
+            if (dbPool) {
+                const users = await dbPool.query('SELECT id FROM users ORDER BY id ASC');
+                let delay = 0;
+                for (const row of users.rows) {
+                    setTimeout(async () => {
+                        try {
+                            const eng = await getOrCreateCryptoEngine(row.id);
+                            if (eng) await eng.start();
+                        } catch (e) { console.warn(`⚠️  Crypto engine init failed for user ${row.id}:`, e.message); }
+                    }, delay);
+                    delay += 6000;
+                }
+            }
+        } catch (e) { console.warn('⚠️  Crypto engine pre-registration failed:', e.message); }
+    }, 10000);
 
     // ── DB Reconciliation: close orphaned 'open' trades not in memory ──
     // Runs after loadState so engine.positions is populated from saved state.

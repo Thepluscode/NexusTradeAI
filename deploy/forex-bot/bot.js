@@ -32,6 +32,50 @@ async function initTradeDb() {
         `);
         console.log('✅ Forex bot: Auth DB ready');
         await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS trades (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                bot VARCHAR(20) NOT NULL,
+                symbol VARCHAR(20) NOT NULL,
+                direction VARCHAR(10) NOT NULL,
+                tier VARCHAR(10),
+                status VARCHAR(10) NOT NULL DEFAULT 'open',
+                entry_price DECIMAL(20,8),
+                exit_price DECIMAL(20,8),
+                quantity DECIMAL(20,8),
+                position_size_usd DECIMAL(12,2),
+                pnl_usd DECIMAL(12,2),
+                pnl_pct DECIMAL(8,4),
+                stop_loss DECIMAL(20,8),
+                take_profit DECIMAL(20,8),
+                entry_time TIMESTAMPTZ,
+                exit_time TIMESTAMPTZ,
+                close_reason VARCHAR(100),
+                session VARCHAR(30),
+                rsi DECIMAL(6,2),
+                volume_ratio DECIMAL(6,2),
+                momentum_pct DECIMAL(8,4),
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+            CREATE INDEX IF NOT EXISTS idx_trades_bot ON trades(bot);
+            CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
+            CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time);
+            CREATE INDEX IF NOT EXISTS idx_trades_user_id ON trades(user_id);
+            CREATE INDEX IF NOT EXISTS idx_trades_user_bot ON trades(user_id, bot);
+        `);
+        console.log('✅ Forex bot: Trades table ready');
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS engine_state (
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                bot VARCHAR(20) NOT NULL,
+                state_json JSONB NOT NULL DEFAULT '{}',
+                updated_at TIMESTAMPTZ DEFAULT NOW(),
+                PRIMARY KEY (user_id, bot)
+            )
+        `);
+        console.log('✅ Forex bot: Engine state table ready');
+        await dbPool.query(`
             CREATE TABLE IF NOT EXISTS user_credentials (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1704,9 +1748,19 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
             if (creds.OANDA_ACCOUNT_ID)   oandaConfig.accountId   = creds.OANDA_ACCOUNT_ID;
             if (creds.OANDA_ACCESS_TOKEN) oandaConfig.accessToken = creds.OANDA_ACCESS_TOKEN;
             if (creds.OANDA_PRACTICE !== undefined) oandaConfig.isPractice = creds.OANDA_PRACTICE !== 'false';
+            // Register or update per-user engine
+            if (userId) {
+                const existingEngine = forexEngineRegistry.get(String(userId));
+                if (existingEngine) {
+                    existingEngine.updateCredentials(creds.OANDA_ACCOUNT_ID, creds.OANDA_ACCESS_TOKEN,
+                        creds.OANDA_PRACTICE !== undefined ? creds.OANDA_PRACTICE !== 'false' : undefined);
+                } else {
+                    getOrCreateForexEngine(userId).catch(() => {});
+                }
+            }
         }
 
-        res.json({ success: true, updated, storage: userId ? 'database' : 'environment' });
+        res.json({ success: true, updated, storage: userId ? 'database' : 'environment', engineStarted: !!userId });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -1786,6 +1840,346 @@ app.get('/metrics', async (req, res) => {
     } catch (error) {
         res.status(500).end(error.message);
     }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MULTI-USER FOREX ENGINE
+// ─────────────────────────────────────────────────────────────────────────────
+
+class UserForexEngine {
+    constructor(userId, oandaAccountId, oandaAccessToken, isPractice) {
+        this.userId = userId;
+        this.oandaConfig = {
+            accountId: oandaAccountId,
+            accessToken: oandaAccessToken,
+            baseURL: isPractice !== false ? 'https://api-fxpractice.oanda.com' : 'https://api-fxtrade.oanda.com',
+            isPractice: isPractice !== false
+        };
+        this.positions = new Map();
+        this.recentTrades = new Map();
+        this.stoppedOutPairs = new Map();
+        this.tradesPerPair = new Map();
+        this.totalTradesToday = 0;
+        this.botRunning = true;
+        this.botPaused = false;
+        this.lastResetDate = new Date().toUTCDate ? new Date().toUTCString().slice(0, 16) : new Date().toDateString();
+        this.simEquity = 100000;
+        this.simDailyPnL = 0;
+        this.simTotalTrades = 0;
+        this.simWinners = 0;
+        this.simLosers = 0;
+        console.log(`🔧 [ForexEngine] Created engine for user ${userId}`);
+    }
+
+    updateCredentials(oandaAccountId, oandaAccessToken, isPractice) {
+        if (oandaAccountId)    this.oandaConfig.accountId  = oandaAccountId;
+        if (oandaAccessToken)  this.oandaConfig.accessToken = oandaAccessToken;
+        if (isPractice !== undefined) {
+            this.oandaConfig.isPractice = isPractice !== false;
+            this.oandaConfig.baseURL = this.oandaConfig.isPractice
+                ? 'https://api-fxpractice.oanda.com' : 'https://api-fxtrade.oanda.com';
+        }
+    }
+
+    async saveState() {
+        if (!dbPool) return;
+        try {
+            await dbPool.query(
+                `INSERT INTO engine_state (user_id, bot, state_json, updated_at)
+                 VALUES ($1, 'forex', $2, NOW())
+                 ON CONFLICT (user_id, bot) DO UPDATE SET state_json=$2, updated_at=NOW()`,
+                [this.userId, JSON.stringify({
+                    totalTradesToday: this.totalTradesToday, botRunning: this.botRunning,
+                    botPaused: this.botPaused, simEquity: this.simEquity,
+                    simTotalTrades: this.simTotalTrades, simWinners: this.simWinners, simLosers: this.simLosers
+                })]
+            );
+        } catch (e) { /* non-critical */ }
+    }
+
+    async loadState() {
+        if (!dbPool) return;
+        try {
+            const r = await dbPool.query('SELECT state_json FROM engine_state WHERE user_id=$1 AND bot=$2', [this.userId, 'forex']);
+            if (r.rows.length > 0) {
+                const s = r.rows[0].state_json;
+                if (s.totalTradesToday !== undefined) this.totalTradesToday = s.totalTradesToday;
+                if (s.botRunning !== undefined)       this.botRunning = s.botRunning;
+                if (s.botPaused !== undefined)        this.botPaused = s.botPaused;
+                if (s.simEquity !== undefined)        this.simEquity = s.simEquity;
+                if (s.simTotalTrades !== undefined)   this.simTotalTrades = s.simTotalTrades;
+                if (s.simWinners !== undefined)       this.simWinners = s.simWinners;
+                if (s.simLosers !== undefined)        this.simLosers = s.simLosers;
+            }
+        } catch (e) { /* non-critical */ }
+    }
+
+    async oandaReq(method, endpoint, data = null) {
+        try {
+            const config = {
+                method, url: `${this.oandaConfig.baseURL}${endpoint}`,
+                headers: { 'Authorization': `Bearer ${this.oandaConfig.accessToken}`, 'Content-Type': 'application/json' }
+            };
+            if (data) config.data = data;
+            const response = await axios(config);
+            return response.data;
+        } catch (error) {
+            console.error(`[ForexEngine ${this.userId}] OANDA Error [${endpoint}]:`, error.response?.data || error.message);
+            return null;
+        }
+    }
+
+    async getAccount() {
+        const data = await this.oandaReq('get', `/v3/accounts/${this.oandaConfig.accountId}`);
+        return data?.account || null;
+    }
+
+    async getOpenPositions() {
+        const data = await this.oandaReq('get', `/v3/accounts/${this.oandaConfig.accountId}/openPositions`);
+        return data?.positions || [];
+    }
+
+    async createOrder(instrument, units, stopLoss, takeProfit) {
+        const precision = instrument.includes('JPY') ? 3 : 5;
+        const order = { order: { type: 'MARKET', instrument, units: units.toString(),
+            stopLossOnFill: { price: stopLoss.toFixed(precision) },
+            takeProfitOnFill: { price: takeProfit.toFixed(precision) }, timeInForce: 'FOK' }};
+        return await this.oandaReq('post', `/v3/accounts/${this.oandaConfig.accountId}/orders`, order);
+    }
+
+    async closeOandaPosition(instrument) {
+        return await this.oandaReq('put', `/v3/accounts/${this.oandaConfig.accountId}/positions/${instrument}/close`,
+            { longUnits: 'ALL', shortUnits: 'ALL' });
+    }
+
+    async dbForexOpen(pair, direction, tier, entry, stopLoss, takeProfit, units, session) {
+        if (!dbPool) return null;
+        try {
+            const absUnits = Math.abs(units);
+            const positionSizeUsd = entry > 0 ? parseFloat((absUnits * entry).toFixed(2)) : null;
+            const r = await dbPool.query(
+                `INSERT INTO trades (user_id,bot,symbol,direction,tier,status,entry_price,quantity,
+                 position_size_usd,stop_loss,take_profit,entry_time,session)
+                 VALUES ($1,'forex',$2,$3,$4,'open',$5,$6,$7,$8,$9,NOW(),$10) RETURNING id`,
+                [this.userId, pair, direction, tier, entry, absUnits, positionSizeUsd, stopLoss, takeProfit, session || null]
+            );
+            return r.rows[0]?.id;
+        } catch (e) { console.warn('DB forex open failed:', e.message); return null; }
+    }
+
+    async dbForexClose(id, exitPrice, pnlUsd, pnlPct, reason) {
+        if (!dbPool || !id) return;
+        try {
+            await dbPool.query(
+                `UPDATE trades SET status='closed',exit_price=$1,pnl_usd=$2,pnl_pct=$3,exit_time=NOW(),close_reason=$4 WHERE id=$5`,
+                [exitPrice, pnlUsd, pnlPct, reason, id]
+            );
+        } catch (e) { console.warn('DB forex close failed:', e.message); }
+    }
+
+    canTrade(pair, direction) {
+        const stopTime = this.stoppedOutPairs.get(pair);
+        if (stopTime && Date.now() - stopTime < 60 * 60 * 1000) return false;
+        if (this.totalTradesToday >= MAX_TRADES_PER_DAY) return false;
+        if ((this.tradesPerPair.get(pair) || 0) >= MAX_TRADES_PER_PAIR) return false;
+        const recent = this.recentTrades.get(pair) || [];
+        if (recent.length > 0) {
+            const last = recent[recent.length - 1];
+            if (Date.now() - last.time < 10 * 60 * 1000) return false;
+        }
+        return true;
+    }
+
+    async closePositionWithReason(pair, reason) {
+        const pos = this.positions.get(pair);
+        if (pos?.dbTradeId) {
+            const exitPnl = pos.unrealizedPL ?? 0;
+            const exitEntry = pos.entry ?? 0;
+            const exitPct = exitEntry > 0 ? (exitPnl / (exitEntry * Math.abs(pos.units ?? 1))) * 100 : 0;
+            const exitPrice = pos.currentPrice ?? exitEntry;
+            this.dbForexClose(pos.dbTradeId, exitPrice, exitPnl, exitPct, reason).catch(() => {});
+        }
+        await this.closeOandaPosition(pair);
+        if (reason.toLowerCase().includes('stop')) this.stoppedOutPairs.set(pair, Date.now());
+        this.positions.delete(pair);
+        await this.saveState();
+        console.log(`✅ [ForexEngine ${this.userId}] Closed ${pair} (${reason})`);
+    }
+
+    async managePositions() {
+        const oandaPositions = await this.getOpenPositions();
+        const openInstruments = new Set(oandaPositions.map(p => p.instrument));
+        // Clean up positions we think are open but OANDA closed them
+        for (const [pair] of this.positions) {
+            if (!openInstruments.has(pair)) this.positions.delete(pair);
+        }
+        for (const p of oandaPositions) {
+            const instrument = p.instrument;
+            const isLong = (p.long?.units || 0) > 0;
+            const position = this.positions.get(instrument);
+            if (!position) continue;
+            const unrealizedPL = parseFloat(isLong ? p.long?.unrealizedPL : p.short?.unrealizedPL) || 0;
+            const currentPrice = parseFloat(isLong ? p.long?.averagePrice : p.short?.averagePrice) || position.entry;
+            position.unrealizedPL = unrealizedPL;
+            position.currentPrice = currentPrice;
+            // Time-based exit: max 5 days
+            const holdHours = (Date.now() - (position.entryTime?.getTime?.() || Date.now())) / 3600000;
+            if (holdHours >= 120) { await this.closePositionWithReason(instrument, 'Max Hold Time (5 days)'); continue; }
+            // Stop loss
+            if (position.direction === 'long' && currentPrice <= position.stopLoss) {
+                await this.closePositionWithReason(instrument, 'Stop Loss'); continue;
+            }
+            if (position.direction === 'short' && currentPrice >= position.stopLoss) {
+                await this.closePositionWithReason(instrument, 'Stop Loss'); continue;
+            }
+            // Take profit
+            if (position.direction === 'long' && currentPrice >= position.takeProfit) {
+                await this.closePositionWithReason(instrument, 'Take Profit'); continue;
+            }
+            if (position.direction === 'short' && currentPrice <= position.takeProfit) {
+                await this.closePositionWithReason(instrument, 'Take Profit');
+            }
+        }
+    }
+
+    async executeTrade(signal) {
+        const account = await this.getAccount();
+        if (!account) return false;
+        const balance = parseFloat(account.balance);
+        const config = MOMENTUM_CONFIG[signal.tier];
+        const FOREX_SLIPPAGE = 0.001;
+        const slippageAdj = signal.direction === 'long' ? 1 + FOREX_SLIPPAGE : 1 - FOREX_SLIPPAGE;
+        const effectiveEntry = signal.entry * slippageAdj;
+        const sessionMultiplier = signal.session === 'London/NY Overlap' ? 1.5 : 1.0;
+        const positionValue = balance * config.positionSize * sessionMultiplier;
+        const units = signal.direction === 'long'
+            ? Math.floor(positionValue / effectiveEntry * 10000)
+            : -Math.floor(positionValue / effectiveEntry * 10000);
+        const result = await this.createOrder(signal.pair, units, signal.stopLoss, signal.takeProfit);
+        if (result?.orderFillTransaction) {
+            this.positions.set(signal.pair, {
+                instrument: signal.pair, direction: signal.direction, tier: signal.tier,
+                entry: signal.entry, stopLoss: signal.stopLoss, takeProfit: signal.takeProfit,
+                units, entryTime: new Date(), session: signal.session
+            });
+            this.dbForexOpen(signal.pair, signal.direction, signal.tier, signal.entry, signal.stopLoss, signal.takeProfit, units, signal.session)
+                .then(id => { const p = this.positions.get(signal.pair); if (p) p.dbTradeId = id; })
+                .catch(() => {});
+            this.totalTradesToday++;
+            this.tradesPerPair.set(signal.pair, (this.tradesPerPair.get(signal.pair) || 0) + 1);
+            const trades = this.recentTrades.get(signal.pair) || [];
+            trades.push({ time: Date.now(), side: signal.direction });
+            this.recentTrades.set(signal.pair, trades);
+            await this.saveState();
+            telegramAlerts.sendForexEntry(signal.pair, signal.direction, signal.entry, signal.stopLoss, signal.takeProfit, units, signal.tier).catch(() => {});
+            console.log(`✅ [ForexEngine ${this.userId}] Trade: ${signal.direction.toUpperCase()} ${signal.pair} x${Math.abs(units)}`);
+            return true;
+        }
+        return false;
+    }
+
+    async tradingLoop() {
+        if (!this.botRunning || this.botPaused) return;
+        if (!isMarketOpen()) return;
+        await this.managePositions();
+        // Reuse module-level scanForSignals but with this engine's oandaConfig
+        // scanForSignals() uses module-level oandaConfig for OANDA API calls — we temporarily
+        // swap it to this engine's config, then restore. This is safe since JS is single-threaded.
+        const savedConfig = { ...oandaConfig };
+        Object.assign(oandaConfig, this.oandaConfig);
+        let signals = [];
+        try {
+            signals = await scanForSignals();
+        } finally {
+            Object.assign(oandaConfig, savedConfig);
+        }
+        const maxNewPos = 5 - this.positions.size;
+        for (const signal of signals.slice(0, Math.min(maxNewPos, 2))) {
+            if (this.canTrade(signal.pair, signal.direction)) {
+                await this.executeTrade(signal);
+            }
+        }
+    }
+
+    getStatus() {
+        return {
+            userId: this.userId, isRunning: this.botRunning, isPaused: this.botPaused,
+            positions: this.positions.size, totalTradesToday: this.totalTradesToday,
+            oandaConfigured: !!(this.oandaConfig.accessToken && this.oandaConfig.accountId),
+            isPractice: this.oandaConfig.isPractice
+        };
+    }
+}
+
+// ── Forex Engine Registry ────────────────────────────────────────────────────
+const forexEngineRegistry = new Map(); // userId → UserForexEngine
+
+async function getOrCreateForexEngine(userId) {
+    const key = String(userId);
+    if (forexEngineRegistry.has(key)) return forexEngineRegistry.get(key);
+    if (!dbPool) return null;
+    try {
+        const creds = await loadUserCredentials(userId, 'oanda');
+        const accountId   = creds.OANDA_ACCOUNT_ID    || process.env.OANDA_ACCOUNT_ID;
+        const accessToken = creds.OANDA_ACCESS_TOKEN   || process.env.OANDA_ACCESS_TOKEN;
+        const isPractice  = creds.OANDA_PRACTICE !== 'false' && process.env.OANDA_PRACTICE !== 'false';
+        if (!accountId || !accessToken) return null;
+        const engine = new UserForexEngine(userId, accountId, accessToken, isPractice);
+        await engine.loadState();
+        forexEngineRegistry.set(key, engine);
+        console.log(`🔧 [ForexRegistry] Engine registered for user ${userId} (${forexEngineRegistry.size} total)`);
+        return engine;
+    } catch (e) {
+        console.warn(`⚠️  [ForexRegistry] Failed to create engine for user ${userId}:`, e.message);
+        return null;
+    }
+}
+
+// ── Forex ScanQueue ──────────────────────────────────────────────────────────
+let forexScanQueueRunning = false;
+
+async function runForexScanQueue() {
+    if (forexScanQueueRunning) return;
+    forexScanQueueRunning = true;
+    try {
+        for (const engine of forexEngineRegistry.values()) {
+            try { await engine.tradingLoop(); }
+            catch (e) { console.error(`❌ [ForexQueue] Engine ${engine.userId} crashed:`, e.message); }
+        }
+    } finally { forexScanQueueRunning = false; }
+}
+
+// ── Per-user forex engine JWT endpoints ─────────────────────────────────────
+app.get('/api/forex/engine/status', requireJwt, async (req, res) => {
+    const userId = req.user.sub;
+    const engine = await getOrCreateForexEngine(userId);
+    if (!engine) return res.json({ success: true, credentialsRequired: true,
+        message: 'No OANDA credentials configured — visit Settings' });
+    try {
+        const account = await engine.getAccount();
+        const equity = account ? parseFloat(account.balance) : 0;
+        res.json({ success: true, isRunning: engine.botRunning, isPaused: engine.botPaused,
+            mode: engine.oandaConfig.isPractice ? 'PAPER' : 'LIVE',
+            positions: Array.from(engine.positions.values()),
+            stats: { totalTradesToday: engine.totalTradesToday, openPositions: engine.positions.size },
+            portfolioValue: equity });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/forex/engine/start', requireJwt, async (req, res) => {
+    const engine = await getOrCreateForexEngine(req.user.sub);
+    if (!engine) return res.status(404).json({ success: false, error: 'Configure OANDA credentials first' });
+    engine.botRunning = true; engine.botPaused = false; await engine.saveState();
+    res.json({ success: true, isRunning: true });
+});
+
+app.post('/api/forex/engine/stop', requireJwt, async (req, res) => {
+    const engine = forexEngineRegistry.get(String(req.user.sub));
+    if (!engine) return res.status(404).json({ success: false, error: 'Engine not found' });
+    engine.botRunning = false; await engine.saveState();
+    res.json({ success: true, isRunning: false });
 });
 
 // ===== START =====
@@ -1891,13 +2285,33 @@ app.listen(PORT, async () => {
         console.warn('⚠️  DB reconciliation failed:', e.message);
     }
 
-    // Initial scan
+    // Initial scan (default env-var mode)
     setTimeout(() => tradingLoop().catch(e => console.error('❌ Forex loop crashed:', e)), 5000);
 
-    // Main loop: every 5 minutes
+    // Register engines for existing users (staggered 6s each)
+    setTimeout(async () => {
+        try {
+            if (dbPool) {
+                const users = await dbPool.query('SELECT id FROM users ORDER BY id ASC');
+                let delay = 0;
+                for (const row of users.rows) {
+                    setTimeout(async () => {
+                        try { await getOrCreateForexEngine(row.id); }
+                        catch (e) { console.warn(`⚠️  Forex engine init failed for user ${row.id}:`, e.message); }
+                    }, delay);
+                    delay += 6000;
+                }
+            }
+        } catch (e) { console.warn('⚠️  Forex engine pre-registration failed:', e.message); }
+    }, 8000);
+
+    // Main loop: every 5 minutes — runs default loop + per-user ScanQueue
     setInterval(() => {
         resetDailyCounters();
-        tradingLoop().catch(e => console.error('❌ Forex loop crashed:', e));
+        runForexScanQueue().catch(e => console.error('❌ Forex ScanQueue crashed:', e));
+        if (forexEngineRegistry.size === 0) {
+            tradingLoop().catch(e => console.error('❌ Forex loop crashed:', e));
+        }
     }, 5 * 60 * 1000);
 
     console.log(`\n✅ Forex bot started - scanning every 5 minutes\n`);

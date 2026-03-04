@@ -159,6 +159,7 @@ async function initDb() {
         await dbPool.query(`
             CREATE TABLE IF NOT EXISTS trades (
                 id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
                 bot VARCHAR(20) NOT NULL,
                 symbol VARCHAR(20) NOT NULL,
                 direction VARCHAR(10) NOT NULL,
@@ -181,11 +182,24 @@ async function initDb() {
                 momentum_pct DECIMAL(8,4),
                 created_at TIMESTAMPTZ DEFAULT NOW()
             );
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
             CREATE INDEX IF NOT EXISTS idx_trades_bot ON trades(bot);
             CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
             CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time);
+            CREATE INDEX IF NOT EXISTS idx_trades_user_id ON trades(user_id);
+            CREATE INDEX IF NOT EXISTS idx_trades_user_bot ON trades(user_id, bot);
         `);
         console.log('✅ Trades table ready');
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS engine_state (
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                bot VARCHAR(20) NOT NULL,
+                state_json JSONB NOT NULL DEFAULT '{}',
+                updated_at TIMESTAMPTZ DEFAULT NOW(),
+                PRIMARY KEY (user_id, bot)
+            )
+        `);
+        console.log('✅ Engine state table ready');
         await dbPool.query(`
             CREATE TABLE IF NOT EXISTS user_credentials (
                 id SERIAL PRIMARY KEY,
@@ -974,7 +988,8 @@ async function getCurrentMarketData(symbol) {
 // ===== CHECK IF SHOULD EXIT POSITION =====
 // FIX: entryTime was defaulting to new Date() which made holdDays always 0
 // FIX: profitTargetByDay values are 0-1 decimals, unrealizedPL is already a % value
-async function shouldExitPosition(position, currentPrice, alpacaPos) {
+async function shouldExitPosition(position, currentPrice, alpacaPos, overrideAlpacaConfig) {
+    const _alpacaConfig = overrideAlpacaConfig || alpacaConfig; // eslint-disable-line no-unused-vars
     // Use stored entryTime, or fall back to a safe timestamp (1 day ago as worst case)
     const entryTime = position.entryTime instanceof Date
         ? position.entryTime
@@ -1781,6 +1796,97 @@ app.get('/api/trading/status', async (req, res) => {
     }
 });
 
+// ── Per-user engine status (JWT-scoped) ──────────────────────────────────────
+app.get('/api/trading/engine/status', requireJwt, async (req, res) => {
+    const userId = req.user.sub;
+    const engine = await getOrCreateEngine(userId);
+    if (!engine) {
+        return res.json({ success: true, credentialsRequired: true,
+            message: 'No Alpaca credentials configured — visit Settings to add your API keys' });
+    }
+    try {
+        const response = await axios.get(`${engine.alpacaConfig.baseURL}/v2/positions`, {
+            headers: { 'APCA-API-KEY-ID': engine.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': engine.alpacaConfig.secretKey }
+        });
+        const accountResponse = await axios.get(`${engine.alpacaConfig.baseURL}/v2/account`, {
+            headers: { 'APCA-API-KEY-ID': engine.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': engine.alpacaConfig.secretKey }
+        });
+        const account = accountResponse.data;
+        const equity = parseFloat(account.equity);
+        const lastEquity = parseFloat(account.last_equity);
+        engine.cachedDailyPnL = equity - lastEquity;
+        const positionsData = response.data.map(pos => {
+            const tracked = engine.positions.get(pos.symbol);
+            return {
+                id: pos.asset_id || pos.symbol, symbol: pos.symbol, side: pos.side || 'long',
+                quantity: parseFloat(pos.qty), entryPrice: parseFloat(pos.avg_entry_price),
+                currentPrice: parseFloat(pos.current_price), unrealizedPnL: parseFloat(pos.unrealized_pl),
+                pnl: parseFloat(pos.unrealized_pl),
+                openTime: tracked?.entryTime instanceof Date ? tracked.entryTime.getTime() : null
+            };
+        });
+        res.json({
+            success: true, isRunning: engine.botRunning, isPaused: engine.botPaused,
+            mode: 'PAPER', equity, dailyReturn: lastEquity > 0 ? ((equity - lastEquity) / lastEquity) * 100 : 0,
+            positions: positionsData, stats: {
+                totalTrades: engine.perfData.totalTrades, winners: engine.perfData.winningTrades,
+                losers: engine.perfData.losingTrades, totalPnL: engine.perfData.totalProfit,
+                winRate: parseFloat(engine.perfData.winRate.toFixed(1)),
+                profitFactor: parseFloat(engine.perfData.profitFactor.toFixed(2)),
+                totalTradesToday: engine.totalTradesToday
+            }, portfolioValue: equity, dailyPnL: equity - lastEquity, lastUpdate: engine.lastScanTime
+        });
+    } catch (error) {
+        const status = error?.response?.status;
+        if (status === 401 || status === 403) {
+            return res.json({ success: true, credentialsRequired: true,
+                message: 'Alpaca credentials invalid or expired' });
+        }
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/trading/engine/start', requireJwt, async (req, res) => {
+    const userId = req.user.sub;
+    const engine = await getOrCreateEngine(userId);
+    if (!engine) return res.status(404).json({ success: false, error: 'No engine found — configure credentials first' });
+    engine.botRunning = true; engine.botPaused = false; engine.savePerfData();
+    res.json({ success: true, isRunning: true, isPaused: false });
+});
+
+app.post('/api/trading/engine/stop', requireJwt, async (req, res) => {
+    const userId = req.user.sub;
+    const engine = engineRegistry.get(String(userId));
+    if (!engine) return res.status(404).json({ success: false, error: 'Engine not found' });
+    engine.botRunning = false; engine.botPaused = false; engine.savePerfData();
+    res.json({ success: true, isRunning: false, isPaused: false });
+});
+
+app.post('/api/trading/engine/pause', requireJwt, async (req, res) => {
+    const userId = req.user.sub;
+    const engine = engineRegistry.get(String(userId));
+    if (!engine) return res.status(404).json({ success: false, error: 'Engine not found' });
+    engine.botPaused = !engine.botPaused; engine.savePerfData();
+    res.json({ success: true, isRunning: engine.botRunning, isPaused: engine.botPaused });
+});
+
+app.post('/api/trading/engine/close-all', requireJwt, async (req, res) => {
+    const userId = req.user.sub;
+    const engine = engineRegistry.get(String(userId));
+    if (!engine) return res.status(404).json({ success: false, error: 'Engine not found' });
+    const closed = [], skipped = [];
+    for (const [symbol] of engine.positions) {
+        try {
+            const posRes = await axios.get(`${engine.alpacaConfig.baseURL}/v2/positions/${symbol}`, {
+                headers: { 'APCA-API-KEY-ID': engine.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': engine.alpacaConfig.secretKey }
+            });
+            await engine.closePosition(symbol, posRes.data.qty, 'Manual Close All');
+            closed.push(symbol);
+        } catch (err) { skipped.push({ symbol, error: err.message }); }
+    }
+    res.json({ success: true, closed, skipped });
+});
+
 app.get('/api/accounts/summary', async (req, res) => {
     try {
         const accountUrl = `${alpacaConfig.baseURL}/v2/account`;
@@ -2173,9 +2279,22 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
             if (creds.ALPACA_API_KEY)    alpacaConfig.apiKey    = creds.ALPACA_API_KEY;
             if (creds.ALPACA_SECRET_KEY) alpacaConfig.secretKey = creds.ALPACA_SECRET_KEY;
             if (creds.ALPACA_BASE_URL)   alpacaConfig.baseURL   = creds.ALPACA_BASE_URL;
+            // Register or update per-user engine if this is an Alpaca credential save
+            if (userId) {
+                const existingEngine = engineRegistry.get(String(userId));
+                if (existingEngine) {
+                    existingEngine.updateCredentials(creds.ALPACA_API_KEY, creds.ALPACA_SECRET_KEY, creds.ALPACA_BASE_URL);
+                    console.log(`🔧 [Engine ${userId}] Credentials updated in running engine`);
+                } else {
+                    // Create engine in background — don't block the response
+                    getOrCreateEngine(userId).then(engine => {
+                        if (engine) console.log(`🔧 [Engine ${userId}] Engine created after credential save`);
+                    }).catch(() => {});
+                }
+            }
         }
 
-        res.json({ success: true, updated, storage: userId ? 'database' : 'environment' });
+        res.json({ success: true, updated, storage: userId ? 'database' : 'environment', engineStarted: !!userId });
     } catch (err) {
         console.error('Credentials update error:', err.message);
         res.status(500).json({ success: false, error: 'Failed to save credentials' });
@@ -2367,6 +2486,534 @@ async function checkEndOfDay() {
                 }
             }
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MULTI-USER TRADING ENGINE
+// Each user who saves credentials gets their own isolated trading engine instance.
+// EngineRegistry manages lifecycle; ScanQueue drives all engines from one interval.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Module-level shared 45-second bar cache — single set of Alpaca API calls for all users
+const BAR_CACHE = new Map(); // symbol → { bars, fetchedAt }
+const BAR_CACHE_TTL_MS = 45 * 1000;
+
+async function fetchBarsWithCache(symbol, cfg, params) {
+    const cacheKey = `${symbol}:${JSON.stringify(params)}`;
+    const cached = BAR_CACHE.get(cacheKey);
+    if (cached && Date.now() - cached.fetchedAt < BAR_CACHE_TTL_MS) return cached.bars;
+    const barUrl = `${cfg.dataURL}/v2/stocks/${symbol}/bars`;
+    const barResponse = await axios.get(barUrl, {
+        headers: { 'APCA-API-KEY-ID': cfg.apiKey, 'APCA-API-SECRET-KEY': cfg.secretKey },
+        params,
+        timeout: 12000
+    });
+    const bars = barResponse.data?.bars || null;
+    if (bars) BAR_CACHE.set(cacheKey, { bars, fetchedAt: Date.now() });
+    return bars;
+}
+
+class UserTradingEngine {
+    constructor(userId, alpacaApiKey, alpacaSecretKey, alpacaBaseURL) {
+        this.userId = userId;
+        this.alpacaConfig = {
+            baseURL: alpacaBaseURL || 'https://paper-api.alpaca.markets',
+            apiKey: alpacaApiKey,
+            secretKey: alpacaSecretKey,
+            dataURL: 'https://data.alpaca.markets'
+        };
+        // Per-user trading state
+        this.positions = new Map();
+        this.recentTrades = new Map();
+        this.stoppedOutSymbols = new Map();
+        this.tradesPerSymbol = new Map();
+        this.totalTradesToday = 0;
+        this.cachedDailyPnL = 0;
+        this.scanCount = 0;
+        this.lastScanTime = null;
+        this.botRunning = true;
+        this.botPaused = false;
+        this.lastResetDate = getESTDate().toDateString();
+        this.perfData = {
+            totalTrades: 0, winningTrades: 0, losingTrades: 0,
+            totalProfit: 0, totalWinAmount: 0, totalLossAmount: 0,
+            maxDrawdown: 0, sharpeRatio: 0, winRate: 0, profitFactor: 0,
+            consecutiveLosses: 0, maxConsecutiveLosses: 0,
+            circuitBreakerStatus: 'OK', circuitBreakerReason: null,
+            isRunning: true, activePositions: 0, lastUpdate: new Date().toISOString()
+        };
+        console.log(`🔧 [Engine] Created engine for user ${userId}`);
+    }
+
+    updateCredentials(alpacaApiKey, alpacaSecretKey, alpacaBaseURL) {
+        if (alpacaApiKey)    this.alpacaConfig.apiKey    = alpacaApiKey;
+        if (alpacaSecretKey) this.alpacaConfig.secretKey = alpacaSecretKey;
+        if (alpacaBaseURL)   this.alpacaConfig.baseURL   = alpacaBaseURL;
+    }
+
+    savePerfData() {
+        this.perfData.lastUpdate = new Date().toISOString();
+        this.perfData.activePositions = this.positions.size;
+        // Persist to engine_state table in DB
+        if (dbPool) {
+            dbPool.query(
+                `INSERT INTO engine_state (user_id, bot, state_json, updated_at)
+                 VALUES ($1, 'stock', $2, NOW())
+                 ON CONFLICT (user_id, bot) DO UPDATE SET state_json=$2, updated_at=NOW()`,
+                [this.userId, JSON.stringify({ perfData: this.perfData,
+                    totalTradesToday: this.totalTradesToday, botRunning: this.botRunning,
+                    botPaused: this.botPaused, lastResetDate: this.lastResetDate })]
+            ).catch(() => {});
+        }
+    }
+
+    async loadStateFromDb() {
+        if (!dbPool) return;
+        try {
+            const r = await dbPool.query(
+                'SELECT state_json FROM engine_state WHERE user_id=$1 AND bot=$2',
+                [this.userId, 'stock']
+            );
+            if (r.rows.length > 0) {
+                const s = r.rows[0].state_json;
+                if (s.perfData)        Object.assign(this.perfData, s.perfData);
+                if (s.totalTradesToday !== undefined) this.totalTradesToday = s.totalTradesToday;
+                if (s.botRunning !== undefined)       this.botRunning = s.botRunning;
+                if (s.botPaused !== undefined)        this.botPaused = s.botPaused;
+                if (s.lastResetDate)                  this.lastResetDate = s.lastResetDate;
+                console.log(`📂 [Engine ${this.userId}] State restored from DB`);
+            }
+        } catch (e) {
+            console.warn(`⚠️  [Engine ${this.userId}] State load failed:`, e.message);
+        }
+    }
+
+    recordTradeClose(symbol, entryPrice, exitPrice, shares, reason) {
+        const pnlPct = ((exitPrice - entryPrice) / entryPrice) * 100;
+        const pnlDollar = (exitPrice - entryPrice) * shares;
+        const isWin = pnlPct > 0;
+        this.perfData.totalTrades++;
+        this.perfData.totalProfit += pnlDollar;
+        if (isWin) {
+            this.perfData.winningTrades++;
+            this.perfData.totalWinAmount += pnlDollar;
+            this.perfData.consecutiveLosses = 0;
+        } else {
+            this.perfData.losingTrades++;
+            this.perfData.totalLossAmount += Math.abs(pnlDollar);
+            this.perfData.consecutiveLosses++;
+            this.perfData.maxConsecutiveLosses = Math.max(this.perfData.maxConsecutiveLosses, this.perfData.consecutiveLosses);
+        }
+        this.perfData.winRate = this.perfData.totalTrades > 0
+            ? (this.perfData.winningTrades / this.perfData.totalTrades) * 100 : 0;
+        this.perfData.profitFactor = this.perfData.totalTrades < 5 ? 0
+            : this.perfData.totalLossAmount > 0
+                ? this.perfData.totalWinAmount / this.perfData.totalLossAmount
+                : this.perfData.totalWinAmount > 0 ? 9.99 : 0;
+        this.savePerfData();
+    }
+
+    async dbTradeOpen(symbol, entryPrice, shares, config, signal, tier) {
+        if (!dbPool) return null;
+        try {
+            const r = await dbPool.query(
+                `INSERT INTO trades (user_id,bot,symbol,direction,tier,status,entry_price,quantity,
+                 position_size_usd,stop_loss,take_profit,entry_time,rsi,volume_ratio,momentum_pct)
+                 VALUES ($1,'stock',$2,'long',$3,'open',$4,$5,$6,$7,$8,NOW(),$9,$10,$11) RETURNING id`,
+                [this.userId, symbol, tier, entryPrice, shares, shares * entryPrice,
+                 config.stopLoss ? entryPrice * (1 - config.stopLoss) : null,
+                 config.profitTarget ? entryPrice * (1 + config.profitTarget) : null,
+                 signal.rsi || null, signal.volumeRatio || null, signal.percentChange || null]
+            );
+            return r.rows[0]?.id;
+        } catch (e) { console.warn('DB open failed:', e.message); return null; }
+    }
+
+    async dbTradeClose(id, exitPrice, pnlUsd, pnlPct, reason) {
+        if (!dbPool || !id) return;
+        try {
+            await dbPool.query(
+                `UPDATE trades SET status='closed',exit_price=$1,pnl_usd=$2,pnl_pct=$3,
+                 exit_time=NOW(),close_reason=$4 WHERE id=$5`,
+                [exitPrice, pnlUsd, pnlPct, reason, id]
+            );
+        } catch (e) { console.warn('DB close failed:', e.message); }
+    }
+
+    canTrade(symbol, side = 'buy') {
+        const stopTime = this.stoppedOutSymbols.get(symbol);
+        if (stopTime) {
+            const timeSinceStop = Date.now() - stopTime;
+            if (timeSinceStop < MIN_TIME_AFTER_STOP) return false;
+            else this.stoppedOutSymbols.delete(symbol);
+        }
+        if (this.totalTradesToday >= MAX_TRADES_PER_DAY) return false;
+        const symbolTrades = this.tradesPerSymbol.get(symbol) || 0;
+        if (symbolTrades >= MAX_TRADES_PER_SYMBOL) return false;
+        const recent = this.recentTrades.get(symbol) || [];
+        if (recent.length > 0) {
+            const lastTrade = recent[recent.length - 1];
+            const timeSince = Date.now() - lastTrade.time;
+            if (timeSince < MIN_TIME_BETWEEN_TRADES) return false;
+            if (lastTrade.side !== side && timeSince < MIN_TIME_BETWEEN_TRADES * 1.5) return false;
+        }
+        return true;
+    }
+
+    resetDailyCounters() {
+        const today = getESTDate().toDateString();
+        if (today !== this.lastResetDate) {
+            console.log(`\n📅 [Engine ${this.userId}] New trading day — resetting counters`);
+            this.totalTradesToday = 0;
+            this.tradesPerSymbol.clear();
+            this.stoppedOutSymbols.clear();
+            this.lastResetDate = today;
+        }
+    }
+
+    async checkEndOfDay() {
+        const now = getESTDate();
+        const hour = now.getHours();
+        const minute = now.getMinutes();
+        if (hour === 15 && minute >= 50) {
+            if (this.positions.size > 0) {
+                console.log(`\n⚠️  [EOD][Engine ${this.userId}] Closing all ${this.positions.size} positions`);
+                for (const [symbol] of this.positions) {
+                    try {
+                        const posUrl = `${this.alpacaConfig.baseURL}/v2/positions/${symbol}`;
+                        const posRes = await axios.get(posUrl, {
+                            headers: { 'APCA-API-KEY-ID': this.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': this.alpacaConfig.secretKey }
+                        });
+                        await this.closePosition(symbol, posRes.data.qty, 'End of Day');
+                    } catch (err) {
+                        console.error(`❌ [EOD][Engine ${this.userId}] Failed to close ${symbol}:`, err.message);
+                    }
+                }
+            }
+        }
+    }
+
+    async closePosition(symbol, qty, reason = 'Manual') {
+        let currentPrice = null;
+        const position = this.positions.get(symbol);
+        try {
+            const posUrl = `${this.alpacaConfig.baseURL}/v2/positions/${symbol}`;
+            const posRes = await axios.get(posUrl, {
+                headers: { 'APCA-API-KEY-ID': this.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': this.alpacaConfig.secretKey }
+            });
+            currentPrice = parseFloat(posRes.data.current_price);
+        } catch {}
+        const isCrypto = /USD$/.test(symbol) && symbol.length <= 8;
+        await axios.post(`${this.alpacaConfig.baseURL}/v2/orders`, {
+            symbol, qty: parseFloat(qty), side: 'sell', type: 'market',
+            time_in_force: isCrypto ? 'gtc' : 'day'
+        }, {
+            headers: { 'APCA-API-KEY-ID': this.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': this.alpacaConfig.secretKey }
+        });
+        if (position && currentPrice) {
+            const STOCK_EXIT_SLIPPAGE = 0.0005;
+            const adjustedExitPrice = currentPrice * (1 - STOCK_EXIT_SLIPPAGE);
+            this.recordTradeClose(symbol, position.entry, adjustedExitPrice, parseFloat(qty), reason);
+            const pnlUsd = (adjustedExitPrice - position.entry) * parseFloat(qty);
+            const pnlPct = ((adjustedExitPrice - position.entry) / position.entry) * 100;
+            this.dbTradeClose(position?.dbTradeId, adjustedExitPrice, pnlUsd, pnlPct, reason).catch(() => {});
+        }
+        const tradeRecord = { time: Date.now(), side: 'sell', reason };
+        const recent = this.recentTrades.get(symbol) || [];
+        recent.push(tradeRecord);
+        if (recent.length > 10) recent.shift();
+        this.recentTrades.set(symbol, recent);
+        if (reason && (reason.includes('Stop') || reason.toLowerCase().includes('stop loss'))) {
+            this.stoppedOutSymbols.set(symbol, Date.now());
+        }
+        this.positions.delete(symbol);
+        this.savePerfData();
+        console.log(`✅ [Engine ${this.userId}] Position closed: ${symbol} (${reason})`);
+    }
+
+    async managePositions() {
+        try {
+            const response = await axios.get(`${this.alpacaConfig.baseURL}/v2/positions`, {
+                headers: { 'APCA-API-KEY-ID': this.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': this.alpacaConfig.secretKey }
+            });
+            if (response.data.length === 0) return;
+            for (const alpacaPos of response.data) {
+                const symbol = alpacaPos.symbol;
+                const currentPrice = parseFloat(alpacaPos.current_price);
+                const avgEntry = parseFloat(alpacaPos.avg_entry_price);
+                const unrealizedPL = parseFloat(alpacaPos.unrealized_plpc) * 100;
+                let position = this.positions.get(symbol);
+                if (!position) {
+                    const restoredEntry = alpacaPos.created_at ? new Date(alpacaPos.created_at) : new Date(Date.now() - 86400000);
+                    position = { symbol, entry: avgEntry, shares: parseFloat(alpacaPos.qty),
+                        stopLoss: avgEntry * 0.93, target: avgEntry * 1.20,
+                        strategy: 'existing', entryTime: restoredEntry };
+                    this.positions.set(symbol, position);
+                }
+                updateTrailingStop(position, currentPrice, unrealizedPL);
+                const exitReason = await shouldExitPosition(position, currentPrice, alpacaPos, this.alpacaConfig);
+                if (exitReason) { await this.closePosition(symbol, alpacaPos.qty, exitReason); continue; }
+                if (currentPrice <= position.stopLoss) {
+                    smsAlerts.sendStockStopLoss(symbol, position.entry, currentPrice, unrealizedPL, position.stopLoss).catch(() => {});
+                    telegramAlerts.sendStockStopLoss(symbol, position.entry, currentPrice, unrealizedPL, position.stopLoss).catch(() => {});
+                    await this.closePosition(symbol, alpacaPos.qty, 'Stop Loss');
+                } else if (currentPrice >= position.target) {
+                    smsAlerts.sendStockTakeProfit(symbol, position.entry, currentPrice, unrealizedPL, position.target).catch(() => {});
+                    telegramAlerts.sendStockTakeProfit(symbol, position.entry, currentPrice, unrealizedPL, position.target).catch(() => {});
+                    await this.closePosition(symbol, alpacaPos.qty, 'Profit Target');
+                }
+            }
+        } catch (error) {
+            console.error(`❌ [Engine ${this.userId}] Position management error:`, error.message);
+        }
+    }
+
+    async executeTrade(signal, strategy) {
+        try {
+            const tier = signal.tier || 'tier1';
+            const config = signal.config || MOMENTUM_CONFIG.tier1;
+            const accountResponse = await axios.get(`${this.alpacaConfig.baseURL}/v2/account`, {
+                headers: { 'APCA-API-KEY-ID': this.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': this.alpacaConfig.secretKey }
+            });
+            const equity = parseFloat(accountResponse.data.equity);
+            if (!equity || equity <= 0) return null;
+            let kellyMultiplier = 1.0;
+            if (this.perfData.totalTrades >= 10 && this.perfData.winRate > 0 && this.perfData.profitFactor > 0) {
+                const w = this.perfData.winRate / 100;
+                const avgWin  = this.perfData.totalWinAmount  / Math.max(this.perfData.winningTrades, 1);
+                const avgLoss = this.perfData.totalLossAmount / Math.max(this.perfData.losingTrades, 1);
+                const b = avgLoss > 0 ? avgWin / avgLoss : 1;
+                const fullKelly = (w * b - (1 - w)) / b;
+                const fracKelly = Math.max(0, fullKelly) * 0.25;
+                const rawMultiplier = fracKelly > 0 ? fracKelly / config.positionSize : 1.0;
+                const safeMultiplier = isFinite(rawMultiplier) && !isNaN(rawMultiplier) ? rawMultiplier : 1.0;
+                kellyMultiplier = Math.max(0.25, Math.min(2.0, safeMultiplier));
+            }
+            const STOCK_SLIPPAGE = 0.0005;
+            const effectiveEntry = signal.price * (1 + STOCK_SLIPPAGE);
+            const positionSize = equity * config.positionSize * kellyMultiplier;
+            if (!signal.price || signal.price <= 0) return null;
+            const shares = Math.floor(positionSize / effectiveEntry);
+            if (shares < 1) return null;
+            const stopPrice  = (signal.atrStop  || effectiveEntry * (1 - config.stopLoss)).toFixed(2);
+            const targetPrice = (signal.atrTarget || effectiveEntry * (1 + config.profitTarget)).toFixed(2);
+            const orderResponse = await axios.post(`${this.alpacaConfig.baseURL}/v2/orders`, {
+                symbol: signal.symbol, qty: shares, side: 'buy', type: 'market', time_in_force: 'day'
+            }, {
+                headers: { 'APCA-API-KEY-ID': this.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': this.alpacaConfig.secretKey }
+            });
+            const entryTime = new Date();
+            this.positions.set(signal.symbol, {
+                symbol: signal.symbol, shares, entry: signal.price,
+                stopLoss: parseFloat(stopPrice), target: parseFloat(targetPrice),
+                strategy, tier, config, entryTime, entryVolume: signal.entryVolume,
+                rsi: signal.rsi, vwap: signal.vwap, volumeRatio: signal.volumeRatio,
+                percentChange: signal.percentChange
+            });
+            this.dbTradeOpen(signal.symbol, signal.price, shares, config, signal, tier)
+                .then(id => { const p = this.positions.get(signal.symbol); if (p) p.dbTradeId = id; })
+                .catch(() => {});
+            const tradeRecord = { time: Date.now(), side: 'buy', price: signal.price, shares, tier };
+            const recent = this.recentTrades.get(signal.symbol) || [];
+            recent.push(tradeRecord);
+            if (recent.length > 10) recent.shift();
+            this.recentTrades.set(signal.symbol, recent);
+            this.tradesPerSymbol.set(signal.symbol, (this.tradesPerSymbol.get(signal.symbol) || 0) + 1);
+            this.totalTradesToday++;
+            telegramAlerts.sendStockEntry(signal.symbol, signal.price, parseFloat(stopPrice), parseFloat(targetPrice), shares, tier).catch(() => {});
+            console.log(`✅ [Engine ${this.userId}] TRADE: ${signal.symbol} [${tier}] x${shares} @ $${signal.price}`);
+            return orderResponse.data;
+        } catch (error) {
+            console.error(`❌ [Engine ${this.userId}] Trade failed for ${signal.symbol}:`, error.message);
+            return null;
+        }
+    }
+
+    async scanMomentumBreakouts() {
+        if (this.perfData.maxDrawdown >= MAX_DRAWDOWN_PCT) return [];
+        const symbols = popularStocks.getAllSymbols();
+        const movers = [];
+        const batchSize = 20;
+        for (let i = 0; i < symbols.length; i += batchSize) {
+            const batch = symbols.slice(i, i + batchSize);
+            const results = await Promise.allSettled(batch.map(s => analyzeMomentumForEngine(s, this)));
+            for (const r of results) { if (r.status === 'fulfilled' && r.value) movers.push(r.value); }
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        movers.sort((a, b) => (b.score || 0) - (a.score || 0));
+        const maxPositions = 8;
+        if (this.positions.size < maxPositions) {
+            const available = maxPositions - this.positions.size;
+            const ranked = movers.filter(m => !this.positions.has(m.symbol) && this.canTrade(m.symbol, 'buy'))
+                .sort((a, b) => (b.score || 0) - (a.score || 0));
+            for (const mover of ranked.slice(0, available)) {
+                await this.executeTrade(mover, 'momentum');
+            }
+        }
+        return movers;
+    }
+
+    async tradingLoop() {
+        this.resetDailyCounters();
+        this.scanCount++;
+        this.lastScanTime = new Date();
+        await this.checkEndOfDay();
+        await this.managePositions();
+        if (!this.botRunning || this.botPaused) return;
+        if (this.cachedDailyPnL < -MAX_DAILY_LOSS) return;
+        if (isGoodTradingTime()) await this.scanMomentumBreakouts();
+    }
+
+    getStatus() {
+        return {
+            userId: this.userId,
+            isRunning: this.botRunning,
+            isPaused: this.botPaused,
+            scanCount: this.scanCount,
+            lastScanTime: this.lastScanTime,
+            totalTradesToday: this.totalTradesToday,
+            positions: this.positions.size,
+            perfData: this.perfData,
+            alpacaConfigured: !!(this.alpacaConfig.apiKey && this.alpacaConfig.secretKey)
+        };
+    }
+}
+
+// ── Engine-aware analyzeMomentum: same logic but uses engine's alpacaConfig & positions ──
+async function analyzeMomentumForEngine(symbol, engine) {
+    try {
+        if (!isGoodTradingTime()) return null;
+        const today = new Date().toISOString().split('T')[0];
+        const bars = await fetchBarsWithCache(symbol, engine.alpacaConfig,
+            { start: today, timeframe: '1Min', feed: 'sip', limit: 10000 });
+        if (!bars || bars.length === 0) return null;
+        const firstBar = bars[0];
+        const lastBar = bars[bars.length - 1];
+        const todayOpen = firstBar.o;
+        const current = lastBar.c;
+        const volumeToday = bars.reduce((sum, b) => sum + b.v, 0);
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        const prevDate = yesterday.toISOString().split('T')[0];
+        const prevBars = await fetchBarsWithCache(symbol, engine.alpacaConfig,
+            { start: prevDate, end: prevDate, timeframe: '1Day', feed: 'sip', limit: 1 });
+        const prevVolume = prevBars?.[0]?.v || volumeToday;
+        const percentChange = ((current - todayOpen) / todayOpen) * 100;
+        const volumeRatio = volumeToday / (prevVolume || 1);
+        const rsi = calculateRSI(bars);
+        if (current < 1.0 || current > 1000) return null;
+        if (volumeToday < 500000) return null;
+        const vwap = calculateVWAP(bars);
+        if (vwap && current < vwap * 0.995) return null;
+        const dailyHigh = Math.max(...bars.map(b => b.h));
+        const dailyLow = Math.min(...bars.map(b => b.l));
+        const dailyRange = dailyHigh - dailyLow;
+        if (dailyRange > 0 && (current - dailyLow) / dailyRange > 0.92) return null;
+        const closes = bars.map(b => b.c);
+        const ema9 = calculateEMA(closes, 9);
+        const ema21 = calculateEMA(closes, 21);
+        if (ema9 !== null && ema21 !== null && ema9 <= ema21) return null;
+        const adx = calculateADX(bars);
+        if (adx !== null && adx < 15) return null;
+        const macd = calculateMACD(bars);
+        if (macd !== null && !macd.bullish) {
+            if (!detectRSIBullishDivergence(bars)) return null;
+        }
+        // Multi-timeframe daily SMA filter
+        try {
+            const barUrl = `${engine.alpacaConfig.dataURL}/v2/stocks/${symbol}/bars`;
+            const dailyResp = await axios.get(barUrl, {
+                headers: { 'APCA-API-KEY-ID': engine.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': engine.alpacaConfig.secretKey },
+                params: { timeframe: '1Day', limit: 20, feed: 'sip' }
+            });
+            const dailyBars = dailyResp.data?.bars || [];
+            if (dailyBars.length >= 5) {
+                const lookback = Math.min(9, dailyBars.length);
+                const sma9d = dailyBars.slice(-lookback).map(b => b.c).reduce((a, v) => a + v, 0) / lookback;
+                if (current < sma9d * 0.99) return null;
+            }
+        } catch {}
+        const atr = calculateATR(bars);
+        let atrStop = null, atrTarget = null;
+        if (atr !== null && current > 0) {
+            const atrPct = atr / current;
+            const candidateStop   = current * (1 - atrPct * 1.5);
+            const candidateTarget = current * (1 + atrPct * 3.0);
+            const rr = candidateStop > 0 ? (candidateTarget - current) / (current - candidateStop) : 0;
+            const actualStopPct = (current - candidateStop) / current;
+            if (rr >= 1.8) { atrStop = candidateStop; atrTarget = candidateTarget; }
+        }
+        let tier = null, config = null;
+        const tierCandidates = [];
+        if (percentChange >= MOMENTUM_CONFIG.tier3.threshold) tierCandidates.push('tier3');
+        if (percentChange >= MOMENTUM_CONFIG.tier2.threshold) tierCandidates.push('tier2');
+        if (percentChange >= MOMENTUM_CONFIG.tier1.threshold) tierCandidates.push('tier1');
+        for (const candidate of tierCandidates) {
+            const c = MOMENTUM_CONFIG[candidate];
+            if (volumeRatio >= c.volumeRatio && volumeToday >= c.minVolume && rsi >= c.rsiMin && rsi <= c.rsiMax) {
+                tier = candidate; config = c; break;
+            }
+        }
+        if (!tier || !config) return null;
+        const tierPositions = Array.from(engine.positions.values()).filter(p => p.tier === tier).length;
+        if (tierPositions >= config.maxPositions) return null;
+        const bridgeResult = await queryStrategyBridge(symbol, bars, 'stock');
+        if (bridgeResult !== null && bridgeResult.direction === 'short' && bridgeResult.confidence > 0.7) return null;
+        const tierMultiplier = { tier1: 1, tier2: 2, tier3: 3 }[tier] || 1;
+        const rsiBonus = rsi >= 45 && rsi <= 65 ? 1.15 : 1.0;
+        const score = tierMultiplier * parseFloat(percentChange) * parseFloat(volumeRatio.toFixed(2)) * rsiBonus;
+        return { symbol, price: current, percentChange: percentChange.toFixed(2), volumeRatio: volumeRatio.toFixed(2),
+            volume: volumeToday, rsi: rsi.toFixed(2), vwap: vwap ? vwap.toFixed(2) : null,
+            tier, score: parseFloat(score.toFixed(3)), strategy: 'momentum', config,
+            entryVolume: volumeToday, atrStop, atrTarget };
+    } catch { return null; }
+}
+
+// ── EngineRegistry: userId → UserTradingEngine ──────────────────────────────
+const engineRegistry = new Map(); // userId (string) → UserTradingEngine
+
+async function getOrCreateEngine(userId) {
+    const key = String(userId);
+    if (engineRegistry.has(key)) return engineRegistry.get(key);
+    if (!dbPool) return null;
+    try {
+        const creds = await loadUserCredentials(userId, 'alpaca');
+        const apiKey    = creds.ALPACA_API_KEY    || process.env.ALPACA_API_KEY;
+        const secretKey = creds.ALPACA_SECRET_KEY || process.env.ALPACA_SECRET_KEY;
+        const baseURL   = creds.ALPACA_BASE_URL   || process.env.ALPACA_BASE_URL;
+        if (!apiKey || !secretKey) return null; // no creds yet
+        const engine = new UserTradingEngine(userId, apiKey, secretKey, baseURL);
+        await engine.loadStateFromDb();
+        engineRegistry.set(key, engine);
+        console.log(`🔧 [EngineRegistry] Engine registered for user ${userId} (${engineRegistry.size} total)`);
+        return engine;
+    } catch (e) {
+        console.warn(`⚠️  [EngineRegistry] Failed to create engine for user ${userId}:`, e.message);
+        return null;
+    }
+}
+
+// ── ScanQueue: single interval drives all registered engines ─────────────────
+// Engines run sequentially (not in parallel) to avoid rate limit spikes.
+// Each engine gets an independent 60-second slot; staggered 6s apart on startup.
+let scanQueueRunning = false;
+
+async function runScanQueue() {
+    if (scanQueueRunning) return; // previous cycle still running — skip
+    scanQueueRunning = true;
+    try {
+        const engines = Array.from(engineRegistry.values());
+        for (const engine of engines) {
+            try { await engine.tradingLoop(); }
+            catch (e) { console.error(`❌ [ScanQueue] Engine ${engine.userId} crashed:`, e.message); }
+        }
+        // Always run the default module-level loop (for env-var-only mode / backward compat)
+        if (engines.length === 0) {
+            // will be handled by the existing tradingLoop() call below
+        }
+    } finally {
+        scanQueueRunning = false;
     }
 }
 
@@ -2652,7 +3299,37 @@ app.listen(PORT, async () => {
     }, 30000);
 
     await tradingLoop();
-    setInterval(() => tradingLoop().catch(e => console.error('❌ Stock loop crashed:', e)), 60000);
+
+    // ── Register engines for all existing users with Alpaca credentials ──────
+    // Staggered 6s apart to avoid burst API calls; runs 5s after startup so DB is warm
+    setTimeout(async () => {
+        try {
+            if (dbPool) {
+                const users = await dbPool.query('SELECT id FROM users ORDER BY id ASC');
+                let delay = 0;
+                for (const row of users.rows) {
+                    setTimeout(async () => {
+                        try { await getOrCreateEngine(row.id); }
+                        catch (e) { console.warn(`⚠️  Engine init failed for user ${row.id}:`, e.message); }
+                    }, delay);
+                    delay += 6000; // 6s stagger between users
+                }
+            }
+        } catch (e) { console.warn('⚠️  User engine pre-registration failed:', e.message); }
+    }, 5000);
+
+    // Default single-loop for env-var-only mode + multi-user ScanQueue
+    setInterval(async () => {
+        try {
+            // Run ScanQueue for all registered user engines
+            await runScanQueue();
+            // Also run the default module-level loop (for env-var / admin mode backward compat)
+            // Skip it if there are registered user engines already trading
+            if (engineRegistry.size === 0) {
+                await tradingLoop();
+            }
+        } catch (e) { console.error('❌ Stock loop crashed:', e); }
+    }, 60000);
 });
 
 // ===== GRACEFUL SHUTDOWN =====
