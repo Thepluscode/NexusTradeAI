@@ -19,6 +19,7 @@ import {
     Casino,
     SwapVert,
     Settings,
+    Cancel,
 } from '@mui/icons-material';
 import axios from 'axios';
 import { SERVICE_URLS, apiClient } from '@/services/api';
@@ -129,6 +130,17 @@ export default function ForexBotPage() {
             onError: () => { toast.error('Failed to pause bot'); },
         }
     );
+
+    const closeAllMutation = useMutation<unknown, unknown, void>(async () => {
+        return axios.post(`${API_BASE}/api/forex/close-all`);
+    }, {
+        onSuccess: () => {
+            toast.success('All forex positions closed');
+            queryClient.invalidateQueries('forexBotStatus');
+            queryClient.invalidateQueries('forexEngineStatus');
+        },
+        onError: () => { toast.error('Failed to close all positions'); },
+    });
 
     if (isLoading) {
         return (
@@ -394,6 +406,20 @@ export default function ForexBotPage() {
                         disabled={!status?.isRunning || stopMutation.isLoading}
                     >
                         Stop
+                    </Button>
+                    <Button
+                        variant="outlined"
+                        color="error"
+                        startIcon={<Cancel />}
+                        onClick={() => {
+                            if (window.confirm('Close ALL open positions immediately?')) {
+                                closeAllMutation.mutate();
+                            }
+                        }}
+                        disabled={!status?.positions?.length || closeAllMutation.isLoading}
+                        sx={{ borderStyle: 'dashed' }}
+                    >
+                        Close All
                     </Button>
                 </Box>
             </Paper>

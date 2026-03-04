@@ -18,6 +18,7 @@ import {
     Stop,
     Casino,
     Settings,
+    Cancel,
 } from '@mui/icons-material';
 import axios from 'axios';
 import { SERVICE_URLS, apiClient } from '@/services/api';
@@ -155,6 +156,18 @@ export default function StockBotPage() {
             onError: () => { toast.error('Failed to pause bot'); },
         }
     );
+
+    const closeAllMutation = useMutation<unknown, unknown, void>(async () => {
+        if (user) return apiClient.closeAllStockPositions();
+        return axios.post(`${API_BASE}/api/trading/close-all`);
+    }, {
+        onSuccess: () => {
+            toast.success('All stock positions closed');
+            queryClient.invalidateQueries('stockBotStatus');
+            queryClient.invalidateQueries('stockEngineStatus');
+        },
+        onError: () => { toast.error('Failed to close all positions'); },
+    });
 
     if (isLoading) {
         return (
@@ -412,6 +425,20 @@ export default function StockBotPage() {
                         disabled={!status?.isRunning || stopMutation.isLoading}
                     >
                         Stop
+                    </Button>
+                    <Button
+                        variant="outlined"
+                        color="error"
+                        startIcon={<Cancel />}
+                        onClick={() => {
+                            if (window.confirm('Close ALL open positions immediately?')) {
+                                closeAllMutation.mutate();
+                            }
+                        }}
+                        disabled={!status?.positions?.length || closeAllMutation.isLoading}
+                        sx={{ borderStyle: 'dashed' }}
+                    >
+                        Close All
                     </Button>
                 </Box>
             </Paper>

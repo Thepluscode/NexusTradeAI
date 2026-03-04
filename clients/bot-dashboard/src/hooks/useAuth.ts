@@ -1,6 +1,7 @@
 import { jwtDecode } from 'jwt-decode';
 import { useNavigate } from 'react-router-dom';
 import type { User } from '@/types';
+import { SERVICE_URLS } from '@/services/api';
 
 interface JwtPayload {
   sub: number;
@@ -49,6 +50,16 @@ export function useAuth() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refreshToken }),
       }).catch(() => {});
+    }
+    // Best-effort stop of per-user engines on logout
+    const { accessToken: tok } = getStoredTokens();
+    if (tok) {
+      const engineHeaders = { Authorization: `Bearer ${tok}` };
+      void Promise.allSettled([
+        fetch(`${SERVICE_URLS.stockBot}/api/trading/engine/stop`, { method: 'POST', headers: engineHeaders }),
+        fetch(`${SERVICE_URLS.forexBot}/api/forex/engine/stop`, { method: 'POST', headers: engineHeaders }),
+        fetch(`${SERVICE_URLS.cryptoBot}/api/crypto/engine/stop`, { method: 'POST', headers: engineHeaders }),
+      ]).catch(() => {});
     }
     localStorage.removeItem('nexus_access_token');
     localStorage.removeItem('nexus_refresh_token');
