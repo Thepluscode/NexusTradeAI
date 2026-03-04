@@ -42,6 +42,20 @@ async function initTradeDb() {
             )
         `);
         console.log('✅ Crypto bot: Auth DB ready');
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS user_credentials (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                broker VARCHAR(30) NOT NULL,
+                credential_key VARCHAR(100) NOT NULL,
+                encrypted_value TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(user_id, broker, credential_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_user_creds_lookup ON user_credentials(user_id, broker);
+        `);
+        console.log('✅ Crypto bot: User credentials table ready');
     } catch (e) {
         console.warn('⚠️  Crypto DB init failed:', e.message);
         dbPool = null;
@@ -839,20 +853,33 @@ class CryptoTradingEngine {
             if (holdDays >= this.config.stalePositionDays) {
                 console.log(`⏰ ${symbol}: STALE EXIT after ${holdDays.toFixed(1)} days`);
                 await this.closePosition(symbol, currentPrice, 'Stale Position Timeout');
+                telegramAlerts.send(
+                    `⏰ *CRYPTO STALE EXIT* — ${symbol}\n` +
+                    `Held ${holdDays.toFixed(1)} days (limit: ${this.config.stalePositionDays}d)\n` +
+                    `Entry: $${position.entry.toFixed(2)} → Exit: $${currentPrice.toFixed(2)}\n` +
+                    `P&L: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%`
+                ).catch(e => console.warn(`⚠️  Telegram stale-exit alert failed: ${e.message}`));
                 continue;
             }
-            // Exit losing positions after maxHoldDays — prevents dead capital in declining trades
-            // Exit winning positions after stalePositionDays (handled above) — winners can ride
-            // longer but must still eventually free capital for new opportunities
             if (holdDays >= this.config.maxHoldDays && pnlPercent < 0) {
                 console.log(`⏰ ${symbol}: MAX HOLD EXIT after ${holdDays.toFixed(1)} days (loss: ${pnlPercent.toFixed(2)}%)`);
                 await this.closePosition(symbol, currentPrice, 'Max Hold Days - Loss Exit');
+                telegramAlerts.send(
+                    `⏰ *CRYPTO MAX HOLD EXIT (loss)* — ${symbol}\n` +
+                    `Held ${holdDays.toFixed(1)} days (limit: ${this.config.maxHoldDays}d)\n` +
+                    `Entry: $${position.entry.toFixed(2)} → Exit: $${currentPrice.toFixed(2)}\n` +
+                    `P&L: ${pnlPercent.toFixed(2)}%`
+                ).catch(e => console.warn(`⚠️  Telegram max-hold-loss alert failed: ${e.message}`));
                 continue;
             }
-            // Winners that are near breakeven after maxHoldDays are dead capital — exit them too
             if (holdDays >= this.config.maxHoldDays && pnlPercent < 2) {
                 console.log(`⏰ ${symbol}: MAX HOLD EXIT after ${holdDays.toFixed(1)} days (flat/marginal winner: ${pnlPercent.toFixed(2)}%)`);
                 await this.closePosition(symbol, currentPrice, 'Max Hold Days - Flat Exit');
+                telegramAlerts.send(
+                    `⏰ *CRYPTO MAX HOLD EXIT (flat)* — ${symbol}\n` +
+                    `Held ${holdDays.toFixed(1)} days, marginal gain ${pnlPercent.toFixed(2)}%\n` +
+                    `Entry: $${position.entry.toFixed(2)} → Exit: $${currentPrice.toFixed(2)}`
+                ).catch(e => console.warn(`⚠️  Telegram max-hold-flat alert failed: ${e.message}`));
                 continue;
             }
 
@@ -1263,6 +1290,70 @@ async function persistEnvVar(name, value) {
     }
 }
 
+// ── Per-user credential encryption (AES-256-GCM) ───────────────────────────
+function getEncryptionKey() {
+    const envKey = process.env.CREDENTIAL_ENCRYPTION_KEY;
+    if (envKey) return Buffer.from(envKey, 'hex');
+    const secret = process.env.JWT_SECRET || 'dev-secret-change-me';
+    return crypto.createHash('sha256').update(secret).digest();
+}
+
+function encryptCredential(plaintext) {
+    const key = getEncryptionKey();
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    let encrypted = cipher.update(plaintext, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    const tag = cipher.getAuthTag().toString('hex');
+    return `${iv.toString('hex')}:${tag}:${encrypted}`;
+}
+
+function decryptCredential(stored) {
+    const key = getEncryptionKey();
+    const [ivHex, tagHex, ciphertext] = stored.split(':');
+    if (!ivHex || !tagHex || !ciphertext) throw new Error('Invalid encrypted format');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivHex, 'hex'));
+    decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
+    let decrypted = decipher.update(ciphertext, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+}
+
+async function loadUserCredentials(userId, broker) {
+    if (!dbPool) return {};
+    try {
+        const result = await dbPool.query(
+            'SELECT credential_key, encrypted_value FROM user_credentials WHERE user_id=$1 AND broker=$2',
+            [userId, broker]
+        );
+        const creds = {};
+        for (const row of result.rows) {
+            try { creds[row.credential_key] = decryptCredential(row.encrypted_value); }
+            catch (e) { console.warn(`⚠️ Failed to decrypt ${row.credential_key} for user ${userId}:`, e.message); }
+        }
+        return creds;
+    } catch (e) {
+        console.warn(`⚠️ Failed to load credentials for user ${userId}:`, e.message);
+        return {};
+    }
+}
+
+// For credential endpoints — accepts JWT (per-user) or API secret (backward compat)
+function requireJwtOrApiSecret(req, res, next) {
+    const auth = req.headers.authorization || '';
+    if (auth.startsWith('Bearer ')) {
+        const token = auth.slice(7);
+        const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+        try {
+            req.user = jwt.verify(token, JWT_SECRET);
+            return next();
+        } catch { /* not a JWT — try API secret */ }
+        const secret = process.env.NEXUS_API_SECRET;
+        if (secret && auth === `Bearer ${secret}`) return next();
+    }
+    return res.status(401).json({ success: false, error: 'Unauthorized — provide JWT or API secret' });
+}
+
 // ── JWT Auth Helpers ─────────────────────────────────────────────────────────
 function signTokens(userId, email) {
     const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
@@ -1531,7 +1622,7 @@ app.get('/api/config', (req, res) => {
 });
 
 // ── Credentials management ──────────────────────────────────────────────────
-app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
+app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
     try {
         const { broker, credentials, fields } = req.body;
         const creds = credentials || fields;
@@ -1543,15 +1634,27 @@ app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
         const allowed = ALLOWED_KEYS[broker];
         if (!allowed) return res.status(400).json({ success: false, error: 'Unknown broker' });
         if (!creds || typeof creds !== 'object') return res.status(400).json({ success: false, error: 'No credentials provided' });
+        const userId = req.user?.sub;
         let updated = 0;
         for (const [key, value] of Object.entries(creds)) {
             if (!allowed.includes(key)) continue;
             if (typeof value !== 'string' || value === '') continue;
+            // Apply immediately in-memory so current session picks it up
             process.env[key] = value;
-            await persistEnvVar(key, value);
+            // Persist encrypted to DB per user (if authenticated)
+            if (userId && dbPool) {
+                const encrypted = encryptCredential(value);
+                await dbPool.query(
+                    `INSERT INTO user_credentials (user_id, broker, credential_key, encrypted_value, updated_at)
+                     VALUES ($1, $2, $3, $4, NOW())
+                     ON CONFLICT (user_id, broker, credential_key)
+                     DO UPDATE SET encrypted_value=$4, updated_at=NOW()`,
+                    [userId, broker, key, encrypted]
+                );
+            }
             updated++;
         }
-        console.log(`⚙️  Credentials updated: broker=${broker} keys=${updated}`);
+        console.log(`⚙️  Credentials updated: broker=${broker} keys=${updated} storage=${userId ? 'database' : 'environment'}`);
         // If crypto keys were updated, reinitialise the exchange client and reconnect
         if (broker === 'crypto' && updated > 0) {
             engine.kraken = new KrakenClient({
@@ -1565,19 +1668,45 @@ app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
                         engine.demoMode = false;
                         engine.saveState();
                         console.log('✅ Kraken reconnected after credential update — exiting DEMO MODE');
-                        return res.json({ success: true, updated, reconnected: true, demoMode: false });
+                        return res.json({ success: true, updated, reconnected: true, demoMode: false, storage: userId ? 'database' : 'environment' });
                     }
                     return res.json({ success: true, updated, reconnected: false, demoMode: true,
-                        warning: 'Keys saved but Kraken rejected them — check permissions/IP whitelist' });
+                        warning: 'Keys saved but Kraken rejected them — check permissions/IP whitelist',
+                        storage: userId ? 'database' : 'environment' });
                 } catch (reconnectErr) {
                     return res.json({ success: true, updated, reconnected: false, demoMode: true,
-                        warning: reconnectErr.message });
+                        warning: reconnectErr.message, storage: userId ? 'database' : 'environment' });
                 }
             }
         }
-        res.json({ success: true, updated, reconnected: false, demoMode: engine.demoMode || false });
+        res.json({ success: true, updated, reconnected: false, demoMode: engine.demoMode || false, storage: userId ? 'database' : 'environment' });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+app.get('/api/config/credentials/status', requireJwt, async (req, res) => {
+    const userId = req.user?.sub;
+    if (!userId || !dbPool) {
+        return res.json({ success: true, brokers: {
+            crypto:   { configured: !!(process.env.CRYPTO_API_KEY && process.env.CRYPTO_API_SECRET) },
+            telegram: { configured: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) },
+            sms:      { configured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) },
+        }});
+    }
+    try {
+        const r = await dbPool.query(
+            'SELECT broker, COUNT(*) as key_count FROM user_credentials WHERE user_id=$1 GROUP BY broker',
+            [userId]
+        );
+        const stored = Object.fromEntries(r.rows.map(row => [row.broker, parseInt(row.key_count)]));
+        res.json({ success: true, brokers: {
+            crypto:   { configured: (stored.crypto   || 0) >= 2 },
+            telegram: { configured: (stored.telegram || 0) >= 2 },
+            sms:      { configured: (stored.sms      || 0) >= 2 },
+        }});
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
     }
 });
 
@@ -1659,7 +1788,34 @@ app.listen(PORT, async () => {
     console.log(`⚠️  ${CRYPTO_CONFIG.exchange.testnet ? 'Using TESTNET - Safe to experiment!' : 'LIVE TRADING - Real money at risk!'}`);
 
     // Connect DB for trade persistence (non-blocking)
-    initTradeDb().catch(e => console.warn('⚠️  Crypto DB init error:', e.message));
+    await initTradeDb().catch(e => console.warn('⚠️  Crypto DB init error:', e.message));
+
+    // ── Load credentials from DB into process.env (fallback: env vars already set) ──
+    try {
+        if (dbPool) {
+            const firstUser = await dbPool.query('SELECT id FROM users ORDER BY id ASC LIMIT 1');
+            if (firstUser.rows.length > 0) {
+                const userId = firstUser.rows[0].id;
+                for (const broker of ['crypto', 'telegram', 'sms']) {
+                    const creds = await loadUserCredentials(userId, broker);
+                    for (const [key, value] of Object.entries(creds)) {
+                        if (!process.env[key]) process.env[key] = value;
+                    }
+                    if (Object.keys(creds).length > 0) console.log(`🔑 Loaded ${broker} credentials from DB for user ${userId}`);
+                }
+                // Reinitialise Kraken client with loaded keys
+                if (process.env.CRYPTO_API_KEY && process.env.CRYPTO_API_SECRET) {
+                    engine.kraken = new KrakenClient({
+                        apiKey: process.env.CRYPTO_API_KEY,
+                        apiSecret: process.env.CRYPTO_API_SECRET,
+                    });
+                    console.log('🔑 Kraken client reinitialised with DB credentials');
+                }
+            }
+        }
+    } catch (e) {
+        console.warn('⚠️  Startup credential load failed:', e.message);
+    }
 
     // Auto-start only if previously running (persistent state)
     if (engine.loadState()) {
