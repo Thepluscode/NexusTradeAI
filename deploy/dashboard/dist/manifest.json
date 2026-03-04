@@ -1,0 +1,24 @@
+{
+  "name": "NexusTradeAI",
+  "short_name": "NexusTrade",
+  "description": "AI-powered automated trading dashboard",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#06080d",
+  "theme_color": "#06080d",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3e%3cdefs%3e%3clinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3e%3cstop offset='0%25' stop-color='%233b82f6'/%3e%3cstop offset='100%25' stop-color='%238b5cf6'/%3e%3c/linearGradient%3e%3c/defs%3e%3crect width='192' height='192' rx='40' fill='url(%23g)'/%3e%3cpath d='M40 140 L75 60 L110 110 L135 75' stroke='white' stroke-width='12' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3e%3c/svg%3e",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3e%3cdefs%3e%3clinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3e%3cstop offset='0%25' stop-color='%233b82f6'/%3e%3cstop offset='100%25' stop-color='%238b5cf6'/%3e%3c/linearGradient%3e%3c/defs%3e%3crect width='512' height='512' rx='100' fill='url(%23g)'/%3e%3cpath d='M100 380 L200 130 L300 270 L370 180' stroke='white' stroke-width='30' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3e%3c/svg%3e",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

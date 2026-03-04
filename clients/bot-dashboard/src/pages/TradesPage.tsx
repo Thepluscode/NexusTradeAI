@@ -23,7 +23,7 @@ import {
     Button,
     Tooltip,
 } from '@mui/material';
-import { TrendingUp, TrendingDown, Receipt, Download } from '@mui/icons-material';
+import { TrendingUp, TrendingDown, Receipt, Download, Person } from '@mui/icons-material';
 import { apiClient } from '@/services/api';
 import { MetricCard } from '@/components/MetricCard';
 import type { TradeRecord, TradeBotTotal } from '@/types';
@@ -74,10 +74,12 @@ function exportTradesToCSV(rows: TradeRecord[]) {
 export default function TradesPage() {
     const [botFilter, setBotFilter] = useState<BotFilter>('all');
     const [days, setDays] = useState(30);
+    const [myTrades, setMyTrades] = useState(false);
+    const isLoggedIn = !!localStorage.getItem('nexus_access_token');
 
     const { data: trades = [], isLoading: tradesLoading } = useQuery(
-        ['trades', botFilter],
-        () => apiClient.getTrades({ bot: botFilter === 'all' ? undefined : botFilter, limit: 200 }),
+        ['trades', botFilter, myTrades],
+        () => apiClient.getTrades({ bot: botFilter === 'all' ? undefined : botFilter, limit: 200, mine: myTrades }),
         { staleTime: 30 * 1000, refetchInterval: 60 * 1000 }
     );
 
@@ -117,13 +119,25 @@ export default function TradesPage() {
     return (
         <Box sx={{ p: { xs: 1.5, sm: 2 } }}>
             {/* Header */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3, flexWrap: 'wrap' }}>
                 <Receipt sx={{ fontSize: 32, color: 'primary.main' }} />
                 <Box>
                     <Typography variant="h5" fontWeight={700}>Trade History</Typography>
                     <Typography variant="body2" color="text.secondary">All trades persisted to PostgreSQL across stock, forex and crypto bots</Typography>
                 </Box>
-                <FormControl size="small" sx={{ ml: 'auto', minWidth: 100 }}>
+                {isLoggedIn && (
+                    <Button
+                        variant={myTrades ? 'contained' : 'outlined'}
+                        size="small"
+                        startIcon={<Person />}
+                        onClick={() => setMyTrades(v => !v)}
+                        color="primary"
+                        sx={{ ml: { sm: 'auto' } }}
+                    >
+                        {myTrades ? 'My Trades' : 'All Trades'}
+                    </Button>
+                )}
+                <FormControl size="small" sx={{ ml: isLoggedIn ? 0 : 'auto', minWidth: 100 }}>
                     <InputLabel>Period</InputLabel>
                     <Select value={days} label="Period" onChange={(e) => setDays(Number(e.target.value))}>
                         <MenuItem value={7}>7 days</MenuItem>

@@ -198,7 +198,7 @@ class APIClient {
     }
   }
 
-  async getTrades(params?: { bot?: string; limit?: number }): Promise<TradeRecord[]> {
+  async getTrades(params?: { bot?: string; limit?: number; mine?: boolean }): Promise<TradeRecord[]> {
     try {
       const response = await this.tradingEngine.get('/api/trades', { params });
       return response.data.trades ?? [];
@@ -531,6 +531,15 @@ class APIClient {
         : { name: services[i].name, status: 'offline' as const, port: services[i].port, latency: 0, lastCheck: new Date().toISOString() };
       return { ...base, optional: services[i].optional };
     });
+  }
+
+  async getAdminUsers(): Promise<Record<string, unknown>[]> {
+    try {
+      const response = await this.tradingEngine.get('/api/admin/users');
+      return response.data.users ?? [];
+    } catch {
+      return [];
+    }
   }
 }
 

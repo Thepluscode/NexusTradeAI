@@ -32,6 +32,7 @@ import {
   Logout,
   Bolt,
   FiberManualRecord,
+  AdminPanelSettings,
 } from '@mui/icons-material';
 import darkTheme from './theme';
 import { Toaster } from 'react-hot-toast';
@@ -45,6 +46,7 @@ import BacktestPage from './pages/BacktestPage';
 import TradesPage from './pages/TradesPage';
 import SettingsPage from './pages/SettingsPage';
 import LoginPage from './pages/LoginPage';
+import AdminPage from './pages/AdminPage';
 import ProtectedRoute from './components/ProtectedRoute';
 import { useAuth } from './hooks/useAuth';
 
@@ -255,6 +257,25 @@ function Navigation() {
           );
         })}
       </List>
+
+        {user?.role === 'admin' && (
+          <ListItem disablePadding sx={{ px: 1.5, mb: 0.5 }}>
+            <ListItemButton
+              onClick={() => { navigate('/admin'); if (isMobile) setMobileOpen(false); }}
+              selected={location.pathname === '/admin'}
+              sx={{
+                borderRadius: '12px', py: 1.2, px: 1.5,
+                '&.Mui-selected': { bgcolor: 'rgba(245, 158, 11, 0.08)' },
+                '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' },
+              }}
+            >
+              <ListItemIcon sx={{ color: location.pathname === '/admin' ? '#f59e0b' : 'text.secondary', minWidth: 40 }}>
+                <AdminPanelSettings />
+              </ListItemIcon>
+              <ListItemText primary="Admin" primaryTypographyProps={{ fontSize: '0.875rem', fontWeight: location.pathname === '/admin' ? 600 : 400 }} />
+            </ListItemButton>
+          </ListItem>
+        )}
 
       <Divider sx={{ mx: 2 }} />
 
@@ -500,6 +521,7 @@ function Navigation() {
             <Route path="/backtest" element={<ProtectedRoute><BacktestPage /></ProtectedRoute>} />
             <Route path="/trades" element={<ProtectedRoute><TradesPage /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+            <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Box>
