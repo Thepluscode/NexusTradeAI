@@ -6,6 +6,7 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { Pool } = require('pg');
+const rateLimit = require('express-rate-limit');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 // ===== PRODUCTION INFRASTRUCTURE =====
@@ -240,9 +241,19 @@ function requireJwt(req, res, next) {
     }
 }
 
+// Rate limiter for auth endpoints — prevents brute force attacks
+const authRateLimit = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 20,                   // max 20 requests per window per IP
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, error: 'Too many requests — try again in 15 minutes' },
+    skip: () => process.env.NODE_ENV === 'test',
+});
+
 // ── Auth Endpoints ────────────────────────────────────────────────────────────
 
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', authRateLimit, async (req, res) => {
     if (!dbPool) return res.status(503).json({ success: false, error: 'Auth service unavailable' });
     const { email, password, name } = req.body || {};
     if (!email || !password) return res.status(400).json({ success: false, error: 'Email and password required' });
@@ -264,7 +275,7 @@ app.post('/api/auth/register', async (req, res) => {
     }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authRateLimit, async (req, res) => {
     if (!dbPool) return res.status(503).json({ success: false, error: 'Auth service unavailable' });
     const { email, password } = req.body || {};
     if (!email || !password) return res.status(400).json({ success: false, error: 'Email and password required' });

@@ -26,6 +26,7 @@ import { SERVICE_URLS, apiClient } from '@/services/api';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import { useAuth } from '@/hooks/useAuth';
 
 interface Position {
     symbol: string;
@@ -80,6 +81,7 @@ const API_BASE = SERVICE_URLS.cryptoBot;
 export default function CryptoBotPage() {
     const queryClient = useQueryClient();
     const navigate = useNavigate();
+    const { user } = useAuth();
 
     const { data: engineStatus } = useQuery(
         'cryptoEngineStatus',
@@ -97,34 +99,37 @@ export default function CryptoBotPage() {
         { refetchInterval: 5000 }
     );
 
-    const startMutation = useMutation(
-        () => axios.post(`${API_BASE}/api/crypto/start`),
+    const startMutation = useMutation<unknown, unknown, void>(
+        async () => user ? apiClient.startCryptoEngine() : axios.post(`${API_BASE}/api/crypto/start`),
         {
             onSuccess: () => {
                 toast.success('Crypto Bot started!');
                 queryClient.invalidateQueries('cryptoBotStatus');
+                queryClient.invalidateQueries('cryptoEngineStatus');
             },
             onError: () => { toast.error('Failed to start bot'); },
         }
     );
 
-    const stopMutation = useMutation(
-        () => axios.post(`${API_BASE}/api/crypto/stop`),
+    const stopMutation = useMutation<unknown, unknown, void>(
+        async () => user ? apiClient.stopCryptoEngine() : axios.post(`${API_BASE}/api/crypto/stop`),
         {
             onSuccess: () => {
                 toast.success('Crypto Bot stopped');
                 queryClient.invalidateQueries('cryptoBotStatus');
+                queryClient.invalidateQueries('cryptoEngineStatus');
             },
             onError: () => { toast.error('Failed to stop bot'); },
         }
     );
 
-    const pauseMutation = useMutation(
-        () => axios.post(`${API_BASE}/api/crypto/pause`),
+    const pauseMutation = useMutation<unknown, unknown, void>(
+        async () => axios.post(`${API_BASE}/api/crypto/pause`),
         {
             onSuccess: () => {
                 toast.success('Crypto Bot paused');
                 queryClient.invalidateQueries('cryptoBotStatus');
+                queryClient.invalidateQueries('cryptoEngineStatus');
             },
             onError: () => { toast.error('Failed to pause bot'); },
         }

@@ -24,6 +24,7 @@ import { SERVICE_URLS, apiClient } from '@/services/api';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import { useAuth } from '@/hooks/useAuth';
 
 interface Position {
     symbol: string;
@@ -72,6 +73,7 @@ const API_BASE = SERVICE_URLS.stockBot;
 export default function StockBotPage() {
     const queryClient = useQueryClient();
     const navigate = useNavigate();
+    const { user } = useAuth();
 
     // Per-user engine status (JWT-scoped) — shows credential prompt when needed
     const { data: engineStatus } = useQuery(
@@ -118,34 +120,37 @@ export default function StockBotPage() {
     );
 
     // Control mutations
-    const startMutation = useMutation(
-        () => axios.post(`${API_BASE}/api/trading/start`),
+    const startMutation = useMutation<unknown, unknown, void>(
+        async () => user ? apiClient.startStockEngine() : axios.post(`${API_BASE}/api/trading/start`),
         {
             onSuccess: () => {
                 toast.success('Stock Bot started!');
                 queryClient.invalidateQueries('stockBotStatus');
+                queryClient.invalidateQueries('stockEngineStatus');
             },
             onError: () => { toast.error('Failed to start bot'); },
         }
     );
 
-    const stopMutation = useMutation(
-        () => axios.post(`${API_BASE}/api/trading/stop`),
+    const stopMutation = useMutation<unknown, unknown, void>(
+        async () => user ? apiClient.stopStockEngine() : axios.post(`${API_BASE}/api/trading/stop`),
         {
             onSuccess: () => {
                 toast.success('Stock Bot stopped');
                 queryClient.invalidateQueries('stockBotStatus');
+                queryClient.invalidateQueries('stockEngineStatus');
             },
             onError: () => { toast.error('Failed to stop bot'); },
         }
     );
 
-    const pauseMutation = useMutation(
-        () => axios.post(`${API_BASE}/api/trading/pause`),
+    const pauseMutation = useMutation<unknown, unknown, void>(
+        async () => user ? apiClient.pauseStockEngine() : axios.post(`${API_BASE}/api/trading/pause`),
         {
             onSuccess: () => {
                 toast.success('Stock Bot paused');
                 queryClient.invalidateQueries('stockBotStatus');
+                queryClient.invalidateQueries('stockEngineStatus');
             },
             onError: () => { toast.error('Failed to pause bot'); },
         }

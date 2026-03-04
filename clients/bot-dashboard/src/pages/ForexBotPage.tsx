@@ -25,6 +25,7 @@ import { SERVICE_URLS, apiClient } from '@/services/api';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import { useAuth } from '@/hooks/useAuth';
 
 interface Position {
     symbol?: string;
@@ -75,6 +76,7 @@ const API_BASE = SERVICE_URLS.forexBot;
 export default function ForexBotPage() {
     const queryClient = useQueryClient();
     const navigate = useNavigate();
+    const { user } = useAuth();
 
     const { data: engineStatus } = useQuery(
         'forexEngineStatus',
@@ -92,34 +94,37 @@ export default function ForexBotPage() {
         { refetchInterval: 5000 }
     );
 
-    const startMutation = useMutation(
-        () => axios.post(`${API_BASE}/api/forex/start`),
+    const startMutation = useMutation<unknown, unknown, void>(
+        async () => user ? apiClient.startForexEngine() : axios.post(`${API_BASE}/api/forex/start`),
         {
             onSuccess: () => {
                 toast.success('Forex Bot started!');
                 queryClient.invalidateQueries('forexBotStatus');
+                queryClient.invalidateQueries('forexEngineStatus');
             },
             onError: () => { toast.error('Failed to start bot'); },
         }
     );
 
-    const stopMutation = useMutation(
-        () => axios.post(`${API_BASE}/api/forex/stop`),
+    const stopMutation = useMutation<unknown, unknown, void>(
+        async () => user ? apiClient.stopForexEngine() : axios.post(`${API_BASE}/api/forex/stop`),
         {
             onSuccess: () => {
                 toast.success('Forex Bot stopped');
                 queryClient.invalidateQueries('forexBotStatus');
+                queryClient.invalidateQueries('forexEngineStatus');
             },
             onError: () => { toast.error('Failed to stop bot'); },
         }
     );
 
-    const pauseMutation = useMutation(
-        () => axios.post(`${API_BASE}/api/forex/pause`),
+    const pauseMutation = useMutation<unknown, unknown, void>(
+        async () => axios.post(`${API_BASE}/api/forex/pause`),
         {
             onSuccess: () => {
                 toast.success('Forex Bot paused');
                 queryClient.invalidateQueries('forexBotStatus');
+                queryClient.invalidateQueries('forexEngineStatus');
             },
             onError: () => { toast.error('Failed to pause bot'); },
         }
