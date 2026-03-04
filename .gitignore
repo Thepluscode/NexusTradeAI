@@ -16,11 +16,17 @@ clients/bot-dashboard/data/
 # Next.js build cache
 clients/web-app/.next/
 
-# Stock bot runtime data
-deploy/stock-bot/data/*.json
+# Bot runtime data (all deploy dirs)
+deploy/stock-bot/data/
+deploy/forex-bot/data/
+deploy/crypto-bot/data/
 
 # Dashboard dist is always rebuilt by CI — never track in git
 deploy/dashboard/dist/
+
+# Android / mobile build artifacts
+clients/mobile-app/android/
+**/.gradle/
 
 # Credential-bearing config files — never commit these
 config/alpaca-config.json
