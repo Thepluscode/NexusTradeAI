@@ -2,7 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
-const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
@@ -31,21 +30,6 @@ async function initTradeDb() {
             )
         `);
         console.log('✅ Forex bot: Auth DB ready');
-        // Per-user credential storage (encrypted)
-        await dbPool.query(`
-            CREATE TABLE IF NOT EXISTS user_credentials (
-                id SERIAL PRIMARY KEY,
-                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                broker VARCHAR(30) NOT NULL,
-                credential_key VARCHAR(100) NOT NULL,
-                encrypted_value TEXT NOT NULL,
-                created_at TIMESTAMPTZ DEFAULT NOW(),
-                updated_at TIMESTAMPTZ DEFAULT NOW(),
-                UNIQUE(user_id, broker, credential_key)
-            );
-            CREATE INDEX IF NOT EXISTS idx_user_creds_lookup ON user_credentials(user_id, broker);
-        `);
-        console.log('✅ User credentials table ready');
     } catch (e) {
         console.warn('⚠️  Forex DB init failed:', e.message);
         dbPool = null;
@@ -122,75 +106,11 @@ function requireApiSecret(req, res, next) {
     return res.status(401).json({ success: false, error: 'Unauthorized' });
 }
 
-// Accepts EITHER a valid JWT (per-user) OR the shared API secret (backward compat)
-function requireJwtOrApiSecret(req, res, next) {
-    const auth = req.headers.authorization || '';
-    if (auth.startsWith('Bearer ')) {
-        const token = auth.slice(7);
-        const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
-        try {
-            req.user = jwt.verify(token, JWT_SECRET);
-            return next();
-        } catch { /* not a JWT — fall through */ }
-        const secret = process.env.NEXUS_API_SECRET;
-        if (secret && auth === `Bearer ${secret}`) return next();
-    }
-    return res.status(401).json({ success: false, error: 'Unauthorized' });
-}
-
-// ── Credential Encryption (AES-256-GCM) ─────────────────────────────────────
-function getEncryptionKey() {
-    const envKey = process.env.CREDENTIAL_ENCRYPTION_KEY;
-    if (envKey) return Buffer.from(envKey, 'hex');
-    const secret = process.env.JWT_SECRET || 'dev-secret-change-me';
-    return crypto.createHash('sha256').update(secret).digest();
-}
-
-function encryptCredential(plaintext) {
-    const key = getEncryptionKey();
-    const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-    let encrypted = cipher.update(plaintext, 'utf8', 'hex');
-    encrypted += cipher.final('hex');
-    const tag = cipher.getAuthTag().toString('hex');
-    return `${iv.toString('hex')}:${tag}:${encrypted}`;
-}
-
-function decryptCredential(stored) {
-    const key = getEncryptionKey();
-    const [ivHex, tagHex, ciphertext] = stored.split(':');
-    if (!ivHex || !tagHex || !ciphertext) throw new Error('Invalid encrypted format');
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivHex, 'hex'));
-    decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
-    let decrypted = decipher.update(ciphertext, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    return decrypted;
-}
-
-async function loadUserCredentials(userId, broker) {
-    if (!dbPool) return {};
-    try {
-        const result = await dbPool.query(
-            'SELECT credential_key, encrypted_value FROM user_credentials WHERE user_id=$1 AND broker=$2',
-            [userId, broker]
-        );
-        const creds = {};
-        for (const row of result.rows) {
-            try { creds[row.credential_key] = decryptCredential(row.encrypted_value); }
-            catch (e) { console.warn(`⚠️ Failed to decrypt ${row.credential_key}:`, e.message); }
-        }
-        return creds;
-    } catch (e) {
-        console.warn(`⚠️ Failed to load credentials for user ${userId}:`, e.message);
-        return {};
-    }
-}
-
-// ── Persist env var to Railway (kept for non-credential config) ─────────────
+// ── Persist env var to Railway (survives redeploys) ────────────────────────
 async function persistEnvVar(name, value) {
-    const token = process.env.RAILWAY_TOKEN;
+    const token   = process.env.RAILWAY_TOKEN;
     const project = process.env.RAILWAY_PROJECT_ID;
-    const env = process.env.RAILWAY_ENVIRONMENT_ID;
+    const env     = process.env.RAILWAY_ENVIRONMENT_ID;
     const service = process.env.RAILWAY_SERVICE_ID;
     if (!token || !project || !env || !service) return;
     const query = `mutation { variableUpsert(input: { projectId: "${project}", environmentId: "${env}", serviceId: "${service}", name: "${name}", value: "${value.replace(/"/g, '\\"')}" }) }`;
@@ -294,7 +214,7 @@ app.post('/api/auth/logout', async (req, res) => {
             try {
                 const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
                 await dbPool.query('UPDATE users SET refresh_token=NULL WHERE id=$1', [payload.sub]);
-            } catch { }
+            } catch {}
         }
     }
     res.json({ success: true });
@@ -380,7 +300,7 @@ function loadBotState() {
             const saved = JSON.parse(require('fs').readFileSync(BOT_STATE_FILE, 'utf8'));
             return { running: saved.running !== false, paused: saved.paused === true };
         }
-    } catch { }
+    } catch {}
     return { running: true, paused: false };
 }
 function saveBotState() {
@@ -388,7 +308,7 @@ function saveBotState() {
         const dir = require('path').dirname(BOT_STATE_FILE);
         if (!require('fs').existsSync(dir)) require('fs').mkdirSync(dir, { recursive: true });
         require('fs').writeFileSync(BOT_STATE_FILE, JSON.stringify({ running: botRunning, paused: botPaused }));
-    } catch { }
+    } catch {}
 }
 const _initState = loadBotState();
 let botRunning = _initState.running;
@@ -420,7 +340,7 @@ function loadForexPerf() {
             // Don't restore equity or dailyPnL — those are session-specific
             console.log(`📊 Forex perf restored: ${simTotalTrades} trades, ${simWinners}W/${simLosers}L`);
         }
-    } catch { }
+    } catch {}
 }
 
 function saveForexPerf() {
@@ -435,7 +355,7 @@ function saveForexPerf() {
             shortTrades: simShortTrades,
             lastUpdate: new Date().toISOString()
         }));
-    } catch { }
+    } catch {}
 }
 
 // Load on startup
@@ -806,8 +726,8 @@ function calculateMACDForex(candles, fastPeriod = 12, slowPeriod = 26, signalPer
         macd: macdLine[macdLine.length - 1],
         signal: signalLine,
         histogram,
-        bullish: histogram > 0 && histogram > prevHistogram,
-        bearish: histogram < 0 && histogram < prevHistogram
+        bullish:  histogram > 0 && histogram > prevHistogram,
+        bearish:  histogram < 0 && histogram < prevHistogram
     };
 }
 
@@ -863,10 +783,10 @@ async function queryStrategyBridge(pair, _direction) {
         if (!candles || candles.length < 30) return null;
         const prices = candles.map(c => ({
             timestamp: c.time || new Date().toISOString(),
-            open: parseFloat(c.mid.o) || 0,
-            high: parseFloat(c.mid.h) || 0,
-            low: parseFloat(c.mid.l) || 0,
-            close: parseFloat(c.mid.c) || 0,
+            open:   parseFloat(c.mid.o) || 0,
+            high:   parseFloat(c.mid.h) || 0,
+            low:    parseFloat(c.mid.l) || 0,
+            close:  parseFloat(c.mid.c) || 0,
             volume: parseFloat(c.volume) || 0
         }));
         const response = await axios.post(`${BRIDGE_URL}/signal`,
@@ -996,7 +916,7 @@ async function scanForSignals() {
         if (tierPositions >= config.maxPositions) continue;
 
         // [v3.2] ATR-based stops/targets — adapts to each pair's volatility
-        const atrStop = atrPct > 0 ? atrPct * 1.5 : config.stopLoss;
+        const atrStop   = atrPct > 0 ? atrPct * 1.5 : config.stopLoss;
         const atrTarget = atrPct > 0 ? atrPct * 3.0 : config.profitTarget;
 
         // LONG Signal
@@ -1030,7 +950,7 @@ async function scanForSignals() {
                 signals.push({
                     pair, direction: 'long', tier,
                     entry: currentPrice,
-                    stopLoss: currentPrice * (1 - atrStop),
+                    stopLoss:   currentPrice * (1 - atrStop),
                     takeProfit: currentPrice * (1 + atrTarget),
                     rsi, trendStrength, atrPct, h1Trend,
                     macdHistogram: macd ? macd.histogram : null,
@@ -1069,7 +989,7 @@ async function scanForSignals() {
                 signals.push({
                     pair, direction: 'short', tier,
                     entry: currentPrice,
-                    stopLoss: currentPrice * (1 + atrStop),
+                    stopLoss:   currentPrice * (1 + atrStop),
                     takeProfit: currentPrice * (1 - atrTarget),
                     rsi, trendStrength, atrPct, h1Trend,
                     macdHistogram: macd ? macd.histogram : null,
@@ -1135,7 +1055,7 @@ async function executeTrade(signal) {
         // Persist trade opening to DB (fire-and-forget)
         dbForexOpen(signal.pair, signal.direction, signal.tier, signal.entry, signal.stopLoss, signal.takeProfit, units, signal.session)
             .then(id => { const p = positions.get(signal.pair); if (p) p.dbTradeId = id; })
-            .catch(() => { });
+            .catch(() => {});
 
         // Update tracking
         totalTradesToday++;
@@ -1246,7 +1166,7 @@ async function closePositionWithReason(pair, reason) {
             const exitEntry = pos.entry ?? 0;
             const exitPct = exitEntry > 0 ? (exitPnl / (exitEntry * Math.abs(pos.units ?? 1))) * 100 : 0;
             const exitPrice = pos.currentPrice ?? exitEntry;
-            dbForexClose(pos.dbTradeId, exitPrice, exitPnl, exitPct, reason).catch(() => { });
+            dbForexClose(pos.dbTradeId, exitPrice, exitPnl, exitPct, reason).catch(() => {});
         }
 
         positions.delete(pair);
@@ -1425,9 +1345,9 @@ app.get('/api/forex/status', async (req, res) => {
         const hasCredentials = oandaConfig.accessToken && oandaConfig.accountId;
         const session = getCurrentSession();
         const sessionLabel = session.quality === 'best' ? 'OVERLAP' :
-            session.name === 'London' ? 'LONDON' :
-                session.name === 'New York' ? 'NEW_YORK' :
-                    session.name === 'Tokyo' ? 'TOKYO' : 'OFF_PEAK';
+                             session.name === 'London' ? 'LONDON' :
+                             session.name === 'New York' ? 'NEW_YORK' :
+                             session.name === 'Tokyo' ? 'TOKYO' : 'OFF_PEAK';
 
         // --- Demo/simulation mode (no OANDA credentials) ---
         if (!hasCredentials) {
@@ -1654,84 +1574,28 @@ app.get('/api/config', (req, res) => {
 });
 
 // ── Credentials management ──────────────────────────────────────────────────
-app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
+app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
     try {
         const { broker, credentials, fields } = req.body;
         const creds = credentials || fields;
         const ALLOWED_KEYS = {
-            oanda: ['OANDA_ACCOUNT_ID', 'OANDA_ACCESS_TOKEN', 'OANDA_PRACTICE'],
+            oanda:    ['OANDA_ACCOUNT_ID', 'OANDA_ACCESS_TOKEN', 'OANDA_PRACTICE'],
             telegram: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_ALERTS_ENABLED'],
-            sms: ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'ALERT_PHONE_NUMBER', 'SMS_ALERTS_ENABLED'],
+            sms:      ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'ALERT_PHONE_NUMBER', 'SMS_ALERTS_ENABLED'],
         };
         const allowed = ALLOWED_KEYS[broker];
         if (!allowed) return res.status(400).json({ success: false, error: 'Unknown broker' });
         if (!creds || typeof creds !== 'object') return res.status(400).json({ success: false, error: 'No credentials provided' });
-
-        const userId = req.user?.sub;
-
         let updated = 0;
         for (const [key, value] of Object.entries(creds)) {
             if (!allowed.includes(key)) continue;
             if (typeof value !== 'string' || value === '') continue;
-
-            // Per-user DB storage (preferred)
-            if (userId && dbPool) {
-                const encVal = encryptCredential(value);
-                await dbPool.query(`
-                    INSERT INTO user_credentials (user_id, broker, credential_key, encrypted_value, updated_at)
-                    VALUES ($1, $2, $3, $4, NOW())
-                    ON CONFLICT (user_id, broker, credential_key)
-                    DO UPDATE SET encrypted_value = $4, updated_at = NOW()
-                `, [userId, broker, key, encVal]);
-            }
-
             process.env[key] = value;
+            await persistEnvVar(key, value);
             updated++;
         }
-
-        console.log(`⚙️  Credentials updated: broker=${broker} keys=${updated} user=${userId || 'system'} storage=${userId ? 'DB' : 'env'}`);
-
-        // Refresh in-memory OANDA config immediately
-        if (broker === 'oanda' && updated > 0) {
-            oandaConfig.accountId = process.env.OANDA_ACCOUNT_ID;
-            oandaConfig.accessToken = process.env.OANDA_ACCESS_TOKEN;
-            oandaConfig.isPractice = process.env.OANDA_PRACTICE !== 'false';
-            oandaConfig.baseURL = getOandaBaseUrl();
-            console.log('✅ OANDA config refreshed');
-        }
-
-        res.json({ success: true, updated, storage: userId ? 'database' : 'environment' });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-// Check which brokers have credentials configured for the logged-in user
-app.get('/api/config/credentials/status', requireJwtOrApiSecret, async (req, res) => {
-    try {
-        const userId = req.user?.sub;
-        if (!userId || !dbPool) {
-            return res.json({
-                success: true, source: 'environment',
-                brokers: {
-                    oanda: { configured: !!(process.env.OANDA_ACCOUNT_ID && process.env.OANDA_ACCESS_TOKEN) },
-                    telegram: { configured: !!process.env.TELEGRAM_BOT_TOKEN },
-                    sms: { configured: !!process.env.TWILIO_ACCOUNT_SID },
-                }
-            });
-        }
-        const result = await dbPool.query(
-            'SELECT DISTINCT broker FROM user_credentials WHERE user_id=$1', [userId]
-        );
-        const configuredBrokers = new Set(result.rows.map(r => r.broker));
-        res.json({
-            success: true, source: 'database',
-            brokers: {
-                oanda: { configured: configuredBrokers.has('oanda') },
-                telegram: { configured: configuredBrokers.has('telegram') },
-                sms: { configured: configuredBrokers.has('sms') },
-            }
-        });
+        console.log(`⚙️  Credentials updated: broker=${broker} keys=${updated}`);
+        res.json({ success: true, updated });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
