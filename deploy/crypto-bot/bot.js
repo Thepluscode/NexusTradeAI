@@ -2031,6 +2031,33 @@ app.post('/api/crypto/engine/stop', requireJwt, async (req, res) => {
     res.json({ success: true, isRunning: false });
 });
 
+app.post('/api/crypto/engine/close-all', requireJwt, async (req, res) => {
+    const userEngine = cryptoEngineRegistry.get(String(req.user.sub));
+    if (!userEngine) return res.status(404).json({ success: false, error: 'Engine not found' });
+    const closed = [], skipped = [];
+    for (const [symbol] of userEngine.positions) {
+        try {
+            const price = await userEngine.kraken.getPrice(symbol).catch(() => 0);
+            await userEngine.closePosition(symbol, price, 'Manual Close All');
+            closed.push(symbol);
+        } catch (err) { skipped.push({ symbol, error: err.message }); }
+    }
+    res.json({ success: true, closed, skipped });
+});
+
+// Module-level close-all (no per-user engine context required)
+app.post('/api/crypto/close-all', async (req, res) => {
+    const closed = [], skipped = [];
+    for (const [symbol] of engine.positions) {
+        try {
+            const price = await engine.kraken.getPrice(symbol).catch(() => 0);
+            await engine.closePosition(symbol, price, 'Manual Close All');
+            closed.push(symbol);
+        } catch (err) { skipped.push({ symbol, error: err.message }); }
+    }
+    res.json({ success: true, closed, skipped });
+});
+
 // ============================================================================
 // START SERVER
 // ============================================================================
