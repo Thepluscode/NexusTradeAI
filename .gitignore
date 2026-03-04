@@ -19,3 +19,6 @@ clients/web-app/.next/
 
 # Stock bot runtime data
 deploy/stock-bot/data/*.json
+
+# Dashboard dist is always rebuilt by CI — never track in git
+deploy/dashboard/dist/

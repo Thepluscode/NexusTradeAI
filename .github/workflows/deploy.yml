@@ -97,7 +97,7 @@ jobs:
       - name: Assert no localhost URLs in bundle
         if: steps.src-changed.outputs.rebuild == 'true'
         run: |
-          BUNDLE=$(ls clients/bot-dashboard/dist/assets/index-*.js)
+          BUNDLE=clients/bot-dashboard/dist/assets/index.js
           if grep -qo 'localhost:[0-9][0-9]*' "$BUNDLE"; then
             echo "ERROR: localhost URLs found in bundle:"
             grep -o 'localhost:[0-9][0-9]*' "$BUNDLE" | sort -u
@@ -109,7 +109,7 @@ jobs:
       - name: Assert Railway URLs in bundle
         if: steps.src-changed.outputs.rebuild == 'true'
         run: |
-          BUNDLE=$(ls clients/bot-dashboard/dist/assets/index-*.js)
+          BUNDLE=clients/bot-dashboard/dist/assets/index.js
           for URL in \
             nexus-stock-bot-production.up.railway.app \
             nexus-forex-bot-production.up.railway.app \
@@ -124,8 +124,6 @@ jobs:
       - name: Copy dist to deploy/dashboard/
         if: steps.src-changed.outputs.rebuild == 'true'
         run: |
-          # Remove old bundle files (keep any static assets)
-          rm -f deploy/dashboard/dist/assets/index-*.js
           cp -r clients/bot-dashboard/dist/. deploy/dashboard/dist/
 
       # Sync bot source files to deploy dirs so Railway picks up any bot changes.
@@ -142,7 +140,8 @@ jobs:
       - name: Check if bundle changed
         id: check
         run: |
-          if git diff --quiet deploy/; then
+          git add -f deploy/dashboard/dist/ || true
+          if git diff --cached --quiet deploy/ && git diff --quiet deploy/; then
             echo "changed=false" >> $GITHUB_OUTPUT
             echo "Deploy unchanged — skipping commit"
           else
@@ -155,9 +154,10 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f deploy/dashboard/dist/ || true
           git add deploy/
-          # Use bundle filename if a build ran; fall back to "bot-only" label if only bots changed
-          BUNDLE=$(ls clients/bot-dashboard/dist/assets/index-*.js 2>/dev/null | xargs -r basename || echo "bot-only")
+          # Use "dashboard" label if a build ran; fall back to "bot-only" label if only bots changed
+          if [ -f clients/bot-dashboard/dist/assets/index.js ]; then BUNDLE="dashboard"; else BUNDLE="bot-only"; fi
           git commit -m "chore: sync deploy files ($BUNDLE) [skip ci]"
           git push origin main
 
@@ -225,15 +225,9 @@ jobs:
 
       - name: Verify dashboard serves correct bundle (no localhost URLs)
         run: |
-          # Pull the live HTML to find the bundle filename
-          BUNDLE_FILE=$(curl -s --max-time 10 \
-            https://nexus-dashboard-production-e6e6.up.railway.app/ \
-            | grep -o 'index-[A-Za-z0-9_-]*\.js' | head -1)
-          echo "Live bundle: $BUNDLE_FILE"
-
-          # Download and check it
+          # Download the fixed-name bundle directly (no hash — always index.js)
           curl -s --max-time 30 \
-            "https://nexus-dashboard-production-e6e6.up.railway.app/assets/$BUNDLE_FILE" \
+            "https://nexus-dashboard-production-e6e6.up.railway.app/assets/index.js" \
             -o /tmp/bundle.js
 
           if grep -qo 'localhost:[0-9][0-9]*' /tmp/bundle.js; then
