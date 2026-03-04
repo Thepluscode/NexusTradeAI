@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { Pool } = require('pg');
@@ -41,22 +42,94 @@ app.use(cors());
 app.use(express.json());
 
 // ── Auth middleware for config-write endpoints ──────────────────────────────
-// All POST /api/config/* routes require: Authorization: Bearer <NEXUS_API_SECRET>
+// Legacy: shared secret for backward compat
 function requireApiSecret(req, res, next) {
     const secret = process.env.NEXUS_API_SECRET;
-    if (!secret) return next(); // not configured — allow (startup / local dev)
+    if (!secret) return next();
     const auth = req.headers.authorization || '';
     if (auth === `Bearer ${secret}`) return next();
     return res.status(401).json({ success: false, error: 'Unauthorized' });
 }
 
-// ── Persist env var to Railway (survives redeploys) ────────────────────────
+// Accepts EITHER a valid JWT (per-user) OR the shared API secret (backward compat)
+function requireJwtOrApiSecret(req, res, next) {
+    const auth = req.headers.authorization || '';
+    // Try JWT first
+    if (auth.startsWith('Bearer ')) {
+        const token = auth.slice(7);
+        const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+        try {
+            req.user = jwt.verify(token, JWT_SECRET);
+            return next(); // JWT valid — proceed with req.user.sub as userId
+        } catch {
+            // Not a valid JWT — try API secret below
+        }
+        // Fall back to API secret check
+        const secret = process.env.NEXUS_API_SECRET;
+        if (secret && auth === `Bearer ${secret}`) return next();
+    }
+    return res.status(401).json({ success: false, error: 'Unauthorized — provide JWT or API secret' });
+}
+
+// ── Credential Encryption (AES-256-GCM) ─────────────────────────────────────
+// One env var per deployment: CREDENTIAL_ENCRYPTION_KEY (32-byte hex key)
+// If unset, falls back to a derived key from JWT_SECRET (not ideal but works)
+function getEncryptionKey() {
+    const envKey = process.env.CREDENTIAL_ENCRYPTION_KEY;
+    if (envKey) return Buffer.from(envKey, 'hex');
+    // Derive from JWT_SECRET as fallback — better than storing plaintext
+    const secret = process.env.JWT_SECRET || 'dev-secret-change-me';
+    return crypto.createHash('sha256').update(secret).digest();
+}
+
+function encryptCredential(plaintext) {
+    const key = getEncryptionKey();
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    let encrypted = cipher.update(plaintext, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    const tag = cipher.getAuthTag().toString('hex');
+    return `${iv.toString('hex')}:${tag}:${encrypted}`; // iv:tag:ciphertext
+}
+
+function decryptCredential(stored) {
+    const key = getEncryptionKey();
+    const [ivHex, tagHex, ciphertext] = stored.split(':');
+    if (!ivHex || !tagHex || !ciphertext) throw new Error('Invalid encrypted format');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivHex, 'hex'));
+    decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
+    let decrypted = decipher.update(ciphertext, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+}
+
+// ── Load user credentials from DB ───────────────────────────────────────────
+async function loadUserCredentials(userId, broker) {
+    if (!dbPool) return {};
+    try {
+        const result = await dbPool.query(
+            'SELECT credential_key, encrypted_value FROM user_credentials WHERE user_id=$1 AND broker=$2',
+            [userId, broker]
+        );
+        const creds = {};
+        for (const row of result.rows) {
+            try { creds[row.credential_key] = decryptCredential(row.encrypted_value); }
+            catch (e) { console.warn(`⚠️ Failed to decrypt ${row.credential_key} for user ${userId}:`, e.message); }
+        }
+        return creds;
+    } catch (e) {
+        console.warn(`⚠️ Failed to load credentials for user ${userId}:`, e.message);
+        return {};
+    }
+}
+
+// ── Persist env var to Railway (kept for non-credential config) ─────────────
 async function persistEnvVar(name, value) {
     const token   = process.env.RAILWAY_TOKEN;
     const project = process.env.RAILWAY_PROJECT_ID;
     const env     = process.env.RAILWAY_ENVIRONMENT_ID;
     const service = process.env.RAILWAY_SERVICE_ID;
-    if (!token || !project || !env || !service) return; // not on Railway — skip
+    if (!token || !project || !env || !service) return;
     const query = `mutation { variableUpsert(input: { projectId: "${project}", environmentId: "${env}", serviceId: "${service}", name: "${name}", value: "${value.replace(/"/g, '\\"')}" }) }`;
     try {
         await axios.post('https://backboard.railway.app/graphql/v2',
@@ -121,6 +194,21 @@ async function initDb() {
             CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time);
         `);
         console.log('✅ Trades table ready');
+        // Per-user credential storage (encrypted)
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS user_credentials (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                broker VARCHAR(30) NOT NULL,
+                credential_key VARCHAR(100) NOT NULL,
+                encrypted_value TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(user_id, broker, credential_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_user_creds_lookup ON user_credentials(user_id, broker);
+        `);
+        console.log('✅ User credentials table ready');
     } catch (e) {
         console.warn('⚠️  Auth DB init failed:', e.message);
         dbPool = null;
@@ -2050,7 +2138,7 @@ app.post('/api/config/risk-limits', requireApiSecret, (req, res) => {
     }
 });
 
-app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
+app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
     try {
         const { broker, credentials, fields } = req.body;
         const creds = credentials || fields;
@@ -2066,18 +2154,30 @@ app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
         if (!allowed) return res.status(400).json({ success: false, error: 'Unknown broker' });
         if (!creds || typeof creds !== 'object') return res.status(400).json({ success: false, error: 'No credentials provided' });
 
+        const userId = req.user?.sub; // from JWT — null if using API secret
+
         let updated = 0;
         for (const [key, value] of Object.entries(creds)) {
             if (!allowed.includes(key)) continue;
             if (typeof value !== 'string' || value === '') continue;
-            // Apply immediately in-memory
+
+            // Per-user DB storage (preferred)
+            if (userId && dbPool) {
+                const encVal = encryptCredential(value);
+                await dbPool.query(`
+                    INSERT INTO user_credentials (user_id, broker, credential_key, encrypted_value, updated_at)
+                    VALUES ($1, $2, $3, $4, NOW())
+                    ON CONFLICT (user_id, broker, credential_key)
+                    DO UPDATE SET encrypted_value = $4, updated_at = NOW()
+                `, [userId, broker, key, encVal]);
+            }
+
+            // Also apply in-memory so the current bot session picks it up immediately
             process.env[key] = value;
-            // Persist to Railway env vars so they survive redeploys
-            await persistEnvVar(key, value);
             updated++;
         }
 
-        console.log(`⚙️  Credentials updated: broker=${broker} keys=${updated}`);
+        console.log(`⚙️  Credentials updated: broker=${broker} keys=${updated} user=${userId || 'system'} storage=${userId ? 'DB' : 'env'}`);
 
         // Refresh in-memory broker config
         if (broker === 'alpaca') {
@@ -2086,10 +2186,47 @@ app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
             if (creds.ALPACA_BASE_URL)   alpacaConfig.baseURL   = creds.ALPACA_BASE_URL;
         }
 
-        res.json({ success: true, updated });
+        res.json({ success: true, updated, storage: userId ? 'database' : 'environment' });
     } catch (err) {
         console.error('Credentials update error:', err.message);
         res.status(500).json({ success: false, error: 'Failed to save credentials' });
+    }
+});
+
+// Check which brokers have credentials configured for the logged-in user
+// Never returns actual keys — only { configured: true/false } per broker
+app.get('/api/config/credentials/status', requireJwtOrApiSecret, async (req, res) => {
+    try {
+        const userId = req.user?.sub;
+        if (!userId || !dbPool) {
+            // Fall back: check env vars
+            return res.json({
+                success: true, source: 'environment',
+                brokers: {
+                    alpaca: { configured: !!(process.env.ALPACA_API_KEY && process.env.ALPACA_SECRET_KEY) },
+                    oanda: { configured: !!(process.env.OANDA_ACCOUNT_ID && process.env.OANDA_ACCESS_TOKEN) },
+                    crypto: { configured: !!(process.env.CRYPTO_API_KEY && process.env.CRYPTO_API_SECRET) },
+                    telegram: { configured: !!process.env.TELEGRAM_BOT_TOKEN },
+                    sms: { configured: !!process.env.TWILIO_ACCOUNT_SID },
+                }
+            });
+        }
+        const result = await dbPool.query(
+            'SELECT DISTINCT broker FROM user_credentials WHERE user_id=$1', [userId]
+        );
+        const configuredBrokers = new Set(result.rows.map(r => r.broker));
+        res.json({
+            success: true, source: 'database',
+            brokers: {
+                alpaca: { configured: configuredBrokers.has('alpaca') },
+                oanda: { configured: configuredBrokers.has('oanda') },
+                crypto: { configured: configuredBrokers.has('crypto') },
+                telegram: { configured: configuredBrokers.has('telegram') },
+                sms: { configured: configuredBrokers.has('sms') },
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 

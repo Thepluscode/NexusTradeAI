@@ -56,9 +56,19 @@ import toast from 'react-hot-toast';
 const API_BASE = SERVICE_URLS.stockBot;
 
 // Auth header for protected config-write endpoints.
-// VITE_NEXUS_API_SECRET is injected at build time from the GitHub secret.
+// VITE_NEXUS_API_SECRET is kept for backward-compat with non-credential endpoints (risk, mode).
 const API_SECRET = import.meta.env.VITE_NEXUS_API_SECRET || '';
 const authHeaders = API_SECRET ? { Authorization: `Bearer ${API_SECRET}` } : {};
+
+// JWT auth headers for per-user endpoints (credentials)
+// Uses the logged-in user's JWT token so credentials are stored per-user in the DB
+function getJwtHeaders(): Record<string, string> {
+    const token = localStorage.getItem('nexus_access_token');
+    if (token) return { Authorization: `Bearer ${token}` };
+    // Fall back to API secret if user is not logged in (shouldn't happen, but safe)
+    if (API_SECRET) return { Authorization: `Bearer ${API_SECRET}` };
+    return {};
+}
 
 // ─── API ────────────────────────────────────────────────────────────────────
 
@@ -91,13 +101,15 @@ async function updateRisk(payload: { tier: string; stopLoss?: number; profitTarg
 }
 
 async function saveCredentials(payload: { broker: string; credentials: Record<string, string> }) {
-    if (!API_SECRET) throw new Error('Dashboard was built without VITE_NEXUS_API_SECRET — redeploy required before credentials can be saved');
+    // Use JWT auth so credentials are stored per-user in the database
+    const headers = getJwtHeaders();
+    if (!headers.Authorization) throw new Error('Please log in before saving broker credentials');
     // Route to the correct bot based on broker type
     const botUrl =
         (payload.broker === 'oanda') ? SERVICE_URLS.forexBot :
             (payload.broker === 'crypto') ? SERVICE_URLS.cryptoBot :
                 API_BASE;
-    const res = await axios.post(`${botUrl}/api/config/credentials`, payload, { headers: authHeaders });
+    const res = await axios.post(`${botUrl}/api/config/credentials`, payload, { headers });
     return res.data;
 }
 
