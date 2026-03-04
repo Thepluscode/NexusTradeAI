@@ -1753,7 +1753,8 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
                 const existingEngine = forexEngineRegistry.get(String(userId));
                 if (existingEngine) {
                     existingEngine.updateCredentials(creds.OANDA_ACCOUNT_ID, creds.OANDA_ACCESS_TOKEN,
-                        creds.OANDA_PRACTICE !== undefined ? creds.OANDA_PRACTICE !== 'false' : undefined);
+                        creds.OANDA_PRACTICE !== undefined ? creds.OANDA_PRACTICE !== 'false' : undefined,
+                        { TELEGRAM_BOT_TOKEN: creds.TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID: creds.TELEGRAM_CHAT_ID });
                 } else {
                     getOrCreateForexEngine(userId).catch(() => {});
                 }
@@ -1871,13 +1872,36 @@ class UserForexEngine {
         console.log(`🔧 [ForexEngine] Created engine for user ${userId}`);
     }
 
-    updateCredentials(oandaAccountId, oandaAccessToken, isPractice) {
+    updateCredentials(oandaAccountId, oandaAccessToken, isPractice, extraCreds) {
         if (oandaAccountId)    this.oandaConfig.accountId  = oandaAccountId;
         if (oandaAccessToken)  this.oandaConfig.accessToken = oandaAccessToken;
         if (isPractice !== undefined) {
             this.oandaConfig.isPractice = isPractice !== false;
             this.oandaConfig.baseURL = this.oandaConfig.isPractice
                 ? 'https://api-fxpractice.oanda.com' : 'https://api-fxtrade.oanda.com';
+        }
+        const tgToken  = extraCreds?.TELEGRAM_BOT_TOKEN  || process.env.TELEGRAM_BOT_TOKEN;
+        const tgChatId = extraCreds?.TELEGRAM_CHAT_ID    || process.env.TELEGRAM_CHAT_ID;
+        if (tgToken && tgChatId) {
+            try {
+                const TelegramBot = require('node-telegram-bot-api');
+                const bot = new TelegramBot(tgToken, { polling: false });
+                this._telegram = {
+                    sendForexEntry:     (pair, dir, entry, sl, tp, units, tier) =>
+                        bot.sendMessage(tgChatId, `✅ *FOREX ENTRY* [${tier}]\n🌍 ${pair} ${dir.toUpperCase()} x${units}\n💰 Entry: ${entry.toFixed(5)}\n🛑 SL: ${sl?.toFixed(5) || '—'}  🎯 TP: ${tp?.toFixed(5) || '—'}`, { parse_mode: 'Markdown' }).catch(() => {}),
+                    sendForexStopLoss:  (pair, entry, reason) =>
+                        bot.sendMessage(tgChatId, `🚨 *FOREX STOP LOSS*\n🌍 ${pair}\n💰 Entry: ${entry}\n📌 Reason: ${reason}`, { parse_mode: 'Markdown' }).catch(() => {}),
+                    sendForexTakeProfit:(pair, entry, reason) =>
+                        bot.sendMessage(tgChatId, `🎯 *FOREX TAKE PROFIT*\n🌍 ${pair}\n💰 Entry: ${entry}\n📌 Reason: ${reason}`, { parse_mode: 'Markdown' }).catch(() => {}),
+                    send:               (msg) => bot.sendMessage(tgChatId, msg, { parse_mode: 'Markdown' }).catch(() => {}),
+                };
+                console.log(`📱 [ForexEngine ${this.userId}] Per-user Telegram alerts configured`);
+            } catch (e) {
+                this._telegram = null;
+                console.warn(`⚠️  [ForexEngine ${this.userId}] Telegram init failed:`, e.message);
+            }
+        } else {
+            this._telegram = null;
         }
     }
 
@@ -2071,7 +2095,7 @@ class UserForexEngine {
             trades.push({ time: Date.now(), side: signal.direction });
             this.recentTrades.set(signal.pair, trades);
             await this.saveState();
-            telegramAlerts.sendForexEntry(signal.pair, signal.direction, signal.entry, signal.stopLoss, signal.takeProfit, units, signal.tier).catch(() => {});
+            (this._telegram || telegramAlerts).sendForexEntry(signal.pair, signal.direction, signal.entry, signal.stopLoss, signal.takeProfit, units, signal.tier).catch(() => {});
             console.log(`✅ [ForexEngine ${this.userId}] Trade: ${signal.direction.toUpperCase()} ${signal.pair} x${Math.abs(units)}`);
             return true;
         }
@@ -2126,6 +2150,8 @@ async function getOrCreateForexEngine(userId) {
         if (!accountId || !accessToken) return null;
         const engine = new UserForexEngine(userId, accountId, accessToken, isPractice);
         await engine.loadState();
+        const tgCreds = await loadUserCredentials(userId, 'telegram').catch(() => ({}));
+        engine.updateCredentials(null, null, undefined, { TELEGRAM_BOT_TOKEN: tgCreds.TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID: tgCreds.TELEGRAM_CHAT_ID });
         forexEngineRegistry.set(key, engine);
         console.log(`🔧 [ForexRegistry] Engine registered for user ${userId} (${forexEngineRegistry.size} total)`);
         return engine;

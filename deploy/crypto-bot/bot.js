@@ -864,7 +864,7 @@ class CryptoTradingEngine {
             this.saveState();
 
             // Send Telegram alert — fire-and-forget so a failure never blocks trade return
-            telegramAlerts.sendCryptoEntry(
+            (this._userTelegram || telegramAlerts).sendCryptoEntry(
                 signal.symbol,
                 signal.price,
                 signal.stopLoss,
@@ -897,7 +897,7 @@ class CryptoTradingEngine {
             if (holdDays >= this.config.stalePositionDays) {
                 console.log(`⏰ ${symbol}: STALE EXIT after ${holdDays.toFixed(1)} days`);
                 await this.closePosition(symbol, currentPrice, 'Stale Position Timeout');
-                telegramAlerts.send(
+                (this._userTelegram || telegramAlerts).send(
                     `⏰ *CRYPTO STALE EXIT* — ${symbol}\n` +
                     `Held ${holdDays.toFixed(1)} days (limit: ${this.config.stalePositionDays}d)\n` +
                     `Entry: $${position.entry.toFixed(2)} → Exit: $${currentPrice.toFixed(2)}\n` +
@@ -908,7 +908,7 @@ class CryptoTradingEngine {
             if (holdDays >= this.config.maxHoldDays && pnlPercent < 0) {
                 console.log(`⏰ ${symbol}: MAX HOLD EXIT after ${holdDays.toFixed(1)} days (loss: ${pnlPercent.toFixed(2)}%)`);
                 await this.closePosition(symbol, currentPrice, 'Max Hold Days - Loss Exit');
-                telegramAlerts.send(
+                (this._userTelegram || telegramAlerts).send(
                     `⏰ *CRYPTO MAX HOLD EXIT (loss)* — ${symbol}\n` +
                     `Held ${holdDays.toFixed(1)} days (limit: ${this.config.maxHoldDays}d)\n` +
                     `Entry: $${position.entry.toFixed(2)} → Exit: $${currentPrice.toFixed(2)}\n` +
@@ -919,7 +919,7 @@ class CryptoTradingEngine {
             if (holdDays >= this.config.maxHoldDays && pnlPercent < 2) {
                 console.log(`⏰ ${symbol}: MAX HOLD EXIT after ${holdDays.toFixed(1)} days (flat/marginal winner: ${pnlPercent.toFixed(2)}%)`);
                 await this.closePosition(symbol, currentPrice, 'Max Hold Days - Flat Exit');
-                telegramAlerts.send(
+                (this._userTelegram || telegramAlerts).send(
                     `⏰ *CRYPTO MAX HOLD EXIT (flat)* — ${symbol}\n` +
                     `Held ${holdDays.toFixed(1)} days, marginal gain ${pnlPercent.toFixed(2)}%\n` +
                     `Entry: $${position.entry.toFixed(2)} → Exit: $${currentPrice.toFixed(2)}`
@@ -933,7 +933,7 @@ class CryptoTradingEngine {
                 await this.closePosition(symbol, currentPrice, 'Stop Loss');
 
                 // Send alert — fire-and-forget so a network failure never blocks the loop
-                telegramAlerts.sendCryptoStopLoss(symbol, position.entry, currentPrice, pnlPercent, position.stopLoss)
+                (this._userTelegram || telegramAlerts).sendCryptoStopLoss(symbol, position.entry, currentPrice, pnlPercent, position.stopLoss)
                     .catch(e => console.warn(`⚠️  Telegram stop-loss alert failed: ${e.message}`));
                 continue;
             }
@@ -944,7 +944,7 @@ class CryptoTradingEngine {
                 await this.closePosition(symbol, currentPrice, 'Take Profit');
 
                 // Send alert — fire-and-forget
-                telegramAlerts.sendCryptoTakeProfit(symbol, position.entry, currentPrice, pnlPercent, position.takeProfit)
+                (this._userTelegram || telegramAlerts).sendCryptoTakeProfit(symbol, position.entry, currentPrice, pnlPercent, position.takeProfit)
                     .catch(e => console.warn(`⚠️  Telegram take-profit alert failed: ${e.message}`));
                 continue;
             }
@@ -1889,6 +1889,29 @@ async function getOrCreateCryptoEngine(userId) {
                 if (s.totalProfit !== undefined) userEngine.totalProfit = s.totalProfit;
             }
         } catch (e) { /* non-critical */ }
+        // Per-user Telegram alerts
+        const tgCreds = await loadUserCredentials(userId, 'telegram').catch(() => ({}));
+        const tgToken  = tgCreds.TELEGRAM_BOT_TOKEN  || process.env.TELEGRAM_BOT_TOKEN;
+        const tgChatId = tgCreds.TELEGRAM_CHAT_ID    || process.env.TELEGRAM_CHAT_ID;
+        if (tgToken && tgChatId) {
+            try {
+                const TelegramBot = require('node-telegram-bot-api');
+                const tgBot = new TelegramBot(tgToken, { polling: false });
+                userEngine._userTelegram = {
+                    sendCryptoEntry:     (sym, entry, sl, tp, qty, tier) =>
+                        tgBot.sendMessage(tgChatId, `✅ *CRYPTO ENTRY* [${tier}]\n₿ ${sym} x${qty}\n💰 Entry: $${entry.toFixed(2)}\n🛑 SL: $${sl?.toFixed(2) || '—'}  🎯 TP: $${tp?.toFixed(2) || '—'}`, { parse_mode: 'Markdown' }).catch(() => {}),
+                    sendCryptoStopLoss:  (sym, ep, cp, pnl, sl) =>
+                        tgBot.sendMessage(tgChatId, `🚨 *CRYPTO STOP LOSS*\n₿ ${sym}\n💰 Entry $${ep.toFixed(2)} → $${cp.toFixed(2)}\n💸 P&L: ${pnl.toFixed(2)}%`, { parse_mode: 'Markdown' }).catch(() => {}),
+                    sendCryptoTakeProfit:(sym, ep, cp, pnl, tp) =>
+                        tgBot.sendMessage(tgChatId, `🎯 *CRYPTO TAKE PROFIT*\n₿ ${sym}\n💰 Entry $${ep.toFixed(2)} → $${cp.toFixed(2)}\n💵 P&L: +${pnl.toFixed(2)}%`, { parse_mode: 'Markdown' }).catch(() => {}),
+                    send:               (msg) => tgBot.sendMessage(tgChatId, msg, { parse_mode: 'Markdown' }).catch(() => {}),
+                };
+                console.log(`📱 [CryptoEngine ${userId}] Per-user Telegram alerts configured`);
+            } catch (e) {
+                userEngine._userTelegram = null;
+                console.warn(`⚠️  [CryptoEngine ${userId}] Telegram init failed:`, e.message);
+            }
+        }
         cryptoEngineRegistry.set(key, userEngine);
         console.log(`🔧 [CryptoRegistry] Engine registered for user ${userId} (${cryptoEngineRegistry.size} total)`);
         return userEngine;
