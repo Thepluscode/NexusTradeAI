@@ -290,7 +290,7 @@ function BrokerForm({
                         Save Credentials
                     </Button>
                     <Typography variant="caption" color="text.secondary" sx={{ ml: 1.5 }}>
-                        Keys saved to <code style={{ background: '#ffffff12', padding: '1px 5px', borderRadius: 3 }}>.env</code> — never transmitted externally
+                        Keys stored encrypted in your account — never exposed in API responses
                     </Typography>
                 </Box>
             </Box>
@@ -1268,7 +1268,7 @@ export default function SettingsPage() {
                     <Box>
                         <SectionTitle
                             label="Brokers"
-                            sub="Enter API credentials for each trading venue. Keys are stored in your local .env file and never transmitted to third parties."
+                            sub="Enter API credentials for each trading venue. Keys are encrypted and stored securely per-user in the database."
                         />
                         <Stack spacing={2.5}>
 
