@@ -101,6 +101,14 @@ async function initTradeDb() {
             CREATE INDEX IF NOT EXISTS idx_user_creds_lookup ON user_credentials(user_id, broker);
         `);
         console.log('✅ Crypto bot: User credentials table ready');
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                token VARCHAR(64) NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL
+            )
+        `);
+        console.log('✅ Crypto bot: Password reset tokens table ready');
     } catch (e) {
         console.warn('⚠️  Crypto DB init failed:', e.message);
         dbPool = null;
@@ -1473,6 +1481,52 @@ app.post('/api/auth/login', authRateLimit, async (req, res) => {
     }
 });
 
+app.post('/api/auth/forgot-password', authRateLimit, async (req, res) => {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ success: false, error: 'Email required' });
+    if (!dbPool) return res.json({ success: true }); // silent for security
+    try {
+        const result = await dbPool.query('SELECT id FROM users WHERE email=$1', [email.toLowerCase().trim()]);
+        if (result.rows.length === 0) return res.json({ success: true }); // don't reveal existence
+        const userId = result.rows[0].id;
+        const token = crypto.randomBytes(32).toString('hex');
+        const expires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+        await dbPool.query(
+            `INSERT INTO password_reset_tokens (user_id, token, expires_at)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (user_id) DO UPDATE SET token=$2, expires_at=$3`,
+            [userId, token, expires]
+        );
+        // Log token for now (email delivery is future work)
+        console.log(`🔑 Password reset token for ${email}: ${token}`);
+        res.json({ success: true });
+    } catch (e) {
+        res.json({ success: true }); // never reveal errors
+    }
+});
+
+app.post('/api/auth/reset-password', authRateLimit, async (req, res) => {
+    const { token, password } = req.body;
+    if (!token || !password) return res.status(400).json({ success: false, error: 'Token and password required' });
+    if (password.length < 8) return res.status(400).json({ success: false, error: 'Password must be at least 8 characters' });
+    if (!dbPool) return res.status(503).json({ success: false, error: 'Database unavailable' });
+    try {
+        const result = await dbPool.query(
+            `SELECT user_id FROM password_reset_tokens
+             WHERE token=$1 AND expires_at > NOW()`,
+            [token]
+        );
+        if (result.rows.length === 0) return res.status(400).json({ success: false, error: 'Invalid or expired token' });
+        const userId = result.rows[0].user_id;
+        const hash = await bcrypt.hash(password, 12);
+        await dbPool.query('UPDATE users SET password_hash=$1 WHERE id=$2', [hash, userId]);
+        await dbPool.query('DELETE FROM password_reset_tokens WHERE user_id=$1', [userId]);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ success: false, error: 'Reset failed' });
+    }
+});
+
 app.post('/api/auth/refresh', async (req, res) => {
     if (!dbPool) return res.status(503).json({ success: false, error: 'Auth service unavailable' });
     const { refreshToken } = req.body || {};
@@ -2039,6 +2093,36 @@ app.listen(PORT, async () => {
     } else {
         console.log('⏸️  Bot was stopped before restart - not auto-starting. POST /api/trading/start to begin.');
     }
+
+    // ── Auto-restart engines for users who had isRunning=true at last save ──
+    async function autoRestartCryptoEngines() {
+        if (!dbPool) return;
+        try {
+            const result = await dbPool.query(
+                `SELECT es.user_id, es.state_json AS state, u.email
+                 FROM engine_state es
+                 JOIN users u ON u.id = es.user_id
+                 WHERE es.bot = 'crypto' AND (es.state_json->>'isRunning')::boolean = true`
+            );
+            if (result.rows.length === 0) return;
+            console.log(`🔄 Auto-restarting crypto engines for ${result.rows.length} user(s)...`);
+            for (const row of result.rows) {
+                try {
+                    const eng = await getOrCreateCryptoEngine(row.user_id);
+                    if (eng && !eng.isRunning) {
+                        await eng.start();
+                        console.log(`✅ Auto-restarted crypto engine for user ${row.email}`);
+                    }
+                } catch (e) {
+                    console.warn(`⚠️ Failed to auto-restart crypto engine for user ${row.user_id}:`, e.message);
+                }
+            }
+        } catch (e) {
+            console.warn('⚠️ autoRestartCryptoEngines failed:', e.message);
+        }
+    }
+
+    setTimeout(() => autoRestartCryptoEngines().catch(e => console.warn('Auto-restart error:', e.message)), 5000);
 
     // Register engines for all existing users with Kraken credentials (staggered)
     setTimeout(async () => {
