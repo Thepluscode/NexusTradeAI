@@ -585,7 +585,7 @@ const MOMENTUM_CONFIG = {
     tier2: {
         threshold: 5.0,
         minVolume: 500000,
-        volumeRatio: 1.5,
+        volumeRatio: 1.3,  // relaxed from 1.5 — was blocking too many signals
         rsiMax: 70,  // v3.3: relaxed from 65
         rsiMin: 35,  // v3.3: relaxed from 40
         positionSize: 0.0075,
@@ -596,7 +596,7 @@ const MOMENTUM_CONFIG = {
     tier3: {
         threshold: 10.0,
         minVolume: 750000,
-        volumeRatio: 2.0,
+        volumeRatio: 1.5,  // relaxed from 2.0 — was blocking legitimate high-momentum moves
         rsiMax: 72,  // v3.3: relaxed from 65
         rsiMin: 35,  // v3.3: relaxed from 40
         positionSize: 0.01,
@@ -808,7 +808,7 @@ function calculateMACD(bars, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9)
         signal: signalLine,
         histogram,
         // Require histogram strictly positive AND rising — both conditions must be true
-        bullish: histogram > 0 && histogram > prevHistogram
+        bullish: histogram > 0  // positive histogram = bullish momentum; rising check removed (too restrictive)
     };
 }
 
