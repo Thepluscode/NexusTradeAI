@@ -90,3 +90,13 @@ services/websocket/
 !services/trading/data/**
 !services/strategy-engine/
 !services/strategy-engine/**
+
+# Legacy ML/AI research code — not deployed
+ai-ml/
+legacy/
+
+# Top-level infrastructure — not deployed (deploy bots carry their own copies in deploy/*/infrastructure/)
+infrastructure/
+
+# Mobile app — not active, kept locally for reference only
+clients/mobile-app/

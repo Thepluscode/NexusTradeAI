@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Box,
   Card,
@@ -8,41 +8,51 @@ import {
   Button,
   Typography,
   Alert,
-  Divider,
   CircularProgress,
   alpha,
 } from '@mui/material';
-import { Bolt, Email, Lock, Person } from '@mui/icons-material';
+import { Bolt, Lock } from '@mui/icons-material';
 import axios from 'axios';
+import toast from 'react-hot-toast';
 import { SERVICE_URLS } from '@/services/api';
 
 const AUTH_URL = SERVICE_URLS.stockBot;
 
-export default function LoginPage() {
+export default function ResetPasswordPage() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<'login' | 'register'>('register');
-  const [email, setEmail] = useState('');
+  const [searchParams] = useSearchParams();
+  const token = searchParams.get('token') ?? '';
+
   const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
-  const [error, setError] = useState('');
+  const [confirm, setConfirm] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
+
+    if (!token) {
+      setError('Missing reset token. Use the link from your email.');
+      return;
+    }
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters.');
+      return;
+    }
+    if (password !== confirm) {
+      setError('Passwords do not match.');
+      return;
+    }
+
     setLoading(true);
     try {
-      const payload = mode === 'register'
-        ? { email, password, name: name || undefined }
-        : { email, password };
-      const endpoint = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
-      const { data } = await axios.post(`${AUTH_URL}${endpoint}`, payload);
-      localStorage.setItem('nexus_access_token', data.accessToken);
-      localStorage.setItem('nexus_refresh_token', data.refreshToken);
-      navigate('/');
+      await axios.post(`${AUTH_URL}/api/auth/reset-password`, { token, password });
+      toast.success('Password updated — please log in');
+      navigate('/login');
     } catch (err: unknown) {
       const errData = (err as { response?: { data?: { error?: string } } })?.response?.data;
-      setError(errData?.error || 'Something went wrong. Try again.');
+      setError(errData?.error || 'Reset failed. The link may have expired — request a new one.');
     } finally {
       setLoading(false);
     }
@@ -58,7 +68,6 @@ export default function LoginPage() {
         px: 2,
         position: 'relative',
         overflow: 'hidden',
-        // Animated mesh background
         '&::before': {
           content: '""',
           position: 'absolute',
@@ -71,7 +80,6 @@ export default function LoginPage() {
           backgroundSize: '200% 200%',
           pointerEvents: 'none',
         },
-        // Grid dot pattern
         '&::after': {
           content: '""',
           position: 'absolute',
@@ -140,9 +148,24 @@ export default function LoginPage() {
               NexusTradeAI
             </Typography>
             <Typography variant="body2" sx={{ color: 'text.secondary', mt: 0.5, textAlign: 'center' }}>
-              {mode === 'login' ? 'Welcome back — sign in to your account' : 'Get started — create a new account'}
+              Set a new password
             </Typography>
           </Box>
+
+          {!token && (
+            <Alert
+              severity="error"
+              sx={{
+                mb: 2.5,
+                borderRadius: '12px',
+                bgcolor: alpha('#ef4444', 0.08),
+                border: `1px solid ${alpha('#ef4444', 0.2)}`,
+                '& .MuiAlert-icon': { color: '#ef4444' },
+              }}
+            >
+              No reset token found. Use the link from your email or request a new one.
+            </Alert>
+          )}
 
           {error && (
             <Alert
@@ -160,37 +183,8 @@ export default function LoginPage() {
           )}
 
           <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {mode === 'register' && (
-              <TextField
-                label="Name"
-                placeholder="John Doe"
-                value={name}
-                onChange={e => setName(e.target.value)}
-                fullWidth
-                size="small"
-                autoComplete="name"
-                InputProps={{
-                  startAdornment: <Person sx={{ color: 'text.secondary', mr: 1, fontSize: 18 }} />,
-                }}
-              />
-            )}
             <TextField
-              label="Email"
-              type="email"
-              placeholder="you@example.com"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              required
-              fullWidth
-              size="small"
-              autoComplete="email"
-              autoFocus={mode === 'login'}
-              InputProps={{
-                startAdornment: <Email sx={{ color: 'text.secondary', mr: 1, fontSize: 18 }} />,
-              }}
-            />
-            <TextField
-              label="Password"
+              label="New Password"
               type="password"
               placeholder="••••••••"
               value={password}
@@ -198,8 +192,23 @@ export default function LoginPage() {
               required
               fullWidth
               size="small"
-              autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-              helperText={mode === 'register' ? 'At least 8 characters' : undefined}
+              autoComplete="new-password"
+              autoFocus
+              helperText="At least 8 characters"
+              InputProps={{
+                startAdornment: <Lock sx={{ color: 'text.secondary', mr: 1, fontSize: 18 }} />,
+              }}
+            />
+            <TextField
+              label="Confirm Password"
+              type="password"
+              placeholder="••••••••"
+              value={confirm}
+              onChange={e => setConfirm(e.target.value)}
+              required
+              fullWidth
+              size="small"
+              autoComplete="new-password"
               InputProps={{
                 startAdornment: <Lock sx={{ color: 'text.secondary', mr: 1, fontSize: 18 }} />,
               }}
@@ -208,7 +217,7 @@ export default function LoginPage() {
               type="submit"
               variant="contained"
               fullWidth
-              disabled={loading}
+              disabled={loading || !token}
               sx={{
                 mt: 1,
                 py: 1.4,
@@ -228,57 +237,29 @@ export default function LoginPage() {
             >
               {loading ? (
                 <CircularProgress size={22} sx={{ color: 'rgba(255,255,255,0.7)' }} />
-              ) : mode === 'login' ? 'Sign In' : 'Create Account'}
+              ) : 'Update Password'}
             </Button>
           </Box>
 
-          <Divider sx={{ my: 3 }} />
-
-          <Box sx={{ textAlign: 'center' }}>
-            <Typography variant="body2" color="text.secondary">
-              {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
-              <Button
-                variant="text"
-                size="small"
-                onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); }}
-                sx={{
-                  p: 0,
-                  minWidth: 0,
-                  fontWeight: 700,
-                  textTransform: 'none',
-                  verticalAlign: 'baseline',
-                  color: '#3b82f6',
-                  '&:hover': {
-                    color: '#60a5fa',
-                    background: 'transparent',
-                  },
-                }}
-              >
-                {mode === 'login' ? 'Register' : 'Sign In'}
-              </Button>
-            </Typography>
-            {mode === 'login' && (
-              <Button
-                variant="text"
-                size="small"
-                onClick={() => navigate('/forgot-password')}
-                sx={{
-                  mt: 1,
-                  p: 0,
-                  minWidth: 0,
-                  fontWeight: 500,
-                  textTransform: 'none',
-                  color: 'text.secondary',
-                  fontSize: '0.8rem',
-                  '&:hover': {
-                    color: '#3b82f6',
-                    background: 'transparent',
-                  },
-                }}
-              >
-                Forgot password?
-              </Button>
-            )}
+          <Box sx={{ mt: 3, textAlign: 'center' }}>
+            <Button
+              variant="text"
+              size="small"
+              onClick={() => navigate('/forgot-password')}
+              sx={{
+                p: 0,
+                minWidth: 0,
+                fontWeight: 700,
+                textTransform: 'none',
+                color: '#3b82f6',
+                '&:hover': {
+                  color: '#60a5fa',
+                  background: 'transparent',
+                },
+              }}
+            >
+              Request a new reset link
+            </Button>
           </Box>
         </CardContent>
       </Card>

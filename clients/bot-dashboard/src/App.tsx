@@ -46,6 +46,8 @@ import BacktestPage from './pages/BacktestPage';
 import TradesPage from './pages/TradesPage';
 import SettingsPage from './pages/SettingsPage';
 import LoginPage from './pages/LoginPage';
+import ForgotPasswordPage from './pages/ForgotPasswordPage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
 import AdminPage from './pages/AdminPage';
 import ProtectedRoute from './components/ProtectedRoute';
 import { useAuth } from './hooks/useAuth';
@@ -514,6 +516,8 @@ function Navigation() {
         >
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
             <Route path="/" element={<ProtectedRoute><OverviewPage /></ProtectedRoute>} />
             <Route path="/stock" element={<ProtectedRoute><StockBotPage /></ProtectedRoute>} />
             <Route path="/forex" element={<ProtectedRoute><ForexBotPage /></ProtectedRoute>} />
