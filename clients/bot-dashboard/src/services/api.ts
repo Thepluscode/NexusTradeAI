@@ -425,6 +425,24 @@ class APIClient {
     }
   }
 
+  async pauseForexEngine(): Promise<Record<string, unknown>> {
+    try {
+      const response = await this.forexService.post('/api/forex/pause');
+      return response.data;
+    } catch {
+      return { success: false };
+    }
+  }
+
+  async closeAllForexPositions(): Promise<Record<string, unknown>> {
+    try {
+      const response = await this.forexService.post('/api/forex/engine/close-all');
+      return response.data;
+    } catch {
+      return { success: false };
+    }
+  }
+
   async getCryptoEngineStatus(): Promise<Record<string, unknown>> {
     try {
       const response = await this.cryptoService.get('/api/crypto/engine/status');
@@ -446,6 +464,24 @@ class APIClient {
   async stopCryptoEngine(): Promise<Record<string, unknown>> {
     try {
       const response = await this.cryptoService.post('/api/crypto/engine/stop');
+      return response.data;
+    } catch {
+      return { success: false };
+    }
+  }
+
+  async pauseCryptoEngine(): Promise<Record<string, unknown>> {
+    try {
+      const response = await this.cryptoService.post('/api/crypto/pause');
+      return response.data;
+    } catch {
+      return { success: false };
+    }
+  }
+
+  async closeAllCryptoPositions(): Promise<Record<string, unknown>> {
+    try {
+      const response = await this.cryptoService.post('/api/crypto/engine/close-all');
       return response.data;
     } catch {
       return { success: false };

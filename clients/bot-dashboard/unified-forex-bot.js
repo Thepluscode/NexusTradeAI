@@ -2277,6 +2277,31 @@ app.post('/api/forex/engine/stop', requireJwt, async (req, res) => {
     res.json({ success: true, isRunning: false });
 });
 
+app.post('/api/forex/engine/close-all', requireJwt, async (req, res) => {
+    const engine = forexEngineRegistry.get(String(req.user.sub));
+    if (!engine) return res.status(404).json({ success: false, error: 'Engine not found' });
+    const closed = [], skipped = [];
+    for (const [pair] of engine.positions) {
+        try {
+            await engine.closePositionWithReason(pair, 'Manual Close All');
+            closed.push(pair);
+        } catch (err) { skipped.push({ pair, error: err.message }); }
+    }
+    res.json({ success: true, closed, skipped });
+});
+
+// Module-level close-all (no per-user engine context required)
+app.post('/api/forex/close-all', async (req, res) => {
+    const closed = [], skipped = [];
+    for (const [pair] of positions) {
+        try {
+            await closePositionWithReason(pair, 'Manual Close All');
+            closed.push(pair);
+        } catch (err) { skipped.push({ pair, error: err.message }); }
+    }
+    res.json({ success: true, closed, skipped });
+});
+
 // ===== START =====
 
 app.listen(PORT, async () => {

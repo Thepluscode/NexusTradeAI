@@ -21,8 +21,7 @@ import {
     Settings,
     Cancel,
 } from '@mui/icons-material';
-import axios from 'axios';
-import { SERVICE_URLS, apiClient } from '@/services/api';
+import { apiClient } from '@/services/api';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -72,8 +71,6 @@ interface BotStatus {
     };
 }
 
-const API_BASE = SERVICE_URLS.forexBot;
-
 export default function ForexBotPage() {
     const queryClient = useQueryClient();
     const navigate = useNavigate();
@@ -89,14 +86,14 @@ export default function ForexBotPage() {
     const { data: status, isLoading, error } = useQuery<BotStatus>(
         'forexBotStatus',
         async () => {
-            const res = await axios.get(`${API_BASE}/api/forex/status`);
-            return res.data;
+            const res = await apiClient.getForexStatus();
+            return res as unknown as BotStatus;
         },
         { refetchInterval: 5000 }
     );
 
     const startMutation = useMutation<unknown, unknown, void>(
-        async () => user ? apiClient.startForexEngine() : axios.post(`${API_BASE}/api/forex/start`),
+        () => user ? apiClient.startForexEngine() : apiClient.startForexTrading(),
         {
             onSuccess: () => {
                 toast.success('Forex Bot started!');
@@ -108,7 +105,7 @@ export default function ForexBotPage() {
     );
 
     const stopMutation = useMutation<unknown, unknown, void>(
-        async () => user ? apiClient.stopForexEngine() : axios.post(`${API_BASE}/api/forex/stop`),
+        () => user ? apiClient.stopForexEngine() : apiClient.stopForexTrading(),
         {
             onSuccess: () => {
                 toast.success('Forex Bot stopped');
@@ -120,7 +117,7 @@ export default function ForexBotPage() {
     );
 
     const pauseMutation = useMutation<unknown, unknown, void>(
-        async () => axios.post(`${API_BASE}/api/forex/pause`),
+        () => apiClient.pauseForexEngine(),
         {
             onSuccess: () => {
                 toast.success('Forex Bot paused');
@@ -131,9 +128,9 @@ export default function ForexBotPage() {
         }
     );
 
-    const closeAllMutation = useMutation<unknown, unknown, void>(async () => {
-        return axios.post(`${API_BASE}/api/forex/close-all`);
-    }, {
+    const closeAllMutation = useMutation<unknown, unknown, void>(
+        () => apiClient.closeAllForexPositions(),
+    {
         onSuccess: () => {
             toast.success('All forex positions closed');
             queryClient.invalidateQueries('forexBotStatus');

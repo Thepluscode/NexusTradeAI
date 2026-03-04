@@ -22,12 +22,11 @@ import {
     Settings,
     Cancel,
 } from '@mui/icons-material';
-import axios from 'axios';
-import { SERVICE_URLS, apiClient } from '@/services/api';
+import { apiClient } from '@/services/api';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { useAuth } from '@/hooks/useAuth';
+
 
 interface Position {
     symbol: string;
@@ -77,12 +76,10 @@ interface BotStatus {
     };
 }
 
-const API_BASE = SERVICE_URLS.cryptoBot;
-
 export default function CryptoBotPage() {
     const queryClient = useQueryClient();
     const navigate = useNavigate();
-    const { user } = useAuth();
+
 
     const { data: engineStatus } = useQuery(
         'cryptoEngineStatus',
@@ -94,14 +91,14 @@ export default function CryptoBotPage() {
     const { data: status, isLoading, error } = useQuery<BotStatus>(
         'cryptoBotStatus',
         async () => {
-            const res = await axios.get(`${API_BASE}/api/crypto/status`);
-            return res.data;
+            const res = await apiClient.getCryptoStatus();
+            return res as unknown as BotStatus;
         },
         { refetchInterval: 5000 }
     );
 
     const startMutation = useMutation<unknown, unknown, void>(
-        async () => user ? apiClient.startCryptoEngine() : axios.post(`${API_BASE}/api/crypto/start`),
+        () => apiClient.startCryptoEngine(),
         {
             onSuccess: () => {
                 toast.success('Crypto Bot started!');
@@ -113,7 +110,7 @@ export default function CryptoBotPage() {
     );
 
     const stopMutation = useMutation<unknown, unknown, void>(
-        async () => user ? apiClient.stopCryptoEngine() : axios.post(`${API_BASE}/api/crypto/stop`),
+        () => apiClient.stopCryptoEngine(),
         {
             onSuccess: () => {
                 toast.success('Crypto Bot stopped');
@@ -125,7 +122,7 @@ export default function CryptoBotPage() {
     );
 
     const pauseMutation = useMutation<unknown, unknown, void>(
-        async () => axios.post(`${API_BASE}/api/crypto/pause`),
+        () => apiClient.pauseCryptoEngine(),
         {
             onSuccess: () => {
                 toast.success('Crypto Bot paused');
@@ -136,9 +133,9 @@ export default function CryptoBotPage() {
         }
     );
 
-    const closeAllMutation = useMutation<unknown, unknown, void>(async () => {
-        return axios.post(`${API_BASE}/api/crypto/close-all`);
-    }, {
+    const closeAllMutation = useMutation<unknown, unknown, void>(
+        () => apiClient.closeAllCryptoPositions(),
+    {
         onSuccess: () => {
             toast.success('All crypto positions closed');
             queryClient.invalidateQueries('cryptoBotStatus');
