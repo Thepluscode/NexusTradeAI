@@ -8,7 +8,6 @@ mongodb-macos-*/
 mongosh-*/
 .DS_Store
 **/.env*
-reset HEAD clients/web-app/.env.local*/.env.example
 
 # Bot dashboard runtime artifacts
 clients/bot-dashboard/logs/
@@ -22,3 +21,13 @@ deploy/stock-bot/data/*.json
 
 # Dashboard dist is always rebuilt by CI — never track in git
 deploy/dashboard/dist/
+
+# Credential-bearing config files — never commit these
+config/alpaca-config.json
+config/*-credentials.json
+config/*-config.json
+services/broker-api/broker-configs.json
+services/broker-api/*-config.json
+services/trading/.env.*
+**/*.env.backup
+**/*.env.bak
