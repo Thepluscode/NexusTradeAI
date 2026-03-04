@@ -1595,6 +1595,16 @@ app.post('/api/config/credentials', requireApiSecret, async (req, res) => {
             updated++;
         }
         console.log(`⚙️  Credentials updated: broker=${broker} keys=${updated}`);
+
+        // Refresh in-memory OANDA config so the bot exits demo mode immediately
+        if (broker === 'oanda' && updated > 0) {
+            oandaConfig.accountId = process.env.OANDA_ACCOUNT_ID;
+            oandaConfig.accessToken = process.env.OANDA_ACCESS_TOKEN;
+            oandaConfig.isPractice = process.env.OANDA_PRACTICE !== 'false';
+            oandaConfig.baseURL = getOandaBaseUrl();
+            console.log('✅ OANDA config refreshed — exiting demo mode');
+        }
+
         res.json({ success: true, updated });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
