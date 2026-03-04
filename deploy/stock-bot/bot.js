@@ -153,7 +153,9 @@ async function initDb() {
                 role VARCHAR(20) DEFAULT 'user',
                 refresh_token TEXT,
                 created_at TIMESTAMPTZ DEFAULT NOW(),
-                last_login TIMESTAMPTZ
+                last_login TIMESTAMPTZ,
+                subscription_tier VARCHAR(20) DEFAULT 'free',
+                live_trading_enabled BOOLEAN DEFAULT false
             )
         `);
         console.log('✅ Auth DB ready');
@@ -399,6 +401,13 @@ const alpacaConfig = {
     secretKey: process.env.ALPACA_SECRET_KEY,
     dataURL: 'https://data.alpaca.markets'
 };
+
+// Returns the correct Alpaca base URL, reflecting runtime changes to REAL_TRADING_ENABLED.
+// alpacaConfig.baseURL is the startup default; this getter re-evaluates the env var each call.
+function getAlpacaBaseURL() {
+    if (process.env.REAL_TRADING_ENABLED === 'true') return 'https://api.alpaca.markets';
+    return process.env.ALPACA_BASE_URL || 'https://paper-api.alpaca.markets';
+}
 
 const popularStocks = require('./services/trading/popular-stocks-list');
 
@@ -2315,6 +2324,24 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
         if (!creds || typeof creds !== 'object') return res.status(400).json({ success: false, error: 'No credentials provided' });
 
         const userId = req.user?.sub;
+
+        // Gate: block live Alpaca URL for free-tier users
+        if (broker === 'alpaca' && creds.ALPACA_BASE_URL &&
+            creds.ALPACA_BASE_URL.includes('api.alpaca.markets') &&
+            !creds.ALPACA_BASE_URL.includes('paper')) {
+            if (userId && dbPool) {
+                const tierRow = await dbPool.query('SELECT subscription_tier FROM users WHERE id=$1', [userId]);
+                const tier = tierRow.rows[0]?.subscription_tier || 'free';
+                if (tier === 'free') {
+                    return res.status(403).json({
+                        success: false,
+                        error: 'Live trading requires a paid subscription. Please upgrade your plan.',
+                        code: 'SUBSCRIPTION_REQUIRED'
+                    });
+                }
+            }
+        }
+
         let updated = 0;
         for (const [key, value] of Object.entries(creds)) {
             if (!allowed.includes(key)) continue;
