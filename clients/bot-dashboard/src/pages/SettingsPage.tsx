@@ -901,35 +901,12 @@ export default function SettingsPage() {
     const [telegramChatId, setTelegramChatId] = useState('');
     const [telegramEnabled, setTelegramEnabled] = useState(false);
 
-    // ── Telegram setup form state ──
-    const [tgToken, setTgToken] = useState('');
-    const [tgChatId, setTgChatId] = useState('');
-    const [tgTokenVisible, setTgTokenVisible] = useState(false);
-    const [tgSaving, setTgSaving] = useState(false);
-
     // ── SMS credentials state ──
     const [smsSid, setSmsSid] = useState('');
     const [smsAuth, setSmsAuth] = useState('');
     const [smsFrom, setSmsFrom] = useState('');
     const [smsTo, setSmsTo] = useState('');
     const [smsEnabled, setSmsEnabled] = useState(false);
-
-    async function saveTelegram() {
-        if (!tgToken || !tgChatId) return;
-        setTgSaving(true);
-        try {
-            await axios.post(
-                `${API_BASE}/api/config/credentials`,
-                { TELEGRAM_BOT_TOKEN: tgToken, TELEGRAM_CHAT_ID: tgChatId },
-                { headers: getJwtHeaders() },
-            );
-            toast.success('Telegram alerts configured!');
-        } catch {
-            toast.error('Failed to save Telegram settings');
-        } finally {
-            setTgSaving(false);
-        }
-    }
 
     const { data: config, isLoading } = useQuery('botConfig', fetchConfig, {
         refetchInterval: 30000,
@@ -1561,83 +1538,6 @@ export default function SettingsPage() {
                                     </Button>
                                 )}
                             </NotifForm>
-
-                            {/* Telegram Setup — direct credential entry */}
-                            <Paper sx={{ p: 3, borderRadius: 3, border: '1px solid', borderColor: 'divider' }}>
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2.5 }}>
-                                    <Avatar sx={{ bgcolor: '#3b82f620', color: '#3b82f6', width: 42, height: 42 }}>
-                                        <Send />
-                                    </Avatar>
-                                    <Box>
-                                        <Typography fontWeight={700}>Telegram Notifications Setup</Typography>
-                                        <Typography variant="caption" color="text.secondary">
-                                            Enter your bot token and chat ID to enable trade alerts
-                                        </Typography>
-                                    </Box>
-                                </Box>
-
-                                <Divider sx={{ mb: 2.5 }} />
-
-                                <Box
-                                    component="form"
-                                    autoComplete="off"
-                                    onSubmit={e => { e.preventDefault(); void saveTelegram(); }}
-                                >
-                                    <input type="text" autoComplete="username" style={{ display: 'none' }} readOnly tabIndex={-1} />
-                                    <Stack spacing={2}>
-                                        <TextField
-                                            fullWidth
-                                            size="small"
-                                            label="Telegram Bot Token"
-                                            type={tgTokenVisible ? 'text' : 'password'}
-                                            value={tgToken}
-                                            onChange={e => setTgToken(e.target.value)}
-                                            placeholder="1234567890:AABBccDDeeFFggHH..."
-                                            autoComplete="new-password"
-                                            helperText="From @BotFather — starts with numbers:letters"
-                                            InputProps={{
-                                                endAdornment: (
-                                                    <InputAdornment position="end">
-                                                        <IconButton
-                                                            size="small"
-                                                            onClick={() => setTgTokenVisible(p => !p)}
-                                                            edge="end"
-                                                            tabIndex={-1}
-                                                        >
-                                                            {tgTokenVisible ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
-                                                        </IconButton>
-                                                    </InputAdornment>
-                                                ),
-                                            }}
-                                            sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
-                                        />
-                                        <TextField
-                                            fullWidth
-                                            size="small"
-                                            label="Chat ID"
-                                            value={tgChatId}
-                                            onChange={e => setTgChatId(e.target.value)}
-                                            placeholder="-1001234567890"
-                                            autoComplete="off"
-                                            helperText="Your chat or group ID — get it from @userinfobot"
-                                            sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2 } }}
-                                        />
-                                    </Stack>
-
-                                    <Box sx={{ mt: 2.5 }}>
-                                        <Button
-                                            type="submit"
-                                            variant="contained"
-                                            size="small"
-                                            disabled={tgSaving || !tgToken || !tgChatId}
-                                            startIcon={tgSaving ? <CircularProgress size={13} color="inherit" /> : <Send fontSize="small" />}
-                                            sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
-                                        >
-                                            Save Telegram
-                                        </Button>
-                                    </Box>
-                                </Box>
-                            </Paper>
 
                             {/* SMS */}
                             <NotifForm

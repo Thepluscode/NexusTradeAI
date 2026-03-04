@@ -28,8 +28,12 @@ async function initTradeDb() {
                 role VARCHAR(20) DEFAULT 'user',
                 refresh_token TEXT,
                 created_at TIMESTAMPTZ DEFAULT NOW(),
-                last_login TIMESTAMPTZ
-            )
+                last_login TIMESTAMPTZ,
+                subscription_tier VARCHAR(20) DEFAULT 'free',
+                live_trading_enabled BOOLEAN DEFAULT false
+            );
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_tier VARCHAR(20) DEFAULT 'free';
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS live_trading_enabled BOOLEAN DEFAULT false
         `);
         console.log('✅ Forex bot: Auth DB ready');
         await dbPool.query(`
