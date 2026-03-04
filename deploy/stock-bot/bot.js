@@ -2546,10 +2546,33 @@ class UserTradingEngine {
         console.log(`🔧 [Engine] Created engine for user ${userId}`);
     }
 
-    updateCredentials(alpacaApiKey, alpacaSecretKey, alpacaBaseURL) {
+    updateCredentials(alpacaApiKey, alpacaSecretKey, alpacaBaseURL, extraCreds) {
         if (alpacaApiKey)    this.alpacaConfig.apiKey    = alpacaApiKey;
         if (alpacaSecretKey) this.alpacaConfig.secretKey = alpacaSecretKey;
         if (alpacaBaseURL)   this.alpacaConfig.baseURL   = alpacaBaseURL;
+        // Per-user Telegram: use user's own bot token+chatId if stored, else fall back to shared
+        const tgToken  = extraCreds?.TELEGRAM_BOT_TOKEN  || process.env.TELEGRAM_BOT_TOKEN;
+        const tgChatId = extraCreds?.TELEGRAM_CHAT_ID    || process.env.TELEGRAM_CHAT_ID;
+        if (tgToken && tgChatId) {
+            try {
+                const TelegramBot = require('node-telegram-bot-api');
+                const bot = new TelegramBot(tgToken, { polling: false });
+                this._telegram = {
+                    sendStockEntry:     (sym, ep, sl, tp, qty, tier) =>
+                        bot.sendMessage(tgChatId, `✅ *STOCK ENTRY* [${tier}]\n📛 ${sym} x${qty}\n💰 Entry: $${ep.toFixed(2)}\n🛑 SL: $${sl.toFixed(2)}  🎯 TP: $${tp.toFixed(2)}`, { parse_mode: 'Markdown' }).catch(() => {}),
+                    sendStockStopLoss:  (sym, ep, cp, pnl, sl) =>
+                        bot.sendMessage(tgChatId, `🚨 *STOP LOSS* ${sym}\n💰 Entry $${ep.toFixed(2)} → $${cp.toFixed(2)}\n💸 P&L: ${pnl.toFixed(2)}%`, { parse_mode: 'Markdown' }).catch(() => {}),
+                    sendStockTakeProfit:(sym, ep, cp, pnl, tp) =>
+                        bot.sendMessage(tgChatId, `🎯 *TAKE PROFIT* ${sym}\n💰 Entry $${ep.toFixed(2)} → $${cp.toFixed(2)}\n💵 P&L: +${pnl.toFixed(2)}%`, { parse_mode: 'Markdown' }).catch(() => {}),
+                };
+                console.log(`📱 [Engine ${this.userId}] Per-user Telegram alerts configured`);
+            } catch (e) {
+                this._telegram = null;
+                console.warn(`⚠️  [Engine ${this.userId}] Telegram init failed:`, e.message);
+            }
+        } else {
+            this._telegram = null; // will fall back to shared telegramAlerts
+        }
     }
 
     savePerfData() {
@@ -2755,12 +2778,10 @@ class UserTradingEngine {
                 const exitReason = await shouldExitPosition(position, currentPrice, alpacaPos, this.alpacaConfig);
                 if (exitReason) { await this.closePosition(symbol, alpacaPos.qty, exitReason); continue; }
                 if (currentPrice <= position.stopLoss) {
-                    smsAlerts.sendStockStopLoss(symbol, position.entry, currentPrice, unrealizedPL, position.stopLoss).catch(() => {});
-                    telegramAlerts.sendStockStopLoss(symbol, position.entry, currentPrice, unrealizedPL, position.stopLoss).catch(() => {});
+                    (this._telegram || telegramAlerts).sendStockStopLoss(symbol, position.entry, currentPrice, unrealizedPL, position.stopLoss).catch(() => {});
                     await this.closePosition(symbol, alpacaPos.qty, 'Stop Loss');
                 } else if (currentPrice >= position.target) {
-                    smsAlerts.sendStockTakeProfit(symbol, position.entry, currentPrice, unrealizedPL, position.target).catch(() => {});
-                    telegramAlerts.sendStockTakeProfit(symbol, position.entry, currentPrice, unrealizedPL, position.target).catch(() => {});
+                    (this._telegram || telegramAlerts).sendStockTakeProfit(symbol, position.entry, currentPrice, unrealizedPL, position.target).catch(() => {});
                     await this.closePosition(symbol, alpacaPos.qty, 'Profit Target');
                 }
             }
@@ -2821,7 +2842,7 @@ class UserTradingEngine {
             this.recentTrades.set(signal.symbol, recent);
             this.tradesPerSymbol.set(signal.symbol, (this.tradesPerSymbol.get(signal.symbol) || 0) + 1);
             this.totalTradesToday++;
-            telegramAlerts.sendStockEntry(signal.symbol, signal.price, parseFloat(stopPrice), parseFloat(targetPrice), shares, tier).catch(() => {});
+            (this._telegram || telegramAlerts).sendStockEntry(signal.symbol, signal.price, parseFloat(stopPrice), parseFloat(targetPrice), shares, tier).catch(() => {});
             console.log(`✅ [Engine ${this.userId}] TRADE: ${signal.symbol} [${tier}] x${shares} @ $${signal.price}`);
             return orderResponse.data;
         } catch (error) {
@@ -2985,6 +3006,11 @@ async function getOrCreateEngine(userId) {
         if (!apiKey || !secretKey) return null; // no creds yet
         const engine = new UserTradingEngine(userId, apiKey, secretKey, baseURL);
         await engine.loadStateFromDb();
+        const tgCreds = await loadUserCredentials(userId, 'telegram');
+        engine.updateCredentials(creds.ALPACA_API_KEY || process.env.ALPACA_API_KEY,
+            creds.ALPACA_SECRET_KEY || process.env.ALPACA_SECRET_KEY,
+            creds.ALPACA_BASE_URL || process.env.ALPACA_BASE_URL,
+            { TELEGRAM_BOT_TOKEN: tgCreds.TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID: tgCreds.TELEGRAM_CHAT_ID });
         engineRegistry.set(key, engine);
         console.log(`🔧 [EngineRegistry] Engine registered for user ${userId} (${engineRegistry.size} total)`);
         return engine;
@@ -3071,10 +3097,34 @@ app.get('/api/trades', async (req, res) => {
     try {
         const limit = Math.min(parseInt(req.query.limit) || 100, 500);
         const bot = req.query.bot;
-        const q = bot
-            ? 'SELECT * FROM trades WHERE bot=$1 ORDER BY created_at DESC LIMIT $2'
-            : 'SELECT * FROM trades ORDER BY created_at DESC LIMIT $1';
-        const r = await dbPool.query(q, bot ? [bot, limit] : [limit]);
+        // Optional: filter to the calling user's trades when JWT is present
+        const mine = req.query.mine === 'true';
+        let userId = null;
+        if (mine) {
+            try {
+                const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+                const auth = req.headers.authorization || '';
+                if (auth.startsWith('Bearer ')) {
+                    const decoded = jwt.verify(auth.slice(7), JWT_SECRET);
+                    userId = decoded.sub;
+                }
+            } catch { /* ignore — fall back to all */ }
+        }
+        let q, params;
+        if (userId && bot) {
+            q = 'SELECT * FROM trades WHERE user_id=$1 AND bot=$2 ORDER BY created_at DESC LIMIT $3';
+            params = [userId, bot, limit];
+        } else if (userId) {
+            q = 'SELECT * FROM trades WHERE user_id=$1 ORDER BY created_at DESC LIMIT $2';
+            params = [userId, limit];
+        } else if (bot) {
+            q = 'SELECT * FROM trades WHERE bot=$1 ORDER BY created_at DESC LIMIT $2';
+            params = [bot, limit];
+        } else {
+            q = 'SELECT * FROM trades ORDER BY created_at DESC LIMIT $1';
+            params = [limit];
+        }
+        const r = await dbPool.query(q, params);
         res.json({ success: true, trades: r.rows, count: r.rows.length });
     } catch (e) { res.status(500).json({ success: false, error: e.message, trades: [] }); }
 });
@@ -3114,6 +3164,37 @@ app.get('/api/trades/summary', async (req, res) => {
         `);
         res.json({ success: true, daily: r.rows, totals: totals.rows });
     } catch (e) { res.status(500).json({ success: false, error: e.message, daily: [], totals: [] }); }
+});
+
+// Admin: list all users + their engine status (admin role required)
+app.get('/api/admin/users', requireJwt, async (req, res) => {
+    if (req.user?.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+    if (!dbPool) return res.json({ success: true, users: [] });
+    try {
+        const users = await dbPool.query(
+            `SELECT u.id, u.email, u.name, u.role, u.created_at,
+                    COUNT(DISTINCT uc.broker) AS brokers_configured,
+                    es.state_json AS engine_state
+             FROM users u
+             LEFT JOIN user_credentials uc ON uc.user_id = u.id
+             LEFT JOIN engine_state es ON es.user_id = u.id AND es.bot = 'stock'
+             GROUP BY u.id, u.email, u.name, u.role, u.created_at, es.state_json
+             ORDER BY u.created_at DESC`
+        );
+        const rows = users.rows.map(r => ({
+            id: r.id,
+            email: r.email,
+            name: r.name,
+            role: r.role,
+            createdAt: r.created_at,
+            brokersConfigured: parseInt(r.brokers_configured),
+            engineRunning: r.engine_state?.botRunning ?? false,
+            enginePaused:  r.engine_state?.botPaused  ?? false,
+            totalTrades:   r.engine_state?.totalTradesToday ?? 0,
+            activeInRegistry: engineRegistry.has(String(r.id)),
+        }));
+        res.json({ success: true, users: rows });
+    } catch (e) { res.status(500).json({ success: false, error: e.message, users: [] }); }
 });
 
 // Trigger a live backtest scan (runs analyzeMomentum on all symbols, returns signals without executing trades)
