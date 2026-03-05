@@ -3177,6 +3177,9 @@ async function runScanQueue() {
         if (engines.length === 0) {
             // will be handled by the existing tradingLoop() call below
         }
+        // Keep global lastScanTime in sync so /api/trading/status shows a live timestamp
+        // even when user engines are handling the scans (engineRegistry.size > 0)
+        if (engines.length > 0) lastScanTime = new Date();
     } finally {
         scanQueueRunning = false;
     }
