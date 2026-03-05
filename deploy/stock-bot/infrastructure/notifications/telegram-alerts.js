@@ -238,6 +238,11 @@ ${directionEmoji} *Direction:* ${directionText}
         }
     }
 
+    async sendHeartbeatAlert(botName, silentMinutes) {
+        const message = `⚠️ *${botName} SILENT ALERT*\n\nBot has not executed any scans in the last *${silentMinutes} minutes*.\n\nCheck Railway logs.\n⏰ ${new Date().toISOString()}`;
+        return await this.send(message);
+    }
+
     // Test Telegram
     async sendTestAlert() {
         const message = `📱 *NexusTradeAI Telegram Test*
