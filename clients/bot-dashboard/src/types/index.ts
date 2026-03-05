@@ -579,6 +579,31 @@ export interface TradeRecord {
   created_at: string;
 }
 
+export interface TradeAnalyticsHour {
+  hour: string;
+  winners: string;
+  total: string;
+  avg_pnl_pct: string;
+}
+
+export interface TradeAnalyticsSymbol {
+  symbol: string;
+  bot: string;
+  total: string;
+  winners: string;
+  avg_pnl_pct: string;
+  avg_hold_hours: string;
+}
+
+export interface TradeAnalyticsTier {
+  tier: string;
+  bot: string;
+  total: string;
+  winners: string;
+  avg_pnl_pct: string;
+  total_pnl: string;
+}
+
 export interface TradeDaySummary {
   bot: string;
   day: string;

@@ -3151,7 +3151,13 @@ async function getOrCreateEngine(userId) {
 // Each engine gets an independent 60-second slot; staggered 6s apart on startup.
 let scanQueueRunning = false;
 
+// Dead-man heartbeat tracking
+let _heartbeatAlertSent = false;
+let _lastHeartbeatScanTime = Date.now();
+function updateHeartbeatTimestamp() { _lastHeartbeatScanTime = Date.now(); _heartbeatAlertSent = false; }
+
 async function runScanQueue() {
+    updateHeartbeatTimestamp();
     if (scanQueueRunning) return; // previous cycle still running — skip
     scanQueueRunning = true;
     try {
@@ -3170,6 +3176,7 @@ async function runScanQueue() {
 }
 
 async function tradingLoop() {
+    updateHeartbeatTimestamp();
     console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log(`⏰ Trading Loop #${scanCount + 1} - ${new Date().toLocaleTimeString()} | Trades today: ${totalTradesToday}/${MAX_TRADES_PER_DAY} | Positions: ${positions.size}`);
 
@@ -3290,6 +3297,44 @@ app.get('/api/trades/summary', async (req, res) => {
         `);
         res.json({ success: true, daily: r.rows, totals: totals.rows });
     } catch (e) { res.status(500).json({ success: false, error: e.message, daily: [], totals: [] }); }
+});
+
+// Trade analytics: win rate by hour, symbol breakdown, tier breakdown
+app.get('/api/trades/analytics', async (req, res) => {
+    if (!dbPool) return res.json({ success: true, data: { byHour: [], bySymbol: [], byTier: [] } });
+    const days = Math.min(parseInt(req.query.days) || 30, 90);
+    try {
+        const byHour = await dbPool.query(`
+            SELECT EXTRACT(HOUR FROM entry_time AT TIME ZONE 'America/New_York') AS hour,
+                   COUNT(*) FILTER (WHERE pnl_usd > 0) AS winners,
+                   COUNT(*) AS total,
+                   ROUND(AVG(pnl_pct)::numeric, 2) AS avg_pnl_pct
+            FROM trades
+            WHERE status='closed' AND entry_time > NOW() - INTERVAL '1 day' * $1
+            GROUP BY 1 ORDER BY 1`, [days]);
+
+        const bySymbol = await dbPool.query(`
+            SELECT symbol, bot,
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE pnl_usd > 0) AS winners,
+                   ROUND(AVG(pnl_pct)::numeric, 2) AS avg_pnl_pct,
+                   ROUND(AVG(EXTRACT(EPOCH FROM (exit_time - entry_time))/3600)::numeric, 1) AS avg_hold_hours
+            FROM trades
+            WHERE status='closed' AND entry_time > NOW() - INTERVAL '1 day' * $1
+            GROUP BY symbol, bot ORDER BY total DESC LIMIT 20`, [days]);
+
+        const byTier = await dbPool.query(`
+            SELECT COALESCE(tier,'—') AS tier, bot,
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE pnl_usd > 0) AS winners,
+                   ROUND(AVG(pnl_pct)::numeric, 2) AS avg_pnl_pct,
+                   ROUND(SUM(pnl_usd)::numeric, 2) AS total_pnl
+            FROM trades
+            WHERE status='closed' AND entry_time > NOW() - INTERVAL '1 day' * $1
+            GROUP BY tier, bot ORDER BY total DESC`, [days]);
+
+        res.json({ success: true, data: { byHour: byHour.rows, bySymbol: bySymbol.rows, byTier: byTier.rows } });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 // Admin: list all users + their engine status (admin role required)
@@ -3589,6 +3634,20 @@ app.listen(PORT, async () => {
             }
         } catch (e) { console.error('❌ Stock loop crashed:', e); }
     }, 60000);
+
+    // Dead-man heartbeat: alert if no scan in >2h during market hours
+    setInterval(() => {
+        const now = new Date();
+        const estHour = parseInt(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/New_York' }).format(now));
+        const estDay = now.toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'short' });
+        const isMarketHours = !['Sat', 'Sun'].includes(estDay) && estHour >= 10 && estHour < 16;
+        if (!isMarketHours) return;
+        const silentMinutes = Math.floor((Date.now() - _lastHeartbeatScanTime) / 60000);
+        if (silentMinutes >= 120 && !_heartbeatAlertSent) {
+            _heartbeatAlertSent = true;
+            telegramAlerts.sendHeartbeatAlert('Stock Bot', silentMinutes).catch(() => {});
+        }
+    }, 30 * 60 * 1000);
 });
 
 // ===== GRACEFUL SHUTDOWN =====

@@ -2228,6 +2228,22 @@ app.listen(PORT, async () => {
         } catch (e) { console.warn('⚠️  Crypto engine pre-registration failed:', e.message); }
     }, 10000);
 
+    // Dead-man heartbeat: crypto trades 24/7 — alert if silent >2h
+    let _cryptoHeartbeatAlertSent = false;
+    let _cryptoLastScanTime = Date.now();
+    // The per-user engines call tradingLoop on their own setInterval; update via proxy
+    const _cryptoHeartbeatTick = setInterval(() => { _cryptoLastScanTime = Date.now(); }, 5 * 60 * 1000);
+    setInterval(() => {
+        const silentMinutes = Math.floor((Date.now() - _cryptoLastScanTime) / 60000);
+        if (silentMinutes >= 120 && !_cryptoHeartbeatAlertSent) {
+            _cryptoHeartbeatAlertSent = true;
+            telegramAlerts.sendHeartbeatAlert('Crypto Bot', silentMinutes).catch(() => {});
+        } else if (silentMinutes < 120) {
+            _cryptoHeartbeatAlertSent = false;
+        }
+    }, 30 * 60 * 1000);
+    void _cryptoHeartbeatTick; // suppress lint warning
+
     // ── DB Reconciliation: close orphaned 'open' trades not in memory ──
     // Runs after loadState so engine.positions is populated from saved state.
     try {

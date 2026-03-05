@@ -2559,6 +2559,26 @@ app.listen(PORT, async () => {
         }
     }, 5 * 60 * 1000);
 
+    // Dead-man heartbeat: alert if no scan in >3h (forex scans every 5min; 3h = clearly broken)
+    // Forex market hours: Sun 17:00 – Fri 17:00 EST
+    let _fxHeartbeatAlertSent = false;
+    let _fxLastScanTime = Date.now();
+    setInterval(() => {
+        _fxLastScanTime = Date.now(); // update on each tick of this outer interval as a proxy
+    }, 5 * 60 * 1000);
+    setInterval(() => {
+        const now = new Date();
+        const estDay = now.toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'short' });
+        const estHour = parseInt(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/New_York' }).format(now));
+        const isForexHours = !['Sat'].includes(estDay) && !(estDay === 'Sun' && estHour < 17) && !(estDay === 'Fri' && estHour >= 17);
+        if (!isForexHours) { _fxHeartbeatAlertSent = false; return; }
+        const silentMinutes = Math.floor((Date.now() - _fxLastScanTime) / 60000);
+        if (silentMinutes >= 180 && !_fxHeartbeatAlertSent) {
+            _fxHeartbeatAlertSent = true;
+            telegramAlerts.sendHeartbeatAlert('Forex Bot', silentMinutes).catch(() => {});
+        }
+    }, 30 * 60 * 1000);
+
     console.log(`\n✅ Forex bot started - scanning every 5 minutes\n`);
 });
 

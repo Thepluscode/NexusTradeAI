@@ -1,9 +1,11 @@
+import { useState } from 'react';
 import {
     Box, Paper, Typography, Table, TableBody, TableCell,
     TableContainer, TableHead, TableRow, Chip, Alert,
-    CircularProgress, Avatar,
+    CircularProgress, Avatar, TextField, Button, MenuItem, Select,
+    FormControl, InputLabel, Divider,
 } from '@mui/material';
-import { AdminPanelSettings, Person, CheckCircle, Cancel } from '@mui/icons-material';
+import { AdminPanelSettings, Person, CheckCircle, Cancel, Build } from '@mui/icons-material';
 import { apiClient } from '@/services/api';
 import { useAuth } from '@/hooks/useAuth';
 import { useQuery } from 'react-query';
@@ -16,6 +18,32 @@ export default function AdminPage() {
         () => apiClient.getAdminUsers(),
         { refetchInterval: 15000, retry: false }
     );
+
+    const [fixBot, setFixBot] = useState('all');
+    const [fixSymbols, setFixSymbols] = useState('');
+    const [fixLoading, setFixLoading] = useState(false);
+    const [fixResult, setFixResult] = useState<{ fixed: number; trades: unknown[] } | null>(null);
+    const [fixError, setFixError] = useState<string | null>(null);
+
+    async function handleFixStuck() {
+        setFixLoading(true);
+        setFixResult(null);
+        setFixError(null);
+        try {
+            const symbols = fixSymbols.trim()
+                ? fixSymbols.split(',').map(s => s.trim()).filter(Boolean)
+                : undefined;
+            const result = await apiClient.fixStuckTrades({
+                bot: fixBot === 'all' ? undefined : fixBot,
+                symbols,
+            });
+            setFixResult(result);
+        } catch (e: unknown) {
+            setFixError((e as Error)?.message ?? 'Unknown error');
+        } finally {
+            setFixLoading(false);
+        }
+    }
 
     if (user?.role !== 'admin') {
         return (
@@ -132,6 +160,64 @@ export default function AdminPage() {
             {!isLoading && users.length === 0 && !error && (
                 <Alert severity="info">No users registered yet.</Alert>
             )}
+
+            <Divider sx={{ my: 3 }} />
+
+            {/* Fix Stuck Trades */}
+            <Paper elevation={0} sx={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, p: 2.5 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5 }}>
+                    <Build sx={{ color: 'warning.main' }} />
+                    <Typography variant="subtitle1" fontWeight={700}>Fix Stuck Trades</Typography>
+                </Box>
+                <Typography variant="body2" color="text.secondary" mb={2}>
+                    Force-close open DB trades that have no exit record. Sets <code>close_reason = admin_cleanup</code>.
+                </Typography>
+
+                <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                    <FormControl size="small" sx={{ minWidth: 130 }}>
+                        <InputLabel>Bot</InputLabel>
+                        <Select value={fixBot} label="Bot" onChange={e => setFixBot(e.target.value)}>
+                            <MenuItem value="all">All bots</MenuItem>
+                            <MenuItem value="stock">Stock</MenuItem>
+                            <MenuItem value="forex">Forex</MenuItem>
+                            <MenuItem value="crypto">Crypto</MenuItem>
+                        </Select>
+                    </FormControl>
+
+                    <TextField
+                        size="small"
+                        label="Symbols (optional)"
+                        placeholder="GBP_JPY, CHF_JPY"
+                        value={fixSymbols}
+                        onChange={e => setFixSymbols(e.target.value)}
+                        sx={{ minWidth: 220 }}
+                        helperText="Comma-separated. Leave blank to fix all."
+                    />
+
+                    <Button
+                        variant="contained"
+                        color="warning"
+                        onClick={handleFixStuck}
+                        disabled={fixLoading}
+                        startIcon={fixLoading ? <CircularProgress size={16} /> : <Build />}
+                    >
+                        Fix Stuck
+                    </Button>
+                </Box>
+
+                {fixResult && (
+                    <Alert severity={fixResult.fixed > 0 ? 'success' : 'info'} sx={{ mt: 2 }}>
+                        Fixed <strong>{fixResult.fixed}</strong> stuck trade(s).
+                        {fixResult.fixed > 0 && (
+                            <> Symbols: {(fixResult.trades as { symbol: string }[]).map(t => t.symbol).join(', ')}</>
+                        )}
+                    </Alert>
+                )}
+
+                {fixError && (
+                    <Alert severity="error" sx={{ mt: 2 }}>{fixError}</Alert>
+                )}
+            </Paper>
         </Box>
     );
 }

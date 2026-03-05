@@ -22,11 +22,13 @@ import {
     InputLabel,
     Button,
     Tooltip,
+    Tabs,
+    Tab,
 } from '@mui/material';
-import { TrendingUp, TrendingDown, Receipt, Download, Person } from '@mui/icons-material';
+import { TrendingUp, TrendingDown, Receipt, Download, Person, Analytics } from '@mui/icons-material';
 import { apiClient } from '@/services/api';
 import { MetricCard } from '@/components/MetricCard';
-import type { TradeRecord, TradeBotTotal } from '@/types';
+import type { TradeRecord, TradeBotTotal, TradeAnalyticsHour, TradeAnalyticsSymbol, TradeAnalyticsTier } from '@/types';
 
 type BotFilter = 'all' | 'stock' | 'forex' | 'crypto';
 
@@ -72,6 +74,7 @@ function exportTradesToCSV(rows: TradeRecord[]) {
 }
 
 export default function TradesPage() {
+    const [tab, setTab] = useState(0);
     const [botFilter, setBotFilter] = useState<BotFilter>('all');
     const [days, setDays] = useState(30);
     const [myTrades, setMyTrades] = useState(false);
@@ -87,6 +90,12 @@ export default function TradesPage() {
         ['tradesSummary', days],
         () => apiClient.getTradesSummary(days),
         { staleTime: 60 * 1000, refetchInterval: 120 * 1000 }
+    );
+
+    const { data: analytics, isLoading: analyticsLoading } = useQuery(
+        ['tradeAnalytics', days],
+        () => apiClient.getTradeAnalytics(days),
+        { staleTime: 120 * 1000, refetchInterval: 5 * 60 * 1000, enabled: tab === 1 }
     );
 
     const totals = summary?.totals ?? [];
@@ -119,10 +128,10 @@ export default function TradesPage() {
     return (
         <Box sx={{ p: { xs: 1.5, sm: 2 } }}>
             {/* Header */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3, flexWrap: 'wrap' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2, flexWrap: 'wrap' }}>
                 <Receipt sx={{ fontSize: 32, color: 'primary.main' }} />
                 <Box>
-                    <Typography variant="h5" fontWeight={700}>Trade History</Typography>
+                    <Typography variant="h5" fontWeight={700}>Trades</Typography>
                     <Typography variant="body2" color="text.secondary">All trades persisted to PostgreSQL across stock, forex and crypto bots</Typography>
                 </Box>
                 {isLoggedIn && (
@@ -148,10 +157,16 @@ export default function TradesPage() {
                 </FormControl>
             </Box>
 
-            {/* Summary metric cards */}
-            {isLoading ? (
+            {/* Tab bar */}
+            <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
+                <Tab label="History" icon={<Receipt />} iconPosition="start" />
+                <Tab label="Analytics" icon={<Analytics />} iconPosition="start" />
+            </Tabs>
+
+            {/* History tab */}
+            {tab === 0 && isLoading ? (
                 <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}><CircularProgress /></Box>
-            ) : (
+            ) : tab === 0 ? (
                 <>
                     <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2,1fr)', md: 'repeat(4,1fr)' }, gap: 3, mb: 3 }}>
                         <MetricCard
@@ -342,7 +357,155 @@ export default function TradesPage() {
                         </Paper>
                     )}
                 </>
-            )}
+            ) : tab === 1 ? (
+                /* Analytics tab */
+                analyticsLoading ? (
+                    <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}><CircularProgress /></Box>
+                ) : (
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                        {/* By Hour */}
+                        <Paper sx={{ p: 2 }}>
+                            <Typography variant="subtitle1" fontWeight={700} mb={1}>Win Rate by Hour (EST)</Typography>
+                            {(!analytics?.byHour?.length) ? (
+                                <Alert severity="info">No closed trades in selected period.</Alert>
+                            ) : (
+                                <TableContainer>
+                                    <Table size="small">
+                                        <TableHead>
+                                            <TableRow>
+                                                <TableCell>Hour (EST)</TableCell>
+                                                <TableCell align="right">Trades</TableCell>
+                                                <TableCell align="right">Win Rate</TableCell>
+                                                <TableCell align="right">Avg P&L %</TableCell>
+                                            </TableRow>
+                                        </TableHead>
+                                        <TableBody>
+                                            {(analytics.byHour as TradeAnalyticsHour[]).map(r => {
+                                                const total = parseInt(r.total);
+                                                const wr = total > 0 ? parseInt(r.winners) / total : 0;
+                                                return (
+                                                    <TableRow key={r.hour} hover>
+                                                        <TableCell>{String(r.hour).padStart(2, '0')}:00</TableCell>
+                                                        <TableCell align="right">{r.total}</TableCell>
+                                                        <TableCell align="right">
+                                                            <Typography variant="body2" color={wr >= 0.5 ? 'success.main' : 'warning.main'}>
+                                                                {(wr * 100).toFixed(1)}%
+                                                            </Typography>
+                                                        </TableCell>
+                                                        <TableCell align="right">
+                                                            <Typography variant="body2" color={pnlColor(r.avg_pnl_pct)}>
+                                                                {parseFloat(r.avg_pnl_pct ?? '0').toFixed(2)}%
+                                                            </Typography>
+                                                        </TableCell>
+                                                    </TableRow>
+                                                );
+                                            })}
+                                        </TableBody>
+                                    </Table>
+                                </TableContainer>
+                            )}
+                        </Paper>
+
+                        {/* By Symbol */}
+                        <Paper sx={{ p: 2 }}>
+                            <Typography variant="subtitle1" fontWeight={700} mb={1}>Top Symbols</Typography>
+                            {(!analytics?.bySymbol?.length) ? (
+                                <Alert severity="info">No closed trades in selected period.</Alert>
+                            ) : (
+                                <TableContainer>
+                                    <Table size="small">
+                                        <TableHead>
+                                            <TableRow>
+                                                <TableCell>Symbol</TableCell>
+                                                <TableCell>Bot</TableCell>
+                                                <TableCell align="right">Trades</TableCell>
+                                                <TableCell align="right">Win Rate</TableCell>
+                                                <TableCell align="right">Avg P&L %</TableCell>
+                                                <TableCell align="right">Avg Hold (h)</TableCell>
+                                            </TableRow>
+                                        </TableHead>
+                                        <TableBody>
+                                            {(analytics.bySymbol as TradeAnalyticsSymbol[]).map(r => {
+                                                const total = parseInt(r.total);
+                                                const wr = total > 0 ? parseInt(r.winners) / total : 0;
+                                                return (
+                                                    <TableRow key={`${r.symbol}-${r.bot}`} hover>
+                                                        <TableCell><Typography fontWeight={600}>{r.symbol}</Typography></TableCell>
+                                                        <TableCell><Chip label={r.bot} size="small" color={BOT_COLORS[r.bot] ?? 'default'} variant="outlined" /></TableCell>
+                                                        <TableCell align="right">{r.total}</TableCell>
+                                                        <TableCell align="right">
+                                                            <Typography variant="body2" color={wr >= 0.5 ? 'success.main' : 'warning.main'}>
+                                                                {(wr * 100).toFixed(1)}%
+                                                            </Typography>
+                                                        </TableCell>
+                                                        <TableCell align="right">
+                                                            <Typography variant="body2" color={pnlColor(r.avg_pnl_pct)}>
+                                                                {parseFloat(r.avg_pnl_pct ?? '0').toFixed(2)}%
+                                                            </Typography>
+                                                        </TableCell>
+                                                        <TableCell align="right">{r.avg_hold_hours ?? '—'}</TableCell>
+                                                    </TableRow>
+                                                );
+                                            })}
+                                        </TableBody>
+                                    </Table>
+                                </TableContainer>
+                            )}
+                        </Paper>
+
+                        {/* By Tier */}
+                        <Paper sx={{ p: 2 }}>
+                            <Typography variant="subtitle1" fontWeight={700} mb={1}>Performance by Tier</Typography>
+                            {(!analytics?.byTier?.length) ? (
+                                <Alert severity="info">No closed trades in selected period.</Alert>
+                            ) : (
+                                <TableContainer>
+                                    <Table size="small">
+                                        <TableHead>
+                                            <TableRow>
+                                                <TableCell>Tier</TableCell>
+                                                <TableCell>Bot</TableCell>
+                                                <TableCell align="right">Trades</TableCell>
+                                                <TableCell align="right">Win Rate</TableCell>
+                                                <TableCell align="right">Avg P&L %</TableCell>
+                                                <TableCell align="right">Total P&L</TableCell>
+                                            </TableRow>
+                                        </TableHead>
+                                        <TableBody>
+                                            {(analytics.byTier as TradeAnalyticsTier[]).map((r, i) => {
+                                                const total = parseInt(r.total);
+                                                const wr = total > 0 ? parseInt(r.winners) / total : 0;
+                                                return (
+                                                    <TableRow key={`${r.tier}-${r.bot}-${i}`} hover>
+                                                        <TableCell><Chip label={r.tier} size="small" /></TableCell>
+                                                        <TableCell><Chip label={r.bot} size="small" color={BOT_COLORS[r.bot] ?? 'default'} variant="outlined" /></TableCell>
+                                                        <TableCell align="right">{r.total}</TableCell>
+                                                        <TableCell align="right">
+                                                            <Typography variant="body2" color={wr >= 0.5 ? 'success.main' : 'warning.main'}>
+                                                                {(wr * 100).toFixed(1)}%
+                                                            </Typography>
+                                                        </TableCell>
+                                                        <TableCell align="right">
+                                                            <Typography variant="body2" color={pnlColor(r.avg_pnl_pct)}>
+                                                                {parseFloat(r.avg_pnl_pct ?? '0').toFixed(2)}%
+                                                            </Typography>
+                                                        </TableCell>
+                                                        <TableCell align="right">
+                                                            <Typography variant="body2" color={pnlColor(r.total_pnl)}>
+                                                                {fmt(r.total_pnl)}
+                                                            </Typography>
+                                                        </TableCell>
+                                                    </TableRow>
+                                                );
+                                            })}
+                                        </TableBody>
+                                    </Table>
+                                </TableContainer>
+                            )}
+                        </Paper>
+                    </Box>
+                )
+            ) : null}
         </Box>
     );
 }

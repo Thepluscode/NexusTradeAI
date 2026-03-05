@@ -12,6 +12,9 @@ import type {
   BacktestScanResult,
   TradeRecord,
   TradesSummaryResult,
+  TradeAnalyticsHour,
+  TradeAnalyticsSymbol,
+  TradeAnalyticsTier,
 } from '@/types';
 
 // ── Service URLs ─────────────────────────────────────────────────────────────
@@ -214,6 +217,15 @@ class APIClient {
       return response.data;
     } catch {
       return null;
+    }
+  }
+
+  async getTradeAnalytics(days = 30): Promise<{ byHour: TradeAnalyticsHour[]; bySymbol: TradeAnalyticsSymbol[]; byTier: TradeAnalyticsTier[] }> {
+    try {
+      const response = await this.tradingEngine.get(`/api/trades/analytics?days=${days}`);
+      return response.data.data ?? { byHour: [], bySymbol: [], byTier: [] };
+    } catch {
+      return { byHour: [], bySymbol: [], byTier: [] };
     }
   }
 
