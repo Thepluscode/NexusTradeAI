@@ -2034,14 +2034,44 @@ class UserForexEngine {
             if (r.rows.length > 0) {
                 const s = r.rows[0].state_json;
                 if (s.totalTradesToday !== undefined) this.totalTradesToday = s.totalTradesToday;
-                if (s.botRunning !== undefined)       this.botRunning = s.botRunning;
-                if (s.botPaused !== undefined)        this.botPaused = s.botPaused;
-                if (s.simEquity !== undefined)        this.simEquity = s.simEquity;
-                if (s.simTotalTrades !== undefined)   this.simTotalTrades = s.simTotalTrades;
-                if (s.simWinners !== undefined)       this.simWinners = s.simWinners;
-                if (s.simLosers !== undefined)        this.simLosers = s.simLosers;
+                if (s.botRunning !== undefined) this.botRunning = s.botRunning;
+                if (s.botPaused !== undefined) this.botPaused = s.botPaused;
+                if (s.simEquity !== undefined) this.simEquity = s.simEquity;
+                if (s.simTotalTrades !== undefined) this.simTotalTrades = s.simTotalTrades;
+                if (s.simWinners !== undefined) this.simWinners = s.simWinners;
+                if (s.simLosers !== undefined) this.simLosers = s.simLosers;
             }
-        } catch (e) { /* non-critical */ }
+
+            // Hydrate `this.positions` from DB + OANDA
+            const dbOpenRes = await dbPool.query(
+                `SELECT id, symbol, direction, entry_price, quantity, stop_loss, take_profit, entry_time
+                 FROM trades WHERE bot='forex' AND status='open' AND user_id=$1`, [this.userId]
+            );
+            const oandaPositions = await this.getOpenPositions();
+            const openInstruments = new Set(oandaPositions.map(p => p.instrument));
+
+            for (const row of dbOpenRes.rows) {
+                if (openInstruments.has(row.symbol)) {
+                    this.positions.set(row.symbol, {
+                        dbTradeId: row.id,
+                        instrument: row.symbol,
+                        direction: row.direction,
+                        entry: parseFloat(row.entry_price || '0'),
+                        units: parseFloat(row.quantity || '0'),
+                        stopLoss: parseFloat(row.stop_loss || '0'),
+                        takeProfit: parseFloat(row.take_profit || '0'),
+                        entryTime: row.entry_time,
+                        tier: 'restored'
+                    });
+                    this.tradesPerPair.set(row.symbol, 10); // block new entries while recovering
+                }
+            }
+            if (this.positions.size > 0) {
+                console.log(`✅ [ForexEngine ${this.userId}] Hydrated ${this.positions.size} positions from DB/OANDA`);
+            }
+        } catch (e) {
+            console.warn(`⚠️  [ForexEngine ${this.userId}] State load failed:`, e.message);
+        }
     }
 
     async oandaReq(method, endpoint, data = null) {
@@ -2443,10 +2473,11 @@ app.listen(PORT, async () => {
     // ── DB Reconciliation: close orphaned 'open' trades not in memory ──
     // Runs after position hydration so in-memory positions map is complete.
     // Any DB row still 'open' for a pair we don't track = orphaned on restart.
+    // ONLY check system-level trades (user_id IS NULL). Per-user trades are managed by UserForexEngine.
     try {
         if (dbPool) {
             const orphaned = await dbPool.query(
-                `SELECT id, symbol FROM trades WHERE bot='forex' AND status='open'`
+                `SELECT id, symbol FROM trades WHERE bot='forex' AND status='open' AND user_id IS NULL`
             );
             let closedCount = 0;
             for (const row of orphaned.rows) {
