@@ -79,7 +79,7 @@ export default function ForexBotPage() {
     const { data: engineStatus } = useQuery(
         'forexEngineStatus',
         () => apiClient.getForexEngineStatus(),
-        { refetchInterval: 15000, retry: false }
+        { refetchInterval: 15000, retry: false, enabled: !!user }
     );
     const credentialsRequired = engineStatus?.credentialsRequired === true;
 

@@ -119,8 +119,9 @@ class APIClient {
     // Apply auth token header to all instances (JWT Bearer for dashboard routes)
     [this.tradingEngine, this.forexService, this.cryptoService, this.marketData, this.aiService]
       .forEach(inst => addAuthInterceptor(inst));
-    // JWT refresh/redirect only on tradingEngine (stock-bot hosts the auth endpoints)
-    addRefreshInterceptor(this.tradingEngine);
+    // JWT refresh on all three bot instances — stock-bot hosts the /api/auth/refresh endpoint
+    [this.tradingEngine, this.forexService, this.cryptoService]
+      .forEach(inst => addRefreshInterceptor(inst));
   }
 
   // ── Stock Bot (port 3002) ─────────────────────────────────────────────────

@@ -26,6 +26,7 @@ import { apiClient } from '@/services/api';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import { useAuth } from '@/hooks/useAuth';
 
 
 interface Position {
@@ -79,12 +80,12 @@ interface BotStatus {
 export default function CryptoBotPage() {
     const queryClient = useQueryClient();
     const navigate = useNavigate();
-
+    const { user } = useAuth();
 
     const { data: engineStatus } = useQuery(
         'cryptoEngineStatus',
         () => apiClient.getCryptoEngineStatus(),
-        { refetchInterval: 15000, retry: false }
+        { refetchInterval: 15000, retry: false, enabled: !!user }
     );
     const credentialsRequired = engineStatus?.credentialsRequired === true;
 

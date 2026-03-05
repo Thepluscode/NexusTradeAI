@@ -80,7 +80,7 @@ export default function StockBotPage() {
     const { data: engineStatus } = useQuery(
         'stockEngineStatus',
         () => apiClient.getStockEngineStatus(),
-        { refetchInterval: 15000, retry: false }
+        { refetchInterval: 15000, retry: false, enabled: !!user }
     );
     const credentialsRequired = engineStatus?.credentialsRequired === true;
 
