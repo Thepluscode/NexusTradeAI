@@ -169,18 +169,39 @@ const CRYPTO_CONFIG = {
 
     // Trading Pairs — Kraken format (XBT = Bitcoin on Kraken)
     symbols: [
+        // Layer 1 Blue Chips
         'XBTUSD',   // Bitcoin
         'ETHUSD',   // Ethereum
         'SOLUSD',   // Solana
         'ADAUSD',   // Cardano
         'XRPUSD',   // Ripple
         'AVAXUSD',  // Avalanche
-        'LINKUSD',  // Chainlink
         'DOTUSD',   // Polkadot
-        'UNIUSD',   // Uniswap
+        'LTCUSD',   // Litecoin
         'ATOMUSD',  // Cosmos
+        // DeFi
+        'LINKUSD',  // Chainlink
+        'UNIUSD',   // Uniswap
+        'AAVEUSD',  // Aave
+        'MKRUSD',   // Maker
+        'SNXUSD',   // Synthetix
+        'CRVUSD',   // Curve
+        // Layer 2 / Scaling
         'MATICUSD', // Polygon
-        'LTCUSD',   // Litecoin (replaces BNB — not on Kraken)
+        'OPUSD',    // Optimism
+        'ARBUSD',   // Arbitrum
+        // Infrastructure / Interop
+        'ALGOUSD',  // Algorand
+        'NEARUSD',  // Near Protocol
+        'FTMUSD',   // Fantom
+        'ICPUSD',   // Internet Computer
+        'FILUSD',   // Filecoin
+        // Newer High-Momentum
+        'APTUSD',   // Aptos
+        'SUIUSD',   // Sui
+        'INJUSD',   // Injective
+        'TIAUSD',   // Celestia
+        'WIFUSD',   // dogwifhat (high vol)
     ],
 
     // Risk Management (Ultra-Conservative for crypto)
