@@ -1979,6 +1979,32 @@ async function getOrCreateCryptoEngine(userId) {
                 if (s.totalProfit !== undefined) userEngine.totalProfit = s.totalProfit;
             }
         } catch (e) { /* non-critical */ }
+        // Hydrate open positions from trades table (KrakenClient has no getOpenPositions — trust DB)
+        if (dbPool) {
+            try {
+                const dbOpen = await dbPool.query(
+                    `SELECT id, symbol, entry_price, quantity, stop_loss, take_profit, entry_time
+                     FROM trades WHERE bot='crypto' AND status='open' AND user_id=$1`, [userId]
+                );
+                for (const row of dbOpen.rows) {
+                    userEngine.positions.set(row.symbol, {
+                        dbTradeId: row.id,
+                        symbol: row.symbol,
+                        entry: parseFloat(row.entry_price || '0'),
+                        quantity: parseFloat(row.quantity || '0'),
+                        positionSize: parseFloat(row.quantity || '0') * parseFloat(row.entry_price || '0'),
+                        stopLoss: parseFloat(row.stop_loss || '0'),
+                        takeProfit: parseFloat(row.take_profit || '0'),
+                        entryTime: row.entry_time,
+                        tier: 'restored'
+                    });
+                }
+                if (userEngine.positions.size > 0)
+                    console.log(`✅ [CryptoEngine ${userId}] Hydrated ${userEngine.positions.size} position(s) from DB`);
+            } catch (e) {
+                console.warn(`⚠️ [CryptoEngine ${userId}] Position hydration failed:`, e.message);
+            }
+        }
         // Per-user Telegram alerts
         const tgCreds = await loadUserCredentials(userId, 'telegram').catch(() => ({}));
         const tgToken  = tgCreds.TELEGRAM_BOT_TOKEN  || process.env.TELEGRAM_BOT_TOKEN;
