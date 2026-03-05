@@ -1086,6 +1086,13 @@ async function shouldExitPosition(position, currentPrice, alpacaPos, overrideAlp
         exitReason = `5+ days old - taking ${unrealizedPL.toFixed(2)}% profit`;
     }
 
+    // 1b. EARLY LOSS CUT — cap losers before they compound
+    // If held 2+ days and still -1.5%+, the momentum thesis has failed. Cut now.
+    // This prevents the rare -$800 loss that wipes out 60 winning trades.
+    if (!exitReason && holdDays >= 2 && unrealizedPL <= -1.5) {
+        exitReason = `Cutting loser early (${holdDays.toFixed(1)} days, ${unrealizedPL.toFixed(2)}% — momentum thesis failed)`;
+    }
+
     // 2. DYNAMIC PROFIT TARGET (FIX: profitTargetByDay is 0.08 = 8%, unrealizedPL is already 5.09 not 0.0509)
     if (!exitReason) {
         const dayIndex = Math.min(Math.floor(holdDays), 7);
@@ -3297,6 +3304,39 @@ app.get('/api/trades/summary', async (req, res) => {
         `);
         res.json({ success: true, daily: r.rows, totals: totals.rows });
     } catch (e) { res.status(500).json({ success: false, error: e.message, daily: [], totals: [] }); }
+});
+
+// Equity curve: daily cumulative P&L for charting
+app.get('/api/performance/equity', async (req, res) => {
+    if (!dbPool) return res.json({ success: true, data: [] });
+    const days = Math.min(parseInt(req.query.days) || 90, 365);
+    try {
+        const result = await dbPool.query(`
+            SELECT
+                DATE_TRUNC('day', exit_time AT TIME ZONE 'America/New_York')::date AS date,
+                ROUND(SUM(pnl_usd)::numeric, 2)                                    AS daily_pnl,
+                COUNT(*)                                                            AS trades_closed,
+                COUNT(*) FILTER (WHERE pnl_usd > 0)                                AS winners
+            FROM trades
+            WHERE status = 'closed'
+              AND exit_time > NOW() - INTERVAL '1 day' * $1
+            GROUP BY 1
+            ORDER BY 1 ASC`, [days]);
+
+        // Build cumulative sum in JS (simple fold)
+        let cumulative = 0;
+        const data = result.rows.map(r => {
+            cumulative = Math.round((cumulative + parseFloat(r.daily_pnl)) * 100) / 100;
+            return {
+                date:           r.date,
+                daily_pnl:      parseFloat(r.daily_pnl),
+                cumulative_pnl: cumulative,
+                trades_closed:  parseInt(r.trades_closed),
+                winners:        parseInt(r.winners),
+            };
+        });
+        res.json({ success: true, data });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 // Trade analytics: win rate by hour, symbol breakdown, tier breakdown

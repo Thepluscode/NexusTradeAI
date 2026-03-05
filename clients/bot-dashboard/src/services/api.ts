@@ -15,6 +15,7 @@ import type {
   TradeAnalyticsHour,
   TradeAnalyticsSymbol,
   TradeAnalyticsTier,
+  EquityCurvePoint,
 } from '@/types';
 
 // ── Service URLs ─────────────────────────────────────────────────────────────
@@ -217,6 +218,15 @@ class APIClient {
       return response.data;
     } catch {
       return null;
+    }
+  }
+
+  async getEquityCurve(days = 90): Promise<EquityCurvePoint[]> {
+    try {
+      const response = await this.tradingEngine.get(`/api/performance/equity?days=${days}`);
+      return response.data.data ?? [];
+    } catch {
+      return [];
     }
   }
 

@@ -579,6 +579,14 @@ export interface TradeRecord {
   created_at: string;
 }
 
+export interface EquityCurvePoint {
+  date: string;
+  daily_pnl: number;
+  cumulative_pnl: number;
+  trades_closed: number;
+  winners: number;
+}
+
 export interface TradeAnalyticsHour {
   hour: string;
   winners: string;

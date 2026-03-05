@@ -33,9 +33,18 @@ import {
     PlayArrow,
     Bolt,
 } from '@mui/icons-material';
+import {
+    AreaChart,
+    Area,
+    XAxis,
+    YAxis,
+    CartesianGrid,
+    Tooltip as RechartsTooltip,
+    ResponsiveContainer,
+} from 'recharts';
 import { apiClient } from '@/services/api';
 import { MetricCard } from '@/components/MetricCard';
-import type { BacktestSymbolResult, BacktestTrade, BacktestScanResult } from '@/types';
+import type { BacktestSymbolResult, BacktestTrade, BacktestScanResult, EquityCurvePoint } from '@/types';
 
 function ValidationChecklist({ checks }: { checks: Record<string, boolean> }) {
     const labels: Record<string, string> = {
@@ -77,6 +86,12 @@ export default function BacktestPage() {
         'backtestReport',
         () => apiClient.getBacktestReport(),
         { staleTime: 60 * 1000, retry: 1, refetchInterval: 30 * 1000 }
+    );
+
+    const { data: equityCurve = [] } = useQuery(
+        'equityCurve',
+        () => apiClient.getEquityCurve(90),
+        { staleTime: 5 * 60 * 1000, refetchInterval: 10 * 60 * 1000 }
     );
 
     const [scanning, setScanning] = useState(false);
@@ -240,6 +255,80 @@ export default function BacktestPage() {
                     icon={<TrendingDown />}
                 />
             </Box>
+
+            {/* Equity curve chart */}
+            {(equityCurve as EquityCurvePoint[]).length > 1 && (() => {
+                const curve = equityCurve as EquityCurvePoint[];
+                const finalPnl = curve[curve.length - 1]?.cumulative_pnl ?? 0;
+                const curveColor = finalPnl >= 0 ? '#10b981' : '#ef4444';
+                const fmtDate = (d: string) => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                return (
+                    <Paper sx={{ p: 2, mb: 3 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
+                            <Typography variant="h6" fontWeight={600}>Equity Curve (90 days)</Typography>
+                            <Typography
+                                variant="body2"
+                                fontWeight={700}
+                                color={finalPnl >= 0 ? 'success.main' : 'error.main'}
+                            >
+                                {finalPnl >= 0 ? '+' : ''}${finalPnl.toFixed(2)} cumulative P&L
+                            </Typography>
+                        </Box>
+                        <ResponsiveContainer width="100%" height={200}>
+                            <AreaChart data={equityCurve as EquityCurvePoint[]} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                                <defs>
+                                    <linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%"  stopColor={curveColor} stopOpacity={0.25} />
+                                        <stop offset="95%" stopColor={curveColor} stopOpacity={0.03} />
+                                    </linearGradient>
+                                </defs>
+                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                                <XAxis
+                                    dataKey="date"
+                                    tickFormatter={fmtDate}
+                                    tick={{ fontSize: 11, fill: '#9ca3af' }}
+                                    interval="preserveStartEnd"
+                                />
+                                <YAxis
+                                    tickFormatter={(v: number) => `$${v}`}
+                                    tick={{ fontSize: 11, fill: '#9ca3af' }}
+                                    width={52}
+                                />
+                                <RechartsTooltip
+                                    contentStyle={{ background: '#1e293b', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8 }}
+                                    labelFormatter={fmtDate}
+                                    formatter={(value: number, name: string) => [
+                                        `$${value.toFixed(2)}`,
+                                        name === 'cumulative_pnl' ? 'Cumulative P&L' : 'Daily P&L',
+                                    ]}
+                                />
+                                <Area
+                                    type="monotone"
+                                    dataKey="cumulative_pnl"
+                                    stroke={curveColor}
+                                    strokeWidth={2}
+                                    fill="url(#eqGrad)"
+                                    dot={false}
+                                    activeDot={{ r: 4, fill: curveColor }}
+                                />
+                            </AreaChart>
+                        </ResponsiveContainer>
+                        <Box sx={{ display: 'flex', gap: 3, mt: 1.5, flexWrap: 'wrap' }}>
+                            {[
+                                { label: 'Trading days', value: String((equityCurve as EquityCurvePoint[]).length) },
+                                { label: 'Total closed', value: String((equityCurve as EquityCurvePoint[]).reduce((s, r) => s + r.trades_closed, 0)) },
+                                { label: 'Best day', value: `$${Math.max(...(equityCurve as EquityCurvePoint[]).map(r => r.daily_pnl)).toFixed(2)}` },
+                                { label: 'Worst day', value: `$${Math.min(...(equityCurve as EquityCurvePoint[]).map(r => r.daily_pnl)).toFixed(2)}` },
+                            ].map(({ label, value }) => (
+                                <Box key={label}>
+                                    <Typography variant="caption" color="text.secondary">{label}</Typography>
+                                    <Typography variant="body2" fontWeight={600}>{value}</Typography>
+                                </Box>
+                            ))}
+                        </Box>
+                    </Paper>
+                );
+            })()}
 
             {/* Pairs cache warm-up result */}
             {warmResult && (
