@@ -2700,6 +2700,42 @@ class UserTradingEngine {
         } catch (e) {
             console.warn(`⚠️  [Engine ${this.userId}] State load failed:`, e.message);
         }
+        // Hydrate open positions from trades table + cross-reference with Alpaca
+        try {
+            const dbOpen = await dbPool.query(
+                `SELECT id, symbol, direction, entry_price, quantity, stop_loss, take_profit, entry_time
+                 FROM trades WHERE bot='stock' AND status='open' AND user_id=$1`, [this.userId]
+            );
+            if (dbOpen.rows.length > 0) {
+                let alpacaSymbols = new Set();
+                try {
+                    const resp = await axios.get(`${this.alpacaConfig.baseURL}/v2/positions`, {
+                        headers: { 'APCA-API-KEY-ID': this.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': this.alpacaConfig.secretKey }
+                    });
+                    alpacaSymbols = new Set(resp.data.map(p => p.symbol));
+                } catch (e) { console.warn(`⚠️ [Engine ${this.userId}] Alpaca position fetch failed:`, e.message); }
+
+                for (const row of dbOpen.rows) {
+                    if (alpacaSymbols.size === 0 || alpacaSymbols.has(row.symbol)) {
+                        this.positions.set(row.symbol, {
+                            dbTradeId: row.id,
+                            symbol: row.symbol,
+                            side: row.direction || 'long',
+                            entryPrice: parseFloat(row.entry_price || '0'),
+                            quantity: parseFloat(row.quantity || '0'),
+                            stopLoss: parseFloat(row.stop_loss || '0'),
+                            takeProfit: parseFloat(row.take_profit || '0'),
+                            entryTime: row.entry_time,
+                            tier: 'restored'
+                        });
+                    }
+                }
+                if (this.positions.size > 0)
+                    console.log(`✅ [Engine ${this.userId}] Hydrated ${this.positions.size} position(s) from DB/Alpaca`);
+            }
+        } catch (e) {
+            console.warn(`⚠️ [Engine ${this.userId}] Position hydration failed:`, e.message);
+        }
     }
 
     recordTradeClose(symbol, entryPrice, exitPrice, shares, reason) {
@@ -3285,6 +3321,26 @@ app.get('/api/admin/users', requireJwt, async (req, res) => {
         }));
         res.json({ success: true, users: rows });
     } catch (e) { res.status(500).json({ success: false, error: e.message, users: [] }); }
+});
+
+// Admin: force-close stuck open trades (no matching exit recorded)
+app.post('/api/admin/trades/fix-stuck', requireJwt, async (req, res) => {
+    if (req.user?.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
+    if (!dbPool) return res.status(503).json({ success: false, error: 'No DB' });
+    try {
+        const { symbols, bot } = req.body || {};
+        let query = `UPDATE trades SET status='closed', exit_price=entry_price, pnl_usd=0, pnl_pct=0,
+                     close_reason='admin_cleanup', exit_time=NOW()
+                     WHERE status='open' AND exit_time IS NULL`;
+        const params = [];
+        if (bot)             { params.push(bot);     query += ` AND bot=$${params.length}`; }
+        if (symbols?.length) { params.push(symbols); query += ` AND symbol = ANY($${params.length})`; }
+        query += ' RETURNING id, symbol, bot';
+        const result = await dbPool.query(query, params);
+        res.json({ success: true, fixed: result.rows.length, trades: result.rows });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
 });
 
 // Trigger a live backtest scan (runs analyzeMomentum on all symbols, returns signals without executing trades)

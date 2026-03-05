@@ -578,6 +578,11 @@ class APIClient {
       return [];
     }
   }
+
+  async fixStuckTrades(params?: { symbols?: string[]; bot?: string }): Promise<{ fixed: number; trades: unknown[] }> {
+    const response = await this.tradingEngine.post('/api/admin/trades/fix-stuck', params || {});
+    return response.data;
+  }
 }
 
 export const apiClient = new APIClient();
