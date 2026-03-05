@@ -404,7 +404,7 @@ export default function StockBotPage() {
                         color="success"
                         startIcon={<PlayArrow />}
                         onClick={() => startMutation.mutate()}
-                        disabled={status?.isRunning || startMutation.isLoading}
+                        disabled={(engineStatus?.isRunning === true) || startMutation.isLoading}
                     >
                         Start
                     </Button>
@@ -413,7 +413,7 @@ export default function StockBotPage() {
                         color="warning"
                         startIcon={<Pause />}
                         onClick={() => pauseMutation.mutate()}
-                        disabled={!status?.isRunning || pauseMutation.isLoading}
+                        disabled={!(engineStatus?.isRunning) || pauseMutation.isLoading}
                     >
                         Pause
                     </Button>
@@ -422,7 +422,7 @@ export default function StockBotPage() {
                         color="error"
                         startIcon={<Stop />}
                         onClick={() => stopMutation.mutate()}
-                        disabled={!status?.isRunning || stopMutation.isLoading}
+                        disabled={!(engineStatus?.isRunning) || stopMutation.isLoading}
                     >
                         Stop
                     </Button>

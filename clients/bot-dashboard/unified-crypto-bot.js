@@ -2031,6 +2031,13 @@ app.post('/api/crypto/engine/stop', requireJwt, async (req, res) => {
     res.json({ success: true, isRunning: false });
 });
 
+app.post('/api/crypto/engine/pause', requireJwt, async (req, res) => {
+    const userEngine = cryptoEngineRegistry.get(String(req.user.sub));
+    if (!userEngine) return res.status(404).json({ success: false, error: 'Engine not found' });
+    userEngine.isPaused = !userEngine.isPaused;
+    res.json({ success: true, isRunning: userEngine.isRunning, isPaused: userEngine.isPaused });
+});
+
 app.post('/api/crypto/engine/close-all', requireJwt, async (req, res) => {
     const userEngine = cryptoEngineRegistry.get(String(req.user.sub));
     if (!userEngine) return res.status(404).json({ success: false, error: 'Engine not found' });

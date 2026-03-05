@@ -428,7 +428,7 @@ class APIClient {
 
   async pauseForexEngine(): Promise<Record<string, unknown>> {
     try {
-      const response = await this.forexService.post('/api/forex/pause');
+      const response = await this.forexService.post('/api/forex/engine/pause');
       return response.data;
     } catch {
       return { success: false };
@@ -473,7 +473,7 @@ class APIClient {
 
   async pauseCryptoEngine(): Promise<Record<string, unknown>> {
     try {
-      const response = await this.cryptoService.post('/api/crypto/pause');
+      const response = await this.cryptoService.post('/api/crypto/engine/pause');
       return response.data;
     } catch {
       return { success: false };

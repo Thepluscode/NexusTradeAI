@@ -2321,6 +2321,13 @@ app.post('/api/forex/engine/stop', requireJwt, async (req, res) => {
     res.json({ success: true, isRunning: false });
 });
 
+app.post('/api/forex/engine/pause', requireJwt, async (req, res) => {
+    const engine = forexEngineRegistry.get(String(req.user.sub));
+    if (!engine) return res.status(404).json({ success: false, error: 'Engine not found' });
+    engine.botPaused = !engine.botPaused; await engine.saveState();
+    res.json({ success: true, isRunning: engine.botRunning, isPaused: engine.botPaused });
+});
+
 app.post('/api/forex/engine/close-all', requireJwt, async (req, res) => {
     const engine = forexEngineRegistry.get(String(req.user.sub));
     if (!engine) return res.status(404).json({ success: false, error: 'Engine not found' });
