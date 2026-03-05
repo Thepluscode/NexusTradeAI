@@ -386,39 +386,27 @@ class APIClient {
   }
 
   async startStockEngine(): Promise<Record<string, unknown>> {
-    try {
-      const response = await this.tradingEngine.post('/api/trading/engine/start');
-      return response.data;
-    } catch {
-      return { success: false };
-    }
+    const response = await this.tradingEngine.post('/api/trading/engine/start');
+    if (response.data?.success === false) throw new Error(response.data?.error || 'Failed to start engine');
+    return response.data;
   }
 
   async stopStockEngine(): Promise<Record<string, unknown>> {
-    try {
-      const response = await this.tradingEngine.post('/api/trading/engine/stop');
-      return response.data;
-    } catch {
-      return { success: false };
-    }
+    const response = await this.tradingEngine.post('/api/trading/engine/stop');
+    if (response.data?.success === false) throw new Error(response.data?.error || 'Failed to stop engine');
+    return response.data;
   }
 
   async pauseStockEngine(): Promise<Record<string, unknown>> {
-    try {
-      const response = await this.tradingEngine.post('/api/trading/engine/pause');
-      return response.data;
-    } catch {
-      return { success: false };
-    }
+    const response = await this.tradingEngine.post('/api/trading/engine/pause');
+    if (response.data?.success === false) throw new Error(response.data?.error || 'Failed to pause engine');
+    return response.data;
   }
 
   async closeAllStockPositions(): Promise<Record<string, unknown>> {
-    try {
-      const response = await this.tradingEngine.post('/api/trading/engine/close-all');
-      return response.data;
-    } catch {
-      return { success: false };
-    }
+    const response = await this.tradingEngine.post('/api/trading/engine/close-all');
+    if (response.data?.success === false) throw new Error(response.data?.error || 'Failed to close positions');
+    return response.data;
   }
 
   async getForexEngineStatus(): Promise<Record<string, unknown>> {
@@ -431,39 +419,27 @@ class APIClient {
   }
 
   async startForexEngine(): Promise<Record<string, unknown>> {
-    try {
-      const response = await this.forexService.post('/api/forex/engine/start');
-      return response.data;
-    } catch {
-      return { success: false };
-    }
+    const response = await this.forexService.post('/api/forex/engine/start');
+    if (response.data?.success === false) throw new Error(response.data?.error || 'Failed to start engine');
+    return response.data;
   }
 
   async stopForexEngine(): Promise<Record<string, unknown>> {
-    try {
-      const response = await this.forexService.post('/api/forex/engine/stop');
-      return response.data;
-    } catch {
-      return { success: false };
-    }
+    const response = await this.forexService.post('/api/forex/engine/stop');
+    if (response.data?.success === false) throw new Error(response.data?.error || 'Failed to stop engine');
+    return response.data;
   }
 
   async pauseForexEngine(): Promise<Record<string, unknown>> {
-    try {
-      const response = await this.forexService.post('/api/forex/engine/pause');
-      return response.data;
-    } catch {
-      return { success: false };
-    }
+    const response = await this.forexService.post('/api/forex/engine/pause');
+    if (response.data?.success === false) throw new Error(response.data?.error || 'Failed to pause engine');
+    return response.data;
   }
 
   async closeAllForexPositions(): Promise<Record<string, unknown>> {
-    try {
-      const response = await this.forexService.post('/api/forex/engine/close-all');
-      return response.data;
-    } catch {
-      return { success: false };
-    }
+    const response = await this.forexService.post('/api/forex/engine/close-all');
+    if (response.data?.success === false) throw new Error(response.data?.error || 'Failed to close positions');
+    return response.data;
   }
 
   async getCryptoEngineStatus(): Promise<Record<string, unknown>> {
@@ -476,39 +452,27 @@ class APIClient {
   }
 
   async startCryptoEngine(): Promise<Record<string, unknown>> {
-    try {
-      const response = await this.cryptoService.post('/api/crypto/engine/start');
-      return response.data;
-    } catch {
-      return { success: false };
-    }
+    const response = await this.cryptoService.post('/api/crypto/engine/start');
+    if (response.data?.success === false) throw new Error(response.data?.error || 'Failed to start engine');
+    return response.data;
   }
 
   async stopCryptoEngine(): Promise<Record<string, unknown>> {
-    try {
-      const response = await this.cryptoService.post('/api/crypto/engine/stop');
-      return response.data;
-    } catch {
-      return { success: false };
-    }
+    const response = await this.cryptoService.post('/api/crypto/engine/stop');
+    if (response.data?.success === false) throw new Error(response.data?.error || 'Failed to stop engine');
+    return response.data;
   }
 
   async pauseCryptoEngine(): Promise<Record<string, unknown>> {
-    try {
-      const response = await this.cryptoService.post('/api/crypto/engine/pause');
-      return response.data;
-    } catch {
-      return { success: false };
-    }
+    const response = await this.cryptoService.post('/api/crypto/engine/pause');
+    if (response.data?.success === false) throw new Error(response.data?.error || 'Failed to pause engine');
+    return response.data;
   }
 
   async closeAllCryptoPositions(): Promise<Record<string, unknown>> {
-    try {
-      const response = await this.cryptoService.post('/api/crypto/engine/close-all');
-      return response.data;
-    } catch {
-      return { success: false };
-    }
+    const response = await this.cryptoService.post('/api/crypto/engine/close-all');
+    if (response.data?.success === false) throw new Error(response.data?.error || 'Failed to close positions');
+    return response.data;
   }
 
   // ── AI Service (port 5001 — optional) ────────────────────────────────────

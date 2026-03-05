@@ -92,53 +92,60 @@ export default function ForexBotPage() {
         { refetchInterval: 5000 }
     );
 
-    const patchEngineStatus = (patch: Record<string, unknown>) => {
+    const patchRunningState = (patch: { isRunning?: boolean; isPaused?: boolean }) => {
         queryClient.setQueryData('forexEngineStatus', (old: Record<string, unknown> | undefined) =>
             old ? { ...old, ...patch } : patch
         );
+        queryClient.setQueryData('forexBotStatus', (old: BotStatus | undefined) =>
+            old ? { ...old, ...patch } : old as unknown as BotStatus
+        );
     };
 
-    const startMutation = useMutation<unknown, unknown, void>(
+    const isRunning = engineStatus?.isRunning != null ? (engineStatus.isRunning as boolean) : (status?.isRunning ?? false);
+    const isPaused = engineStatus?.isPaused != null ? (engineStatus.isPaused as boolean) : (status?.isPaused ?? false);
+
+    const startMutation = useMutation<unknown, Error, void>(
         () => user ? apiClient.startForexEngine() : apiClient.startForexTrading(),
         {
             onSuccess: () => {
-                patchEngineStatus({ isRunning: true, isPaused: false });
+                patchRunningState({ isRunning: true, isPaused: false });
                 toast.success('Forex Bot started!');
                 queryClient.invalidateQueries('forexBotStatus');
                 queryClient.invalidateQueries('forexEngineStatus');
             },
-            onError: () => { toast.error('Failed to start bot'); },
+            onError: (err) => { toast.error(err?.message || 'Failed to start bot'); },
         }
     );
 
-    const stopMutation = useMutation<unknown, unknown, void>(
+    const stopMutation = useMutation<unknown, Error, void>(
         () => user ? apiClient.stopForexEngine() : apiClient.stopForexTrading(),
         {
             onSuccess: () => {
-                patchEngineStatus({ isRunning: false, isPaused: false });
+                patchRunningState({ isRunning: false, isPaused: false });
                 toast.success('Forex Bot stopped');
                 queryClient.invalidateQueries('forexBotStatus');
                 queryClient.invalidateQueries('forexEngineStatus');
             },
-            onError: () => { toast.error('Failed to stop bot'); },
+            onError: (err) => { toast.error(err?.message || 'Failed to stop bot'); },
         }
     );
 
-    const pauseMutation = useMutation<unknown, unknown, void>(
+    const pauseMutation = useMutation<unknown, Error, void>(
         () => apiClient.pauseForexEngine(),
         {
             onSuccess: (data) => {
                 const d = data as { isRunning?: boolean; isPaused?: boolean } | null;
-                patchEngineStatus({ isRunning: d?.isRunning ?? true, isPaused: d?.isPaused ?? !engineStatus?.isPaused });
-                toast.success(engineStatus?.isPaused ? 'Forex Bot resumed' : 'Forex Bot paused');
+                const newPaused = d?.isPaused ?? !isPaused;
+                patchRunningState({ isRunning: d?.isRunning ?? true, isPaused: newPaused });
+                toast.success(isPaused ? 'Forex Bot resumed' : 'Forex Bot paused');
                 queryClient.invalidateQueries('forexBotStatus');
                 queryClient.invalidateQueries('forexEngineStatus');
             },
-            onError: () => { toast.error('Failed to pause bot'); },
+            onError: (err) => { toast.error(err?.message || 'Failed to pause bot'); },
         }
     );
 
-    const closeAllMutation = useMutation<unknown, unknown, void>(
+    const closeAllMutation = useMutation<unknown, Error, void>(
         () => apiClient.closeAllForexPositions(),
     {
         onSuccess: () => {
@@ -146,7 +153,7 @@ export default function ForexBotPage() {
             queryClient.invalidateQueries('forexBotStatus');
             queryClient.invalidateQueries('forexEngineStatus');
         },
-        onError: () => { toast.error('Failed to close all positions'); },
+        onError: (err) => { toast.error(err?.message || 'Failed to close all positions'); },
     });
 
     if (isLoading) {
@@ -240,8 +247,8 @@ export default function ForexBotPage() {
                             sx={{ fontWeight: 600, color: 'white', bgcolor: 'rgba(255,255,255,0.2)' }}
                         />
                         <Chip
-                            label={status?.isRunning ? 'RUNNING' : 'STOPPED'}
-                            color={status?.isRunning ? 'success' : 'default'}
+                            label={isRunning ? 'RUNNING' : 'STOPPED'}
+                            color={isRunning ? 'success' : 'default'}
                             sx={{ fontWeight: 600 }}
                         />
                         <Chip
@@ -336,7 +343,7 @@ export default function ForexBotPage() {
                         <Box sx={{ p: 1.5, borderRadius: 2, background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)' }}>
                             <Typography variant="caption" color="text.secondary">REGIME</Typography>
                             <Typography variant="body1" sx={{ fontWeight: 700, color: '#10b981' }}>
-                                {status?.isRunning ? '📊 Active Detection' : '⏸️ Inactive'}
+                                {isRunning ? '📊 Active Detection' : '⏸️ Inactive'}
                             </Typography>
                             <Typography variant="caption" color="text.secondary">HMM + Session Optimization</Typography>
                         </Box>
@@ -392,7 +399,7 @@ export default function ForexBotPage() {
                         color="success"
                         startIcon={<PlayArrow />}
                         onClick={() => startMutation.mutate()}
-                        disabled={(engineStatus?.isRunning === true) || startMutation.isLoading}
+                        disabled={isRunning || startMutation.isLoading}
                     >
                         Start
                     </Button>
@@ -401,16 +408,16 @@ export default function ForexBotPage() {
                         color="warning"
                         startIcon={<Pause />}
                         onClick={() => pauseMutation.mutate()}
-                        disabled={!(engineStatus?.isRunning) || pauseMutation.isLoading}
+                        disabled={!isRunning || pauseMutation.isLoading}
                     >
-                        {engineStatus?.isPaused ? 'Resume' : 'Pause'}
+                        {isPaused ? 'Resume' : 'Pause'}
                     </Button>
                     <Button
                         variant="contained"
                         color="error"
                         startIcon={<Stop />}
                         onClick={() => stopMutation.mutate()}
-                        disabled={!(engineStatus?.isRunning) || stopMutation.isLoading}
+                        disabled={!isRunning || stopMutation.isLoading}
                     >
                         Stop
                     </Button>

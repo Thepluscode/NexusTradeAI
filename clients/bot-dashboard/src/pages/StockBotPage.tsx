@@ -120,55 +120,64 @@ export default function StockBotPage() {
         { refetchInterval: 5000 }
     );
 
-    // Helper: immediately patch the cached engine status so buttons react instantly
-    const patchEngineStatus = (patch: Record<string, unknown>) => {
+    // Helper: immediately patch BOTH caches so UI reacts instantly
+    const patchRunningState = (patch: { isRunning?: boolean; isPaused?: boolean }) => {
         queryClient.setQueryData('stockEngineStatus', (old: Record<string, unknown> | undefined) =>
             old ? { ...old, ...patch } : patch
         );
+        // Also patch the global status so the chip + button disabled logic is consistent
+        queryClient.setQueryData('stockBotStatus', (old: BotStatus | undefined) =>
+            old ? { ...old, ...patch } : old as unknown as BotStatus
+        );
     };
 
+    // Effective running/paused state — prefer engineStatus when available, fall back to global status
+    const isRunning = engineStatus?.isRunning != null ? (engineStatus.isRunning as boolean) : (status?.isRunning ?? false);
+    const isPaused = engineStatus?.isPaused != null ? (engineStatus.isPaused as boolean) : (status?.isPaused ?? false);
+
     // Control mutations
-    const startMutation = useMutation<unknown, unknown, void>(
+    const startMutation = useMutation<unknown, Error, void>(
         async () => user ? apiClient.startStockEngine() : axios.post(`${API_BASE}/api/trading/start`),
         {
             onSuccess: () => {
-                patchEngineStatus({ isRunning: true, isPaused: false });
+                patchRunningState({ isRunning: true, isPaused: false });
                 toast.success('Stock Bot started!');
                 queryClient.invalidateQueries('stockBotStatus');
                 queryClient.invalidateQueries('stockEngineStatus');
             },
-            onError: () => { toast.error('Failed to start bot'); },
+            onError: (err) => { toast.error(err?.message || 'Failed to start bot'); },
         }
     );
 
-    const stopMutation = useMutation<unknown, unknown, void>(
+    const stopMutation = useMutation<unknown, Error, void>(
         async () => user ? apiClient.stopStockEngine() : axios.post(`${API_BASE}/api/trading/stop`),
         {
             onSuccess: () => {
-                patchEngineStatus({ isRunning: false, isPaused: false });
+                patchRunningState({ isRunning: false, isPaused: false });
                 toast.success('Stock Bot stopped');
                 queryClient.invalidateQueries('stockBotStatus');
                 queryClient.invalidateQueries('stockEngineStatus');
             },
-            onError: () => { toast.error('Failed to stop bot'); },
+            onError: (err) => { toast.error(err?.message || 'Failed to stop bot'); },
         }
     );
 
-    const pauseMutation = useMutation<unknown, unknown, void>(
+    const pauseMutation = useMutation<unknown, Error, void>(
         async () => user ? apiClient.pauseStockEngine() : axios.post(`${API_BASE}/api/trading/pause`),
         {
             onSuccess: (data) => {
                 const d = data as { isRunning?: boolean; isPaused?: boolean } | null;
-                patchEngineStatus({ isRunning: d?.isRunning ?? true, isPaused: d?.isPaused ?? !engineStatus?.isPaused });
-                toast.success(engineStatus?.isPaused ? 'Stock Bot resumed' : 'Stock Bot paused');
+                const newPaused = d?.isPaused ?? !isPaused;
+                patchRunningState({ isRunning: d?.isRunning ?? true, isPaused: newPaused });
+                toast.success(isPaused ? 'Stock Bot resumed' : 'Stock Bot paused');
                 queryClient.invalidateQueries('stockBotStatus');
                 queryClient.invalidateQueries('stockEngineStatus');
             },
-            onError: () => { toast.error('Failed to pause bot'); },
+            onError: (err) => { toast.error(err?.message || 'Failed to pause bot'); },
         }
     );
 
-    const closeAllMutation = useMutation<unknown, unknown, void>(async () => {
+    const closeAllMutation = useMutation<unknown, Error, void>(async () => {
         if (user) return apiClient.closeAllStockPositions();
         return axios.post(`${API_BASE}/api/trading/close-all`);
     }, {
@@ -177,7 +186,7 @@ export default function StockBotPage() {
             queryClient.invalidateQueries('stockBotStatus');
             queryClient.invalidateQueries('stockEngineStatus');
         },
-        onError: () => { toast.error('Failed to close all positions'); },
+        onError: (err) => { toast.error(err?.message || 'Failed to close all positions'); },
     });
 
     if (isLoading) {
@@ -258,8 +267,8 @@ export default function StockBotPage() {
                     </Box>
                     <Box sx={{ display: 'flex', gap: 1 }}>
                         <Chip
-                            label={status?.isRunning ? 'RUNNING' : 'STOPPED'}
-                            color={status?.isRunning ? 'success' : 'default'}
+                            label={isRunning ? 'RUNNING' : 'STOPPED'}
+                            color={isRunning ? 'success' : 'default'}
                             sx={{ fontWeight: 600 }}
                         />
                         <Chip
@@ -351,7 +360,7 @@ export default function StockBotPage() {
                         <Box sx={{ p: 1.5, borderRadius: 2, background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)' }}>
                             <Typography variant="caption" color="text.secondary">REGIME</Typography>
                             <Typography variant="body1" sx={{ fontWeight: 700, color: '#10b981' }}>
-                                {status?.isRunning ? '📊 Active Detection' : '⏸️ Inactive'}
+                                {isRunning ? '📊 Active Detection' : '⏸️ Inactive'}
                             </Typography>
                             <Typography variant="caption" color="text.secondary">HMM + Baum-Welch Calibration</Typography>
                         </Box>
@@ -415,7 +424,7 @@ export default function StockBotPage() {
                         color="success"
                         startIcon={<PlayArrow />}
                         onClick={() => startMutation.mutate()}
-                        disabled={engineStatus?.isRunning === true || startMutation.isLoading}
+                        disabled={isRunning || startMutation.isLoading}
                     >
                         Start
                     </Button>
@@ -424,16 +433,16 @@ export default function StockBotPage() {
                         color="warning"
                         startIcon={<Pause />}
                         onClick={() => pauseMutation.mutate()}
-                        disabled={!engineStatus?.isRunning || pauseMutation.isLoading}
+                        disabled={!isRunning || pauseMutation.isLoading}
                     >
-                        {engineStatus?.isPaused ? 'Resume' : 'Pause'}
+                        {isPaused ? 'Resume' : 'Pause'}
                     </Button>
                     <Button
                         variant="contained"
                         color="error"
                         startIcon={<Stop />}
                         onClick={() => stopMutation.mutate()}
-                        disabled={!engineStatus?.isRunning || stopMutation.isLoading}
+                        disabled={!isRunning || stopMutation.isLoading}
                     >
                         Stop
                     </Button>
