@@ -92,10 +92,17 @@ export default function ForexBotPage() {
         { refetchInterval: 5000 }
     );
 
+    const patchEngineStatus = (patch: Record<string, unknown>) => {
+        queryClient.setQueryData('forexEngineStatus', (old: Record<string, unknown> | undefined) =>
+            old ? { ...old, ...patch } : patch
+        );
+    };
+
     const startMutation = useMutation<unknown, unknown, void>(
         () => user ? apiClient.startForexEngine() : apiClient.startForexTrading(),
         {
             onSuccess: () => {
+                patchEngineStatus({ isRunning: true, isPaused: false });
                 toast.success('Forex Bot started!');
                 queryClient.invalidateQueries('forexBotStatus');
                 queryClient.invalidateQueries('forexEngineStatus');
@@ -108,6 +115,7 @@ export default function ForexBotPage() {
         () => user ? apiClient.stopForexEngine() : apiClient.stopForexTrading(),
         {
             onSuccess: () => {
+                patchEngineStatus({ isRunning: false, isPaused: false });
                 toast.success('Forex Bot stopped');
                 queryClient.invalidateQueries('forexBotStatus');
                 queryClient.invalidateQueries('forexEngineStatus');
@@ -119,8 +127,10 @@ export default function ForexBotPage() {
     const pauseMutation = useMutation<unknown, unknown, void>(
         () => apiClient.pauseForexEngine(),
         {
-            onSuccess: () => {
-                toast.success('Forex Bot paused');
+            onSuccess: (data) => {
+                const d = data as { isRunning?: boolean; isPaused?: boolean } | null;
+                patchEngineStatus({ isRunning: d?.isRunning ?? true, isPaused: d?.isPaused ?? !engineStatus?.isPaused });
+                toast.success(engineStatus?.isPaused ? 'Forex Bot resumed' : 'Forex Bot paused');
                 queryClient.invalidateQueries('forexBotStatus');
                 queryClient.invalidateQueries('forexEngineStatus');
             },
@@ -393,7 +403,7 @@ export default function ForexBotPage() {
                         onClick={() => pauseMutation.mutate()}
                         disabled={!(engineStatus?.isRunning) || pauseMutation.isLoading}
                     >
-                        Pause
+                        {engineStatus?.isPaused ? 'Resume' : 'Pause'}
                     </Button>
                     <Button
                         variant="contained"

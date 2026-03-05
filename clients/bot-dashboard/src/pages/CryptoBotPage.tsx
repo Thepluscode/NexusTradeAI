@@ -98,10 +98,17 @@ export default function CryptoBotPage() {
         { refetchInterval: 5000 }
     );
 
+    const patchEngineStatus = (patch: Record<string, unknown>) => {
+        queryClient.setQueryData('cryptoEngineStatus', (old: Record<string, unknown> | undefined) =>
+            old ? { ...old, ...patch } : patch
+        );
+    };
+
     const startMutation = useMutation<unknown, unknown, void>(
         () => apiClient.startCryptoEngine(),
         {
             onSuccess: () => {
+                patchEngineStatus({ isRunning: true, isPaused: false });
                 toast.success('Crypto Bot started!');
                 queryClient.invalidateQueries('cryptoBotStatus');
                 queryClient.invalidateQueries('cryptoEngineStatus');
@@ -114,6 +121,7 @@ export default function CryptoBotPage() {
         () => apiClient.stopCryptoEngine(),
         {
             onSuccess: () => {
+                patchEngineStatus({ isRunning: false, isPaused: false });
                 toast.success('Crypto Bot stopped');
                 queryClient.invalidateQueries('cryptoBotStatus');
                 queryClient.invalidateQueries('cryptoEngineStatus');
@@ -125,8 +133,10 @@ export default function CryptoBotPage() {
     const pauseMutation = useMutation<unknown, unknown, void>(
         () => apiClient.pauseCryptoEngine(),
         {
-            onSuccess: () => {
-                toast.success('Crypto Bot paused');
+            onSuccess: (data) => {
+                const d = data as { isRunning?: boolean; isPaused?: boolean } | null;
+                patchEngineStatus({ isRunning: d?.isRunning ?? true, isPaused: d?.isPaused ?? !engineStatus?.isPaused });
+                toast.success(engineStatus?.isPaused ? 'Crypto Bot resumed' : 'Crypto Bot paused');
                 queryClient.invalidateQueries('cryptoBotStatus');
                 queryClient.invalidateQueries('cryptoEngineStatus');
             },
@@ -420,7 +430,7 @@ export default function CryptoBotPage() {
                         onClick={() => pauseMutation.mutate()}
                         disabled={!(engineStatus?.isRunning) || pauseMutation.isLoading}
                     >
-                        Pause
+                        {engineStatus?.isPaused ? 'Resume' : 'Pause'}
                     </Button>
                     <Button
                         variant="contained"

@@ -120,11 +120,19 @@ export default function StockBotPage() {
         { refetchInterval: 5000 }
     );
 
+    // Helper: immediately patch the cached engine status so buttons react instantly
+    const patchEngineStatus = (patch: Record<string, unknown>) => {
+        queryClient.setQueryData('stockEngineStatus', (old: Record<string, unknown> | undefined) =>
+            old ? { ...old, ...patch } : patch
+        );
+    };
+
     // Control mutations
     const startMutation = useMutation<unknown, unknown, void>(
         async () => user ? apiClient.startStockEngine() : axios.post(`${API_BASE}/api/trading/start`),
         {
             onSuccess: () => {
+                patchEngineStatus({ isRunning: true, isPaused: false });
                 toast.success('Stock Bot started!');
                 queryClient.invalidateQueries('stockBotStatus');
                 queryClient.invalidateQueries('stockEngineStatus');
@@ -137,6 +145,7 @@ export default function StockBotPage() {
         async () => user ? apiClient.stopStockEngine() : axios.post(`${API_BASE}/api/trading/stop`),
         {
             onSuccess: () => {
+                patchEngineStatus({ isRunning: false, isPaused: false });
                 toast.success('Stock Bot stopped');
                 queryClient.invalidateQueries('stockBotStatus');
                 queryClient.invalidateQueries('stockEngineStatus');
@@ -148,8 +157,10 @@ export default function StockBotPage() {
     const pauseMutation = useMutation<unknown, unknown, void>(
         async () => user ? apiClient.pauseStockEngine() : axios.post(`${API_BASE}/api/trading/pause`),
         {
-            onSuccess: () => {
-                toast.success('Stock Bot paused');
+            onSuccess: (data) => {
+                const d = data as { isRunning?: boolean; isPaused?: boolean } | null;
+                patchEngineStatus({ isRunning: d?.isRunning ?? true, isPaused: d?.isPaused ?? !engineStatus?.isPaused });
+                toast.success(engineStatus?.isPaused ? 'Stock Bot resumed' : 'Stock Bot paused');
                 queryClient.invalidateQueries('stockBotStatus');
                 queryClient.invalidateQueries('stockEngineStatus');
             },
@@ -404,7 +415,7 @@ export default function StockBotPage() {
                         color="success"
                         startIcon={<PlayArrow />}
                         onClick={() => startMutation.mutate()}
-                        disabled={(engineStatus?.isRunning === true) || startMutation.isLoading}
+                        disabled={engineStatus?.isRunning === true || startMutation.isLoading}
                     >
                         Start
                     </Button>
@@ -413,16 +424,16 @@ export default function StockBotPage() {
                         color="warning"
                         startIcon={<Pause />}
                         onClick={() => pauseMutation.mutate()}
-                        disabled={!(engineStatus?.isRunning) || pauseMutation.isLoading}
+                        disabled={!engineStatus?.isRunning || pauseMutation.isLoading}
                     >
-                        Pause
+                        {engineStatus?.isPaused ? 'Resume' : 'Pause'}
                     </Button>
                     <Button
                         variant="contained"
                         color="error"
                         startIcon={<Stop />}
                         onClick={() => stopMutation.mutate()}
-                        disabled={!(engineStatus?.isRunning) || stopMutation.isLoading}
+                        disabled={!engineStatus?.isRunning || stopMutation.isLoading}
                     >
                         Stop
                     </Button>
