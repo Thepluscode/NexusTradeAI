@@ -459,15 +459,26 @@ const FOREX_PAIRS = [
     // Major Pairs (highest liquidity, tightest spreads)
     'EUR_USD', 'GBP_USD', 'USD_JPY', 'USD_CHF', 'AUD_USD', 'USD_CAD', 'NZD_USD',
     // Cross Pairs (good liquidity)
-    'EUR_JPY', 'GBP_JPY', 'EUR_GBP', 'AUD_JPY', 'EUR_AUD'
+    'EUR_JPY', 'GBP_JPY', 'EUR_GBP', 'AUD_JPY', 'EUR_AUD',
+    // Additional Cross Pairs
+    'EUR_CAD', 'EUR_CHF', 'EUR_NZD',
+    'GBP_CHF', 'GBP_AUD', 'GBP_CAD', 'GBP_NZD',
+    'AUD_CAD', 'AUD_CHF', 'AUD_NZD',
+    'NZD_JPY', 'NZD_CAD', 'NZD_CHF',
+    'CAD_JPY', 'CAD_CHF',
+    'CHF_JPY',
 ];
 
 // Correlation groups - avoid same-direction trades on correlated pairs
 const CORRELATION_GROUPS = {
     USD_LONG: ['EUR_USD', 'GBP_USD', 'AUD_USD', 'NZD_USD'], // If short EUR_USD, don't short GBP_USD
     USD_SHORT: ['USD_JPY', 'USD_CHF', 'USD_CAD'],
-    JPY_PAIRS: ['USD_JPY', 'EUR_JPY', 'GBP_JPY', 'AUD_JPY'],
-    EUR_PAIRS: ['EUR_USD', 'EUR_JPY', 'EUR_GBP', 'EUR_AUD']
+    JPY_PAIRS: ['USD_JPY', 'EUR_JPY', 'GBP_JPY', 'AUD_JPY', 'NZD_JPY', 'CAD_JPY', 'CHF_JPY'],
+    EUR_PAIRS: ['EUR_USD', 'EUR_JPY', 'EUR_GBP', 'EUR_AUD', 'EUR_CAD', 'EUR_CHF', 'EUR_NZD'],
+    GBP_PAIRS: ['GBP_USD', 'GBP_JPY', 'EUR_GBP', 'GBP_CHF', 'GBP_AUD', 'GBP_CAD', 'GBP_NZD'],
+    AUD_PAIRS: ['AUD_USD', 'AUD_JPY', 'EUR_AUD', 'GBP_AUD', 'AUD_CAD', 'AUD_CHF', 'AUD_NZD'],
+    NZD_PAIRS: ['NZD_USD', 'NZD_JPY', 'EUR_NZD', 'GBP_NZD', 'AUD_NZD', 'NZD_CAD', 'NZD_CHF'],
+    CAD_PAIRS: ['USD_CAD', 'EUR_CAD', 'GBP_CAD', 'AUD_CAD', 'NZD_CAD', 'CAD_JPY', 'CAD_CHF'],
 };
 
 // Data structures
