@@ -54,9 +54,9 @@ function requireApiSecret(req, res, next) {
 
 // ── Persist env var to Railway (survives redeploys) ────────────────────────
 async function persistEnvVar(name, value) {
-    const token = process.env.RAILWAY_TOKEN;
+    const token   = process.env.RAILWAY_TOKEN;
     const project = process.env.RAILWAY_PROJECT_ID;
-    const env = process.env.RAILWAY_ENVIRONMENT_ID;
+    const env     = process.env.RAILWAY_ENVIRONMENT_ID;
     const service = process.env.RAILWAY_SERVICE_ID;
     if (!token || !project || !env || !service) return; // not on Railway — skip
     const query = `mutation { variableUpsert(input: { projectId: "${project}", environmentId: "${env}", serviceId: "${service}", name: "${name}", value: "${value.replace(/"/g, '\\"')}" }) }`;
@@ -376,7 +376,7 @@ app.post('/api/auth/logout', async (req, res) => {
             try {
                 const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
                 await dbPool.query('UPDATE users SET refresh_token=NULL WHERE id=$1', [payload.sub]);
-            } catch { }
+            } catch {}
         }
     }
     res.json({ success: true });
@@ -427,7 +427,7 @@ function loadBotState() {
             const saved = JSON.parse(require('fs').readFileSync(BOT_STATE_FILE, 'utf8'));
             return { running: saved.running !== false, paused: saved.paused === true };
         }
-    } catch { }
+    } catch {}
     return { running: true, paused: false };
 }
 function saveBotState() {
@@ -435,7 +435,7 @@ function saveBotState() {
         const dir = require('path').dirname(BOT_STATE_FILE);
         if (!require('fs').existsSync(dir)) require('fs').mkdirSync(dir, { recursive: true });
         require('fs').writeFileSync(BOT_STATE_FILE, JSON.stringify({ running: botRunning, paused: botPaused }));
-    } catch { }
+    } catch {}
 }
 const _initState = loadBotState();
 let botRunning = _initState.running;
@@ -455,7 +455,7 @@ function savePositions() {
             };
         }
         require('fs').writeFileSync(POSITIONS_FILE, JSON.stringify(snapshot, null, 2));
-    } catch { }
+    } catch {}
 }
 function loadPositions() {
     try {
@@ -471,7 +471,7 @@ function loadPositions() {
                 console.log(`📂 Restored ${positions.size} position(s) from disk: ${[...positions.keys()].join(', ')}`);
             }
         }
-    } catch { }
+    } catch {}
 }
 loadPositions();
 
@@ -575,9 +575,9 @@ async function dbTradeOpen(symbol, entryPrice, shares, config, signal, tier) {
              position_size_usd,stop_loss,take_profit,entry_time,rsi,volume_ratio,momentum_pct)
              VALUES ('stock',$1,'long',$2,'open',$3,$4,$5,$6,$7,NOW(),$8,$9,$10) RETURNING id`,
             [symbol, tier, entryPrice, shares, shares * entryPrice,
-                config.stopLoss ? entryPrice * (1 - config.stopLoss) : null,
-                config.profitTarget ? entryPrice * (1 + config.profitTarget) : null,
-                signal.rsi || null, signal.volumeRatio || null, signal.percentChange || null]
+             config.stopLoss ? entryPrice * (1 - config.stopLoss) : null,
+             config.profitTarget ? entryPrice * (1 + config.profitTarget) : null,
+             signal.rsi || null, signal.volumeRatio || null, signal.percentChange || null]
         );
         return r.rows[0]?.id;
     } catch (e) { console.warn('DB open failed:', e.message); return null; }
@@ -917,7 +917,7 @@ function detectRSIBullishDivergence(bars, lookback = 20) {
 
     // Ensure low1 is earlier, low2 is later
     const earlyIdx = Math.min(low1Idx, low2Idx);
-    const lateIdx = Math.max(low1Idx, low2Idx);
+    const lateIdx  = Math.max(low1Idx, low2Idx);
     if (lateIdx - earlyIdx < 3) return false; // Must be separated by at least 3 bars
 
     // Price must have made a lower low (bearish price structure)
@@ -925,9 +925,9 @@ function detectRSIBullishDivergence(bars, lookback = 20) {
 
     // Calculate RSI at each swing low (need surrounding bars for proper RSI)
     const barsAtEarly = bars.slice(Math.max(0, bars.length - lookback + earlyIdx - 14), bars.length - lookback + earlyIdx + 1);
-    const barsAtLate = bars.slice(Math.max(0, bars.length - lookback + lateIdx - 14), bars.length - lookback + lateIdx + 1);
+    const barsAtLate  = bars.slice(Math.max(0, bars.length - lookback + lateIdx - 14),  bars.length - lookback + lateIdx + 1);
     const rsiEarly = calculateRSI(barsAtEarly);
-    const rsiLate = calculateRSI(barsAtLate);
+    const rsiLate  = calculateRSI(barsAtLate);
 
     // RSI must have made a higher low (bullish momentum structure) while price made lower low
     const hasDivergence = rsiLate > rsiEarly + 2; // Require meaningful RSI improvement (2+ pts)
@@ -973,7 +973,7 @@ async function queryStrategyBridge(symbol, bars, assetClass = 'stock') {
             timestamp: b.t || new Date().toISOString(),
             open: parseFloat(b.o) || 0,
             high: parseFloat(b.h) || 0,
-            low: parseFloat(b.l) || 0,
+            low:  parseFloat(b.l) || 0,
             close: parseFloat(b.c) || 0,
             volume: parseFloat(b.v) || 0
         }));
@@ -1572,7 +1572,7 @@ async function executeTrade(signal, strategy) {
         let kellyMultiplier = 1.0;
         if (perfData.totalTrades >= 10 && perfData.winRate > 0 && perfData.profitFactor > 0) {
             const w = perfData.winRate / 100;
-            const avgWin = perfData.totalWinAmount / Math.max(perfData.winningTrades, 1);
+            const avgWin  = perfData.totalWinAmount  / Math.max(perfData.winningTrades, 1);
             const avgLoss = perfData.totalLossAmount / Math.max(perfData.losingTrades, 1);
             const b = avgLoss > 0 ? avgWin / avgLoss : 1;
             const fullKelly = (w * b - (1 - w)) / b;        // optimal fraction of equity
@@ -1645,7 +1645,7 @@ async function executeTrade(signal, strategy) {
         // Persist trade opening to DB (fire-and-forget)
         dbTradeOpen(signal.symbol, signal.price, shares, config, signal, tier)
             .then(id => { const p = positions.get(signal.symbol); if (p) p.dbTradeId = id; })
-            .catch(() => { });
+            .catch(() => {});
 
         const tradeRecord = {
             time: Date.now(),
@@ -1721,7 +1721,7 @@ async function closePosition(symbol, qty, reason = 'Manual') {
             recordTradeClose(symbol, position.entry, adjustedExitPrice, parseFloat(qty), reason);
             const pnlUsd = (adjustedExitPrice - position.entry) * parseFloat(qty);
             const pnlPct = ((adjustedExitPrice - position.entry) / position.entry) * 100;
-            dbTradeClose(position?.dbTradeId, adjustedExitPrice, pnlUsd, pnlPct, reason).catch(() => { });
+            dbTradeClose(position?.dbTradeId, adjustedExitPrice, pnlUsd, pnlPct, reason).catch(() => {});
         }
 
         console.log(`✅ Position closed: ${symbol} (${reason})`);
@@ -1873,10 +1873,8 @@ app.get('/api/trading/engine/status', requireJwt, async (req, res) => {
     const userId = req.user.sub;
     const engine = await getOrCreateEngine(userId);
     if (!engine) {
-        return res.json({
-            success: true, credentialsRequired: true,
-            message: 'No Alpaca credentials configured — visit Settings to add your API keys'
-        });
+        return res.json({ success: true, credentialsRequired: true,
+            message: 'No Alpaca credentials configured — visit Settings to add your API keys' });
     }
     try {
         const response = await axios.get(`${engine.alpacaConfig.baseURL}/v2/positions`, {
@@ -1913,10 +1911,8 @@ app.get('/api/trading/engine/status', requireJwt, async (req, res) => {
     } catch (error) {
         const status = error?.response?.status;
         if (status === 401 || status === 403) {
-            return res.json({
-                success: true, credentialsRequired: true,
-                message: 'Alpaca credentials invalid or expired'
-            });
+            return res.json({ success: true, credentialsRequired: true,
+                message: 'Alpaca credentials invalid or expired' });
         }
         res.status(500).json({ success: false, error: error.message });
     }
@@ -2316,11 +2312,11 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
         const { broker, credentials, fields } = req.body;
         const creds = credentials || fields;
         const ALLOWED_KEYS = {
-            alpaca: ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_BASE_URL'],
-            oanda: ['OANDA_ACCOUNT_ID', 'OANDA_ACCESS_TOKEN', 'OANDA_PRACTICE'],
-            crypto: ['CRYPTO_API_KEY', 'CRYPTO_API_SECRET', 'CRYPTO_EXCHANGE', 'CRYPTO_TESTNET'],
+            alpaca:   ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_BASE_URL'],
+            oanda:    ['OANDA_ACCOUNT_ID', 'OANDA_ACCESS_TOKEN', 'OANDA_PRACTICE'],
+            crypto:   ['CRYPTO_API_KEY', 'CRYPTO_API_SECRET', 'CRYPTO_EXCHANGE', 'CRYPTO_TESTNET'],
             telegram: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_ALERTS_ENABLED'],
-            sms: ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'ALERT_PHONE_NUMBER', 'SMS_ALERTS_ENABLED'],
+            sms:      ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'ALERT_PHONE_NUMBER', 'SMS_ALERTS_ENABLED'],
         };
 
         const allowed = ALLOWED_KEYS[broker];
@@ -2370,9 +2366,9 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
 
         // Refresh in-memory broker config
         if (broker === 'alpaca') {
-            if (creds.ALPACA_API_KEY) alpacaConfig.apiKey = creds.ALPACA_API_KEY;
+            if (creds.ALPACA_API_KEY)    alpacaConfig.apiKey    = creds.ALPACA_API_KEY;
             if (creds.ALPACA_SECRET_KEY) alpacaConfig.secretKey = creds.ALPACA_SECRET_KEY;
-            if (creds.ALPACA_BASE_URL) alpacaConfig.baseURL = creds.ALPACA_BASE_URL;
+            if (creds.ALPACA_BASE_URL)   alpacaConfig.baseURL   = creds.ALPACA_BASE_URL;
             // Register or update per-user engine if this is an Alpaca credential save
             if (userId) {
                 const existingEngine = engineRegistry.get(String(userId));
@@ -2383,7 +2379,7 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
                     // Create engine in background — don't block the response
                     getOrCreateEngine(userId).then(engine => {
                         if (engine) console.log(`🔧 [Engine ${userId}] Engine created after credential save`);
-                    }).catch(() => { });
+                    }).catch(() => {});
                 }
             }
         }
@@ -2398,13 +2394,11 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
 app.get('/api/config/credentials/status', requireJwt, async (req, res) => {
     const userId = req.user?.sub;
     if (!userId || !dbPool) {
-        return res.json({
-            success: true, brokers: {
-                alpaca: { configured: !!(process.env.ALPACA_API_KEY && process.env.ALPACA_SECRET_KEY) },
-                telegram: { configured: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) },
-                sms: { configured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) },
-            }
-        });
+        return res.json({ success: true, brokers: {
+            alpaca:   { configured: !!(process.env.ALPACA_API_KEY && process.env.ALPACA_SECRET_KEY) },
+            telegram: { configured: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) },
+            sms:      { configured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) },
+        }});
     }
     try {
         const r = await dbPool.query(
@@ -2412,13 +2406,11 @@ app.get('/api/config/credentials/status', requireJwt, async (req, res) => {
             [userId]
         );
         const stored = Object.fromEntries(r.rows.map(row => [row.broker, parseInt(row.key_count)]));
-        res.json({
-            success: true, brokers: {
-                alpaca: { configured: (stored.alpaca || 0) >= 2 },
-                telegram: { configured: (stored.telegram || 0) >= 2 },
-                sms: { configured: (stored.sms || 0) >= 2 },
-            }
-        });
+        res.json({ success: true, brokers: {
+            alpaca:   { configured: (stored.alpaca   || 0) >= 2 },
+            telegram: { configured: (stored.telegram || 0) >= 2 },
+            sms:      { configured: (stored.sms      || 0) >= 2 },
+        }});
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
     }
@@ -2440,10 +2432,10 @@ app.post('/api/config/test-notification', requireApiSecret, async (req, res) => 
             return res.json({ success: true });
         }
         if (channel === 'sms') {
-            const sid = process.env.TWILIO_ACCOUNT_SID;
+            const sid  = process.env.TWILIO_ACCOUNT_SID;
             const auth = process.env.TWILIO_AUTH_TOKEN;
             const from = process.env.TWILIO_PHONE_NUMBER;
-            const to = process.env.ALERT_PHONE_NUMBER;
+            const to   = process.env.ALERT_PHONE_NUMBER;
             if (!sid || !auth || !from || !to) {
                 return res.status(400).json({ success: false, error: 'SMS not fully configured' });
             }
@@ -2468,7 +2460,7 @@ app.get('/api/backtest/report', (req, res) => {
         const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
         const hasTrades = (report.summary?.totalTrades ?? 0) > 0 || (report.trades?.length ?? 0) > 0;
         if (hasTrades) return res.json({ success: true, data: report });
-    } catch { }
+    } catch {}
 
     // Fall back: return live performance stats so the dashboard always has data
     const pf = perfData.profitFactor || 0;
@@ -2645,23 +2637,23 @@ class UserTradingEngine {
     }
 
     updateCredentials(alpacaApiKey, alpacaSecretKey, alpacaBaseURL, extraCreds) {
-        if (alpacaApiKey) this.alpacaConfig.apiKey = alpacaApiKey;
+        if (alpacaApiKey)    this.alpacaConfig.apiKey    = alpacaApiKey;
         if (alpacaSecretKey) this.alpacaConfig.secretKey = alpacaSecretKey;
-        if (alpacaBaseURL) this.alpacaConfig.baseURL = alpacaBaseURL;
+        if (alpacaBaseURL)   this.alpacaConfig.baseURL   = alpacaBaseURL;
         // Per-user Telegram: use user's own bot token+chatId if stored, else fall back to shared
-        const tgToken = extraCreds?.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
-        const tgChatId = extraCreds?.TELEGRAM_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
+        const tgToken  = extraCreds?.TELEGRAM_BOT_TOKEN  || process.env.TELEGRAM_BOT_TOKEN;
+        const tgChatId = extraCreds?.TELEGRAM_CHAT_ID    || process.env.TELEGRAM_CHAT_ID;
         if (tgToken && tgChatId) {
             try {
                 const TelegramBot = require('node-telegram-bot-api');
                 const bot = new TelegramBot(tgToken, { polling: false });
                 this._telegram = {
-                    sendStockEntry: (sym, ep, sl, tp, qty, tier) =>
-                        bot.sendMessage(tgChatId, `✅ *STOCK ENTRY* [${tier}]\n📛 ${sym} x${qty}\n💰 Entry: $${ep.toFixed(2)}\n🛑 SL: $${sl.toFixed(2)}  🎯 TP: $${tp.toFixed(2)}`, { parse_mode: 'Markdown' }).catch(() => { }),
-                    sendStockStopLoss: (sym, ep, cp, pnl, sl) =>
-                        bot.sendMessage(tgChatId, `🚨 *STOP LOSS* ${sym}\n💰 Entry $${ep.toFixed(2)} → $${cp.toFixed(2)}\n💸 P&L: ${pnl.toFixed(2)}%`, { parse_mode: 'Markdown' }).catch(() => { }),
-                    sendStockTakeProfit: (sym, ep, cp, pnl, tp) =>
-                        bot.sendMessage(tgChatId, `🎯 *TAKE PROFIT* ${sym}\n💰 Entry $${ep.toFixed(2)} → $${cp.toFixed(2)}\n💵 P&L: +${pnl.toFixed(2)}%`, { parse_mode: 'Markdown' }).catch(() => { }),
+                    sendStockEntry:     (sym, ep, sl, tp, qty, tier) =>
+                        bot.sendMessage(tgChatId, `✅ *STOCK ENTRY* [${tier}]\n📛 ${sym} x${qty}\n💰 Entry: $${ep.toFixed(2)}\n🛑 SL: $${sl.toFixed(2)}  🎯 TP: $${tp.toFixed(2)}`, { parse_mode: 'Markdown' }).catch(() => {}),
+                    sendStockStopLoss:  (sym, ep, cp, pnl, sl) =>
+                        bot.sendMessage(tgChatId, `🚨 *STOP LOSS* ${sym}\n💰 Entry $${ep.toFixed(2)} → $${cp.toFixed(2)}\n💸 P&L: ${pnl.toFixed(2)}%`, { parse_mode: 'Markdown' }).catch(() => {}),
+                    sendStockTakeProfit:(sym, ep, cp, pnl, tp) =>
+                        bot.sendMessage(tgChatId, `🎯 *TAKE PROFIT* ${sym}\n💰 Entry $${ep.toFixed(2)} → $${cp.toFixed(2)}\n💵 P&L: +${pnl.toFixed(2)}%`, { parse_mode: 'Markdown' }).catch(() => {}),
                 };
                 console.log(`📱 [Engine ${this.userId}] Per-user Telegram alerts configured`);
             } catch (e) {
@@ -2682,12 +2674,10 @@ class UserTradingEngine {
                 `INSERT INTO engine_state (user_id, bot, state_json, updated_at)
                  VALUES ($1, 'stock', $2, NOW())
                  ON CONFLICT (user_id, bot) DO UPDATE SET state_json=$2, updated_at=NOW()`,
-                [this.userId, JSON.stringify({
-                    perfData: this.perfData,
+                [this.userId, JSON.stringify({ perfData: this.perfData,
                     totalTradesToday: this.totalTradesToday, botRunning: this.botRunning,
-                    botPaused: this.botPaused, lastResetDate: this.lastResetDate
-                })]
-            ).catch(() => { });
+                    botPaused: this.botPaused, lastResetDate: this.lastResetDate })]
+            ).catch(() => {});
         }
     }
 
@@ -2700,11 +2690,11 @@ class UserTradingEngine {
             );
             if (r.rows.length > 0) {
                 const s = r.rows[0].state_json;
-                if (s.perfData) Object.assign(this.perfData, s.perfData);
+                if (s.perfData)        Object.assign(this.perfData, s.perfData);
                 if (s.totalTradesToday !== undefined) this.totalTradesToday = s.totalTradesToday;
-                if (s.botRunning !== undefined) this.botRunning = s.botRunning;
-                if (s.botPaused !== undefined) this.botPaused = s.botPaused;
-                if (s.lastResetDate) this.lastResetDate = s.lastResetDate;
+                if (s.botRunning !== undefined)       this.botRunning = s.botRunning;
+                if (s.botPaused !== undefined)        this.botPaused = s.botPaused;
+                if (s.lastResetDate)                  this.lastResetDate = s.lastResetDate;
                 console.log(`📂 [Engine ${this.userId}] State restored from DB`);
             }
         } catch (e) {
@@ -2745,9 +2735,9 @@ class UserTradingEngine {
                  position_size_usd,stop_loss,take_profit,entry_time,rsi,volume_ratio,momentum_pct)
                  VALUES ($1,'stock',$2,'long',$3,'open',$4,$5,$6,$7,$8,NOW(),$9,$10,$11) RETURNING id`,
                 [this.userId, symbol, tier, entryPrice, shares, shares * entryPrice,
-                config.stopLoss ? entryPrice * (1 - config.stopLoss) : null,
-                config.profitTarget ? entryPrice * (1 + config.profitTarget) : null,
-                signal.rsi || null, signal.volumeRatio || null, signal.percentChange || null]
+                 config.stopLoss ? entryPrice * (1 - config.stopLoss) : null,
+                 config.profitTarget ? entryPrice * (1 + config.profitTarget) : null,
+                 signal.rsi || null, signal.volumeRatio || null, signal.percentChange || null]
             );
             return r.rows[0]?.id;
         } catch (e) { console.warn('DB open failed:', e.message); return null; }
@@ -2826,7 +2816,7 @@ class UserTradingEngine {
                 headers: { 'APCA-API-KEY-ID': this.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': this.alpacaConfig.secretKey }
             });
             currentPrice = parseFloat(posRes.data.current_price);
-        } catch { }
+        } catch {}
         const isCrypto = /USD$/.test(symbol) && symbol.length <= 8;
         await axios.post(`${this.alpacaConfig.baseURL}/v2/orders`, {
             symbol, qty: parseFloat(qty), side: 'sell', type: 'market',
@@ -2840,7 +2830,7 @@ class UserTradingEngine {
             this.recordTradeClose(symbol, position.entry, adjustedExitPrice, parseFloat(qty), reason);
             const pnlUsd = (adjustedExitPrice - position.entry) * parseFloat(qty);
             const pnlPct = ((adjustedExitPrice - position.entry) / position.entry) * 100;
-            this.dbTradeClose(position?.dbTradeId, adjustedExitPrice, pnlUsd, pnlPct, reason).catch(() => { });
+            this.dbTradeClose(position?.dbTradeId, adjustedExitPrice, pnlUsd, pnlPct, reason).catch(() => {});
         }
         const tradeRecord = { time: Date.now(), side: 'sell', reason };
         const recent = this.recentTrades.get(symbol) || [];
@@ -2869,21 +2859,19 @@ class UserTradingEngine {
                 let position = this.positions.get(symbol);
                 if (!position) {
                     const restoredEntry = alpacaPos.created_at ? new Date(alpacaPos.created_at) : new Date(Date.now() - 86400000);
-                    position = {
-                        symbol, entry: avgEntry, shares: parseFloat(alpacaPos.qty),
+                    position = { symbol, entry: avgEntry, shares: parseFloat(alpacaPos.qty),
                         stopLoss: avgEntry * 0.93, target: avgEntry * 1.20,
-                        strategy: 'existing', entryTime: restoredEntry
-                    };
+                        strategy: 'existing', entryTime: restoredEntry };
                     this.positions.set(symbol, position);
                 }
                 updateTrailingStop(position, currentPrice, unrealizedPL);
                 const exitReason = await shouldExitPosition(position, currentPrice, alpacaPos, this.alpacaConfig);
                 if (exitReason) { await this.closePosition(symbol, alpacaPos.qty, exitReason); continue; }
                 if (currentPrice <= position.stopLoss) {
-                    (this._telegram || telegramAlerts).sendStockStopLoss(symbol, position.entry, currentPrice, unrealizedPL, position.stopLoss).catch(() => { });
+                    (this._telegram || telegramAlerts).sendStockStopLoss(symbol, position.entry, currentPrice, unrealizedPL, position.stopLoss).catch(() => {});
                     await this.closePosition(symbol, alpacaPos.qty, 'Stop Loss');
                 } else if (currentPrice >= position.target) {
-                    (this._telegram || telegramAlerts).sendStockTakeProfit(symbol, position.entry, currentPrice, unrealizedPL, position.target).catch(() => { });
+                    (this._telegram || telegramAlerts).sendStockTakeProfit(symbol, position.entry, currentPrice, unrealizedPL, position.target).catch(() => {});
                     await this.closePosition(symbol, alpacaPos.qty, 'Profit Target');
                 }
             }
@@ -2904,7 +2892,7 @@ class UserTradingEngine {
             let kellyMultiplier = 1.0;
             if (this.perfData.totalTrades >= 10 && this.perfData.winRate > 0 && this.perfData.profitFactor > 0) {
                 const w = this.perfData.winRate / 100;
-                const avgWin = this.perfData.totalWinAmount / Math.max(this.perfData.winningTrades, 1);
+                const avgWin  = this.perfData.totalWinAmount  / Math.max(this.perfData.winningTrades, 1);
                 const avgLoss = this.perfData.totalLossAmount / Math.max(this.perfData.losingTrades, 1);
                 const b = avgLoss > 0 ? avgWin / avgLoss : 1;
                 const fullKelly = (w * b - (1 - w)) / b;
@@ -2919,7 +2907,7 @@ class UserTradingEngine {
             if (!signal.price || signal.price <= 0) return null;
             const shares = Math.floor(positionSize / effectiveEntry);
             if (shares < 1) return null;
-            const stopPrice = (signal.atrStop || effectiveEntry * (1 - config.stopLoss)).toFixed(2);
+            const stopPrice  = (signal.atrStop  || effectiveEntry * (1 - config.stopLoss)).toFixed(2);
             const targetPrice = (signal.atrTarget || effectiveEntry * (1 + config.profitTarget)).toFixed(2);
             const orderResponse = await axios.post(`${this.alpacaConfig.baseURL}/v2/orders`, {
                 symbol: signal.symbol, qty: shares, side: 'buy', type: 'market', time_in_force: 'day'
@@ -2936,7 +2924,7 @@ class UserTradingEngine {
             });
             this.dbTradeOpen(signal.symbol, signal.price, shares, config, signal, tier)
                 .then(id => { const p = this.positions.get(signal.symbol); if (p) p.dbTradeId = id; })
-                .catch(() => { });
+                .catch(() => {});
             const tradeRecord = { time: Date.now(), side: 'buy', price: signal.price, shares, tier };
             const recent = this.recentTrades.get(signal.symbol) || [];
             recent.push(tradeRecord);
@@ -2944,7 +2932,7 @@ class UserTradingEngine {
             this.recentTrades.set(signal.symbol, recent);
             this.tradesPerSymbol.set(signal.symbol, (this.tradesPerSymbol.get(signal.symbol) || 0) + 1);
             this.totalTradesToday++;
-            (this._telegram || telegramAlerts).sendStockEntry(signal.symbol, signal.price, parseFloat(stopPrice), parseFloat(targetPrice), shares, tier).catch(() => { });
+            (this._telegram || telegramAlerts).sendStockEntry(signal.symbol, signal.price, parseFloat(stopPrice), parseFloat(targetPrice), shares, tier).catch(() => {});
             console.log(`✅ [Engine ${this.userId}] TRADE: ${signal.symbol} [${tier}] x${shares} @ $${signal.price}`);
             return orderResponse.data;
         } catch (error) {
@@ -3056,12 +3044,12 @@ async function analyzeMomentumForEngine(symbol, engine) {
                 const sma9d = dailyBars.slice(-lookback).map(b => b.c).reduce((a, v) => a + v, 0) / lookback;
                 if (current < sma9d * 0.99) return null;
             }
-        } catch { }
+        } catch {}
         const atr = calculateATR(bars);
         let atrStop = null, atrTarget = null;
         if (atr !== null && current > 0) {
             const atrPct = atr / current;
-            const candidateStop = current * (1 - atrPct * 1.5);
+            const candidateStop   = current * (1 - atrPct * 1.5);
             const candidateTarget = current * (1 + atrPct * 3.0);
             const rr = candidateStop > 0 ? (candidateTarget - current) / (current - candidateStop) : 0;
             const actualStopPct = (current - candidateStop) / current;
@@ -3086,12 +3074,10 @@ async function analyzeMomentumForEngine(symbol, engine) {
         const tierMultiplier = { tier1: 1, tier2: 2, tier3: 3 }[tier] || 1;
         const rsiBonus = rsi >= 45 && rsi <= 65 ? 1.15 : 1.0;
         const score = tierMultiplier * parseFloat(percentChange) * parseFloat(volumeRatio.toFixed(2)) * rsiBonus;
-        return {
-            symbol, price: current, percentChange: percentChange.toFixed(2), volumeRatio: volumeRatio.toFixed(2),
+        return { symbol, price: current, percentChange: percentChange.toFixed(2), volumeRatio: volumeRatio.toFixed(2),
             volume: volumeToday, rsi: rsi.toFixed(2), vwap: vwap ? vwap.toFixed(2) : null,
             tier, score: parseFloat(score.toFixed(3)), strategy: 'momentum', config,
-            entryVolume: volumeToday, atrStop, atrTarget
-        };
+            entryVolume: volumeToday, atrStop, atrTarget };
     } catch { return null; }
 }
 
@@ -3104,9 +3090,9 @@ async function getOrCreateEngine(userId) {
     if (!dbPool) return null;
     try {
         const creds = await loadUserCredentials(userId, 'alpaca');
-        const apiKey = creds.ALPACA_API_KEY || process.env.ALPACA_API_KEY;
+        const apiKey    = creds.ALPACA_API_KEY    || process.env.ALPACA_API_KEY;
         const secretKey = creds.ALPACA_SECRET_KEY || process.env.ALPACA_SECRET_KEY;
-        const baseURL = creds.ALPACA_BASE_URL || process.env.ALPACA_BASE_URL;
+        const baseURL   = creds.ALPACA_BASE_URL   || process.env.ALPACA_BASE_URL;
         if (!apiKey || !secretKey) return null; // no creds yet
         const engine = new UserTradingEngine(userId, apiKey, secretKey, baseURL);
         await engine.loadStateFromDb();
@@ -3293,8 +3279,8 @@ app.get('/api/admin/users', requireJwt, async (req, res) => {
             createdAt: r.created_at,
             brokersConfigured: parseInt(r.brokers_configured),
             engineRunning: r.engine_state?.botRunning ?? false,
-            enginePaused: r.engine_state?.botPaused ?? false,
-            totalTrades: r.engine_state?.totalTradesToday ?? 0,
+            enginePaused:  r.engine_state?.botPaused  ?? false,
+            totalTrades:   r.engine_state?.totalTradesToday ?? 0,
             activeInRegistry: engineRegistry.has(String(r.id)),
         }));
         res.json({ success: true, users: rows });
@@ -3317,21 +3303,17 @@ app.post('/api/backtest/run', async (req, res) => {
             for (const r of settled) {
                 if (r.status === 'fulfilled' && r.value) {
                     const signal = r.value;
-                    results.push({
-                        symbol: signal.symbol, tier: signal.tier, score: signal.score || 0,
+                    results.push({ symbol: signal.symbol, tier: signal.tier, score: signal.score || 0,
                         rsi: signal.rsi, volumeRatio: signal.volumeRatio, percentChange: signal.percentChange,
-                        price: signal.price
-                    });
+                        price: signal.price });
                 }
             }
             if (i + batchSize < symbols.length) await new Promise(r => setTimeout(r, 300)); // rate-limit pause
         }
         results.sort((a, b) => (b.score || 0) - (a.score || 0));
         const elapsed = ((Date.now() - started) / 1000).toFixed(1);
-        res.json({
-            success: true, signals: results, scanned: symbols.length, elapsed: `${elapsed}s`,
-            timestamp: new Date().toISOString()
-        });
+        res.json({ success: true, signals: results, scanned: symbols.length, elapsed: `${elapsed}s`,
+            timestamp: new Date().toISOString() });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
     } finally {
@@ -3343,10 +3325,10 @@ app.post('/api/backtest/run', async (req, res) => {
 // so pairs trading and forex bridge advisory activates immediately on startup
 // All unique symbols from KNOWN_PAIRS in strategy_bridge.py — keep in sync
 const KNOWN_PAIRS_SYMBOLS = [
-    'XOM', 'CVX', 'JPM', 'BAC', 'AAPL', 'MSFT', 'KO', 'PEP', 'HD', 'LOW', 'V', 'MA',
-    'GS', 'MS', 'T', 'VZ', 'WMT', 'TGT', 'GLD', 'SLV', 'SPY', 'QQQ', 'DAL', 'UAL'
+    'XOM','CVX','JPM','BAC','AAPL','MSFT','KO','PEP','HD','LOW','V','MA',
+    'GS','MS','T','VZ','WMT','TGT','GLD','SLV','SPY','QQQ','DAL','UAL'
 ];
-const FOREX_WARMUP_PAIRS = ['EUR_USD', 'GBP_USD', 'USD_JPY', 'USD_CHF', 'AUD_USD', 'USD_CAD', 'NZD_USD', 'EUR_JPY', 'GBP_JPY', 'EUR_GBP', 'AUD_JPY', 'EUR_AUD'];
+const FOREX_WARMUP_PAIRS  = ['EUR_USD','GBP_USD','USD_JPY','USD_CHF','AUD_USD','USD_CAD','NZD_USD','EUR_JPY','GBP_JPY','EUR_GBP','AUD_JPY','EUR_AUD'];
 
 app.post('/api/bridge/warmup', async (req, res) => {
     const results = { seeded: [], failed: [], bridgeUrl: BRIDGE_URL };
@@ -3374,8 +3356,8 @@ app.post('/api/bridge/warmup', async (req, res) => {
     }));
 
     // ── Forex pairs (OANDA H1 candles — only if creds available) ────────────
-    const oandaToken = process.env.OANDA_ACCESS_TOKEN;
-    const oandaBase = process.env.OANDA_PRACTICE !== 'false'
+    const oandaToken   = process.env.OANDA_ACCESS_TOKEN;
+    const oandaBase    = process.env.OANDA_PRACTICE !== 'false'
         ? 'https://api-fxpractice.oanda.com'
         : 'https://api-fxtrade.oanda.com';
 
@@ -3390,10 +3372,10 @@ app.post('/api/bridge/warmup', async (req, res) => {
                 if (candles.length < 30) { results.failed.push(`${pair}: only ${candles.length} candles`); return; }
                 const prices = candles.map(c => ({
                     timestamp: c.time,
-                    open: parseFloat(c.mid.o),
-                    high: parseFloat(c.mid.h),
-                    low: parseFloat(c.mid.l),
-                    close: parseFloat(c.mid.c),
+                    open:   parseFloat(c.mid.o),
+                    high:   parseFloat(c.mid.h),
+                    low:    parseFloat(c.mid.l),
+                    close:  parseFloat(c.mid.c),
                     volume: c.volume || 1
                 }));
                 await axios.post(`${BRIDGE_URL}/signal`, { symbol: pair, prices, asset_class: 'forex' }, { timeout: 8000 });
@@ -3439,9 +3421,9 @@ app.listen(PORT, async () => {
                     if (Object.keys(creds).length > 0) console.log(`🔑 Loaded ${broker} credentials from DB for user ${userId}`);
                 }
                 // Refresh in-memory alpaca config
-                if (process.env.ALPACA_API_KEY) alpacaConfig.apiKey = process.env.ALPACA_API_KEY;
+                if (process.env.ALPACA_API_KEY)    alpacaConfig.apiKey    = process.env.ALPACA_API_KEY;
                 if (process.env.ALPACA_SECRET_KEY) alpacaConfig.secretKey = process.env.ALPACA_SECRET_KEY;
-                if (process.env.ALPACA_BASE_URL) alpacaConfig.baseURL = process.env.ALPACA_BASE_URL;
+                if (process.env.ALPACA_BASE_URL)   alpacaConfig.baseURL   = process.env.ALPACA_BASE_URL;
             }
         }
     } catch (e) {
@@ -3454,7 +3436,7 @@ app.listen(PORT, async () => {
     try {
         if (dbPool) {
             const orphaned = await dbPool.query(
-                `SELECT id, symbol FROM trades WHERE bot='stock' AND status='open' AND user_id IS NULL`
+                `SELECT id, symbol FROM trades WHERE bot='stock' AND status='open'`
             );
             let closedCount = 0;
             for (const row of orphaned.rows) {

@@ -350,7 +350,7 @@ class KrakenClient {
             return {
                 lastPrice: lastPrice.toString(),
                 highPrice: t.h[1],
-                lowPrice: t.l[1],
+                lowPrice:  t.l[1],
                 quoteVolume: (parseFloat(t.v[1]) * lastPrice).toString(), // approx 24h USD volume
                 priceChangePercent: priceChangePercent.toFixed(4),
             };
@@ -829,9 +829,9 @@ class CryptoTradingEngine {
             // Kraken minimum order sizes per symbol (in base asset units)
             const KRAKEN_MIN_QTY = {
                 XBTUSD: 0.0001, ETHUSD: 0.01, SOLUSD: 0.1,
-                ADAUSD: 10, XRPUSD: 10, AVAXUSD: 0.1,
-                LINKUSD: 0.5, DOTUSD: 0.5, UNIUSD: 0.5,
-                ATOMUSD: 0.5, MATICUSD: 5, LTCUSD: 0.05
+                ADAUSD: 10,     XRPUSD: 10,   AVAXUSD: 0.1,
+                LINKUSD: 0.5,   DOTUSD: 0.5,  UNIUSD: 0.5,
+                ATOMUSD: 0.5,   MATICUSD: 5,  LTCUSD: 0.05
             };
             const minQty = KRAKEN_MIN_QTY[signal.symbol] ?? 0.0001;
             if (quantity < minQty) {
@@ -880,7 +880,7 @@ class CryptoTradingEngine {
             // Persist trade opening to DB (fire-and-forget)
             dbCryptoOpen(signal.symbol, signal.tier, signal.price, signal.stopLoss, signal.takeProfit, quantity, positionSizeUSD)
                 .then(id => { const p = this.positions.get(signal.symbol); if (p) p.dbTradeId = id; })
-                .catch(() => { });
+                .catch(() => {});
 
             // Update tracking
             this.dailyTradeCount++;
@@ -1048,7 +1048,7 @@ class CryptoTradingEngine {
             console.log(`   P/L: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}% ($${pnlUSD.toFixed(2)})`);
 
             // Persist close to DB (fire-and-forget)
-            dbCryptoClose(position.dbTradeId, adjustedExitPrice, pnlUSD, pnlPercent, reason).catch(() => { });
+            dbCryptoClose(position.dbTradeId, adjustedExitPrice, pnlUSD, pnlPercent, reason).catch(() => {});
 
             // Remove position
             this.positions.delete(symbol);
@@ -1349,9 +1349,9 @@ function requireApiSecret(req, res, next) {
 
 // ── Persist env var to Railway (survives redeploys) ────────────────────────
 async function persistEnvVar(name, value) {
-    const token = process.env.RAILWAY_TOKEN;
+    const token   = process.env.RAILWAY_TOKEN;
     const project = process.env.RAILWAY_PROJECT_ID;
-    const env = process.env.RAILWAY_ENVIRONMENT_ID;
+    const env     = process.env.RAILWAY_ENVIRONMENT_ID;
     const service = process.env.RAILWAY_SERVICE_ID;
     if (!token || !project || !env || !service) {
         console.warn(`⚠️  persistEnvVar: missing Railway vars (token=${!!token} project=${!!project} env=${!!env} service=${!!service}) — ${name} saved in-memory only`);
@@ -1578,7 +1578,7 @@ app.post('/api/auth/logout', async (req, res) => {
             try {
                 const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
                 await dbPool.query('UPDATE users SET refresh_token=NULL WHERE id=$1', [payload.sub]);
-            } catch { }
+            } catch {}
         }
     }
     res.json({ success: true });
@@ -1761,9 +1761,9 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
         const { broker, credentials, fields } = req.body;
         const creds = credentials || fields;
         const ALLOWED_KEYS = {
-            crypto: ['CRYPTO_API_KEY', 'CRYPTO_API_SECRET', 'CRYPTO_EXCHANGE', 'CRYPTO_TESTNET'],
+            crypto:   ['CRYPTO_API_KEY', 'CRYPTO_API_SECRET', 'CRYPTO_EXCHANGE', 'CRYPTO_TESTNET'],
             telegram: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_ALERTS_ENABLED'],
-            sms: ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'ALERT_PHONE_NUMBER', 'SMS_ALERTS_ENABLED'],
+            sms:      ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'ALERT_PHONE_NUMBER', 'SMS_ALERTS_ENABLED'],
         };
         const allowed = ALLOWED_KEYS[broker];
         if (!allowed) return res.status(400).json({ success: false, error: 'Unknown broker' });
@@ -1804,16 +1804,12 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
                         console.log('✅ Kraken reconnected after credential update — exiting DEMO MODE');
                         return res.json({ success: true, updated, reconnected: true, demoMode: false, storage: userId ? 'database' : 'environment' });
                     }
-                    return res.json({
-                        success: true, updated, reconnected: false, demoMode: true,
+                    return res.json({ success: true, updated, reconnected: false, demoMode: true,
                         warning: 'Keys saved but Kraken rejected them — check permissions/IP whitelist',
-                        storage: userId ? 'database' : 'environment'
-                    });
+                        storage: userId ? 'database' : 'environment' });
                 } catch (reconnectErr) {
-                    return res.json({
-                        success: true, updated, reconnected: false, demoMode: true,
-                        warning: reconnectErr.message, storage: userId ? 'database' : 'environment'
-                    });
+                    return res.json({ success: true, updated, reconnected: false, demoMode: true,
+                        warning: reconnectErr.message, storage: userId ? 'database' : 'environment' });
                 }
             }
         }
@@ -1828,8 +1824,8 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
                 console.log(`🔧 [CryptoEngine ${userId}] Kraken client updated`);
             } else {
                 getOrCreateCryptoEngine(userId).then(eng => {
-                    if (eng) { eng.start().catch(() => { }); }
-                }).catch(() => { });
+                    if (eng) { eng.start().catch(() => {}); }
+                }).catch(() => {});
             }
         }
 
@@ -1842,13 +1838,11 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
 app.get('/api/config/credentials/status', requireJwt, async (req, res) => {
     const userId = req.user?.sub;
     if (!userId || !dbPool) {
-        return res.json({
-            success: true, brokers: {
-                crypto: { configured: !!(process.env.CRYPTO_API_KEY && process.env.CRYPTO_API_SECRET) },
-                telegram: { configured: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) },
-                sms: { configured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) },
-            }
-        });
+        return res.json({ success: true, brokers: {
+            crypto:   { configured: !!(process.env.CRYPTO_API_KEY && process.env.CRYPTO_API_SECRET) },
+            telegram: { configured: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) },
+            sms:      { configured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) },
+        }});
     }
     try {
         const r = await dbPool.query(
@@ -1856,13 +1850,11 @@ app.get('/api/config/credentials/status', requireJwt, async (req, res) => {
             [userId]
         );
         const stored = Object.fromEntries(r.rows.map(row => [row.broker, parseInt(row.key_count)]));
-        res.json({
-            success: true, brokers: {
-                crypto: { configured: (stored.crypto || 0) >= 2 },
-                telegram: { configured: (stored.telegram || 0) >= 2 },
-                sms: { configured: (stored.sms || 0) >= 2 },
-            }
-        });
+        res.json({ success: true, brokers: {
+            crypto:   { configured: (stored.crypto   || 0) >= 2 },
+            telegram: { configured: (stored.telegram || 0) >= 2 },
+            sms:      { configured: (stored.sms      || 0) >= 2 },
+        }});
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
     }
@@ -1929,37 +1921,33 @@ async function getOrCreateCryptoEngine(userId) {
     if (!dbPool) return null;
     try {
         const creds = await loadUserCredentials(userId, 'crypto');
-        const apiKey = creds.CRYPTO_API_KEY || process.env.CRYPTO_API_KEY;
+        const apiKey    = creds.CRYPTO_API_KEY    || process.env.CRYPTO_API_KEY;
         const apiSecret = creds.CRYPTO_API_SECRET || process.env.CRYPTO_API_SECRET;
         if (!apiKey || !apiSecret) return null;
         const userConfig = {
             ...CRYPTO_CONFIG,
-            exchange: {
-                ...CRYPTO_CONFIG.exchange, apiKey, apiSecret,
-                testnet: creds.CRYPTO_TESTNET !== 'false' && CRYPTO_CONFIG.exchange.testnet
-            }
+            exchange: { ...CRYPTO_CONFIG.exchange, apiKey, apiSecret,
+                testnet: creds.CRYPTO_TESTNET !== 'false' && CRYPTO_CONFIG.exchange.testnet }
         };
         const userEngine = new CryptoTradingEngine(userConfig);
         // Persist state to DB rather than filesystem
         userEngine._userId = userId;
-        userEngine._saveStateToDB = async function () {
+        userEngine._saveStateToDB = async function() {
             if (!dbPool) return;
             try {
                 await dbPool.query(
                     `INSERT INTO engine_state (user_id, bot, state_json, updated_at)
                      VALUES ($1, 'crypto', $2, NOW())
                      ON CONFLICT (user_id, bot) DO UPDATE SET state_json=$2, updated_at=NOW()`,
-                    [userId, JSON.stringify({
-                        isRunning: this.isRunning, isPaused: this.isPaused,
+                    [userId, JSON.stringify({ isRunning: this.isRunning, isPaused: this.isPaused,
                         demoMode: this.demoMode, dailyTradeCount: this.dailyTradeCount,
                         totalTrades: this.totalTrades, winningTrades: this.winningTrades,
-                        losingTrades: this.losingTrades, totalProfit: this.totalProfit
-                    })]
+                        losingTrades: this.losingTrades, totalProfit: this.totalProfit })]
                 );
             } catch (e) { /* non-critical */ }
         };
         // Patch dbCryptoOpen/Close to include user_id
-        userEngine._dbOpen = async function (symbol, tier, entry, stopLoss, takeProfit, quantity, positionSize) {
+        userEngine._dbOpen = async function(symbol, tier, entry, stopLoss, takeProfit, quantity, positionSize) {
             if (!dbPool) return null;
             try {
                 const r = await dbPool.query(
@@ -1971,7 +1959,7 @@ async function getOrCreateCryptoEngine(userId) {
                 return r.rows[0]?.id;
             } catch (e) { console.warn('DB crypto open failed:', e.message); return null; }
         };
-        userEngine._dbClose = async function (id, exitPrice, pnlUsd, pnlPct, reason) {
+        userEngine._dbClose = async function(id, exitPrice, pnlUsd, pnlPct, reason) {
             if (!dbPool || !id) return;
             try {
                 await dbPool.query(
@@ -1993,20 +1981,20 @@ async function getOrCreateCryptoEngine(userId) {
         } catch (e) { /* non-critical */ }
         // Per-user Telegram alerts
         const tgCreds = await loadUserCredentials(userId, 'telegram').catch(() => ({}));
-        const tgToken = tgCreds.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
-        const tgChatId = tgCreds.TELEGRAM_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
+        const tgToken  = tgCreds.TELEGRAM_BOT_TOKEN  || process.env.TELEGRAM_BOT_TOKEN;
+        const tgChatId = tgCreds.TELEGRAM_CHAT_ID    || process.env.TELEGRAM_CHAT_ID;
         if (tgToken && tgChatId) {
             try {
                 const TelegramBot = require('node-telegram-bot-api');
                 const tgBot = new TelegramBot(tgToken, { polling: false });
                 userEngine._userTelegram = {
-                    sendCryptoEntry: (sym, entry, sl, tp, qty, tier) =>
-                        tgBot.sendMessage(tgChatId, `✅ *CRYPTO ENTRY* [${tier}]\n₿ ${sym} x${qty}\n💰 Entry: $${entry.toFixed(2)}\n🛑 SL: $${sl?.toFixed(2) || '—'}  🎯 TP: $${tp?.toFixed(2) || '—'}`, { parse_mode: 'Markdown' }).catch(() => { }),
-                    sendCryptoStopLoss: (sym, ep, cp, pnl, sl) =>
-                        tgBot.sendMessage(tgChatId, `🚨 *CRYPTO STOP LOSS*\n₿ ${sym}\n💰 Entry $${ep.toFixed(2)} → $${cp.toFixed(2)}\n💸 P&L: ${pnl.toFixed(2)}%`, { parse_mode: 'Markdown' }).catch(() => { }),
-                    sendCryptoTakeProfit: (sym, ep, cp, pnl, tp) =>
-                        tgBot.sendMessage(tgChatId, `🎯 *CRYPTO TAKE PROFIT*\n₿ ${sym}\n💰 Entry $${ep.toFixed(2)} → $${cp.toFixed(2)}\n💵 P&L: +${pnl.toFixed(2)}%`, { parse_mode: 'Markdown' }).catch(() => { }),
-                    send: (msg) => tgBot.sendMessage(tgChatId, msg, { parse_mode: 'Markdown' }).catch(() => { }),
+                    sendCryptoEntry:     (sym, entry, sl, tp, qty, tier) =>
+                        tgBot.sendMessage(tgChatId, `✅ *CRYPTO ENTRY* [${tier}]\n₿ ${sym} x${qty}\n💰 Entry: $${entry.toFixed(2)}\n🛑 SL: $${sl?.toFixed(2) || '—'}  🎯 TP: $${tp?.toFixed(2) || '—'}`, { parse_mode: 'Markdown' }).catch(() => {}),
+                    sendCryptoStopLoss:  (sym, ep, cp, pnl, sl) =>
+                        tgBot.sendMessage(tgChatId, `🚨 *CRYPTO STOP LOSS*\n₿ ${sym}\n💰 Entry $${ep.toFixed(2)} → $${cp.toFixed(2)}\n💸 P&L: ${pnl.toFixed(2)}%`, { parse_mode: 'Markdown' }).catch(() => {}),
+                    sendCryptoTakeProfit:(sym, ep, cp, pnl, tp) =>
+                        tgBot.sendMessage(tgChatId, `🎯 *CRYPTO TAKE PROFIT*\n₿ ${sym}\n💰 Entry $${ep.toFixed(2)} → $${cp.toFixed(2)}\n💵 P&L: +${pnl.toFixed(2)}%`, { parse_mode: 'Markdown' }).catch(() => {}),
+                    send:               (msg) => tgBot.sendMessage(tgChatId, msg, { parse_mode: 'Markdown' }).catch(() => {}),
                 };
                 console.log(`📱 [CryptoEngine ${userId}] Per-user Telegram alerts configured`);
             } catch (e) {
@@ -2043,10 +2031,8 @@ async function runCryptoScanQueue() {
 app.get('/api/crypto/engine/status', requireJwt, async (req, res) => {
     const userId = req.user.sub;
     const userEngine = await getOrCreateCryptoEngine(userId);
-    if (!userEngine) return res.json({
-        success: true, credentialsRequired: true,
-        message: 'No Kraken credentials configured — visit Settings'
-    });
+    if (!userEngine) return res.json({ success: true, credentialsRequired: true,
+        message: 'No Kraken credentials configured — visit Settings' });
     const status = userEngine.getStatus();
     res.json({ success: true, ...status, userId });
 });
@@ -2221,7 +2207,7 @@ app.listen(PORT, async () => {
     try {
         if (dbPool) {
             const orphaned = await dbPool.query(
-                `SELECT id, symbol FROM trades WHERE bot='crypto' AND status='open' AND user_id IS NULL`
+                `SELECT id, symbol FROM trades WHERE bot='crypto' AND status='open'`
             );
             let closedCount = 0;
             for (const row of orphaned.rows) {
