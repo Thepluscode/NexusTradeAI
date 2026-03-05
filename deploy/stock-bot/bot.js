@@ -3436,7 +3436,7 @@ app.listen(PORT, async () => {
     try {
         if (dbPool) {
             const orphaned = await dbPool.query(
-                `SELECT id, symbol FROM trades WHERE bot='stock' AND status='open'`
+                `SELECT id, symbol FROM trades WHERE bot='stock' AND status='open' AND user_id IS NULL`
             );
             let closedCount = 0;
             for (const row of orphaned.rows) {
