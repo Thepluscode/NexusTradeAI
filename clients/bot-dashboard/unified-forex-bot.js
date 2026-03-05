@@ -1434,10 +1434,36 @@ async function managePositions() {
         }
     }
 
-    // Sync positions Map with OANDA
+    // Sync positions Map with OANDA — detect broker-closed positions and write real P&L to DB
     const oandaInstruments = oandaPositions.map(p => p.instrument);
-    for (const [pair] of positions) {
+    for (const [pair, localPos] of positions) {
         if (!oandaInstruments.includes(pair)) {
+            // Position closed by OANDA (stop-loss / take-profit / margin call)
+            // Fetch the most-recently-closed trade for this instrument to get real exit data
+            try {
+                const closed = await oandaRequest('get',
+                    `/v3/accounts/${oandaConfig.accountId}/trades?instrument=${pair}&state=CLOSED&count=1`);
+                const trade = closed?.trades?.[0];
+                if (trade && localPos.dbTradeId) {
+                    const exitPrice = parseFloat(trade.closePrice ?? trade.averageClosePrice ?? localPos.entry ?? 0);
+                    const realPnl   = parseFloat(trade.realizedPL ?? 0);
+                    const exitEntry = localPos.entry ?? 0;
+                    const exitUnits = Math.abs(localPos.units ?? 1);
+                    const exitPct   = exitEntry > 0 ? (realPnl / (exitEntry * exitUnits)) * 100 : 0;
+                    const reason    = trade.closingTransactionIDs?.length
+                        ? (realPnl < 0 ? 'Stop Loss' : 'Take Profit')
+                        : 'Broker Closed';
+                    dbForexClose(localPos.dbTradeId, exitPrice, realPnl, exitPct, reason).catch(() => {});
+                    // Update in-memory perf counters
+                    simTotalTrades++;
+                    simDailyPnL += realPnl;
+                    if (realPnl > 0) simWinners++; else simLosers++;
+                    saveForexPerf();
+                    console.log(`📊 [DB] Synced closed trade ${pair}: exit=${exitPrice} pnl=${realPnl.toFixed(2)} reason=${reason}`);
+                }
+            } catch (e) {
+                console.warn(`⚠️  Failed to fetch closed trade data for ${pair}:`, e.message);
+            }
             positions.delete(pair);
         }
     }
@@ -2102,9 +2128,27 @@ class UserForexEngine {
     async managePositions() {
         const oandaPositions = await this.getOpenPositions();
         const openInstruments = new Set(oandaPositions.map(p => p.instrument));
-        // Clean up positions we think are open but OANDA closed them
-        for (const [pair] of this.positions) {
-            if (!openInstruments.has(pair)) this.positions.delete(pair);
+        // Clean up positions OANDA closed (stop-loss / take-profit) — write real P&L to DB
+        for (const [pair, localPos] of this.positions) {
+            if (!openInstruments.has(pair)) {
+                try {
+                    const closed = await this.oandaReq('get',
+                        `/v3/accounts/${this.oandaConfig.accountId}/trades?instrument=${pair}&state=CLOSED&count=1`);
+                    const trade = closed?.trades?.[0];
+                    if (trade && localPos.dbTradeId) {
+                        const exitPrice = parseFloat(trade.closePrice ?? trade.averageClosePrice ?? localPos.entry ?? 0);
+                        const realPnl   = parseFloat(trade.realizedPL ?? 0);
+                        const exitEntry = localPos.entry ?? 0;
+                        const exitPct   = exitEntry > 0 ? (realPnl / (exitEntry * Math.abs(localPos.units ?? 1))) * 100 : 0;
+                        const reason    = realPnl < 0 ? 'Stop Loss' : 'Take Profit';
+                        this.dbForexClose(localPos.dbTradeId, exitPrice, realPnl, exitPct, reason).catch(() => {});
+                        console.log(`📊 [ForexEngine ${this.userId}] Synced closed trade ${pair}: pnl=${realPnl.toFixed(2)}`);
+                    }
+                } catch (e) {
+                    console.warn(`⚠️  [ForexEngine ${this.userId}] Failed to fetch closed trade for ${pair}:`, e.message);
+                }
+                this.positions.delete(pair);
+            }
         }
         for (const p of oandaPositions) {
             const instrument = p.instrument;
