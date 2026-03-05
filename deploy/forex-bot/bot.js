@@ -180,9 +180,9 @@ function requireApiSecret(req, res, next) {
 
 // ── Persist env var to Railway (survives redeploys) ────────────────────────
 async function persistEnvVar(name, value) {
-    const token   = process.env.RAILWAY_TOKEN;
+    const token = process.env.RAILWAY_TOKEN;
     const project = process.env.RAILWAY_PROJECT_ID;
-    const env     = process.env.RAILWAY_ENVIRONMENT_ID;
+    const env = process.env.RAILWAY_ENVIRONMENT_ID;
     const service = process.env.RAILWAY_SERVICE_ID;
     if (!token || !project || !env || !service) return;
     const query = `mutation { variableUpsert(input: { projectId: "${project}", environmentId: "${env}", serviceId: "${service}", name: "${name}", value: "${value.replace(/"/g, '\\"')}" }) }`;
@@ -406,7 +406,7 @@ app.post('/api/auth/logout', async (req, res) => {
             try {
                 const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
                 await dbPool.query('UPDATE users SET refresh_token=NULL WHERE id=$1', [payload.sub]);
-            } catch {}
+            } catch { }
         }
     }
     res.json({ success: true });
@@ -503,7 +503,7 @@ function loadBotState() {
             const saved = JSON.parse(require('fs').readFileSync(BOT_STATE_FILE, 'utf8'));
             return { running: saved.running !== false, paused: saved.paused === true };
         }
-    } catch {}
+    } catch { }
     return { running: true, paused: false };
 }
 function saveBotState() {
@@ -511,7 +511,7 @@ function saveBotState() {
         const dir = require('path').dirname(BOT_STATE_FILE);
         if (!require('fs').existsSync(dir)) require('fs').mkdirSync(dir, { recursive: true });
         require('fs').writeFileSync(BOT_STATE_FILE, JSON.stringify({ running: botRunning, paused: botPaused }));
-    } catch {}
+    } catch { }
 }
 const _initState = loadBotState();
 let botRunning = _initState.running;
@@ -543,7 +543,7 @@ function loadForexPerf() {
             // Don't restore equity or dailyPnL — those are session-specific
             console.log(`📊 Forex perf restored: ${simTotalTrades} trades, ${simWinners}W/${simLosers}L`);
         }
-    } catch {}
+    } catch { }
 }
 
 function saveForexPerf() {
@@ -558,7 +558,7 @@ function saveForexPerf() {
             shortTrades: simShortTrades,
             lastUpdate: new Date().toISOString()
         }));
-    } catch {}
+    } catch { }
 }
 
 // Load on startup
@@ -929,8 +929,8 @@ function calculateMACDForex(candles, fastPeriod = 12, slowPeriod = 26, signalPer
         macd: macdLine[macdLine.length - 1],
         signal: signalLine,
         histogram,
-        bullish:  histogram > 0,  // positive histogram = bullish; rising check removed (too restrictive)
-        bearish:  histogram < 0   // negative histogram = bearish; falling check removed
+        bullish: histogram > 0,  // positive histogram = bullish; rising check removed (too restrictive)
+        bearish: histogram < 0   // negative histogram = bearish; falling check removed
     };
 }
 
@@ -986,10 +986,10 @@ async function queryStrategyBridge(pair, _direction) {
         if (!candles || candles.length < 30) return null;
         const prices = candles.map(c => ({
             timestamp: c.time || new Date().toISOString(),
-            open:   parseFloat(c.mid.o) || 0,
-            high:   parseFloat(c.mid.h) || 0,
-            low:    parseFloat(c.mid.l) || 0,
-            close:  parseFloat(c.mid.c) || 0,
+            open: parseFloat(c.mid.o) || 0,
+            high: parseFloat(c.mid.h) || 0,
+            low: parseFloat(c.mid.l) || 0,
+            close: parseFloat(c.mid.c) || 0,
             volume: parseFloat(c.volume) || 0
         }));
         const response = await axios.post(`${BRIDGE_URL}/signal`,
@@ -1119,7 +1119,7 @@ async function scanForSignals() {
         if (tierPositions >= config.maxPositions) continue;
 
         // [v3.2] ATR-based stops/targets — adapts to each pair's volatility
-        const atrStop   = atrPct > 0 ? atrPct * 1.5 : config.stopLoss;
+        const atrStop = atrPct > 0 ? atrPct * 1.5 : config.stopLoss;
         const atrTarget = atrPct > 0 ? atrPct * 3.0 : config.profitTarget;
 
         // LONG Signal
@@ -1153,7 +1153,7 @@ async function scanForSignals() {
                 signals.push({
                     pair, direction: 'long', tier,
                     entry: currentPrice,
-                    stopLoss:   currentPrice * (1 - atrStop),
+                    stopLoss: currentPrice * (1 - atrStop),
                     takeProfit: currentPrice * (1 + atrTarget),
                     rsi, trendStrength, atrPct, h1Trend,
                     macdHistogram: macd ? macd.histogram : null,
@@ -1192,7 +1192,7 @@ async function scanForSignals() {
                 signals.push({
                     pair, direction: 'short', tier,
                     entry: currentPrice,
-                    stopLoss:   currentPrice * (1 + atrStop),
+                    stopLoss: currentPrice * (1 + atrStop),
                     takeProfit: currentPrice * (1 - atrTarget),
                     rsi, trendStrength, atrPct, h1Trend,
                     macdHistogram: macd ? macd.histogram : null,
@@ -1258,7 +1258,7 @@ async function executeTrade(signal) {
         // Persist trade opening to DB (fire-and-forget)
         dbForexOpen(signal.pair, signal.direction, signal.tier, signal.entry, signal.stopLoss, signal.takeProfit, units, signal.session)
             .then(id => { const p = positions.get(signal.pair); if (p) p.dbTradeId = id; })
-            .catch(() => {});
+            .catch(() => { });
 
         // Update tracking
         totalTradesToday++;
@@ -1380,7 +1380,7 @@ async function closePositionWithReason(pair, reason) {
             const exitEntry = pos.entry ?? 0;
             const exitPct = exitEntry > 0 ? (exitPnl / (exitEntry * Math.abs(pos.units ?? 1))) * 100 : 0;
             const exitPrice = pos.currentPrice ?? exitEntry;
-            dbForexClose(pos.dbTradeId, exitPrice, exitPnl, exitPct, reason).catch(() => {});
+            dbForexClose(pos.dbTradeId, exitPrice, exitPnl, exitPct, reason).catch(() => { });
         }
 
         positions.delete(pair);
@@ -1457,14 +1457,14 @@ async function managePositions() {
                 const trade = closed?.trades?.[0];
                 if (trade && localPos.dbTradeId) {
                     const exitPrice = parseFloat(trade.closePrice ?? trade.averageClosePrice ?? localPos.entry ?? 0);
-                    const realPnl   = parseFloat(trade.realizedPL ?? 0);
+                    const realPnl = parseFloat(trade.realizedPL ?? 0);
                     const exitEntry = localPos.entry ?? 0;
                     const exitUnits = Math.abs(localPos.units ?? 1);
-                    const exitPct   = exitEntry > 0 ? (realPnl / (exitEntry * exitUnits)) * 100 : 0;
-                    const reason    = trade.closingTransactionIDs?.length
+                    const exitPct = exitEntry > 0 ? (realPnl / (exitEntry * exitUnits)) * 100 : 0;
+                    const reason = trade.closingTransactionIDs?.length
                         ? (realPnl < 0 ? 'Stop Loss' : 'Take Profit')
                         : 'Broker Closed';
-                    dbForexClose(localPos.dbTradeId, exitPrice, realPnl, exitPct, reason).catch(() => {});
+                    dbForexClose(localPos.dbTradeId, exitPrice, realPnl, exitPct, reason).catch(() => { });
                     // Update in-memory perf counters
                     simTotalTrades++;
                     simDailyPnL += realPnl;
@@ -1585,9 +1585,9 @@ app.get('/api/forex/status', async (req, res) => {
         const hasCredentials = oandaConfig.accessToken && oandaConfig.accountId;
         const session = getCurrentSession();
         const sessionLabel = session.quality === 'best' ? 'OVERLAP' :
-                             session.name === 'London' ? 'LONDON' :
-                             session.name === 'New York' ? 'NEW_YORK' :
-                             session.name === 'Tokyo' ? 'TOKYO' : 'OFF_PEAK';
+            session.name === 'London' ? 'LONDON' :
+                session.name === 'New York' ? 'NEW_YORK' :
+                    session.name === 'Tokyo' ? 'TOKYO' : 'OFF_PEAK';
 
         // --- Demo/simulation mode (no OANDA credentials) ---
         if (!hasCredentials) {
@@ -1820,9 +1820,9 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
         const { broker, credentials, fields } = req.body;
         const creds = credentials || fields;
         const ALLOWED_KEYS = {
-            oanda:    ['OANDA_ACCOUNT_ID', 'OANDA_ACCESS_TOKEN', 'OANDA_PRACTICE'],
+            oanda: ['OANDA_ACCOUNT_ID', 'OANDA_ACCESS_TOKEN', 'OANDA_PRACTICE'],
             telegram: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_ALERTS_ENABLED'],
-            sms:      ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'ALERT_PHONE_NUMBER', 'SMS_ALERTS_ENABLED'],
+            sms: ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_PHONE_NUMBER', 'ALERT_PHONE_NUMBER', 'SMS_ALERTS_ENABLED'],
         };
         const allowed = ALLOWED_KEYS[broker];
         if (!allowed) return res.status(400).json({ success: false, error: 'Unknown broker' });
@@ -1851,7 +1851,7 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
 
         // Refresh in-memory broker config
         if (broker === 'oanda') {
-            if (creds.OANDA_ACCOUNT_ID)   oandaConfig.accountId   = creds.OANDA_ACCOUNT_ID;
+            if (creds.OANDA_ACCOUNT_ID) oandaConfig.accountId = creds.OANDA_ACCOUNT_ID;
             if (creds.OANDA_ACCESS_TOKEN) oandaConfig.accessToken = creds.OANDA_ACCESS_TOKEN;
             if (creds.OANDA_PRACTICE !== undefined) oandaConfig.isPractice = creds.OANDA_PRACTICE !== 'false';
             // Register or update per-user engine
@@ -1862,7 +1862,7 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
                         creds.OANDA_PRACTICE !== undefined ? creds.OANDA_PRACTICE !== 'false' : undefined,
                         { TELEGRAM_BOT_TOKEN: creds.TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID: creds.TELEGRAM_CHAT_ID });
                 } else {
-                    getOrCreateForexEngine(userId).catch(() => {});
+                    getOrCreateForexEngine(userId).catch(() => { });
                 }
             }
         }
@@ -1876,11 +1876,13 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
 app.get('/api/config/credentials/status', requireJwt, async (req, res) => {
     const userId = req.user?.sub;
     if (!userId || !dbPool) {
-        return res.json({ success: true, brokers: {
-            oanda:    { configured: !!(process.env.OANDA_ACCOUNT_ID && process.env.OANDA_ACCESS_TOKEN) },
-            telegram: { configured: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) },
-            sms:      { configured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) },
-        }});
+        return res.json({
+            success: true, brokers: {
+                oanda: { configured: !!(process.env.OANDA_ACCOUNT_ID && process.env.OANDA_ACCESS_TOKEN) },
+                telegram: { configured: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) },
+                sms: { configured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) },
+            }
+        });
     }
     try {
         const r = await dbPool.query(
@@ -1888,11 +1890,13 @@ app.get('/api/config/credentials/status', requireJwt, async (req, res) => {
             [userId]
         );
         const stored = Object.fromEntries(r.rows.map(row => [row.broker, parseInt(row.key_count)]));
-        res.json({ success: true, brokers: {
-            oanda:    { configured: (stored.oanda    || 0) >= 2 },
-            telegram: { configured: (stored.telegram || 0) >= 2 },
-            sms:      { configured: (stored.sms      || 0) >= 2 },
-        }});
+        res.json({
+            success: true, brokers: {
+                oanda: { configured: (stored.oanda || 0) >= 2 },
+                telegram: { configured: (stored.telegram || 0) >= 2 },
+                sms: { configured: (stored.sms || 0) >= 2 },
+            }
+        });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
     }
@@ -1979,27 +1983,27 @@ class UserForexEngine {
     }
 
     updateCredentials(oandaAccountId, oandaAccessToken, isPractice, extraCreds) {
-        if (oandaAccountId)    this.oandaConfig.accountId  = oandaAccountId;
-        if (oandaAccessToken)  this.oandaConfig.accessToken = oandaAccessToken;
+        if (oandaAccountId) this.oandaConfig.accountId = oandaAccountId;
+        if (oandaAccessToken) this.oandaConfig.accessToken = oandaAccessToken;
         if (isPractice !== undefined) {
             this.oandaConfig.isPractice = isPractice !== false;
             this.oandaConfig.baseURL = this.oandaConfig.isPractice
                 ? 'https://api-fxpractice.oanda.com' : 'https://api-fxtrade.oanda.com';
         }
-        const tgToken  = extraCreds?.TELEGRAM_BOT_TOKEN  || process.env.TELEGRAM_BOT_TOKEN;
-        const tgChatId = extraCreds?.TELEGRAM_CHAT_ID    || process.env.TELEGRAM_CHAT_ID;
+        const tgToken = extraCreds?.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
+        const tgChatId = extraCreds?.TELEGRAM_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
         if (tgToken && tgChatId) {
             try {
                 const TelegramBot = require('node-telegram-bot-api');
                 const bot = new TelegramBot(tgToken, { polling: false });
                 this._telegram = {
-                    sendForexEntry:     (pair, dir, entry, sl, tp, units, tier) =>
-                        bot.sendMessage(tgChatId, `✅ *FOREX ENTRY* [${tier}]\n🌍 ${pair} ${dir.toUpperCase()} x${units}\n💰 Entry: ${entry.toFixed(5)}\n🛑 SL: ${sl?.toFixed(5) || '—'}  🎯 TP: ${tp?.toFixed(5) || '—'}`, { parse_mode: 'Markdown' }).catch(() => {}),
-                    sendForexStopLoss:  (pair, entry, reason) =>
-                        bot.sendMessage(tgChatId, `🚨 *FOREX STOP LOSS*\n🌍 ${pair}\n💰 Entry: ${entry}\n📌 Reason: ${reason}`, { parse_mode: 'Markdown' }).catch(() => {}),
-                    sendForexTakeProfit:(pair, entry, reason) =>
-                        bot.sendMessage(tgChatId, `🎯 *FOREX TAKE PROFIT*\n🌍 ${pair}\n💰 Entry: ${entry}\n📌 Reason: ${reason}`, { parse_mode: 'Markdown' }).catch(() => {}),
-                    send:               (msg) => bot.sendMessage(tgChatId, msg, { parse_mode: 'Markdown' }).catch(() => {}),
+                    sendForexEntry: (pair, dir, entry, sl, tp, units, tier) =>
+                        bot.sendMessage(tgChatId, `✅ *FOREX ENTRY* [${tier}]\n🌍 ${pair} ${dir.toUpperCase()} x${units}\n💰 Entry: ${entry.toFixed(5)}\n🛑 SL: ${sl?.toFixed(5) || '—'}  🎯 TP: ${tp?.toFixed(5) || '—'}`, { parse_mode: 'Markdown' }).catch(() => { }),
+                    sendForexStopLoss: (pair, entry, reason) =>
+                        bot.sendMessage(tgChatId, `🚨 *FOREX STOP LOSS*\n🌍 ${pair}\n💰 Entry: ${entry}\n📌 Reason: ${reason}`, { parse_mode: 'Markdown' }).catch(() => { }),
+                    sendForexTakeProfit: (pair, entry, reason) =>
+                        bot.sendMessage(tgChatId, `🎯 *FOREX TAKE PROFIT*\n🌍 ${pair}\n💰 Entry: ${entry}\n📌 Reason: ${reason}`, { parse_mode: 'Markdown' }).catch(() => { }),
+                    send: (msg) => bot.sendMessage(tgChatId, msg, { parse_mode: 'Markdown' }).catch(() => { }),
                 };
                 console.log(`📱 [ForexEngine ${this.userId}] Per-user Telegram alerts configured`);
             } catch (e) {
@@ -2034,14 +2038,44 @@ class UserForexEngine {
             if (r.rows.length > 0) {
                 const s = r.rows[0].state_json;
                 if (s.totalTradesToday !== undefined) this.totalTradesToday = s.totalTradesToday;
-                if (s.botRunning !== undefined)       this.botRunning = s.botRunning;
-                if (s.botPaused !== undefined)        this.botPaused = s.botPaused;
-                if (s.simEquity !== undefined)        this.simEquity = s.simEquity;
-                if (s.simTotalTrades !== undefined)   this.simTotalTrades = s.simTotalTrades;
-                if (s.simWinners !== undefined)       this.simWinners = s.simWinners;
-                if (s.simLosers !== undefined)        this.simLosers = s.simLosers;
+                if (s.botRunning !== undefined) this.botRunning = s.botRunning;
+                if (s.botPaused !== undefined) this.botPaused = s.botPaused;
+                if (s.simEquity !== undefined) this.simEquity = s.simEquity;
+                if (s.simTotalTrades !== undefined) this.simTotalTrades = s.simTotalTrades;
+                if (s.simWinners !== undefined) this.simWinners = s.simWinners;
+                if (s.simLosers !== undefined) this.simLosers = s.simLosers;
             }
-        } catch (e) { /* non-critical */ }
+
+            // Hydrate `this.positions` from DB + OANDA
+            const dbOpenRes = await dbPool.query(
+                `SELECT id, symbol, direction, entry_price, quantity, stop_loss, take_profit, entry_time
+                 FROM trades WHERE bot='forex' AND status='open' AND user_id=$1`, [this.userId]
+            );
+            const oandaPositions = await this.getOpenPositions();
+            const openInstruments = new Set(oandaPositions.map(p => p.instrument));
+
+            for (const row of dbOpenRes.rows) {
+                if (openInstruments.has(row.symbol)) {
+                    this.positions.set(row.symbol, {
+                        dbTradeId: row.id,
+                        instrument: row.symbol,
+                        direction: row.direction,
+                        entry: parseFloat(row.entry_price || '0'),
+                        units: parseFloat(row.quantity || '0'),
+                        stopLoss: parseFloat(row.stop_loss || '0'),
+                        takeProfit: parseFloat(row.take_profit || '0'),
+                        entryTime: row.entry_time,
+                        tier: 'restored'
+                    });
+                    this.tradesPerPair.set(row.symbol, 10); // block new entries while recovering
+                }
+            }
+            if (this.positions.size > 0) {
+                console.log(`✅ [ForexEngine ${this.userId}] Hydrated ${this.positions.size} positions from DB/OANDA`);
+            }
+        } catch (e) {
+            console.warn(`⚠️  [ForexEngine ${this.userId}] State load failed:`, e.message);
+        }
     }
 
     async oandaReq(method, endpoint, data = null) {
@@ -2071,9 +2105,13 @@ class UserForexEngine {
 
     async createOrder(instrument, units, stopLoss, takeProfit) {
         const precision = instrument.includes('JPY') ? 3 : 5;
-        const order = { order: { type: 'MARKET', instrument, units: units.toString(),
-            stopLossOnFill: { price: stopLoss.toFixed(precision) },
-            takeProfitOnFill: { price: takeProfit.toFixed(precision) }, timeInForce: 'FOK' }};
+        const order = {
+            order: {
+                type: 'MARKET', instrument, units: units.toString(),
+                stopLossOnFill: { price: stopLoss.toFixed(precision) },
+                takeProfitOnFill: { price: takeProfit.toFixed(precision) }, timeInForce: 'FOK'
+            }
+        };
         return await this.oandaReq('post', `/v3/accounts/${this.oandaConfig.accountId}/orders`, order);
     }
 
@@ -2127,7 +2165,7 @@ class UserForexEngine {
             const exitEntry = pos.entry ?? 0;
             const exitPct = exitEntry > 0 ? (exitPnl / (exitEntry * Math.abs(pos.units ?? 1))) * 100 : 0;
             const exitPrice = pos.currentPrice ?? exitEntry;
-            this.dbForexClose(pos.dbTradeId, exitPrice, exitPnl, exitPct, reason).catch(() => {});
+            this.dbForexClose(pos.dbTradeId, exitPrice, exitPnl, exitPct, reason).catch(() => { });
         }
         await this.closeOandaPosition(pair);
         if (reason.toLowerCase().includes('stop')) this.stoppedOutPairs.set(pair, Date.now());
@@ -2148,11 +2186,11 @@ class UserForexEngine {
                     const trade = closed?.trades?.[0];
                     if (trade && localPos.dbTradeId) {
                         const exitPrice = parseFloat(trade.closePrice ?? trade.averageClosePrice ?? localPos.entry ?? 0);
-                        const realPnl   = parseFloat(trade.realizedPL ?? 0);
+                        const realPnl = parseFloat(trade.realizedPL ?? 0);
                         const exitEntry = localPos.entry ?? 0;
-                        const exitPct   = exitEntry > 0 ? (realPnl / (exitEntry * Math.abs(localPos.units ?? 1))) * 100 : 0;
-                        const reason    = realPnl < 0 ? 'Stop Loss' : 'Take Profit';
-                        this.dbForexClose(localPos.dbTradeId, exitPrice, realPnl, exitPct, reason).catch(() => {});
+                        const exitPct = exitEntry > 0 ? (realPnl / (exitEntry * Math.abs(localPos.units ?? 1))) * 100 : 0;
+                        const reason = realPnl < 0 ? 'Stop Loss' : 'Take Profit';
+                        this.dbForexClose(localPos.dbTradeId, exitPrice, realPnl, exitPct, reason).catch(() => { });
                         console.log(`📊 [ForexEngine ${this.userId}] Synced closed trade ${pair}: pnl=${realPnl.toFixed(2)}`);
                     }
                 } catch (e) {
@@ -2212,14 +2250,14 @@ class UserForexEngine {
             });
             this.dbForexOpen(signal.pair, signal.direction, signal.tier, signal.entry, signal.stopLoss, signal.takeProfit, units, signal.session)
                 .then(id => { const p = this.positions.get(signal.pair); if (p) p.dbTradeId = id; })
-                .catch(() => {});
+                .catch(() => { });
             this.totalTradesToday++;
             this.tradesPerPair.set(signal.pair, (this.tradesPerPair.get(signal.pair) || 0) + 1);
             const trades = this.recentTrades.get(signal.pair) || [];
             trades.push({ time: Date.now(), side: signal.direction });
             this.recentTrades.set(signal.pair, trades);
             await this.saveState();
-            (this._telegram || telegramAlerts).sendForexEntry(signal.pair, signal.direction, signal.entry, signal.stopLoss, signal.takeProfit, units, signal.tier).catch(() => {});
+            (this._telegram || telegramAlerts).sendForexEntry(signal.pair, signal.direction, signal.entry, signal.stopLoss, signal.takeProfit, units, signal.tier).catch(() => { });
             console.log(`✅ [ForexEngine ${this.userId}] Trade: ${signal.direction.toUpperCase()} ${signal.pair} x${Math.abs(units)}`);
             return true;
         }
@@ -2268,9 +2306,9 @@ async function getOrCreateForexEngine(userId) {
     if (!dbPool) return null;
     try {
         const creds = await loadUserCredentials(userId, 'oanda');
-        const accountId   = creds.OANDA_ACCOUNT_ID    || process.env.OANDA_ACCOUNT_ID;
-        const accessToken = creds.OANDA_ACCESS_TOKEN   || process.env.OANDA_ACCESS_TOKEN;
-        const isPractice  = creds.OANDA_PRACTICE !== 'false' && process.env.OANDA_PRACTICE !== 'false';
+        const accountId = creds.OANDA_ACCOUNT_ID || process.env.OANDA_ACCOUNT_ID;
+        const accessToken = creds.OANDA_ACCESS_TOKEN || process.env.OANDA_ACCESS_TOKEN;
+        const isPractice = creds.OANDA_PRACTICE !== 'false' && process.env.OANDA_PRACTICE !== 'false';
         if (!accountId || !accessToken) return null;
         const engine = new UserForexEngine(userId, accountId, accessToken, isPractice);
         await engine.loadState();
@@ -2303,16 +2341,20 @@ async function runForexScanQueue() {
 app.get('/api/forex/engine/status', requireJwt, async (req, res) => {
     const userId = req.user.sub;
     const engine = await getOrCreateForexEngine(userId);
-    if (!engine) return res.json({ success: true, credentialsRequired: true,
-        message: 'No OANDA credentials configured — visit Settings' });
+    if (!engine) return res.json({
+        success: true, credentialsRequired: true,
+        message: 'No OANDA credentials configured — visit Settings'
+    });
     try {
         const account = await engine.getAccount();
         const equity = account ? parseFloat(account.balance) : 0;
-        res.json({ success: true, isRunning: engine.botRunning, isPaused: engine.botPaused,
+        res.json({
+            success: true, isRunning: engine.botRunning, isPaused: engine.botPaused,
             mode: engine.oandaConfig.isPractice ? 'PAPER' : 'LIVE',
             positions: Array.from(engine.positions.values()),
             stats: { totalTradesToday: engine.totalTradesToday, openPositions: engine.positions.size },
-            portfolioValue: equity });
+            portfolioValue: equity
+        });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -2400,7 +2442,7 @@ app.listen(PORT, async () => {
                     if (Object.keys(creds).length > 0) console.log(`🔑 Loaded ${broker} credentials from DB for user ${userId}`);
                 }
                 // Refresh in-memory OANDA config
-                if (process.env.OANDA_ACCOUNT_ID)   oandaConfig.accountId   = process.env.OANDA_ACCOUNT_ID;
+                if (process.env.OANDA_ACCOUNT_ID) oandaConfig.accountId = process.env.OANDA_ACCOUNT_ID;
                 if (process.env.OANDA_ACCESS_TOKEN) oandaConfig.accessToken = process.env.OANDA_ACCESS_TOKEN;
             }
         }
@@ -2443,10 +2485,11 @@ app.listen(PORT, async () => {
     // ── DB Reconciliation: close orphaned 'open' trades not in memory ──
     // Runs after position hydration so in-memory positions map is complete.
     // Any DB row still 'open' for a pair we don't track = orphaned on restart.
+    // ONLY check system-level trades (user_id IS NULL). Per-user trades are managed by UserForexEngine.
     try {
         if (dbPool) {
             const orphaned = await dbPool.query(
-                `SELECT id, symbol FROM trades WHERE bot='forex' AND status='open'`
+                `SELECT id, symbol FROM trades WHERE bot='forex' AND status='open' AND user_id IS NULL`
             );
             let closedCount = 0;
             for (const row of orphaned.rows) {
