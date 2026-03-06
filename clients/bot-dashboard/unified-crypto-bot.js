@@ -1797,7 +1797,8 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
             });
             if (engine.demoMode) {
                 try {
-                    const account = await engine.kraken.getAccountInfo();
+                    // Call _privateRequest directly so real Kraken errors propagate (getAccountInfo swallows them)
+                    const account = await engine.kraken._privateRequest('Balance');
                     if (account) {
                         engine.demoMode = false;
                         engine.saveState();
@@ -1805,13 +1806,13 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
                         return res.json({ success: true, updated, reconnected: true, demoMode: false, storage: userId ? 'database' : 'environment' });
                     }
                     return res.json({ success: true, updated, reconnected: false, demoMode: true,
-                        warning: 'Keys saved but Kraken Balance call returned null — key may lack Query Funds permission',
+                        warning: 'Keys saved but Kraken Balance returned empty — check API key permissions',
                         storage: userId ? 'database' : 'environment' });
                 } catch (reconnectErr) {
                     const krakenErr = reconnectErr.message || 'Unknown error';
                     console.error('❌ Kraken reconnect error:', krakenErr);
                     return res.json({ success: true, updated, reconnected: false, demoMode: true,
-                        warning: `Kraken error: ${krakenErr}`, storage: userId ? 'database' : 'environment' });
+                        warning: `Kraken rejected keys: ${krakenErr}`, storage: userId ? 'database' : 'environment' });
                 }
             }
         }
