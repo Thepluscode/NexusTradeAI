@@ -1805,11 +1805,13 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
                         return res.json({ success: true, updated, reconnected: true, demoMode: false, storage: userId ? 'database' : 'environment' });
                     }
                     return res.json({ success: true, updated, reconnected: false, demoMode: true,
-                        warning: 'Keys saved but Kraken rejected them — check permissions/IP whitelist',
+                        warning: 'Keys saved but Kraken Balance call returned null — key may lack Query Funds permission',
                         storage: userId ? 'database' : 'environment' });
                 } catch (reconnectErr) {
+                    const krakenErr = reconnectErr.message || 'Unknown error';
+                    console.error('❌ Kraken reconnect error:', krakenErr);
                     return res.json({ success: true, updated, reconnected: false, demoMode: true,
-                        warning: reconnectErr.message, storage: userId ? 'database' : 'environment' });
+                        warning: `Kraken error: ${krakenErr}`, storage: userId ? 'database' : 'environment' });
                 }
             }
         }
