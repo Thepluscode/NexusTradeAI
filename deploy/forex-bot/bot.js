@@ -2465,7 +2465,7 @@ app.listen(PORT, async () => {
                 console.log(`🔄 Restored position: ${instrument} SHORT ${Math.abs(shortUnits)} units @ ${avgPrice}`);
             }
         }
-        if (openPos.length > 0) console.log(`✅ Hydrated ${positions.size} position(s) from OANDA`);
+        console.log(`✅ Hydrated ${positions.size} positions from OANDA (DB open trades: to be reconciled)`);
     } catch (e) {
         console.warn('⚠️  Position hydration failed (will proceed):', e.message);
     }
@@ -2477,7 +2477,7 @@ app.listen(PORT, async () => {
     try {
         if (dbPool) {
             const orphaned = await dbPool.query(
-                `SELECT id, symbol FROM trades WHERE bot='forex' AND status='open' AND user_id IS NULL`
+                `SELECT id, symbol FROM trades WHERE bot='forex' AND status='open' AND user_id IS NULL AND entry_time < NOW() - INTERVAL '5 minutes'`
             );
             let closedCount = 0;
             for (const row of orphaned.rows) {

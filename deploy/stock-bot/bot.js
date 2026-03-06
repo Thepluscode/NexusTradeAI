@@ -1426,10 +1426,10 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
             return null;
         }
 
-        // ADX filter — require minimum trend strength; lowered to 15 to avoid filtering
+        // ADX filter — require minimum trend strength; lowered to 12 to avoid filtering
         // valid momentum moves in quiet pre-breakout markets (RSI/volume already confirm intent)
         const adx = calculateADX(bars);
-        if (adx !== null && adx < 15) {
+        if (adx !== null && adx < 12) {
             return null;
         }
 
@@ -1437,10 +1437,10 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
         // Histogram must be positive AND rising (not just crossing zero)
         const macd = calculateMACD(bars);
         if (macd !== null && !macd.bullish) {
-            // MACD bearish/flat — skip unless RSI divergence overrides (strong reversal signal)
-            const hasDivergence = detectRSIBullishDivergence(bars);
-            if (!hasDivergence) return null;
-            console.log(`[MACD Override] ${symbol} — RSI divergence overrides bearish MACD, proceeding`);
+            // MACD bearish/flat — skip unless histogram is nearly flat (>-0.001) or RSI divergence overrides
+            const nearlyFlat = macd.histogram > -0.001;
+            if (!nearlyFlat && !detectRSIBullishDivergence(bars)) return null;
+            if (!nearlyFlat) console.log(`[MACD Override] ${symbol} — RSI divergence overrides bearish MACD, proceeding`);
         }
 
         // [v3.5] Multi-timeframe filter — require intraday momentum to align with daily uptrend
@@ -1453,11 +1453,11 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
             });
             const dailyBars = dailyResp.data?.bars || [];
             if (dailyBars.length >= 5) {
-                // Use 9-day SMA (faster response) + 1% tolerance — avoids filtering intraday
+                // Use 9-day SMA (faster response) + 3% tolerance — avoids filtering intraday
                 // breakouts that are just starting to reclaim the trend line
                 const lookback = Math.min(9, dailyBars.length);
                 const sma9d = dailyBars.slice(-lookback).map(b => b.c).reduce((a, v) => a + v, 0) / lookback;
-                if (current < sma9d * 0.99) {
+                if (current < sma9d * 0.97) {
                     console.log(`[Daily Filter] ${symbol} below 9-day SMA ($${sma9d.toFixed(2)}) — counter-trend, skipping`);
                     return null;
                 }
@@ -1801,6 +1801,30 @@ app.get('/api/trading/status', async (req, res) => {
         // Update perf data with live equity
         perfData.activePositions = positionsData.length;
         savePerfData();
+
+        // If global perfData shows 0 trades, pull real stats from DB
+        if (perfData.totalTrades === 0 && dbPool) {
+            try {
+                const dbStats = await dbPool.query(`
+                    SELECT
+                        COUNT(*) FILTER (WHERE status='closed') AS total,
+                        COUNT(*) FILTER (WHERE status='closed' AND pnl_usd > 0) AS winners,
+                        COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed'), 0) AS total_pnl,
+                        COUNT(*) FILTER (WHERE status='open') AS open_count
+                    FROM trades WHERE bot='stock'
+                `);
+                const row = dbStats.rows[0];
+                const total = parseInt(row.total) || 0;
+                const winners = parseInt(row.winners) || 0;
+                if (total > 0) {
+                    perfData.totalTrades = total;
+                    perfData.winningTrades = winners;
+                    perfData.losingTrades = total - winners;
+                    perfData.winRate = parseFloat(((winners / total) * 100).toFixed(1));
+                    perfData.totalProfit = parseFloat(row.total_pnl) || 0;
+                }
+            } catch (e) { /* non-fatal */ }
+        }
 
         // Flat response matching StockBotPage BotStatus interface
         res.json({
@@ -3069,10 +3093,11 @@ async function analyzeMomentumForEngine(symbol, engine) {
         const ema21 = calculateEMA(closes, 21);
         if (ema9 !== null && ema21 !== null && ema9 <= ema21) return null;
         const adx = calculateADX(bars);
-        if (adx !== null && adx < 15) return null;
+        if (adx !== null && adx < 12) return null;
         const macd = calculateMACD(bars);
         if (macd !== null && !macd.bullish) {
-            if (!detectRSIBullishDivergence(bars)) return null;
+            const nearlyFlat = macd.histogram > -0.001;
+            if (!nearlyFlat && !detectRSIBullishDivergence(bars)) return null;
         }
         // Multi-timeframe daily SMA filter
         try {
@@ -3085,7 +3110,7 @@ async function analyzeMomentumForEngine(symbol, engine) {
             if (dailyBars.length >= 5) {
                 const lookback = Math.min(9, dailyBars.length);
                 const sma9d = dailyBars.slice(-lookback).map(b => b.c).reduce((a, v) => a + v, 0) / lookback;
-                if (current < sma9d * 0.99) return null;
+                if (current < sma9d * 0.97) return null;
             }
         } catch {}
         const atr = calculateATR(bars);
