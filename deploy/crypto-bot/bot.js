@@ -2160,14 +2160,23 @@ app.listen(PORT, async () => {
                     }
                     if (Object.keys(creds).length > 0) console.log(`🔑 Loaded ${broker} credentials from DB for user ${userId}`);
                 }
-                // Reinitialise Kraken client with loaded keys and exit demo mode
+                // Reinitialise Kraken client with loaded keys and verify connection before exiting DEMO mode
                 if (process.env.CRYPTO_API_KEY && process.env.CRYPTO_API_SECRET) {
                     engine.kraken = new KrakenClient({
                         apiKey: process.env.CRYPTO_API_KEY,
                         apiSecret: process.env.CRYPTO_API_SECRET,
                     });
-                    engine.demoMode = false; // credentials loaded from DB — not demo
-                    console.log('🔑 Kraken client reinitialised with DB credentials — DEMO mode disabled');
+                    try {
+                        const account = await engine.kraken._privateRequest('Balance');
+                        if (account) {
+                            engine.demoMode = false;
+                            console.log('✅ Kraken client reinitialised with DB credentials — DEMO mode disabled');
+                        } else {
+                            console.warn('⚠️  Kraken Balance returned empty — staying in DEMO mode. Re-enter credentials in Settings.');
+                        }
+                    } catch (krakenErr) {
+                        console.warn('⚠️  Kraken rejected DB credentials:', krakenErr.message, '— staying in DEMO mode. Re-enter credentials in Settings.');
+                    }
                 }
             }
         }

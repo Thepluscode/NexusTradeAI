@@ -256,6 +256,11 @@ export default function CryptoBotPage() {
                             sx={{ fontWeight: 600, color: 'white', bgcolor: 'rgba(255,255,255,0.2)' }}
                         />
                         <Chip
+                            label={status?.mode || (isRunning ? 'LIVE' : 'DEMO')}
+                            color={status?.mode === 'DEMO' ? 'warning' : status?.mode === 'LIVE' ? 'success' : 'info'}
+                            sx={{ fontWeight: 600 }}
+                        />
+                        <Chip
                             label={isRunning ? 'RUNNING' : 'STOPPED'}
                             color={isRunning ? 'success' : 'default'}
                             sx={{ fontWeight: 600 }}
