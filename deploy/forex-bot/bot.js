@@ -1074,7 +1074,7 @@ async function analyzePair(pair) {
     };
 }
 
-async function scanForSignals() {
+async function scanForSignals(heldPositions = positions) {
     const signals = [];
     const session = getCurrentSession();
 
@@ -1086,7 +1086,7 @@ async function scanForSignals() {
 
     // [v3.4] Parallelize M15 analysis + H1 trend fetch for all pairs simultaneously
     // Previously sequential (~2s × 12 pairs = 24s lag); now concurrent (~2-3s total)
-    const tradablePairs = FOREX_PAIRS.filter(pair => !positions.has(pair) && canTrade(pair).allowed);
+    const tradablePairs = FOREX_PAIRS.filter(pair => !heldPositions.has(pair) && canTrade(pair).allowed);
 
     const pairResults = await Promise.allSettled(
         tradablePairs.map(async pair => {
@@ -2267,13 +2267,13 @@ class UserForexEngine {
         Object.assign(oandaConfig, this.oandaConfig);
         let signals = [];
         try {
-            signals = await scanForSignals();
+            signals = await scanForSignals(this.positions);
         } finally {
             Object.assign(oandaConfig, savedConfig);
         }
         const maxNewPos = 5 - this.positions.size;
         for (const signal of signals.slice(0, Math.min(maxNewPos, 2))) {
-            if (this.canTrade(signal.pair, signal.direction)) {
+            if (!this.positions.has(signal.pair) && this.canTrade(signal.pair, signal.direction)) {
                 await this.executeTrade(signal);
             }
         }
