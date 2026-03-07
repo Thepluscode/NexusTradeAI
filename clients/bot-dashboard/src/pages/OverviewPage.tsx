@@ -27,6 +27,7 @@ import {
     BarChart,
     Person,
     Settings,
+    Hub,
 } from '@mui/icons-material';
 import axios from 'axios';
 import { SERVICE_URLS, apiClient } from '@/services/api';
@@ -335,6 +336,20 @@ export default function OverviewPage() {
             return { stock, forex, crypto } as Record<string, Record<string, unknown>>;
         },
         { enabled: isLoggedIn, refetchInterval: 15000, retry: false }
+    );
+
+    const { data: bridgeHealth } = useQuery(
+        'bridgeHealth',
+        async () => {
+            try {
+                const res = await axios.get(`${SERVICE_URLS.aiService}/health`, { timeout: 4000 });
+                return res.data as {
+                    status: string;
+                    pairs_cache: { pairs_active: number; symbols_cached: number; pairs: string[]; known_pairs_total: number };
+                };
+            } catch { return null; }
+        },
+        { refetchInterval: 60000, staleTime: 30000 }
     );
 
     const totalEquity = (status?.stock?.equity ?? 0) + (status?.forex?.equity ?? 0) + (status?.crypto?.equity ?? 0);
@@ -795,6 +810,57 @@ export default function OverviewPage() {
                     );
                 })}
             </Grid>
+
+            {/* ── Strategy Bridge Health ───────────────────────────── */}
+            <Box sx={{ mt: 4, animation: 'slideUp 0.5s ease 0.22s both' }}>
+                <Stack direction="row" alignItems="center" spacing={1.5} sx={{ mb: 2 }}>
+                    <Hub sx={{ color: '#8b5cf6', fontSize: 22 }} />
+                    <Typography variant="h6" sx={{ fontWeight: 700 }}>
+                        Strategy Bridge
+                    </Typography>
+                    <Chip
+                        size="small"
+                        label={bridgeHealth?.status === 'ok' ? 'ONLINE' : 'OFFLINE'}
+                        sx={{
+                            fontSize: '0.62rem', fontWeight: 700, height: 20,
+                            bgcolor: alpha(bridgeHealth?.status === 'ok' ? '#10b981' : '#ef4444', 0.1),
+                            color: bridgeHealth?.status === 'ok' ? '#10b981' : '#ef4444',
+                            border: `1px solid ${alpha(bridgeHealth?.status === 'ok' ? '#10b981' : '#ef4444', 0.25)}`,
+                        }}
+                    />
+                </Stack>
+                <Paper elevation={0} sx={{ p: 2.5, borderRadius: '16px', border: '1px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.02)' }}>
+                    {bridgeHealth ? (
+                        <Grid container spacing={2} alignItems="center">
+                            <Grid item xs={6} sm={3}>
+                                <BotStatItem
+                                    label="Pairs Active"
+                                    value={`${bridgeHealth.pairs_cache.pairs_active} / ${bridgeHealth.pairs_cache.known_pairs_total}`}
+                                    color={bridgeHealth.pairs_cache.pairs_active > 0 ? '#10b981' : '#ef4444'}
+                                />
+                            </Grid>
+                            <Grid item xs={6} sm={3}>
+                                <BotStatItem label="Symbols Cached" value={String(bridgeHealth.pairs_cache.symbols_cached)} color="#8b5cf6" />
+                            </Grid>
+                            <Grid item xs={12} sm={6}>
+                                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5, textTransform: 'uppercase', fontSize: '0.62rem', fontWeight: 600, letterSpacing: '0.05em' }}>
+                                    Active Pairs
+                                </Typography>
+                                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                                    {bridgeHealth.pairs_cache.pairs.length > 0
+                                        ? bridgeHealth.pairs_cache.pairs.map(p => (
+                                            <Chip key={p} label={p} size="small" sx={{ height: 20, fontSize: '0.6rem', bgcolor: alpha('#8b5cf6', 0.08), color: '#a78bfa', border: `1px solid ${alpha('#8b5cf6', 0.2)}` }} />
+                                        ))
+                                        : <Typography variant="caption" color="text.secondary">No pairs cached — warmup pending</Typography>
+                                    }
+                                </Box>
+                            </Grid>
+                        </Grid>
+                    ) : (
+                        <Typography variant="body2" color="text.secondary">Strategy bridge offline</Typography>
+                    )}
+                </Paper>
+            </Box>
 
             {/* ── P&L Equity Curve ─────────────────────────────────── */}
             <Box sx={{ mt: 5, animation: 'slideUp 0.5s ease 0.25s both' }}>

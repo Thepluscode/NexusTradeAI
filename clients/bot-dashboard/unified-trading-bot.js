@@ -1406,13 +1406,14 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
             return null;
         }
 
-        // Avoid chasing: if price is >80% through daily range, skip regardless of move size
+        // Avoid chasing: if price is >90% through daily range, skip regardless of move size
+        // 90% (was 80%) — momentum stocks legitimately run near their highs; 80% was too tight
         const dailyHigh = Math.max(...bars.map(b => b.h));
         const dailyLow = Math.min(...bars.map(b => b.l));
         const dailyRange = dailyHigh - dailyLow;
         if (dailyRange > 0) {
             const positionInRange = (current - dailyLow) / dailyRange;
-            if (positionInRange > 0.80) {
+            if (positionInRange > 0.90) {
                 return null;
             }
         }
@@ -1426,9 +1427,10 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
             return null;
         }
 
-        // ADX filter — require minimum trend strength (20 = trending, not choppy/ranging)
+        // ADX filter — require minimum trend strength (15 = early breakout; 20 is already full trend)
+        // Lowered from 20 → 15 to catch breakouts before ADX builds — momentum strats enter early
         const adx = calculateADX(bars);
-        if (adx !== null && adx < 20) {
+        if (adx !== null && adx < 15) {
             return null;
         }
 
@@ -3628,14 +3630,17 @@ app.listen(PORT, async () => {
     // Pre-seed strategy bridge pairs cache 30s after startup (non-blocking).
     // Use the Railway public URL if available so this works on Railway where
     // localhost:<PORT> is not reachable from the same container via HTTP.
-    setTimeout(() => {
+    // Also re-runs every 2h so bridge cache stays warm after bridge restarts.
+    function runBridgeWarmup() {
         const selfUrl = process.env.RAILWAY_PUBLIC_DOMAIN
             ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
             : `http://localhost:${PORT}`;
         axios.post(`${selfUrl}/api/bridge/warmup`, {}, { timeout: 120000 })
             .then(r => console.log(`✅ Bridge warm-up: seeded ${r.data?.seeded?.length ?? 0} symbols, failed ${r.data?.failed?.length ?? 0}`))
             .catch(e => console.warn('⚠️  Bridge warm-up failed:', e.message));
-    }, 30000);
+    }
+    setTimeout(runBridgeWarmup, 30000);
+    setInterval(runBridgeWarmup, 2 * 60 * 60 * 1000); // re-seed every 2h
 
     await tradingLoop();
 
