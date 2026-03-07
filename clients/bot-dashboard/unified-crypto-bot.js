@@ -999,14 +999,15 @@ class CryptoTradingEngine {
         const position = this.positions.get(symbol);
         if (!position) return;
 
-        // Check each trailing stop level
-        for (const level of this.config.trailingStops) {
+        // Check each trailing stop level — iterate backward so highest qualifying level wins
+        for (let i = this.config.trailingStops.length - 1; i >= 0; i--) {
+            const level = this.config.trailingStops[i];
             if (pnlPercent >= level.profit * 100) {
                 const newStop = currentPrice * (1 - level.stopDistance);
 
                 // Only raise stop, never lower
                 if (newStop > position.stopLoss) {
-                    console.log(`📈 ${symbol}: Trailing stop raised to $${newStop.toFixed(2)}`);
+                    console.log(`📈 ${symbol}: Trailing stop raised to $${newStop.toFixed(2)} (level: +${(level.profit * 100).toFixed(0)}%)`);
                     position.stopLoss = newStop;
                     this.positions.set(symbol, position);
                 }
