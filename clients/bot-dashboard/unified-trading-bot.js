@@ -628,15 +628,15 @@ const EXIT_CONFIG = {
     idealHoldDays: 3,         // Ideal 3-day momentum trades
     stalePositionDays: 10,    // Force close after 10 days
 
-    // Dynamic profit targets based on hold time (v3.2: lowered to 5% day 0-2 for higher hit rate)
+    // Dynamic profit targets based on hold time
     profitTargetByDay: {
-        0: 0.03,  // Day 0-1: 3% target (lowered from 5% — capture more intraday momentum wins)
-        1: 0.03,  // Day 1-2: 3% target
-        2: 0.04,  // Day 2-3: 4% target
-        3: 0.04,  // Day 3-4: 4% target
-        4: 0.03,  // Day 4-5: 3% target
-        5: 0.02,  // Day 5-6: 2% target
-        6: 0.015, // Day 6-7: 1.5% target
+        0: 0.05,  // Day 0-1: 5% target — let intraday momentum run before exiting
+        1: 0.05,  // Day 1-2: 5% target
+        2: 0.06,  // Day 2-3: 6% target — momentum still intact
+        3: 0.05,  // Day 3-4: 5% target — start relaxing
+        4: 0.04,  // Day 4-5: 4% target
+        5: 0.03,  // Day 5-6: 3% target
+        6: 0.02,  // Day 6-7: 2% target
         7: 0.01   // Day 7+: ANY profit
     },
 
@@ -660,22 +660,22 @@ const EXIT_CONFIG = {
 
 const MOMENTUM_CONFIG = {
     tier1: {
-        threshold: 2.5,
-        minVolume: 300000,
-        volumeRatio: 1.2,
-        rsiMax: 70,  // v3.3: relaxed from 65 — allow more entries
-        rsiMin: 35,  // v3.3: relaxed from 40 — allow more entries
+        threshold: 3.5,       // raised from 2.5 — 2.5% catches noise; 3.5% is real momentum
+        minVolume: 500000,    // raised from 300k — require meaningful liquidity
+        volumeRatio: 1.5,     // raised from 1.2 — require clear volume surge
+        rsiMax: 68,           // tightened from 70 — avoid overbought entries
+        rsiMin: 38,           // tightened from 35 — avoid deeply oversold
         positionSize: 0.005,
         stopLoss: 0.04,
         profitTarget: 0.08,
-        maxPositions: 6
+        maxPositions: 5       // reduced from 6 — fewer, higher-quality positions
     },
     tier2: {
         threshold: 5.0,
-        minVolume: 500000,
-        volumeRatio: 1.3,  // relaxed from 1.5 — was blocking too many signals
-        rsiMax: 70,  // v3.3: relaxed from 65
-        rsiMin: 35,  // v3.3: relaxed from 40
+        minVolume: 750000,    // raised from 500k
+        volumeRatio: 1.5,
+        rsiMax: 68,           // tightened from 70
+        rsiMin: 38,           // tightened from 35
         positionSize: 0.0075,
         stopLoss: 0.05,
         profitTarget: 0.10,
@@ -683,10 +683,10 @@ const MOMENTUM_CONFIG = {
     },
     tier3: {
         threshold: 10.0,
-        minVolume: 750000,
-        volumeRatio: 1.5,  // relaxed from 2.0 — was blocking legitimate high-momentum moves
-        rsiMax: 72,  // v3.3: relaxed from 65
-        rsiMin: 35,  // v3.3: relaxed from 40
+        minVolume: 1000000,   // raised from 750k — high-momentum moves need high volume
+        volumeRatio: 1.8,     // raised from 1.5 — strong volume surge required
+        rsiMax: 70,
+        rsiMin: 38,           // tightened from 35
         positionSize: 0.01,
         stopLoss: 0.06,
         profitTarget: 0.15,
@@ -1087,9 +1087,9 @@ async function shouldExitPosition(position, currentPrice, alpacaPos, overrideAlp
     }
 
     // 1b. EARLY LOSS CUT — cap losers before they compound
-    // If held 2+ days and still -1.5%+, the momentum thesis has failed. Cut now.
-    // This prevents the rare -$800 loss that wipes out 60 winning trades.
-    if (!exitReason && holdDays >= 2 && unrealizedPL <= -1.5) {
+    // If held 1+ day and still -2%+, the momentum thesis has failed. Cut now.
+    // Intraday momentum doesn't persist — if it's red the next day it's a loser.
+    if (!exitReason && holdDays >= 1 && unrealizedPL <= -2.0) {
         exitReason = `Cutting loser early (${holdDays.toFixed(1)} days, ${unrealizedPL.toFixed(2)}% — momentum thesis failed)`;
     }
 
@@ -1400,19 +1400,19 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
         if (current < 1.0 || current > 1000) return null;
         if (volumeToday < 500000) return null;
 
-        // VWAP filter: allow up to 0.5% below VWAP — catches pullbacks that are reclaiming it
+        // VWAP filter: price must be at or above VWAP — only buy strength, not weakness
         const vwap = calculateVWAP(bars);
-        if (vwap && current < vwap * 0.995) {
+        if (vwap && current < vwap) {
             return null;
         }
 
-        // Avoid chasing: if price is >92% through daily range, skip regardless of move size
+        // Avoid chasing: if price is >80% through daily range, skip regardless of move size
         const dailyHigh = Math.max(...bars.map(b => b.h));
         const dailyLow = Math.min(...bars.map(b => b.l));
         const dailyRange = dailyHigh - dailyLow;
         if (dailyRange > 0) {
             const positionInRange = (current - dailyLow) / dailyRange;
-            if (positionInRange > 0.92) {
+            if (positionInRange > 0.80) {
                 return null;
             }
         }
@@ -1426,10 +1426,9 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
             return null;
         }
 
-        // ADX filter — require minimum trend strength; lowered to 12 to avoid filtering
-        // valid momentum moves in quiet pre-breakout markets (RSI/volume already confirm intent)
+        // ADX filter — require minimum trend strength (20 = trending, not choppy/ranging)
         const adx = calculateADX(bars);
-        if (adx !== null && adx < 12) {
+        if (adx !== null && adx < 20) {
             return null;
         }
 
@@ -3083,17 +3082,17 @@ async function analyzeMomentumForEngine(symbol, engine) {
         if (current < 1.0 || current > 1000) return null;
         if (volumeToday < 500000) return null;
         const vwap = calculateVWAP(bars);
-        if (vwap && current < vwap * 0.995) return null;
+        if (vwap && current < vwap) return null;
         const dailyHigh = Math.max(...bars.map(b => b.h));
         const dailyLow = Math.min(...bars.map(b => b.l));
         const dailyRange = dailyHigh - dailyLow;
-        if (dailyRange > 0 && (current - dailyLow) / dailyRange > 0.92) return null;
+        if (dailyRange > 0 && (current - dailyLow) / dailyRange > 0.80) return null;
         const closes = bars.map(b => b.c);
         const ema9 = calculateEMA(closes, 9);
         const ema21 = calculateEMA(closes, 21);
         if (ema9 !== null && ema21 !== null && ema9 <= ema21) return null;
         const adx = calculateADX(bars);
-        if (adx !== null && adx < 12) return null;
+        if (adx !== null && adx < 20) return null;
         const macd = calculateMACD(bars);
         if (macd !== null && !macd.bullish) {
             const nearlyFlat = macd.histogram > -0.001;
