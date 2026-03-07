@@ -465,7 +465,7 @@ export default function CryptoBotPage() {
                                 closeAllMutation.mutate();
                             }
                         }}
-                        disabled={!(engineStatus as any)?.positions?.length && !status?.positions?.length || closeAllMutation.isLoading}
+                        disabled={!(Array.isArray(engineStatus?.positions) ? engineStatus.positions.length : 0) && !status?.positions?.length || closeAllMutation.isLoading}
                         sx={{ borderStyle: 'dashed' }}
                     >
                         Close All
