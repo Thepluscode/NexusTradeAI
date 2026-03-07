@@ -9,6 +9,8 @@ import {
     Chip,
     Skeleton,
     Alert,
+    alpha,
+    LinearProgress,
 } from '@mui/material';
 import {
     TrendingUp,
@@ -251,32 +253,68 @@ export default function StockBotPage() {
             {/* Header */}
             <Paper
                 sx={{
-                    p: 3,
+                    p: { xs: 2.5, md: 3 },
                     mb: 3,
-                    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                    borderRadius: 3,
+                    borderRadius: '20px',
+                    position: 'relative',
+                    overflow: 'hidden',
+                    background: 'rgba(13, 17, 23, 0.85)',
+                    border: '1px solid rgba(16, 185, 129, 0.2)',
+                    backdropFilter: 'blur(20px)',
+                    '&::before': {
+                        content: '""',
+                        position: 'absolute',
+                        inset: 0,
+                        background:
+                            'radial-gradient(ellipse at 5% 50%, rgba(16,185,129,0.12) 0%, transparent 55%),' +
+                            'radial-gradient(ellipse at 95% 20%, rgba(6,182,212,0.07) 0%, transparent 50%)',
+                        pointerEvents: 'none',
+                    },
+                    '&::after': {
+                        content: '""',
+                        position: 'absolute',
+                        top: 0, left: 0, right: 0,
+                        height: '2px',
+                        background: 'linear-gradient(90deg, transparent, rgba(16,185,129,0.6), rgba(6,182,212,0.4), transparent)',
+                    },
                 }}
             >
-                <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: { xs: 2, md: 0 } }}>
-                    <Box>
-                        <Typography variant="h4" sx={{ color: 'white', fontWeight: 700, mb: 1 }}>
-                            📈 Stock Bot
-                        </Typography>
-                        <Typography variant="body1" sx={{ color: 'rgba(255,255,255,0.8)' }}>
-                            LONG Only • Market Hours (9:30AM-4PM EST) • 3-Tier Momentum Strategy
-                        </Typography>
+                <Box sx={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: { xs: 2, md: 0 } }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                        <Box sx={{
+                            width: 48, height: 48, borderRadius: '14px',
+                            background: 'linear-gradient(135deg, #10b981, #059669)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            boxShadow: '0 4px 16px rgba(16,185,129,0.35)',
+                        }}>
+                            <ShowChart sx={{ color: 'white', fontSize: 26 }} />
+                        </Box>
+                        <Box>
+                            <Typography variant="h5" sx={{ fontWeight: 800, letterSpacing: '-0.02em', color: '#e6edf3' }}>
+                                Stock Bot
+                            </Typography>
+                            <Typography variant="body2" sx={{ color: 'text.secondary', mt: 0.25, fontSize: '0.82rem' }}>
+                                LONG Only · Market Hours 9:30 AM–4 PM EST · 3-Tier Momentum
+                            </Typography>
+                        </Box>
                     </Box>
                     <Box sx={{ display: 'flex', gap: 1 }}>
                         <Chip
-                            label={isRunning ? 'RUNNING' : 'STOPPED'}
-                            color={isRunning ? 'success' : 'default'}
-                            sx={{ fontWeight: 600 }}
+                            label={isRunning ? (isPaused ? 'PAUSED' : 'RUNNING') : 'STOPPED'}
+                            size="small"
+                            sx={{
+                                fontWeight: 700,
+                                fontSize: '0.7rem',
+                                bgcolor: isRunning && !isPaused ? alpha('#10b981', 0.15) : isRunning && isPaused ? alpha('#f59e0b', 0.15) : alpha('#6b7280', 0.15),
+                                color: isRunning && !isPaused ? '#34d399' : isRunning && isPaused ? '#fbbf24' : '#9ca3af',
+                                border: `1px solid ${isRunning && !isPaused ? 'rgba(16,185,129,0.35)' : isRunning && isPaused ? 'rgba(245,158,11,0.35)' : 'rgba(107,114,128,0.25)'}`,
+                            }}
                         />
                         <Chip
                             label={status?.mode || 'PAPER'}
-                            color="info"
+                            size="small"
                             variant="outlined"
-                            sx={{ fontWeight: 600, color: 'white', borderColor: 'white' }}
+                            sx={{ fontWeight: 600, fontSize: '0.7rem', borderColor: 'rgba(6,182,212,0.4)', color: '#22d3ee' }}
                         />
                     </Box>
                 </Box>
@@ -285,70 +323,108 @@ export default function StockBotPage() {
             {/* Stats Grid */}
             <Grid container spacing={2} sx={{ mb: 3 }}>
                 <Grid item xs={12} sm={6} md={3}>
-                    <Card sx={{ height: '100%' }}>
+                    <Card sx={{ height: '100%', position: 'relative', overflow: 'hidden',
+                        '&::before': { content: '""', position: 'absolute', top: 0, left: 0, right: 0, height: '2px', background: 'linear-gradient(90deg, #10b981, rgba(16,185,129,0.2))' }
+                    }}>
                         <CardContent>
-                            <Typography variant="caption" color="text.secondary">
-                                EQUITY
+                            <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: '0.68rem', fontWeight: 600 }}>
+                                Equity
                             </Typography>
-                            <Typography variant="h5" sx={{ fontWeight: 700, mt: 0.5 }}>
+                            <Typography variant="h5" sx={{ fontWeight: 800, mt: 0.5, letterSpacing: '-0.02em' }}>
                                 ${(status?.equity ?? 0).toLocaleString()}
                             </Typography>
-                        </CardContent>
-                    </Card>
-                </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                    <Card sx={{ height: '100%' }}>
-                        <CardContent>
-                            <Typography variant="caption" color="text.secondary">
-                                DAILY RETURN
-                            </Typography>
-                            <Typography
-                                variant="h5"
-                                sx={{
-                                    fontWeight: 700,
-                                    mt: 0.5,
-                                    color: (status?.dailyReturn ?? 0) >= 0 ? '#10b981' : '#ef4444',
-                                }}
-                            >
-                                {(status?.dailyReturn ?? 0).toFixed(2)}%
+                            <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.68rem' }}>
+                                {status?.config?.maxPositions ?? 6} max positions
                             </Typography>
                         </CardContent>
                     </Card>
                 </Grid>
                 <Grid item xs={12} sm={6} md={3}>
-                    <Card sx={{ height: '100%' }}>
+                    <Card sx={{ height: '100%', position: 'relative', overflow: 'hidden',
+                        '&::before': { content: '""', position: 'absolute', top: 0, left: 0, right: 0, height: '2px',
+                            background: `linear-gradient(90deg, ${(status?.dailyReturn ?? 0) >= 0 ? '#10b981' : '#ef4444'}, rgba(0,0,0,0))` }
+                    }}>
                         <CardContent>
-                            <Typography variant="caption" color="text.secondary">
-                                WIN RATE
+                            <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: '0.68rem', fontWeight: 600 }}>
+                                Daily Return
                             </Typography>
                             <Typography variant="h5" sx={{
-                                fontWeight: 700, mt: 0.5,
+                                fontWeight: 800, mt: 0.5, letterSpacing: '-0.02em',
+                                color: (status?.dailyReturn ?? 0) >= 0 ? '#10b981' : '#ef4444',
+                            }}>
+                                {(status?.dailyReturn ?? 0) >= 0 ? '+' : ''}{(status?.dailyReturn ?? 0).toFixed(2)}%
+                            </Typography>
+                            <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.68rem' }}>
+                                ${(status?.stats?.totalPnL ?? 0).toFixed(2)} P&L
+                            </Typography>
+                        </CardContent>
+                    </Card>
+                </Grid>
+                <Grid item xs={12} sm={6} md={3}>
+                    <Card sx={{ height: '100%', position: 'relative', overflow: 'hidden',
+                        '&::before': { content: '""', position: 'absolute', top: 0, left: 0, right: 0, height: '2px',
+                            background: `linear-gradient(90deg, ${parseFloat(winRate) >= 50 ? '#10b981' : parseFloat(winRate) >= 45 ? '#f59e0b' : status?.stats?.totalTrades ? '#ef4444' : '#6b7280'}, rgba(0,0,0,0))` }
+                    }}>
+                        <CardContent sx={{ pb: '8px !important' }}>
+                            <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: '0.68rem', fontWeight: 600 }}>
+                                Win Rate
+                            </Typography>
+                            <Typography variant="h5" sx={{
+                                fontWeight: 800, mt: 0.5, letterSpacing: '-0.02em',
                                 color: parseFloat(winRate) >= 50 ? '#10b981' : parseFloat(winRate) >= 45 ? '#f59e0b' : status?.stats?.totalTrades ? '#ef4444' : 'text.secondary',
                             }}>
                                 {winRate}%
                             </Typography>
-                            <Typography variant="caption" color="text.secondary">
+                            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.68rem' }}>
                                 {status?.stats?.totalTrades || 0} trades · need ≥45%
                             </Typography>
                         </CardContent>
+                        {status?.stats?.totalTrades ? (
+                            <LinearProgress
+                                variant="determinate"
+                                value={Math.min(100, parseFloat(winRate))}
+                                sx={{ height: 3, mx: 2, mb: 1.5, borderRadius: 2,
+                                    bgcolor: 'rgba(255,255,255,0.05)',
+                                    '& .MuiLinearProgress-bar': {
+                                        bgcolor: parseFloat(winRate) >= 50 ? '#10b981' : parseFloat(winRate) >= 45 ? '#f59e0b' : '#ef4444',
+                                        borderRadius: 2,
+                                    }
+                                }}
+                            />
+                        ) : null}
                     </Card>
                 </Grid>
                 <Grid item xs={12} sm={6} md={3}>
-                    <Card sx={{ height: '100%' }}>
-                        <CardContent>
+                    <Card sx={{ height: '100%', position: 'relative', overflow: 'hidden',
+                        '&::before': { content: '""', position: 'absolute', top: 0, left: 0, right: 0, height: '2px', background: 'linear-gradient(90deg, #8b5cf6, rgba(139,92,246,0.2))' }
+                    }}>
+                        <CardContent sx={{ pb: '8px !important' }}>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                <Casino sx={{ color: '#8b5cf6' }} />
-                                <Typography variant="caption" color="text.secondary">
-                                    KELLY SIZE
+                                <Casino sx={{ color: '#8b5cf6', fontSize: 16 }} />
+                                <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: '0.68rem', fontWeight: 600 }}>
+                                    Kelly Size
                                 </Typography>
                             </Box>
-                            <Typography variant="h5" sx={{ fontWeight: 700, mt: 0.5, color: '#8b5cf6' }}>
-                                10%
+                            <Typography variant="h5" sx={{ fontWeight: 800, mt: 0.5, letterSpacing: '-0.02em', color: '#8b5cf6' }}>
+                                {status?.stats?.profitFactor ? `${(status.stats.profitFactor).toFixed(2)}×` : '—'}
                             </Typography>
-                            <Typography variant="caption" color="text.secondary">
-                                Half-Kelly
+                            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.68rem' }}>
+                                Profit factor · target ≥1.5
                             </Typography>
                         </CardContent>
+                        {status?.stats?.profitFactor ? (
+                            <LinearProgress
+                                variant="determinate"
+                                value={Math.min(100, (status.stats.profitFactor / 2) * 100)}
+                                sx={{ height: 3, mx: 2, mb: 1.5, borderRadius: 2,
+                                    bgcolor: 'rgba(255,255,255,0.05)',
+                                    '& .MuiLinearProgress-bar': {
+                                        bgcolor: status.stats.profitFactor >= 1.5 ? '#10b981' : status.stats.profitFactor >= 1.2 ? '#f59e0b' : '#ef4444',
+                                        borderRadius: 2,
+                                    }
+                                }}
+                            />
+                        ) : null}
                     </Card>
                 </Grid>
             </Grid>
@@ -496,53 +572,87 @@ export default function StockBotPage() {
                     <Grid container spacing={2}>
                         {status.positions.map((pos) => (
                             <Grid item xs={12} sm={6} md={4} key={pos.symbol}>
-                                <Card
-                                    sx={{
-                                        border: '1px solid',
-                                        borderColor: (pos.unrealizedPnL ?? pos.pnl ?? pos.unrealizedPL ?? 0) >= 0 ? '#10b981' : '#ef4444',
-                                    }}
-                                >
-                                    <CardContent>
-                                        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                                            <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                                                {pos.symbol}
-                                            </Typography>
-                                            <Chip
-                                                label={pos.side.toUpperCase()}
-                                                size="small"
-                                                color={pos.side === 'long' ? 'success' : 'error'}
-                                            />
-                                        </Box>
-                                        <Typography variant="body2" color="text.secondary">
-                                            {(pos.qty ?? pos.quantity ?? 0)} shares @ ${(pos.entryPrice ?? parseFloat(pos.avg_entry_price || '0')).toFixed(2)}
-                                        </Typography>
-                                        <Box sx={{ display: 'flex', alignItems: 'center', mt: 1 }}>
-                                            {(pos.unrealizedPnL ?? pos.pnl ?? pos.unrealizedPL ?? 0) >= 0 ? (
-                                                <TrendingUp sx={{ color: '#10b981', mr: 0.5 }} />
-                                            ) : (
-                                                <TrendingDown sx={{ color: '#ef4444', mr: 0.5 }} />
-                                            )}
-                                            <Typography
-                                                variant="h6"
-                                                sx={{
-                                                    fontWeight: 700,
-                                                    color: (pos.unrealizedPnL ?? pos.pnl ?? pos.unrealizedPL ?? 0) >= 0 ? '#10b981' : '#ef4444',
-                                                }}
-                                            >
-                                                ${(pos.unrealizedPnL ?? pos.pnl ?? pos.unrealizedPL ?? 0).toFixed(2)}
-                                                {(() => {
-                                                    // Bot doesn't return a % field — derive it from dollar P&L and cost basis
-                                                    const pnlDollar = pos.unrealizedPnL ?? pos.pnl ?? pos.unrealizedPL ?? null;
-                                                    const cost = (pos.entryPrice ?? 0) * (pos.quantity ?? pos.qty ?? 0);
-                                                    if (pnlDollar != null && cost > 0) {
-                                                        return ` (${((pnlDollar / cost) * 100).toFixed(2)}%)`;
-                                                    }
-                                                    return '';
-                                                })()}
-                                            </Typography>
-                                        </Box>
-                                    </CardContent>
-                                </Card>
+                                {(() => {
+                                    const pnlDollar = pos.unrealizedPnL ?? pos.pnl ?? pos.unrealizedPL ?? 0;
+                                    const entryPrice = pos.entryPrice ?? parseFloat(pos.avg_entry_price || '0');
+                                    const cost = entryPrice * (pos.quantity ?? pos.qty ?? 0);
+                                    const pnlPct = cost > 0 ? (pnlDollar / cost) * 100 : 0;
+                                    const isGreen = pnlDollar >= 0;
+                                    const stopPct = status?.config?.stopLoss ?? 4;
+                                    const targetPct = status?.config?.profitTarget ?? 8;
+                                    // Progress: 0 = at stop loss, 100 = at profit target
+                                    const progressRange = stopPct + targetPct;
+                                    const progressVal = Math.max(0, Math.min(100, ((pnlPct + stopPct) / progressRange) * 100));
+                                    return (
+                                        <Card sx={{
+                                            border: '1px solid',
+                                            borderColor: isGreen ? 'rgba(16,185,129,0.35)' : 'rgba(239,68,68,0.35)',
+                                            position: 'relative', overflow: 'hidden',
+                                            '&::before': { content: '""', position: 'absolute', top: 0, left: 0, right: 0, height: '2px',
+                                                background: `linear-gradient(90deg, ${isGreen ? '#10b981' : '#ef4444'}, rgba(0,0,0,0))` }
+                                        }}>
+                                            <CardContent sx={{ pb: '8px !important' }}>
+                                                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.75 }}>
+                                                    <Typography variant="h6" sx={{ fontWeight: 800, letterSpacing: '-0.02em', fontSize: '1rem' }}>
+                                                        {pos.symbol}
+                                                    </Typography>
+                                                    <Chip
+                                                        label={pos.side.toUpperCase()}
+                                                        size="small"
+                                                        sx={{
+                                                            fontWeight: 700, fontSize: '0.65rem', height: 22,
+                                                            bgcolor: pos.side === 'long' ? alpha('#10b981', 0.15) : alpha('#ef4444', 0.15),
+                                                            color: pos.side === 'long' ? '#34d399' : '#f87171',
+                                                            border: `1px solid ${pos.side === 'long' ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)'}`,
+                                                        }}
+                                                    />
+                                                </Box>
+                                                <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.72rem' }}>
+                                                    {(pos.qty ?? pos.quantity ?? 0)} shares · entry ${entryPrice.toFixed(2)}
+                                                </Typography>
+                                                <Box sx={{ display: 'flex', alignItems: 'center', mt: 1, gap: 0.5 }}>
+                                                    {isGreen
+                                                        ? <TrendingUp sx={{ color: '#10b981', fontSize: 18 }} />
+                                                        : <TrendingDown sx={{ color: '#ef4444', fontSize: 18 }} />}
+                                                    <Typography variant="h6" sx={{ fontWeight: 800, fontSize: '1rem', color: isGreen ? '#10b981' : '#ef4444', letterSpacing: '-0.02em' }}>
+                                                        {isGreen ? '+' : ''}${pnlDollar.toFixed(2)}
+                                                    </Typography>
+                                                    {cost > 0 && (
+                                                        <Typography variant="caption" sx={{ color: isGreen ? '#34d399' : '#f87171', fontSize: '0.72rem', fontWeight: 600, opacity: 0.8 }}>
+                                                            ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
+                                                        </Typography>
+                                                    )}
+                                                </Box>
+                                            </CardContent>
+                                            {/* Stop → Target progress bar */}
+                                            <Box sx={{ px: 2, pb: 1.5 }}>
+                                                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                                                    <Typography variant="caption" sx={{ fontSize: '0.6rem', color: '#ef4444', opacity: 0.7 }}>
+                                                        -{stopPct}%
+                                                    </Typography>
+                                                    <Typography variant="caption" sx={{ fontSize: '0.6rem', color: 'text.disabled' }}>
+                                                        stop → target
+                                                    </Typography>
+                                                    <Typography variant="caption" sx={{ fontSize: '0.6rem', color: '#10b981', opacity: 0.7 }}>
+                                                        +{targetPct}%
+                                                    </Typography>
+                                                </Box>
+                                                <Box sx={{ height: 4, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.06)', overflow: 'hidden', position: 'relative' }}>
+                                                    {/* break-even marker */}
+                                                    <Box sx={{ position: 'absolute', left: `${(stopPct / progressRange) * 100}%`, top: 0, bottom: 0, width: '1px', bgcolor: 'rgba(255,255,255,0.2)', zIndex: 2 }} />
+                                                    <Box sx={{
+                                                        height: '100%', borderRadius: 2,
+                                                        width: `${progressVal}%`,
+                                                        background: isGreen
+                                                            ? 'linear-gradient(90deg, rgba(245,158,11,0.5), #10b981)'
+                                                            : 'linear-gradient(90deg, #ef4444, rgba(245,158,11,0.5))',
+                                                        transition: 'width 0.6s cubic-bezier(0.4, 0, 0.2, 1)',
+                                                    }} />
+                                                </Box>
+                                            </Box>
+                                        </Card>
+                                    );
+                                })()}
                             </Grid>
                         ))}
                     </Grid>

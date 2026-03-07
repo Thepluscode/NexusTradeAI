@@ -14,8 +14,6 @@ import {
     TableRow,
     CircularProgress,
     Alert,
-    ToggleButton,
-    ToggleButtonGroup,
     Select,
     MenuItem,
     FormControl,
@@ -24,6 +22,8 @@ import {
     Tooltip,
     Tabs,
     Tab,
+    alpha,
+    LinearProgress,
 } from '@mui/material';
 import { TrendingUp, TrendingDown, Receipt, Download, Person, Analytics, Inbox } from '@mui/icons-material';
 import { apiClient } from '@/services/api';
@@ -205,35 +205,64 @@ export default function TradesPage() {
                                 const tt = parseInt(t.total_trades);
                                 const openTt = parseInt(tAny.open_trades || '0');
                                 const wr = tt > 0 ? parseInt(t.winners) / tt : 0;
+                                const wrPct = wr * 100;
+                                const pf = t.gross_loss > 0 ? t.gross_profit / t.gross_loss : t.gross_profit > 0 ? Infinity : 0;
+                                const BOT_ACCENT: Record<string, string> = { stock: '#10b981', forex: '#3b82f6', crypto: '#f59e0b' };
+                                const accent = BOT_ACCENT[t.bot] ?? '#8b5cf6';
                                 return (
                                     <Grid item xs={12} sm={4} key={t.bot}>
-                                        <Paper sx={{ p: 2 }}>
-                                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                                                <Chip label={t.bot.toUpperCase()} size="small" color={BOT_COLORS[t.bot] ?? 'default'} />
-                                                <Typography variant="body2" color="text.secondary">
-                                                    {tt} closed trades{openTt > 0 ? ` · ${openTt} open` : ''}
+                                        <Paper sx={{
+                                            p: 2.5, position: 'relative', overflow: 'hidden',
+                                            border: `1px solid ${alpha(accent, 0.18)}`,
+                                            '&::before': { content: '""', position: 'absolute', top: 0, left: 0, right: 0, height: '2px',
+                                                background: `linear-gradient(90deg, ${accent}, rgba(0,0,0,0))` }
+                                        }}>
+                                            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+                                                <Chip label={t.bot.toUpperCase()} size="small" color={BOT_COLORS[t.bot] ?? 'default'}
+                                                    sx={{ fontWeight: 700, fontSize: '0.7rem' }} />
+                                                <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
+                                                    {tt} closed{openTt > 0 ? ` · ${openTt} open` : ''}
                                                 </Typography>
                                             </Box>
-                                            <Box sx={{ display: 'flex', gap: 3 }}>
+                                            <Box sx={{ display: 'flex', gap: 3, mb: 2 }}>
                                                 <Box>
-                                                    <Typography variant="caption" color="text.secondary">Win Rate</Typography>
-                                                    <Typography variant="body1" fontWeight={600} color={wr >= 0.5 ? 'success.main' : 'warning.main'}>
-                                                        {(wr * 100).toFixed(1)}%
+                                                    <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Win Rate</Typography>
+                                                    <Typography variant="h6" fontWeight={800} sx={{ letterSpacing: '-0.02em', color: wr >= 0.5 ? '#10b981' : '#f59e0b' }}>
+                                                        {wrPct.toFixed(1)}%
                                                     </Typography>
                                                 </Box>
                                                 <Box>
-                                                    <Typography variant="caption" color="text.secondary">Total P&L</Typography>
-                                                    <Typography variant="body1" fontWeight={600} color={pnlColor(t.total_pnl)}>
+                                                    <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Total P&L</Typography>
+                                                    <Typography variant="h6" fontWeight={800} sx={{ letterSpacing: '-0.02em', color: pnlColor(t.total_pnl) }}>
                                                         {fmt(t.total_pnl)}
                                                     </Typography>
                                                 </Box>
                                                 <Box>
-                                                    <Typography variant="caption" color="text.secondary">Profit Factor</Typography>
-                                                    <Typography variant="body1" fontWeight={600}>
-                                                        {t.gross_loss > 0 ? (t.gross_profit / t.gross_loss).toFixed(2) : t.gross_profit > 0 ? '∞' : '—'}
+                                                    <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Profit Factor</Typography>
+                                                    <Typography variant="h6" fontWeight={800} sx={{ letterSpacing: '-0.02em' }}>
+                                                        {isFinite(pf) ? pf.toFixed(2) : '∞'}
                                                     </Typography>
                                                 </Box>
                                             </Box>
+                                            {tt > 0 && (
+                                                <Box>
+                                                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                                                        <Typography variant="caption" sx={{ fontSize: '0.6rem', color: 'text.disabled' }}>Win rate progress</Typography>
+                                                        <Typography variant="caption" sx={{ fontSize: '0.6rem', color: 'text.disabled' }}>target 50%</Typography>
+                                                    </Box>
+                                                    <LinearProgress
+                                                        variant="determinate"
+                                                        value={Math.min(100, wrPct)}
+                                                        sx={{ height: 4, borderRadius: 2,
+                                                            bgcolor: 'rgba(255,255,255,0.05)',
+                                                            '& .MuiLinearProgress-bar': {
+                                                                bgcolor: wr >= 0.5 ? '#10b981' : wr >= 0.45 ? '#f59e0b' : '#ef4444',
+                                                                borderRadius: 2,
+                                                            }
+                                                        }}
+                                                    />
+                                                </Box>
+                                            )}
                                         </Paper>
                                     </Grid>
                                 );
@@ -243,18 +272,17 @@ export default function TradesPage() {
 
                     {/* Trade filter */}
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2, flexWrap: 'wrap' }}>
-                        <Typography variant="body2" color="text.secondary">Filter:</Typography>
-                        <ToggleButtonGroup
-                            value={botFilter}
-                            exclusive
-                            onChange={(_, v) => { if (v) setBotFilter(v as BotFilter); }}
-                            size="small"
-                        >
-                            <ToggleButton value="all">All</ToggleButton>
-                            <ToggleButton value="stock">Stock</ToggleButton>
-                            <ToggleButton value="forex">Forex</ToggleButton>
-                            <ToggleButton value="crypto">Crypto</ToggleButton>
-                        </ToggleButtonGroup>
+                        <div className="nx-pill-tabs">
+                            {(['all', 'stock', 'forex', 'crypto'] as BotFilter[]).map(v => (
+                                <button
+                                    key={v}
+                                    className={`nx-pill-tab${botFilter === v ? ' active' : ''}`}
+                                    onClick={() => setBotFilter(v)}
+                                >
+                                    {v.charAt(0).toUpperCase() + v.slice(1)}
+                                </button>
+                            ))}
+                        </div>
                         <Typography variant="body2" color="text.secondary" sx={{ ml: 'auto' }}>
                             {trades.length} records
                         </Typography>

@@ -327,24 +327,32 @@ function Navigation() {
           </ListItemButton>
         </ListItem>
 
-        {/* Bot Status + Version */}
+        {/* System status + Version */}
         <Box sx={{ px: 2, pt: 2, pb: 1 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.3 }}>
-            <Box
-              sx={{
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                bgcolor: '#10b981',
-                boxShadow: '0 0 6px rgba(16, 185, 129, 0.6)',
-                animation: 'pulseDot 2s ease-in-out infinite',
-              }}
-            />
-            <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.8rem' }}>Bot Active</Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+              <Box
+                sx={{
+                  width: 7,
+                  height: 7,
+                  borderRadius: '50%',
+                  bgcolor: '#10b981',
+                  boxShadow: '0 0 6px rgba(16, 185, 129, 0.6)',
+                  animation: 'pulseDot 2s ease-in-out infinite',
+                }}
+              />
+              <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.78rem' }}>System Online</Typography>
+            </Box>
+            <Typography variant="caption" sx={{
+              color: 'text.disabled', fontSize: '0.62rem',
+              px: 0.75, py: 0.25, borderRadius: '4px',
+              bgcolor: 'rgba(255,255,255,0.04)',
+              border: '1px solid rgba(255,255,255,0.06)',
+              fontVariantNumeric: 'tabular-nums',
+            }}>
+              v3.8
+            </Typography>
           </Box>
-          <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.65rem', pl: 2.2 }}>
-            Version 1.0.0
-          </Typography>
         </Box>
 
         {/* User Profile + Logout */}

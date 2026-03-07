@@ -10,6 +10,8 @@ interface MetricCardProps {
   suffix?: string;
   color?: 'primary' | 'success' | 'error' | 'warning' | 'info';
   icon?: React.ReactNode;
+  subtitle?: string;
+  progress?: number; // 0–100, shows a bottom progress bar
 }
 
 const COLOR_MAP: Record<string, string> = {
@@ -28,6 +30,8 @@ export const MetricCard: React.FC<MetricCardProps> = ({
   suffix = '',
   color = 'primary',
   icon,
+  subtitle,
+  progress,
 }) => {
   const isPositive = change !== undefined && change >= 0;
   const accent = COLOR_MAP[color] || COLOR_MAP.primary;
@@ -91,7 +95,7 @@ export const MetricCard: React.FC<MetricCardProps> = ({
         }}
       />
 
-      <CardContent sx={{ p: 2.5, '&:last-child': { pb: 2.5 }, position: 'relative', zIndex: 2 }}>
+      <CardContent sx={{ p: 2.5, '&:last-child': { pb: progress !== undefined ? 2 : 2.5 }, position: 'relative', zIndex: 2 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <Box sx={{ flex: 1, minWidth: 0 }}>
             <Typography
@@ -167,6 +171,15 @@ export const MetricCard: React.FC<MetricCardProps> = ({
                 </Typography>
               </Box>
             )}
+
+            {subtitle && (
+              <Typography
+                variant="caption"
+                sx={{ display: 'block', mt: 1, fontSize: '0.68rem', color: 'text.disabled', letterSpacing: '0.01em' }}
+              >
+                {subtitle}
+              </Typography>
+            )}
           </Box>
 
           {/* ── Icon glow orb ──────────────────────────────────────── */}
@@ -206,6 +219,20 @@ export const MetricCard: React.FC<MetricCardProps> = ({
           )}
         </Box>
       </CardContent>
+
+      {/* ── Progress bar ───────────────────────────────────────────── */}
+      {progress !== undefined && (
+        <Box className="nx-progress-bar" sx={{ mx: 2.5, mb: 2, mt: -0.5 }}>
+          <Box
+            className="nx-progress-bar-fill"
+            sx={{
+              width: `${Math.min(100, Math.max(0, progress))}%`,
+              background: `linear-gradient(90deg, ${accent}, ${alpha(accent, 0.6)})`,
+              boxShadow: `0 0 8px ${alpha(accent, 0.4)}`,
+            }}
+          />
+        </Box>
+      )}
     </Card>
   );
 };
