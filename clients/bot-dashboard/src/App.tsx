@@ -290,15 +290,40 @@ function Navigation() {
             sx={{
               borderRadius: '12px',
               py: 1.2,
+              px: 1.5,
+              position: 'relative',
+              overflow: 'hidden',
+              transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+              '&::before': location.pathname === '/settings' ? {
+                content: '""',
+                position: 'absolute',
+                left: 0,
+                top: '20%',
+                bottom: '20%',
+                width: 3,
+                borderRadius: '0 4px 4px 0',
+                background: '#6b7280',
+                boxShadow: '0 0 8px #6b7280',
+              } : {},
               '&.Mui-selected': {
-                bgcolor: 'rgba(255, 255, 255, 0.06)',
+                bgcolor: 'rgba(107, 114, 128, 0.08)',
+                '&:hover': { bgcolor: 'rgba(107, 114, 128, 0.12)' },
               },
+              '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' },
             }}
           >
-            <ListItemIcon sx={{ minWidth: 40, color: 'text.secondary' }}>
+            <ListItemIcon sx={{
+              minWidth: 40,
+              color: location.pathname === '/settings' ? '#9ca3af' : 'text.secondary',
+              transition: 'color 0.2s ease',
+            }}>
               <Settings />
             </ListItemIcon>
-            <ListItemText primary="Settings" primaryTypographyProps={{ fontSize: '0.875rem' }} />
+            <ListItemText primary="Settings" primaryTypographyProps={{
+              fontSize: '0.875rem',
+              fontWeight: location.pathname === '/settings' ? 600 : 400,
+              color: location.pathname === '/settings' ? '#e6edf3' : undefined,
+            }} />
           </ListItemButton>
         </ListItem>
 
@@ -554,14 +579,23 @@ function App() {
             toastOptions={{
               duration: 4000,
               style: {
-                background: 'rgba(28, 35, 51, 0.95)',
+                background: 'rgba(22, 27, 34, 0.98)',
                 color: '#e6edf3',
                 borderRadius: '12px',
-                border: '1px solid rgba(255, 255, 255, 0.08)',
-                backdropFilter: 'blur(12px)',
-                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                backdropFilter: 'blur(16px)',
+                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)',
                 fontSize: '0.875rem',
                 fontWeight: 500,
+                padding: '12px 16px',
+              },
+              success: {
+                iconTheme: { primary: '#10b981', secondary: '#022c22' },
+                style: { borderColor: 'rgba(16, 185, 129, 0.2)' },
+              },
+              error: {
+                iconTheme: { primary: '#ef4444', secondary: '#1f0a0a' },
+                style: { borderColor: 'rgba(239, 68, 68, 0.2)' },
               },
             }}
           />

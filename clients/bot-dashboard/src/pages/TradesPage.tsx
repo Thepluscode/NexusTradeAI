@@ -25,7 +25,7 @@ import {
     Tabs,
     Tab,
 } from '@mui/material';
-import { TrendingUp, TrendingDown, Receipt, Download, Person, Analytics } from '@mui/icons-material';
+import { TrendingUp, TrendingDown, Receipt, Download, Person, Analytics, Inbox } from '@mui/icons-material';
 import { apiClient } from '@/services/api';
 import { MetricCard } from '@/components/MetricCard';
 import type { TradeRecord, TradeBotTotal, TradeAnalyticsHour, TradeAnalyticsSymbol, TradeAnalyticsTier } from '@/types';
@@ -276,76 +276,99 @@ export default function TradesPage() {
 
                     {/* Trades table */}
                     {trades.length === 0 ? (
-                        <Alert severity="info">
-                            No trades recorded yet. Trades will appear here once the bots execute and close positions.
-                        </Alert>
+                        <Paper sx={{ py: 8, textAlign: 'center', border: '1px dashed rgba(255,255,255,0.1)' }}>
+                            <Inbox sx={{ fontSize: 48, color: 'text.disabled', mb: 1.5 }} />
+                            <Typography variant="body1" color="text.secondary" fontWeight={500}>
+                                No trades recorded yet
+                            </Typography>
+                            <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 0.5 }}>
+                                Trades appear here once the bots close positions
+                            </Typography>
+                        </Paper>
                     ) : (
-                        <Paper>
-                            <TableContainer>
-                                <Table size="small">
+                        <Paper sx={{ overflow: 'hidden', borderRadius: 2 }}>
+                            <TableContainer sx={{ maxHeight: 560 }}>
+                                <Table size="small" stickyHeader>
                                     <TableHead>
                                         <TableRow>
-                                            <TableCell>Bot</TableCell>
-                                            <TableCell>Symbol</TableCell>
-                                            <TableCell>Dir</TableCell>
-                                            <TableCell>Tier</TableCell>
-                                            <TableCell>Status</TableCell>
-                                            <TableCell align="right">Entry</TableCell>
-                                            <TableCell align="right">Exit</TableCell>
-                                            <TableCell align="right">P&L</TableCell>
-                                            <TableCell align="right">P&L %</TableCell>
-                                            <TableCell>Close Reason</TableCell>
-                                            <TableCell>Entry Time</TableCell>
+                                            {['Bot', 'Symbol', 'Dir', 'Tier', 'Status', 'Entry', 'Exit', 'P&L', 'P&L %', 'Close Reason', 'Entry Time'].map((h, i) => (
+                                                <TableCell
+                                                    key={h}
+                                                    align={i >= 5 && i <= 8 ? 'right' : 'left'}
+                                                    sx={{
+                                                        bgcolor: 'rgba(13,17,23,0.98)',
+                                                        fontWeight: 700,
+                                                        fontSize: '0.7rem',
+                                                        textTransform: 'uppercase',
+                                                        letterSpacing: '0.05em',
+                                                        color: 'text.secondary',
+                                                        borderBottom: '1px solid rgba(255,255,255,0.1)',
+                                                        whiteSpace: 'nowrap',
+                                                    }}
+                                                >
+                                                    {h}
+                                                </TableCell>
+                                            ))}
                                         </TableRow>
                                     </TableHead>
                                     <TableBody>
-                                        {(trades as TradeRecord[]).map((t) => (
-                                            <TableRow key={t.id} hover sx={{ opacity: t.status === 'open' ? 0.85 : 1 }}>
+                                        {(trades as TradeRecord[]).map((t, idx) => (
+                                            <TableRow
+                                                key={t.id}
+                                                hover
+                                                sx={{
+                                                    opacity: t.status === 'open' ? 0.9 : 1,
+                                                    bgcolor: idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)',
+                                                    '&:hover': { bgcolor: 'rgba(59,130,246,0.05) !important' },
+                                                }}
+                                            >
                                                 <TableCell>
                                                     <Chip label={t.bot} size="small" color={BOT_COLORS[t.bot] ?? 'default'} variant="outlined" />
                                                 </TableCell>
-                                                <TableCell><Typography fontWeight={600}>{t.symbol}</Typography></TableCell>
+                                                <TableCell><Typography fontWeight={600} fontSize="0.85rem">{t.symbol}</Typography></TableCell>
                                                 <TableCell>
                                                     <Chip label={t.direction.toUpperCase()} size="small"
                                                         color={t.direction === 'short' ? 'error' : 'success'} variant="outlined" />
                                                 </TableCell>
-                                                <TableCell>{t.tier ?? '—'}</TableCell>
+                                                <TableCell sx={{ color: 'text.secondary', fontSize: '0.8rem' }}>{t.tier ?? '—'}</TableCell>
                                                 <TableCell>
                                                     <Chip label={t.status} size="small"
                                                         color={t.status === 'open' ? 'primary' : t.status === 'closed' ? 'default' : 'warning'}
                                                         variant={t.status === 'open' ? 'filled' : 'outlined'} />
                                                 </TableCell>
-                                                <TableCell align="right">{t.entry_price ? `$${parseFloat(t.entry_price).toFixed(4)}` : '—'}</TableCell>
-                                                <TableCell align="right">
+                                                <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontSize: '0.82rem' }}>
+                                                    {t.entry_price ? `$${parseFloat(t.entry_price).toFixed(4)}` : '—'}
+                                                </TableCell>
+                                                <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontSize: '0.82rem' }}>
                                                     {t.exit_price
                                                         ? `$${parseFloat(t.exit_price).toFixed(4)}`
-                                                        : <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>—</Typography>
+                                                        : <Typography variant="body2" color="text.disabled" sx={{ fontStyle: 'italic' }}>—</Typography>
                                                     }
                                                 </TableCell>
                                                 <TableCell align="right">
                                                     {t.pnl_usd != null ? (
-                                                        <Typography variant="body2" color={pnlColor(t.pnl_usd)}>{fmt(t.pnl_usd)}</Typography>
+                                                        <Typography variant="body2" fontWeight={600} color={pnlColor(t.pnl_usd)}>{fmt(t.pnl_usd)}</Typography>
                                                     ) : (
-                                                        <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>Unrealized</Typography>
+                                                        <Typography variant="body2" color="text.disabled" sx={{ fontStyle: 'italic' }}>Open</Typography>
                                                     )}
                                                 </TableCell>
                                                 <TableCell align="right">
                                                     {t.pnl_pct != null ? (
-                                                        <Typography variant="body2" color={pnlColor(t.pnl_pct)}>{parseFloat(t.pnl_pct).toFixed(2)}%</Typography>
+                                                        <Typography variant="body2" fontWeight={600} color={pnlColor(t.pnl_pct)}>{parseFloat(t.pnl_pct).toFixed(2)}%</Typography>
                                                     ) : (
-                                                        <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>—</Typography>
+                                                        <Typography variant="body2" color="text.disabled">—</Typography>
                                                     )}
                                                 </TableCell>
                                                 <TableCell>
                                                     {t.close_reason
                                                         ? <Typography variant="caption" color="text.secondary">{t.close_reason}</Typography>
                                                         : t.status === 'open'
-                                                            ? <Chip label="Active" size="small" color="primary" variant="outlined" sx={{ fontSize: '0.65rem', height: 22 }} />
-                                                            : <Typography variant="caption" color="text.secondary">—</Typography>
+                                                            ? <Chip label="Active" size="small" color="primary" variant="outlined" sx={{ fontSize: '0.6rem', height: 20 }} />
+                                                            : <Typography variant="caption" color="text.disabled">—</Typography>
                                                     }
                                                 </TableCell>
                                                 <TableCell>
-                                                    <Typography variant="caption" color="text.secondary">
+                                                    <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
                                                         {t.entry_time ? new Date(t.entry_time).toLocaleString() : '—'}
                                                     </Typography>
                                                 </TableCell>

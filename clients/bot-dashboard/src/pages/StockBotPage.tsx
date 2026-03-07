@@ -19,6 +19,7 @@ import {
     Casino,
     Settings,
     Cancel,
+    ShowChart,
 } from '@mui/icons-material';
 import axios from 'axios';
 import { SERVICE_URLS, apiClient } from '@/services/api';
@@ -320,11 +321,14 @@ export default function StockBotPage() {
                             <Typography variant="caption" color="text.secondary">
                                 WIN RATE
                             </Typography>
-                            <Typography variant="h5" sx={{ fontWeight: 700, mt: 0.5, color: '#10b981' }}>
+                            <Typography variant="h5" sx={{
+                                fontWeight: 700, mt: 0.5,
+                                color: parseFloat(winRate) >= 50 ? '#10b981' : parseFloat(winRate) >= 45 ? '#f59e0b' : status?.stats?.totalTrades ? '#ef4444' : 'text.secondary',
+                            }}>
                                 {winRate}%
                             </Typography>
                             <Typography variant="caption" color="text.secondary">
-                                {status?.stats?.totalTrades || 0} trades
+                                {status?.stats?.totalTrades || 0} trades · need ≥45%
                             </Typography>
                         </CardContent>
                     </Card>
@@ -414,22 +418,41 @@ export default function StockBotPage() {
             </Paper>
 
             {/* Controls */}
-            <Paper sx={{ p: 2, mb: 3 }}>
-                <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <Typography variant="subtitle1" sx={{ fontWeight: 600, mr: 2 }}>
-                        Controls:
+            <Paper sx={{
+                p: 2.5, mb: 3,
+                border: '1px solid',
+                borderColor: isRunning ? 'rgba(16,185,129,0.2)' : 'rgba(255,255,255,0.06)',
+                background: isRunning ? 'rgba(16,185,129,0.03)' : 'transparent',
+                borderRadius: 3,
+            }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2 }}>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'text.secondary', fontSize: '0.7rem' }}>
+                        Engine Controls
                     </Typography>
+                    <Box sx={{ flex: 1, height: 1, bgcolor: 'rgba(255,255,255,0.06)' }} />
+                    <Chip
+                        size="small"
+                        label={isRunning ? (isPaused ? 'PAUSED' : 'RUNNING') : 'STOPPED'}
+                        sx={{
+                            fontWeight: 700, fontSize: '0.62rem', height: 20,
+                            bgcolor: isRunning && !isPaused ? 'rgba(16,185,129,0.15)' : isRunning && isPaused ? 'rgba(245,158,11,0.15)' : 'rgba(255,255,255,0.06)',
+                            color: isRunning && !isPaused ? '#10b981' : isRunning && isPaused ? '#f59e0b' : 'text.secondary',
+                        }}
+                    />
+                </Box>
+                <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
                     <Button
                         variant="contained"
                         color="success"
                         startIcon={<PlayArrow />}
                         onClick={() => startMutation.mutate()}
                         disabled={isRunning || startMutation.isLoading}
+                        size="medium"
                     >
                         Start
                     </Button>
                     <Button
-                        variant="contained"
+                        variant={isPaused ? 'contained' : 'outlined'}
                         color="warning"
                         startIcon={<Pause />}
                         onClick={() => pauseMutation.mutate()}
@@ -438,7 +461,7 @@ export default function StockBotPage() {
                         {isPaused ? 'Resume' : 'Pause'}
                     </Button>
                     <Button
-                        variant="contained"
+                        variant="outlined"
                         color="error"
                         startIcon={<Stop />}
                         onClick={() => stopMutation.mutate()}
@@ -446,6 +469,7 @@ export default function StockBotPage() {
                     >
                         Stop
                     </Button>
+                    <Box sx={{ flex: 1 }} />
                     <Button
                         variant="outlined"
                         color="error"
@@ -456,7 +480,7 @@ export default function StockBotPage() {
                             }
                         }}
                         disabled={!(engineStatus as any)?.positions?.length && !status?.positions?.length || closeAllMutation.isLoading}
-                        sx={{ borderStyle: 'dashed' }}
+                        sx={{ borderStyle: 'dashed', opacity: 0.75, '&:hover': { opacity: 1 } }}
                     >
                         Close All
                     </Button>
@@ -523,9 +547,15 @@ export default function StockBotPage() {
                         ))}
                     </Grid>
                 ) : (
-                    <Typography color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
-                        No open positions
-                    </Typography>
+                    <Box sx={{ textAlign: 'center', py: 5, px: 2 }}>
+                        <ShowChart sx={{ fontSize: 40, color: 'text.disabled', mb: 1 }} />
+                        <Typography variant="body1" color="text.secondary" sx={{ fontWeight: 500 }}>
+                            No open positions
+                        </Typography>
+                        <Typography variant="caption" color="text.disabled">
+                            {isRunning ? 'Scanning for momentum signals…' : 'Start the bot to begin scanning'}
+                        </Typography>
+                    </Box>
                 )}
             </Paper>
 

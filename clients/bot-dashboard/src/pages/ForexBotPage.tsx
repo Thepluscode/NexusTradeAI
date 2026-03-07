@@ -307,8 +307,11 @@ export default function ForexBotPage() {
                                 {' / '}
                                 <span style={{ color: '#ef4444' }}>{status?.stats?.shortTrades || 0}</span>
                             </Typography>
-                            <Typography variant="caption" color="text.secondary">
-                                Win Rate: {winRate}%
+                            <Typography variant="caption" sx={{
+                                color: parseFloat(winRate) >= 50 ? '#10b981' : parseFloat(winRate) >= 45 ? '#f59e0b' : status?.stats?.totalTrades ? '#ef4444' : 'text.secondary',
+                                fontWeight: status?.stats?.totalTrades ? 600 : 400,
+                            }}>
+                                Win Rate: {winRate}% {status?.stats?.totalTrades ? `(${status.stats.totalTrades} trades)` : ''}
                             </Typography>
                         </CardContent>
                     </Card>

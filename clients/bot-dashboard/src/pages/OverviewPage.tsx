@@ -1,3 +1,4 @@
+import React from 'react';
 import {
     Box,
     Paper,
@@ -137,40 +138,44 @@ function SummaryStatBox({
     color,
     icon,
     delay,
+    large = false,
 }: {
     label: string;
     value: string;
     color: string;
     icon?: React.ReactNode;
     delay: number;
+    large?: boolean;
 }) {
     return (
         <Box
             sx={{
                 textAlign: 'center',
-                p: { xs: 1.5, sm: 2 },
+                p: { xs: 1.5, sm: large ? 2.5 : 2 },
                 borderRadius: '14px',
-                bgcolor: 'rgba(255, 255, 255, 0.03)',
-                border: '1px solid rgba(255, 255, 255, 0.05)',
+                bgcolor: large ? alpha(color, 0.05) : 'rgba(255, 255, 255, 0.03)',
+                border: '1px solid',
+                borderColor: large ? alpha(color, 0.2) : 'rgba(255, 255, 255, 0.05)',
                 transition: 'all 0.3s ease',
                 animation: 'slideUp 0.5s cubic-bezier(0.4, 0, 0.2, 1) both',
                 animationDelay: `${delay}s`,
+                boxShadow: large ? `0 4px 20px ${alpha(color, 0.08)}` : 'none',
                 '&:hover': {
-                    bgcolor: alpha(color, 0.06),
-                    borderColor: alpha(color, 0.22),
+                    bgcolor: alpha(color, 0.08),
+                    borderColor: alpha(color, 0.28),
                     transform: 'translateY(-2px)',
-                    boxShadow: `0 8px 24px ${alpha(color, 0.1)}`,
+                    boxShadow: `0 8px 24px ${alpha(color, large ? 0.15 : 0.1)}`,
                 },
             }}
         >
             <Stack direction="row" alignItems="center" justifyContent="center" spacing={0.5} sx={{ mb: 0.5 }}>
-                {icon && <Box sx={{ color, display: 'flex', '& svg': { fontSize: 16 } }}>{icon}</Box>}
+                {icon && <Box sx={{ color, display: 'flex', '& svg': { fontSize: large ? 20 : 16 } }}>{icon}</Box>}
                 <Typography
                     variant="h5"
                     sx={{
                         fontWeight: 800,
                         color,
-                        fontSize: { xs: '1.1rem', sm: '1.4rem' },
+                        fontSize: large ? { xs: '1.4rem', sm: '1.8rem' } : { xs: '1.1rem', sm: '1.4rem' },
                         letterSpacing: '-0.02em',
                         fontVariantNumeric: 'tabular-nums',
                     }}
@@ -183,7 +188,7 @@ function SummaryStatBox({
                 sx={{
                     color: 'text.secondary',
                     fontSize: '0.68rem',
-                    fontWeight: 500,
+                    fontWeight: large ? 700 : 500,
                     letterSpacing: '0.04em',
                     textTransform: 'uppercase',
                     display: 'block',
@@ -313,11 +318,13 @@ function PnLChart({ days = 30 }: { days?: number }) {
 
 export default function OverviewPage() {
     const navigate = useNavigate();
+    const [lastUpdated, setLastUpdated] = React.useState<Date | null>(null);
 
     const { data: status, isLoading } = useQuery<AllBotsStatus>(
         'allBotsStatus',
         async () => {
             const [stock, forex, crypto] = await Promise.all(BOTS.map(fetchBotStatus));
+            setLastUpdated(new Date());
             return { stock, forex, crypto };
         },
         { refetchInterval: 10000 }
@@ -372,30 +379,35 @@ export default function OverviewPage() {
         );
     }
 
+    const pnlColor = totalDailyPnL > 0 ? '#10b981' : totalDailyPnL < 0 ? '#ef4444' : '#6b7280';
     const summaryStats = [
         {
             label: 'Total Equity',
             value: `$${totalEquity.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
             color: '#10b981',
             icon: <AccountBalance />,
+            large: false,
         },
         {
             label: 'Daily P&L',
             value: `${totalDailyPnL >= 0 ? '+' : ''}$${totalDailyPnL.toFixed(2)}`,
-            color: totalDailyPnL >= 0 ? '#10b981' : '#ef4444',
+            color: pnlColor,
             icon: totalDailyPnL >= 0 ? <TrendingUp /> : <TrendingDown />,
+            large: true,  // make P&L the most prominent stat
         },
         {
             label: 'Bots Running',
             value: `${runningBots} / 3`,
-            color: '#3b82f6',
+            color: runningBots > 0 ? '#3b82f6' : '#6b7280',
             icon: <Speed />,
+            large: false,
         },
         {
             label: 'Bots Online',
             value: `${onlineBots} / 3`,
             color: onlineBots === 3 ? '#10b981' : '#f59e0b',
             icon: <BarChart />,
+            large: false,
         },
     ];
 
@@ -532,10 +544,17 @@ export default function OverviewPage() {
                                     color={stat.color}
                                     icon={stat.icon}
                                     delay={0.08 + i * 0.07}
+                                    large={stat.large}
                                 />
                             </Grid>
                         ))}
                     </Grid>
+                    {/* Last updated */}
+                    {lastUpdated && (
+                        <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.62rem', mt: 1.5, display: 'block', textAlign: 'right' }}>
+                            Updated {lastUpdated.toLocaleTimeString()} · refreshes every 10s
+                        </Typography>
+                    )}
                 </Box>
             </Paper>
 
@@ -653,12 +672,38 @@ export default function OverviewPage() {
                                             </Stack>
 
                                             <Stack spacing={0.5} alignItems="flex-end" sx={{ flexShrink: 0 }}>
+                                                {/* Running status — most important, shown largest */}
+                                                {s?.online && (
+                                                    <Chip
+                                                        size="small"
+                                                        icon={
+                                                            <FiberManualRecord
+                                                                sx={{
+                                                                    fontSize: '8px !important',
+                                                                    color: `${s.isRunning ? '#10b981' : '#ef4444'} !important`,
+                                                                    animation: s.isRunning ? 'pulseDot 2s ease-in-out infinite' : 'none',
+                                                                }}
+                                                            />
+                                                        }
+                                                        label={s.isRunning ? 'RUNNING' : 'STOPPED'}
+                                                        sx={{
+                                                            bgcolor: s.isRunning ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.15)',
+                                                            color: s.isRunning ? '#34d399' : '#f87171',
+                                                            fontWeight: 800,
+                                                            fontSize: '0.65rem',
+                                                            height: 24,
+                                                            border: '1px solid',
+                                                            borderColor: s.isRunning ? 'rgba(16,185,129,0.4)' : 'rgba(239,68,68,0.3)',
+                                                            '& .MuiChip-icon': { ml: 0.5 },
+                                                        }}
+                                                    />
+                                                )}
                                                 <Chip
                                                     size="small"
                                                     icon={
                                                         <FiberManualRecord
                                                             sx={{
-                                                                fontSize: '8px !important',
+                                                                fontSize: '7px !important',
                                                                 color: `${s?.online ? '#10b981' : '#ef4444'} !important`,
                                                             }}
                                                         />
@@ -666,26 +711,13 @@ export default function OverviewPage() {
                                                     label={s?.online ? 'ONLINE' : 'OFFLINE'}
                                                     sx={{
                                                         bgcolor: 'rgba(0,0,0,0.22)',
-                                                        color: 'white',
-                                                        fontWeight: 700,
-                                                        fontSize: '0.6rem',
-                                                        height: 22,
+                                                        color: 'rgba(255,255,255,0.7)',
+                                                        fontWeight: 600,
+                                                        fontSize: '0.58rem',
+                                                        height: 20,
                                                         '& .MuiChip-icon': { ml: 0.5 },
                                                     }}
                                                 />
-                                                {s?.online && s.mode !== 'OFFLINE' && s.mode !== 'STOPPED' && (
-                                                    <Chip
-                                                        size="small"
-                                                        label={s.mode}
-                                                        sx={{
-                                                            bgcolor: 'rgba(255,255,255,0.15)',
-                                                            color: 'white',
-                                                            fontSize: '0.6rem',
-                                                            height: 22,
-                                                            fontWeight: 600,
-                                                        }}
-                                                    />
-                                                )}
                                             </Stack>
                                         </Stack>
                                     </Box>
