@@ -630,9 +630,9 @@ const EXIT_CONFIG = {
 
     // Dynamic profit targets based on hold time (v3.2: lowered to 5% day 0-2 for higher hit rate)
     profitTargetByDay: {
-        0: 0.05,  // Day 0-1: 5% target (reduced from 8% — more achievable, higher win rate)
-        1: 0.05,  // Day 1-2: 5% target
-        2: 0.05,  // Day 2-3: 5% target
+        0: 0.03,  // Day 0-1: 3% target (lowered from 5% — capture more intraday momentum wins)
+        1: 0.03,  // Day 1-2: 3% target
+        2: 0.04,  // Day 2-3: 4% target
         3: 0.04,  // Day 3-4: 4% target
         4: 0.03,  // Day 4-5: 3% target
         5: 0.02,  // Day 5-6: 2% target
@@ -725,7 +725,7 @@ function saveRiskConfig() {
 const TRADING_HOURS = {
     marketOpen: { hour: 9, minute: 30 },
     marketClose: { hour: 16, minute: 0 },
-    avoidFirstMinutes: 30,
+    avoidFirstMinutes: 0,
     avoidLastMinutes: 30
 };
 
@@ -1583,13 +1583,13 @@ async function executeTrade(signal, strategy) {
             const avgLoss = perfData.totalLossAmount / Math.max(perfData.losingTrades, 1);
             const b = avgLoss > 0 ? avgWin / avgLoss : 1;
             const fullKelly = (w * b - (1 - w)) / b;        // optimal fraction of equity
-            const fracKelly = Math.max(0, fullKelly) * 0.25; // 25% Kelly for safety
+            const fracKelly = Math.max(0, fullKelly) * 0.5;  // 50% Kelly for safety
             // Express as a multiplier: fracKelly / config.positionSize tells us "how many
-            // config-sized units to risk". Clamp to [0.25, 2.0] and guard against NaN/Infinity
+            // config-sized units to risk". Clamp to [0.5, 2.0] and guard against NaN/Infinity
             // (e.g. if avgLoss=0 or winRate=100%).
             const rawMultiplier = fracKelly > 0 ? fracKelly / config.positionSize : 1.0;
             const safeMultiplier = isFinite(rawMultiplier) && !isNaN(rawMultiplier) ? rawMultiplier : 1.0;
-            kellyMultiplier = Math.max(0.25, Math.min(2.0, safeMultiplier));
+            kellyMultiplier = Math.max(0.5, Math.min(2.0, safeMultiplier));
         }
 
         // [v3.5] Slippage model — market orders typically fill ~0.05% above ask for stocks
@@ -2963,10 +2963,10 @@ class UserTradingEngine {
                 const avgLoss = this.perfData.totalLossAmount / Math.max(this.perfData.losingTrades, 1);
                 const b = avgLoss > 0 ? avgWin / avgLoss : 1;
                 const fullKelly = (w * b - (1 - w)) / b;
-                const fracKelly = Math.max(0, fullKelly) * 0.25;
+                const fracKelly = Math.max(0, fullKelly) * 0.5;
                 const rawMultiplier = fracKelly > 0 ? fracKelly / config.positionSize : 1.0;
                 const safeMultiplier = isFinite(rawMultiplier) && !isNaN(rawMultiplier) ? rawMultiplier : 1.0;
-                kellyMultiplier = Math.max(0.25, Math.min(2.0, safeMultiplier));
+                kellyMultiplier = Math.max(0.5, Math.min(2.0, safeMultiplier));
             }
             const STOCK_SLIPPAGE = 0.0005;
             const effectiveEntry = signal.price * (1 + STOCK_SLIPPAGE);

@@ -458,15 +458,8 @@ const oandaConfig = {
 const FOREX_PAIRS = [
     // Major Pairs (highest liquidity, tightest spreads)
     'EUR_USD', 'GBP_USD', 'USD_JPY', 'USD_CHF', 'AUD_USD', 'USD_CAD', 'NZD_USD',
-    // Cross Pairs (good liquidity)
-    'EUR_JPY', 'GBP_JPY', 'EUR_GBP', 'AUD_JPY', 'EUR_AUD',
-    // Additional Cross Pairs
-    'EUR_CAD', 'EUR_CHF', 'EUR_NZD',
-    'GBP_CHF', 'GBP_AUD', 'GBP_CAD', 'GBP_NZD',
-    'AUD_CAD', 'AUD_CHF', 'AUD_NZD',
-    'NZD_JPY', 'NZD_CAD', 'NZD_CHF',
-    'CAD_JPY', 'CAD_CHF',
-    'CHF_JPY',
+    // High-liquidity crosses only (EUR_JPY and GBP_JPY have sufficient volume)
+    'EUR_JPY', 'GBP_JPY', 'EUR_GBP', 'AUD_JPY', 'CAD_JPY',
 ];
 
 // Correlation groups - avoid same-direction trades on correlated pairs
@@ -629,8 +622,8 @@ const MOMENTUM_CONFIG = {
         rsiMax: 70,
         rsiMin: 30,
         positionSize: 0.01,     // 1% of account
-        stopLoss: 0.015,        // 1.5%
-        profitTarget: 0.03,     // 3% (2:1 R/R)
+        stopLoss: 0.02,         // 2.0% (raised from 1.5% — avoids noise-triggered stops on JPY pairs)
+        profitTarget: 0.04,     // 4% (2:1 R/R)
         maxPositions: 4
     },
     tier2: {
