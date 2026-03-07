@@ -430,7 +430,7 @@ export default function ForexBotPage() {
                                 closeAllMutation.mutate();
                             }
                         }}
-                        disabled={!status?.positions?.length || closeAllMutation.isLoading}
+                        disabled={!(engineStatus as any)?.positions?.length && !status?.positions?.length || closeAllMutation.isLoading}
                         sx={{ borderStyle: 'dashed' }}
                     >
                         Close All
