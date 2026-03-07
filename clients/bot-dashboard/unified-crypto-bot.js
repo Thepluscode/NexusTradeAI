@@ -285,9 +285,9 @@ class KrakenClient {
 
     // Kraken HMAC-SHA512 signature for private endpoints
     _sign(path, nonce, postData) {
-        const message = postData + crypto.createHash('sha256').update(nonce + postData).digest('binary');
+        const sha256Digest = crypto.createHash('sha256').update(nonce + postData).digest('binary');
         const secretBuffer = Buffer.from(this.apiSecret, 'base64');
-        return crypto.createHmac('sha512', secretBuffer).update(path + message, 'binary').digest('base64');
+        return crypto.createHmac('sha512', secretBuffer).update(path + sha256Digest, 'binary').digest('base64');
     }
 
     async _privateRequest(endpoint, params = {}) {
