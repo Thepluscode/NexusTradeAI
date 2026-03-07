@@ -2160,13 +2160,14 @@ app.listen(PORT, async () => {
                     }
                     if (Object.keys(creds).length > 0) console.log(`🔑 Loaded ${broker} credentials from DB for user ${userId}`);
                 }
-                // Reinitialise Kraken client with loaded keys
+                // Reinitialise Kraken client with loaded keys and exit demo mode
                 if (process.env.CRYPTO_API_KEY && process.env.CRYPTO_API_SECRET) {
                     engine.kraken = new KrakenClient({
                         apiKey: process.env.CRYPTO_API_KEY,
                         apiSecret: process.env.CRYPTO_API_SECRET,
                     });
-                    console.log('🔑 Kraken client reinitialised with DB credentials');
+                    engine.demoMode = false; // credentials loaded from DB — not demo
+                    console.log('🔑 Kraken client reinitialised with DB credentials — DEMO mode disabled');
                 }
             }
         }
