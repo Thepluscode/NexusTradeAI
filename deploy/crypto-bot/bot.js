@@ -204,8 +204,8 @@ const CRYPTO_CONFIG = {
         'WIFUSD',   // dogwifhat (high vol)
     ],
 
-    // Risk Management (Ultra-Conservative for crypto)
-    maxTotalPositions: 2,  // Only 2 positions (high volatility!)
+    // Risk Management
+    maxTotalPositions: 4,  // 4 positions max
     maxPositionsPerSymbol: 1,
     maxTradesPerDay: 10,
     maxTradesPerSymbol: 2,
@@ -225,7 +225,7 @@ const CRYPTO_CONFIG = {
             profitTarget: 0.15,      // 15% target (3:1 R/R)
             rsiLower: 20,            // Allow deep oversold
             rsiUpper: 80,            // Allow overbought (FOMO)
-            maxPositions: 2
+            maxPositions: 4
         },
         tier2: {
             name: 'High Momentum',
