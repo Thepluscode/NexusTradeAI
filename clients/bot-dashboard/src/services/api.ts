@@ -361,6 +361,16 @@ class APIClient {
 
   async getCryptoStatus(): Promise<Record<string, unknown>> {
     try {
+      const engineResponse = await this.cryptoService.get('/api/crypto/engine/status');
+      if (engineResponse.data && engineResponse.data.credentialsRequired !== true) {
+        return engineResponse.data;
+      }
+    } catch {
+      // Fall back to the shared public engine status when JWT-scoped status
+      // is unavailable or credentials have not been configured yet.
+    }
+
+    try {
       const response = await this.cryptoService.get('/api/crypto/status');
       return response.data;
     } catch {

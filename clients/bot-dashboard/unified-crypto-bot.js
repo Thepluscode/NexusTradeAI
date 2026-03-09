@@ -222,7 +222,7 @@ const CRYPTO_CONFIG = {
     tiers: {
         tier1: {
             name: 'Standard Crypto',
-            momentumThreshold: 0.015, // 1.5% momentum
+            momentumThreshold: 0.003, // 0.3% momentum
             stopLoss: 0.05,          // 5% stop
             profitTarget: 0.15,      // 15% target (3:1 R/R)
             rsiLower: 20,            // Allow deep oversold
@@ -231,7 +231,7 @@ const CRYPTO_CONFIG = {
         },
         tier2: {
             name: 'High Momentum',
-            momentumThreshold: 0.05, // 5% momentum
+            momentumThreshold: 0.012, // 1.2% momentum
             stopLoss: 0.06,          // 6% stop
             profitTarget: 0.20,      // 20% target (3.3:1 R/R)
             rsiLower: 25,
@@ -240,7 +240,7 @@ const CRYPTO_CONFIG = {
         },
         tier3: {
             name: 'Extreme Momentum',
-            momentumThreshold: 0.10, // 10% momentum
+            momentumThreshold: 0.025, // 2.5% momentum
             stopLoss: 0.08,          // 8% stop
             profitTarget: 0.30,      // 30% target (3.75:1 R/R)
             rsiLower: 30,
@@ -251,10 +251,10 @@ const CRYPTO_CONFIG = {
 
     pullbackStrategy: {
         maxPullbackFromEMA9: 0.03,
-        minTrendStrength: 0.01,
+        minTrendStrength: 0.0015,
         rsiLower: 38,
-        rsiUpper: 62,
-        minVolumeRatio: 1.0,
+        rsiUpper: 64,
+        minVolumeRatio: 0.75,
         stopLoss: 0.04,
         profitTarget: 0.10,
         maxPositions: 2,
@@ -266,6 +266,7 @@ const CRYPTO_CONFIG = {
         btcCorrelation: true,  // Check BTC trend before altcoin trades
         volumeConfirmation: true,
         minVolumeUSD: 10000000, // $10M daily volume minimum
+        minVolumeRatioMomentum: 0.65,
         maxVolatility24h: 0.30, // Pause if >30% move in 24h
         avoidWeekend: false     // Crypto trades 24/7 even weekends
     },
@@ -391,6 +392,21 @@ class KrakenClient {
         }
     }
 
+    async getAssetPairs() {
+        try {
+            const response = await axios.get(`${this.baseURL}/0/public/AssetPairs`, {
+                timeout: 10000,
+            });
+            if (response.data.error && response.data.error.length > 0) {
+                throw new Error(response.data.error.join(', '));
+            }
+            return response.data.result || {};
+        } catch (error) {
+            console.error('❌ Failed to fetch Kraken asset pairs:', error.message);
+            return null;
+        }
+    }
+
     // Get OHLCV candles — public, no auth needed
     // Kraken interval in minutes: 1,5,15,30,60,240,1440
     async getKlines(symbol, interval = '5m', limit = 100) {
@@ -452,6 +468,9 @@ class CryptoTradingEngine {
         // Trading state
         this.positions = new Map();
         this.priceHistory = new Map();
+        this.activeSymbols = Array.from(config.symbols || []);
+        this.invalidSymbols = new Set();
+        this.lastSymbolValidationAt = 0;
         this.isRunning = false;
         this.isPaused = false;
         this.scanCount = 0;
@@ -670,6 +689,7 @@ class CryptoTradingEngine {
 
     async scanForOpportunities() {
         const opportunities = [];
+        const scanSymbols = await this.refreshSupportedSymbols();
 
         // Check BTC trend first (for altcoin correlation)
         const btcBullish = await this.isBTCBullish();
@@ -677,7 +697,7 @@ class CryptoTradingEngine {
             console.log('🔴 BTC is bearish/neutral — scanning all symbols but halving altcoin position size');
         }
 
-        for (const symbol of this.config.symbols) {
+        for (const symbol of scanSymbols) {
             // When BTC is bearish, reduce altcoin position size (50%) instead of hard-skipping.
             // Hard-skipping 10/12 symbols leaves the bot idle for hours when BTC consolidates.
             // We still trade altcoins but with tighter sizing to limit exposure.
@@ -724,14 +744,29 @@ class CryptoTradingEngine {
             // [v3.2] Volume surge filter — lowered from 1.5x to 1.2x average.
             // 1.5x coincides with MACD alignment only ~15% of bars; 1.2x is still
             // above-average volume confirmation without requiring a spike.
-            const avgVolume = data.volumes.length >= 20
-                ? data.volumes.slice(-20).reduce((a, b) => a + b, 0) / 20
+            // Kraken's latest 5m candle is often still forming. Compare both the
+            // live bar and the most recently closed bar so scans right after a new
+            // candle opens do not see an artificial near-zero volume ratio.
+            const liveVolumeWindow = data.volumes.length >= 20
+                ? data.volumes.slice(-20)
+                : data.volumes;
+            const liveAvgVolume = liveVolumeWindow.length > 0
+                ? liveVolumeWindow.reduce((a, b) => a + b, 0) / liveVolumeWindow.length
                 : null;
-            const currentBarVolume = data.volumes[data.volumes.length - 1];
-            const volumeRatio = avgVolume > 0 ? currentBarVolume / avgVolume : 1;
-            if (volumeRatio < 1.2) {
-                continue; // Require above-average volume confirmation
-            }
+            const currentBarVolume = data.volumes[data.volumes.length - 1] ?? 0;
+            const currentBarVolumeRatio = liveAvgVolume > 0 ? currentBarVolume / liveAvgVolume : 1;
+
+            const closedVolumeWindow = data.volumes.length >= 21
+                ? data.volumes.slice(-21, -1)
+                : liveVolumeWindow;
+            const closedAvgVolume = closedVolumeWindow.length > 0
+                ? closedVolumeWindow.reduce((a, b) => a + b, 0) / closedVolumeWindow.length
+                : liveAvgVolume;
+            const previousClosedBarVolume = data.volumes.length >= 2
+                ? data.volumes[data.volumes.length - 2]
+                : currentBarVolume;
+            const previousClosedBarVolumeRatio = closedAvgVolume > 0 ? previousClosedBarVolume / closedAvgVolume : currentBarVolumeRatio;
+            const volumeRatio = Math.max(currentBarVolumeRatio, previousClosedBarVolumeRatio);
 
             // Combined sizing factor for this symbol
             const combinedSizingFactor = btcSizingFactor * macdSizingFactor;
@@ -743,6 +778,7 @@ class CryptoTradingEngine {
             let bestSignal = null;
 
             const pullbackConfig = this.config.pullbackStrategy;
+            const minMomentumVolumeRatio = this.config.filters.minVolumeRatioMomentum ?? 1.05;
             const pullbackPositions = Array.from(this.positions.values())
                 .filter(position => position.tier === 'pullback').length;
 
@@ -785,6 +821,13 @@ class CryptoTradingEngine {
                     macdBullish
                 });
                 bestSignal = pullbackSignal;
+            }
+
+            if (volumeRatio < minMomentumVolumeRatio) {
+                if (bestSignal) {
+                    opportunities.push(bestSignal);
+                }
+                continue;
             }
 
             // Try each tier
@@ -860,6 +903,41 @@ class CryptoTradingEngine {
 
         opportunities.sort((a, b) => (b.score || 0) - (a.score || 0));
         return opportunities;
+    }
+
+    async refreshSupportedSymbols(force = false) {
+        const validationTtlMs = 60 * 60 * 1000;
+        if (!force && this.lastSymbolValidationAt && (Date.now() - this.lastSymbolValidationAt) < validationTtlMs) {
+            return this.activeSymbols;
+        }
+
+        const assetPairs = await this.kraken.getAssetPairs();
+        this.lastSymbolValidationAt = Date.now();
+        if (!assetPairs) return this.activeSymbols;
+
+        const supported = new Set();
+        for (const pair of Object.values(assetPairs)) {
+            if (pair && pair.status === 'online' && typeof pair.altname === 'string') {
+                supported.add(pair.altname);
+            }
+        }
+
+        const nextActiveSymbols = this.config.symbols.filter(symbol => supported.has(symbol));
+        const nextInvalidSymbols = this.config.symbols.filter(symbol => !supported.has(symbol));
+
+        if (nextActiveSymbols.length > 0) {
+            this.activeSymbols = nextActiveSymbols;
+        }
+
+        const invalidChanged = nextInvalidSymbols.length !== this.invalidSymbols.size
+            || nextInvalidSymbols.some(symbol => !this.invalidSymbols.has(symbol));
+        this.invalidSymbols = new Set(nextInvalidSymbols);
+
+        if (invalidChanged && nextInvalidSymbols.length > 0) {
+            console.warn(`⚠️ Kraken unsupported symbols removed from live scan: ${nextInvalidSymbols.join(', ')}`);
+        }
+
+        return this.activeSymbols;
     }
 
     // ========================================================================
@@ -1237,7 +1315,7 @@ class CryptoTradingEngine {
 
                 // Scan for new opportunities
                 if (this.positions.size < this.config.maxTotalPositions) {
-                    console.log(`\n🔍 Scanning ${this.config.symbols.length} crypto pairs...`);
+                    console.log(`\n🔍 Scanning ${this.activeSymbols.length || this.config.symbols.length} crypto pairs...`);
                     const opportunities = await this.scanForOpportunities();
 
                     console.log(`\n🎯 Found ${opportunities.length} signal(s)`);
@@ -1297,6 +1375,8 @@ class CryptoTradingEngine {
             this.tradingLoop().catch(e => console.error('❌ Crypto trading loop crashed:', e));
             return;
         }
+
+        await this.refreshSupportedSymbols(true);
 
         console.log(`✅ Connected to ${this.config.exchange.name.toUpperCase()}`);
         console.log(`💰 Account connected`);
@@ -1455,7 +1535,8 @@ class CryptoTradingEngine {
                 maxDrawdown: 0
             },
             config: {
-                symbols: this.config.symbols,
+                symbols: this.activeSymbols,
+                invalidSymbols: Array.from(this.invalidSymbols),
                 maxPositions: this.config.maxTotalPositions,
                 stopLoss: this.config.tiers.tier1.stopLoss,
                 profitTarget: this.config.tiers.tier1.profitTarget,
