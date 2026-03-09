@@ -128,11 +128,13 @@ function buildForexTradeTags(signal = {}, tier, direction, session) {
     const normalizedStrategy = signal.strategy
         || (pullback > 0 && maxPullback > 0 && pullback >= maxPullback * 0.55 ? 'pullbackContinuation' : 'trendContinuation');
 
-    let regime = 'session-trend';
-    if (session === 'London/NY Overlap') regime = 'overlap-expansion';
-    else if (trendStrength >= MOMENTUM_CONFIG.tier2.threshold) regime = 'trend-expansion';
-    else if (session === 'London') regime = 'london-trend';
-    else if (session === 'New York') regime = 'new-york-trend';
+    let regime = signal.regime || 'session-trend';
+    if (!signal.regime) {
+        if (session === 'London/NY Overlap') regime = 'overlap-expansion';
+        else if (trendStrength >= MOMENTUM_CONFIG.tier2.threshold) regime = 'trend-expansion';
+        else if (session === 'London') regime = 'london-trend';
+        else if (session === 'New York') regime = 'new-york-trend';
+    }
 
     return {
         strategy: normalizedStrategy,
@@ -146,6 +148,7 @@ function buildForexTradeTags(signal = {}, tier, direction, session) {
             trendStrength: signal.trendStrength ?? null,
             pullback: signal.pullback ?? null,
             atrPct: signal.atrPct ?? null,
+            regimeQuality: signal.regimeQuality ?? null,
             rsi: signal.rsi ?? null,
             macdHistogram: signal.macdHistogram ?? null
         }
@@ -778,6 +781,57 @@ function scoreForexSignal({ tier, trendStrength, pullback, maxPullback, rsi, dir
     );
 }
 
+function evaluateForexRegimeSignal({ tier, trendStrength, pullback, maxPullback, rsi, direction, session, h1Trend, macd }) {
+    const expectedTrend = direction === 'long' ? 'up' : 'down';
+    if (h1Trend && h1Trend !== expectedTrend) {
+        return { tradable: false, regime: 'higher-timeframe-mismatch', quality: 0 };
+    }
+
+    let quality = session?.isBest ? 1.18 : session?.quality === 'good' ? 1.08 : session?.quality === 'fair' ? 0.94 : 0.82;
+    const pullbackRatio = maxPullback > 0 ? pullback / maxPullback : 0;
+
+    if (pullbackRatio >= 0.2 && pullbackRatio <= 0.75) quality *= 1.08;
+    else if (pullbackRatio > 0.9) quality *= 0.82;
+    else if (pullbackRatio < 0.08) quality *= 0.88;
+
+    if (trendStrength >= (MOMENTUM_CONFIG[tier]?.threshold || MOMENTUM_CONFIG.tier1.threshold) * 1.15) quality *= 1.08;
+    else if (trendStrength < (MOMENTUM_CONFIG[tier]?.threshold || MOMENTUM_CONFIG.tier1.threshold)) quality *= 0.9;
+
+    const rsiSweetSpot = direction === 'long'
+        ? (rsi >= 46 && rsi <= 60)
+        : (rsi >= 40 && rsi <= 54);
+    if (rsiSweetSpot) quality *= 1.04;
+
+    if (macd) {
+        const macdAligned = direction === 'long' ? macd.bullish : macd.bearish;
+        if (!macdAligned) quality *= 0.78;
+    }
+
+    let regime = 'session-trend';
+    if (session?.name === 'London/NY Overlap') regime = 'overlap-expansion';
+    else if (trendStrength >= MOMENTUM_CONFIG.tier2.threshold) regime = 'trend-expansion';
+    else if (session?.name === 'London') regime = 'london-trend';
+    else if (session?.name === 'New York') regime = 'new-york-trend';
+
+    return {
+        tradable: quality >= 0.92,
+        regime,
+        quality: parseFloat(quality.toFixed(3))
+    };
+}
+
+function getForexAtrExitReason(position, currentPrice) {
+    const atrPct = parseFloat(position?.atrPct || 0);
+    if (!atrPct || !currentPrice || !position?.entry) return null;
+    const adverseMovePct = position.direction === 'long'
+        ? (position.entry - currentPrice) / position.entry
+        : (currentPrice - position.entry) / position.entry;
+    if (adverseMovePct >= atrPct * EXIT_CONFIG.momentumReversal.atrMultipleExit) {
+        return `ATR adverse exit (${(adverseMovePct * 100).toFixed(2)}%)`;
+    }
+    return null;
+}
+
 function isMarketOpen() {
     const now = new Date();
     const day = now.getUTCDay();
@@ -1264,12 +1318,29 @@ async function scanForSignals(heldPositions = positions) {
                     session,
                     macd
                 });
+                const regimeProfile = evaluateForexRegimeSignal({
+                    tier,
+                    trendStrength,
+                    pullback,
+                    maxPullback,
+                    rsi,
+                    direction: 'long',
+                    session,
+                    h1Trend,
+                    macd
+                });
+                if (!regimeProfile.tradable) continue;
+                const strategy = pullback >= maxPullback * 0.55 ? 'pullbackContinuation' : 'trendContinuation';
                 signals.push({
                     pair, direction: 'long', tier,
                     entry: currentPrice,
                     stopLoss:   currentPrice * (1 - atrStop),
                     takeProfit: currentPrice * (1 + atrTarget),
-                    rsi, trendStrength, atrPct, h1Trend, pullback, score,
+                    rsi, trendStrength, atrPct, h1Trend, pullback,
+                    score: parseFloat((score * regimeProfile.quality).toFixed(3)),
+                    strategy,
+                    regime: regimeProfile.regime,
+                    regimeQuality: regimeProfile.quality,
                     macdHistogram: macd ? macd.histogram : null,
                     session: session.name
                 });
@@ -1313,12 +1384,29 @@ async function scanForSignals(heldPositions = positions) {
                     session,
                     macd
                 });
+                const regimeProfile = evaluateForexRegimeSignal({
+                    tier,
+                    trendStrength,
+                    pullback,
+                    maxPullback,
+                    rsi,
+                    direction: 'short',
+                    session,
+                    h1Trend,
+                    macd
+                });
+                if (!regimeProfile.tradable) continue;
+                const strategy = pullback >= maxPullback * 0.55 ? 'pullbackContinuation' : 'trendContinuation';
                 signals.push({
                     pair, direction: 'short', tier,
                     entry: currentPrice,
                     stopLoss:   currentPrice * (1 + atrStop),
                     takeProfit: currentPrice * (1 - atrTarget),
-                    rsi, trendStrength, atrPct, h1Trend, pullback, score,
+                    rsi, trendStrength, atrPct, h1Trend, pullback,
+                    score: parseFloat((score * regimeProfile.quality).toFixed(3)),
+                    strategy,
+                    regime: regimeProfile.regime,
+                    regimeQuality: regimeProfile.quality,
                     macdHistogram: macd ? macd.histogram : null,
                     session: session.name
                 });
@@ -1381,7 +1469,9 @@ async function executeTrade(signal) {
             units,
             entryTime: new Date(),
             session: signal.session,
-            signalScore: signal.score
+            signalScore: signal.score,
+            regimeQuality: signal.regimeQuality,
+            atrPct: signal.atrPct
         });
 
         // Persist trade opening to DB (fire-and-forget)
@@ -1556,6 +1646,12 @@ async function managePositions() {
 
         // Update trailing stop
         updateTrailingStop(localPos, currentPrice);
+
+        const atrExitReason = getForexAtrExitReason(localPos, currentPrice);
+        if (atrExitReason) {
+            await closePositionWithReason(pair, atrExitReason);
+            continue;
+        }
 
         // Check time-based exit
         if (holdDays >= EXIT_CONFIG.stalePositionDays) {
@@ -2391,6 +2487,8 @@ class UserForexEngine {
             const currentPrice = parseFloat(isLong ? p.long?.averagePrice : p.short?.averagePrice) || position.entry;
             position.unrealizedPL = unrealizedPL;
             position.currentPrice = currentPrice;
+            const atrExitReason = getForexAtrExitReason(position, currentPrice);
+            if (atrExitReason) { await this.closePositionWithReason(instrument, atrExitReason); continue; }
             // Time-based exit: max 5 days
             const holdHours = (Date.now() - (position.entryTime?.getTime?.() || Date.now())) / 3600000;
             if (holdHours >= 120) { await this.closePositionWithReason(instrument, 'Max Hold Time (5 days)'); continue; }
@@ -2431,7 +2529,8 @@ class UserForexEngine {
                 instrument: signal.pair, direction: signal.direction, tier: signal.tier,
                 entry: signal.entry, stopLoss: signal.stopLoss, takeProfit: signal.takeProfit,
                 units, entryTime: new Date(), session: signal.session,
-                strategy: tags.strategy, regime: tags.regime, signalScore: signal.score
+                strategy: tags.strategy, regime: tags.regime, signalScore: signal.score,
+                regimeQuality: signal.regimeQuality, atrPct: signal.atrPct
             });
             this.dbForexOpen(signal.pair, signal.direction, signal.tier, signal.entry, signal.stopLoss, signal.takeProfit, units, signal.session, signal)
                 .then(id => { const p = this.positions.get(signal.pair); if (p) p.dbTradeId = id; })

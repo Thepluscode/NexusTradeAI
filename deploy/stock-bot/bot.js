@@ -671,11 +671,13 @@ function buildStockTradeTags(signal = {}, strategy, tier) {
     const volumeRatio = parseFloat(signal.volumeRatio ?? '0');
     const score = signal.score != null ? parseFloat(Number(signal.score).toFixed(3)) : null;
 
-    let regime = 'intraday-momentum';
-    if (normalizedStrategy === 'openingRangeBreakout') {
-        regime = 'opening-range';
-    } else if (percentChange >= MOMENTUM_CONFIG.tier2.threshold || volumeRatio >= 3) {
-        regime = 'trend-expansion';
+    let regime = signal.regime || 'intraday-momentum';
+    if (!signal.regime) {
+        if (normalizedStrategy === 'openingRangeBreakout') {
+            regime = 'opening-range';
+        } else if (percentChange >= MOMENTUM_CONFIG.tier2.threshold || volumeRatio >= 3) {
+            regime = 'trend-expansion';
+        }
     }
 
     return {
@@ -690,8 +692,151 @@ function buildStockTradeTags(signal = {}, strategy, tier) {
             vwap: signal.vwap ?? null,
             breakoutTrigger: signal.breakoutTrigger ?? null,
             openingRangeHigh: signal.openingRangeHigh ?? null,
+            atrStop: signal.atrStop ?? null,
+            atrTarget: signal.atrTarget ?? null,
+            atrPct: signal.atrPct ?? null,
+            regimeScore: signal.regimeScore ?? null,
         }
     };
+}
+
+function evaluateStockRegimeSignal({ strategy, percentChange, volumeRatio, rsi, current, vwap, atrPct = null, breakoutPct = 0 }) {
+    const normalizedStrategy = strategy || 'momentum';
+    let regime = normalizedStrategy === 'openingRangeBreakout' ? 'opening-range' : 'intraday-momentum';
+    let quality = 1;
+
+    const numericPercentChange = parseFloat(percentChange ?? '0');
+    const numericVolumeRatio = parseFloat(volumeRatio ?? '0');
+    const numericRsi = parseFloat(rsi ?? '50');
+    const numericCurrent = parseFloat(current ?? '0');
+    const numericVwap = vwap != null ? parseFloat(vwap) : null;
+    const numericBreakoutPct = parseFloat(breakoutPct ?? '0');
+    const numericAtrPct = atrPct != null ? parseFloat(atrPct) : null;
+
+    if (normalizedStrategy === 'openingRangeBreakout') {
+        regime = 'opening-range';
+        if (numericBreakoutPct > OPENING_RANGE_BREAKOUT_CONFIG.maxBreakoutPct * 0.85) quality *= 0.82;
+        if (numericVolumeRatio < OPENING_RANGE_BREAKOUT_CONFIG.minBreakoutVolumeRatio + 0.2) quality *= 0.9;
+    } else if (numericPercentChange >= MOMENTUM_CONFIG.tier2.threshold || numericVolumeRatio >= 3) {
+        regime = 'trend-expansion';
+    }
+
+    if (numericVwap && numericCurrent > 0) {
+        const vwapDelta = (numericCurrent - numericVwap) / numericVwap;
+        if (vwapDelta < -0.0015) return { tradable: false, regime, quality: 0, reason: 'below_vwap' };
+        if (vwapDelta > 0.0025) quality *= 1.04;
+    }
+
+    if (numericRsi < 42 || numericRsi > 69) quality *= 0.76;
+    else if (numericRsi >= 47 && numericRsi <= 63) quality *= 1.08;
+
+    if (numericVolumeRatio >= 3.5) quality *= 1.08;
+    else if (numericVolumeRatio < 1.35) quality *= 0.86;
+
+    if (numericAtrPct != null) {
+        if (numericAtrPct > 0.09) quality *= 0.72;
+        else if (numericAtrPct >= 0.02 && numericAtrPct <= 0.05) quality *= 1.05;
+    }
+
+    return {
+        tradable: quality >= (normalizedStrategy === 'openingRangeBreakout' ? 0.95 : 0.9),
+        regime,
+        quality: parseFloat(quality.toFixed(3))
+    };
+}
+
+function inferBackfillTradeTags(trade) {
+    const bot = trade.bot;
+    const tier = trade.tier || null;
+    const score = trade.signal_score != null
+        ? parseFloat(Number(trade.signal_score).toFixed(3))
+        : null;
+    const baseContext = trade.entry_context && typeof trade.entry_context === 'object'
+        ? trade.entry_context
+        : {};
+
+    let strategy = trade.strategy || null;
+    let regime = trade.regime || null;
+
+    if (bot === 'stock') {
+        strategy = strategy || (tier === 'orb' ? 'openingRangeBreakout' : 'momentum');
+        if (!regime) {
+            const percentChange = parseFloat(trade.momentum_pct ?? '0');
+            const volumeRatio = parseFloat(trade.volume_ratio ?? '0');
+            regime = strategy === 'openingRangeBreakout'
+                ? 'opening-range'
+                : (percentChange >= MOMENTUM_CONFIG.tier2.threshold || volumeRatio >= 3 ? 'trend-expansion' : 'intraday-momentum');
+        }
+    } else if (bot === 'forex') {
+        strategy = strategy || (parseFloat(trade.momentum_pct ?? '0') > 0.0035 ? 'trendContinuation' : 'pullbackContinuation');
+        if (!regime) {
+            if (trade.session === 'London/NY Overlap') regime = 'overlap-expansion';
+            else if (trade.session === 'London') regime = 'london-trend';
+            else if (trade.session === 'New York') regime = 'new-york-trend';
+            else regime = 'session-trend';
+        }
+    } else if (bot === 'crypto') {
+        strategy = strategy || (tier === 'pullback' ? 'trendPullback' : 'momentum');
+        if (!regime) {
+            regime = strategy === 'trendPullback'
+                ? 'pullback-trend'
+                : (parseFloat(trade.volume_ratio ?? '0') >= 1.5 ? 'trend-expansion' : 'risk-on');
+        }
+    }
+
+    return {
+        strategy: strategy || 'unlabeled',
+        regime: regime || 'unlabeled',
+        score,
+        context: {
+            ...baseContext,
+            tier,
+            session: trade.session ?? baseContext.session ?? null,
+            inferred: true,
+            backfillVersion: 'phase2-2026-03-09'
+        }
+    };
+}
+
+async function backfillTradeTags({ limit = 500, userId = null } = {}) {
+    if (!dbPool) return { scanned: 0, updated: 0 };
+    const params = [Math.max(1, Math.min(parseInt(limit, 10) || 500, 5000))];
+    const filters = [
+        `(strategy IS NULL OR regime IS NULL OR entry_context IS NULL OR entry_context = '{}'::jsonb)`
+    ];
+    if (userId != null) {
+        params.push(userId);
+        filters.push(`user_id = $${params.length}`);
+    }
+
+    const result = await dbPool.query(
+        `SELECT id, bot, tier, session, momentum_pct, volume_ratio, signal_score, entry_context, strategy, regime
+         FROM trades
+         WHERE ${filters.join(' AND ')}
+         ORDER BY created_at DESC
+         LIMIT $1`,
+        params
+    );
+
+    let updated = 0;
+    for (const row of result.rows) {
+        const tags = inferBackfillTradeTags(row);
+        await dbPool.query(
+            `UPDATE trades
+             SET strategy = COALESCE(strategy, $1),
+                 regime = COALESCE(regime, $2),
+                 signal_score = COALESCE(signal_score, $3),
+                 entry_context = CASE
+                    WHEN entry_context IS NULL OR entry_context = '{}'::jsonb THEN $4::jsonb
+                    ELSE entry_context || $4::jsonb
+                 END
+             WHERE id = $5`,
+            [tags.strategy, tags.regime, tags.score, JSON.stringify(tags.context), row.id]
+        );
+        updated++;
+    }
+
+    return { scanned: result.rows.length, updated };
 }
 
 // ===== REGISTER DATA STRUCTURES WITH MEMORY MANAGER =====
@@ -893,7 +1038,7 @@ function isOpeningRangeBreakoutWindow(now = getESTDate()) {
     return timeInMinutes >= openingRangeEnd && timeInMinutes <= entryCutoff;
 }
 
-function buildOpeningRangeBreakoutCandidate({ symbol, bars, current, rsi, vwap, volumeToday, positionsMap }) {
+function buildOpeningRangeBreakoutCandidate({ symbol, bars, current, rsi, vwap, volumeToday, positionsMap, atrPct = null }) {
     if (!isOpeningRangeBreakoutWindow()) return null;
     if (!bars || bars.length < OPENING_RANGE_BREAKOUT_CONFIG.openingRangeMinutes + 3) return null;
 
@@ -929,7 +1074,18 @@ function buildOpeningRangeBreakoutCandidate({ symbol, bars, current, rsi, vwap, 
     if (rsi < OPENING_RANGE_BREAKOUT_CONFIG.rsiMin || rsi > OPENING_RANGE_BREAKOUT_CONFIG.rsiMax) return null;
 
     const rsiBonus = 1 + Math.max(0, 1 - Math.abs(rsi - 60) / 20) * 0.15;
-    const score = (8 + breakoutPct * 1000 + breakoutVolumeRatio * 4) * rsiBonus;
+    const regimeProfile = evaluateStockRegimeSignal({
+        strategy: 'openingRangeBreakout',
+        percentChange: ((current - bars[0].o) / bars[0].o) * 100,
+        volumeRatio: breakoutVolumeRatio,
+        rsi,
+        current,
+        vwap,
+        atrPct,
+        breakoutPct
+    });
+    if (!regimeProfile.tradable) return null;
+    const score = (8 + breakoutPct * 1000 + breakoutVolumeRatio * 4) * rsiBonus * regimeProfile.quality;
 
     return {
         symbol,
@@ -942,6 +1098,8 @@ function buildOpeningRangeBreakoutCandidate({ symbol, bars, current, rsi, vwap, 
         tier: 'orb',
         score: parseFloat(score.toFixed(3)),
         strategy: 'openingRangeBreakout',
+        regime: regimeProfile.regime,
+        regimeScore: regimeProfile.quality,
         config: OPENING_RANGE_BREAKOUT_CONFIG,
         entryVolume: recentBreakoutVolume,
         breakoutTrigger: breakoutTrigger.toFixed(2),
@@ -1603,6 +1761,9 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
             return null;
         }
 
+        const atr = calculateATR(bars);
+        const atrPct = atr !== null && current > 0 ? atr / current : null;
+
         const candidates = [];
         const orbCandidate = buildOpeningRangeBreakoutCandidate({
             symbol,
@@ -1611,7 +1772,8 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
             rsi,
             vwap,
             volumeToday,
-            positionsMap: positions
+            positionsMap: positions,
+            atrPct
         });
         if (orbCandidate) candidates.push(orbCandidate);
 
@@ -1676,10 +1838,8 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
         // Hard cap: ATR stop must not exceed 1.5× the tier's config stopLoss.
         // Without this cap, volatile stocks (ATR 10%+) get stops 2-3x wider than intended,
         // breaking position sizing assumptions (sized for a 4-6% stop, not a 15% stop).
-        const atr = calculateATR(bars);
         let atrStop = null, atrTarget = null;
         if (atr !== null && current > 0) {
-            const atrPct = atr / current;
             const candidateStop = current * (1 - atrPct * 1.5);
             const candidateTarget = current * (1 + atrPct * 3.0);
             const rr = candidateStop > 0
@@ -1730,7 +1890,53 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                             console.log(`[Bridge] ${symbol} advisory: ${bridgeResult.direction} conf:${(bridgeResult.confidence || 0).toFixed(2)}`);
                             const tierMultiplier = { tier1: 1, tier2: 2, tier3: 3 }[tier] || 1;
                             const rsiBonus = rsi >= 45 && rsi <= 65 ? 1.15 : 1.0; // reward "goldilocks" RSI zone
-                            const score = tierMultiplier * parseFloat(percentChange) * parseFloat(volumeRatio.toFixed(2)) * rsiBonus;
+                            const regimeProfile = evaluateStockRegimeSignal({
+                                strategy: 'momentum',
+                                percentChange,
+                                volumeRatio,
+                                rsi,
+                                current,
+                                vwap,
+                                atrPct
+                            });
+                            if (regimeProfile.tradable) {
+                                const score = tierMultiplier * parseFloat(percentChange) * parseFloat(volumeRatio.toFixed(2)) * rsiBonus * regimeProfile.quality;
+
+                                candidates.push({
+                                    symbol,
+                                    price: current,
+                                    percentChange: percentChange.toFixed(2),
+                                    volumeRatio: volumeRatio.toFixed(2),
+                                    volume: volumeToday,
+                                    rsi: rsi.toFixed(2),
+                                    vwap: vwap ? vwap.toFixed(2) : null,
+                                    tier,
+                                    score: parseFloat(score.toFixed(3)),
+                                    strategy: 'momentum',
+                                    regime: regimeProfile.regime,
+                                    regimeScore: regimeProfile.quality,
+                                    config,
+                                    entryVolume: volumeToday,
+                                    atrStop,    // [v3.2] ATR-based stop price (null if not applicable)
+                                    atrTarget,  // [v3.2] ATR-based target price (null if not applicable)
+                                    atrPct
+                                });
+                            }
+                        }
+                    } else {
+                        const tierMultiplier = { tier1: 1, tier2: 2, tier3: 3 }[tier] || 1;
+                        const rsiBonus = rsi >= 45 && rsi <= 65 ? 1.15 : 1.0;
+                        const regimeProfile = evaluateStockRegimeSignal({
+                            strategy: 'momentum',
+                            percentChange,
+                            volumeRatio,
+                            rsi,
+                            current,
+                            vwap,
+                            atrPct
+                        });
+                        if (regimeProfile.tradable) {
+                            const score = tierMultiplier * parseFloat(percentChange) * parseFloat(volumeRatio.toFixed(2)) * rsiBonus * regimeProfile.quality;
 
                             candidates.push({
                                 symbol,
@@ -1743,33 +1949,15 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                                 tier,
                                 score: parseFloat(score.toFixed(3)),
                                 strategy: 'momentum',
+                                regime: regimeProfile.regime,
+                                regimeScore: regimeProfile.quality,
                                 config,
                                 entryVolume: volumeToday,
-                                atrStop,    // [v3.2] ATR-based stop price (null if not applicable)
-                                atrTarget   // [v3.2] ATR-based target price (null if not applicable)
+                                atrStop,
+                                atrTarget,
+                                atrPct
                             });
                         }
-                    } else {
-                        const tierMultiplier = { tier1: 1, tier2: 2, tier3: 3 }[tier] || 1;
-                        const rsiBonus = rsi >= 45 && rsi <= 65 ? 1.15 : 1.0;
-                        const score = tierMultiplier * parseFloat(percentChange) * parseFloat(volumeRatio.toFixed(2)) * rsiBonus;
-
-                        candidates.push({
-                            symbol,
-                            price: current,
-                            percentChange: percentChange.toFixed(2),
-                            volumeRatio: volumeRatio.toFixed(2),
-                            volume: volumeToday,
-                            rsi: rsi.toFixed(2),
-                            vwap: vwap ? vwap.toFixed(2) : null,
-                            tier,
-                            score: parseFloat(score.toFixed(3)),
-                            strategy: 'momentum',
-                            config,
-                            entryVolume: volumeToday,
-                            atrStop,
-                            atrTarget
-                        });
                     }
                 }
             }
@@ -1870,6 +2058,7 @@ async function executeTrade(signal, strategy) {
             stopLoss: parseFloat(stopPrice),
             target: parseFloat(targetPrice),
             strategy,
+            regime: signal.regime,
             tier,
             config,
             entryTime,                          // FIX: stored as Date object
@@ -1877,7 +2066,9 @@ async function executeTrade(signal, strategy) {
             rsi: signal.rsi,
             vwap: signal.vwap,
             volumeRatio: signal.volumeRatio,
-            percentChange: signal.percentChange
+            percentChange: signal.percentChange,
+            regimeScore: signal.regimeScore,
+            atrPct: signal.atrPct
         });
         savePositions();
 
@@ -3306,9 +3497,10 @@ class UserTradingEngine {
             this.positions.set(signal.symbol, {
                 symbol: signal.symbol, shares, entry: signal.price,
                 stopLoss: parseFloat(stopPrice), target: parseFloat(targetPrice),
-                strategy, tier, config, entryTime, entryVolume: signal.entryVolume,
+                strategy, regime: signal.regime, tier, config, entryTime, entryVolume: signal.entryVolume,
                 rsi: signal.rsi, vwap: signal.vwap, volumeRatio: signal.volumeRatio,
-                percentChange: signal.percentChange, signalScore: signal.score
+                percentChange: signal.percentChange, signalScore: signal.score,
+                regimeScore: signal.regimeScore, atrPct: signal.atrPct
             });
             this.dbTradeOpen(signal.symbol, signal.price, shares, config, signal, tier, strategy)
                 .then(id => { const p = this.positions.get(signal.symbol); if (p) p.dbTradeId = id; })
@@ -3409,6 +3601,8 @@ async function analyzeMomentumForEngine(symbol, engine) {
         const ema9 = calculateEMA(closes, 9);
         const ema21 = calculateEMA(closes, 21);
         if (ema9 !== null && ema21 !== null && ema9 <= ema21) return null;
+        const atr = calculateATR(bars);
+        const atrPct = atr !== null && current > 0 ? atr / current : null;
         const candidates = [];
         const orbCandidate = buildOpeningRangeBreakoutCandidate({
             symbol,
@@ -3417,7 +3611,8 @@ async function analyzeMomentumForEngine(symbol, engine) {
             rsi,
             vwap,
             volumeToday,
-            positionsMap: engine.positions
+            positionsMap: engine.positions,
+            atrPct
         });
         if (orbCandidate) candidates.push(orbCandidate);
 
@@ -3451,10 +3646,8 @@ async function analyzeMomentumForEngine(symbol, engine) {
                 }
             } catch {}
         }
-        const atr = calculateATR(bars);
         let atrStop = null, atrTarget = null;
         if (atr !== null && current > 0) {
-            const atrPct = atr / current;
             const candidateStop   = current * (1 - atrPct * 1.5);
             const candidateTarget = current * (1 + atrPct * 3.0);
             const rr = candidateStop > 0 ? (candidateTarget - current) / (current - candidateStop) : 0;
@@ -3479,13 +3672,25 @@ async function analyzeMomentumForEngine(symbol, engine) {
                     if (bridgeResult === null || !(bridgeResult.direction === 'short' && bridgeResult.confidence > 0.7)) {
                         const tierMultiplier = { tier1: 1, tier2: 2, tier3: 3 }[tier] || 1;
                         const rsiBonus = rsi >= 45 && rsi <= 65 ? 1.15 : 1.0;
-                        const score = tierMultiplier * parseFloat(percentChange) * parseFloat(volumeRatio.toFixed(2)) * rsiBonus;
-                        candidates.push({
-                            symbol, price: current, percentChange: percentChange.toFixed(2), volumeRatio: volumeRatio.toFixed(2),
-                            volume: volumeToday, rsi: rsi.toFixed(2), vwap: vwap ? vwap.toFixed(2) : null,
-                            tier, score: parseFloat(score.toFixed(3)), strategy: 'momentum', config,
-                            entryVolume: volumeToday, atrStop, atrTarget
+                        const regimeProfile = evaluateStockRegimeSignal({
+                            strategy: 'momentum',
+                            percentChange,
+                            volumeRatio,
+                            rsi,
+                            current,
+                            vwap,
+                            atrPct
                         });
+                        if (regimeProfile.tradable) {
+                            const score = tierMultiplier * parseFloat(percentChange) * parseFloat(volumeRatio.toFixed(2)) * rsiBonus * regimeProfile.quality;
+                            candidates.push({
+                                symbol, price: current, percentChange: percentChange.toFixed(2), volumeRatio: volumeRatio.toFixed(2),
+                                volume: volumeToday, rsi: rsi.toFixed(2), vwap: vwap ? vwap.toFixed(2) : null,
+                                tier, score: parseFloat(score.toFixed(3)), strategy: 'momentum', regime: regimeProfile.regime,
+                                regimeScore: regimeProfile.quality, config,
+                                entryVolume: volumeToday, atrStop, atrTarget, atrPct
+                            });
+                        }
                     }
                 }
             }
@@ -3816,6 +4021,19 @@ app.get('/api/trades/analytics', async (req, res) => {
     } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
+app.post('/api/admin/trades/backfill-tags', requireJwtOrApiSecret, async (req, res) => {
+    if (req.user?.role && req.user.role !== 'admin') {
+        return res.status(403).json({ success: false, error: 'Admin only' });
+    }
+    try {
+        const limit = Math.min(parseInt(req.body?.limit || req.query.limit || '500', 10), 5000);
+        const result = await backfillTradeTags({ limit });
+        res.json({ success: true, ...result });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
 // Admin: list all users + their engine status (admin role required)
 app.get('/api/admin/users', requireJwt, async (req, res) => {
     if (req.user?.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
@@ -4041,6 +4259,21 @@ app.listen(PORT, async () => {
     // Use the Railway public URL if available so this works on Railway where
     // localhost:<PORT> is not reachable from the same container via HTTP.
     // Also re-runs every 2h so bridge cache stays warm after bridge restarts.
+    if (process.env.AUTO_BACKFILL_TRADE_TAGS !== 'false') {
+        setTimeout(async () => {
+            try {
+                const result = await backfillTradeTags({
+                    limit: parseInt(process.env.TRADE_TAG_BACKFILL_LIMIT || '1500', 10)
+                });
+                if (result.updated > 0) {
+                    console.log(`🏷️ Backfilled trade tags: ${result.updated}/${result.scanned}`);
+                }
+            } catch (e) {
+                console.warn('⚠️  Trade tag backfill failed:', e.message);
+            }
+        }, 8000);
+    }
+
     function runBridgeWarmup() {
         const selfUrl = process.env.RAILWAY_PUBLIC_DOMAIN
             ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`

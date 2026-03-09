@@ -26,6 +26,16 @@ import {
     LinearProgress,
 } from '@mui/material';
 import { TrendingUp, TrendingDown, Receipt, Download, Person, Analytics, Inbox } from '@mui/icons-material';
+import {
+    ResponsiveContainer,
+    BarChart,
+    Bar,
+    CartesianGrid,
+    XAxis,
+    YAxis,
+    Tooltip as RechartsTooltip,
+    Legend,
+} from 'recharts';
 import { apiClient } from '@/services/api';
 import { MetricCard } from '@/components/MetricCard';
 import type {
@@ -129,6 +139,26 @@ export default function TradesPage() {
     const profitFactor = allTotal.gross_loss > 0 ? allTotal.gross_profit / allTotal.gross_loss : allTotal.gross_profit > 0 ? Infinity : 0;
 
     const isLoading = tradesLoading || summaryLoading;
+    const strategyChartData = (analytics?.byStrategy ?? []).slice(0, 8).map((r) => {
+        const total = parseInt(r.total);
+        return {
+            name: r.strategy,
+            bot: r.bot,
+            trades: total,
+            winRate: total > 0 ? (parseInt(r.winners) / total) * 100 : 0,
+            totalPnL: Number(r.total_pnl ?? 0),
+        };
+    });
+    const regimeChartData = (analytics?.byRegime ?? []).slice(0, 8).map((r) => {
+        const total = parseInt(r.total);
+        return {
+            name: r.regime,
+            bot: r.bot,
+            trades: total,
+            winRate: total > 0 ? (parseInt(r.winners) / total) * 100 : 0,
+            totalPnL: Number(r.total_pnl ?? 0),
+        };
+    });
 
     const handleExport = useCallback(() => {
         exportTradesToCSV(trades as TradeRecord[]);
@@ -428,6 +458,51 @@ export default function TradesPage() {
                     <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}><CircularProgress /></Box>
                 ) : (
                     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                        <Grid container spacing={2}>
+                            <Grid item xs={12} lg={6}>
+                                <Paper sx={{ p: 2, height: 340 }}>
+                                    <Typography variant="subtitle1" fontWeight={700} mb={1}>Strategy P&L</Typography>
+                                    {!strategyChartData.length ? (
+                                        <Alert severity="info">No strategy-tagged trades in selected period.</Alert>
+                                    ) : (
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <BarChart data={strategyChartData} margin={{ top: 8, right: 16, left: -12, bottom: 20 }}>
+                                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+                                                <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 12 }} angle={-18} textAnchor="end" height={60} />
+                                                <YAxis yAxisId="left" tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                                                <YAxis yAxisId="right" orientation="right" tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                                                <RechartsTooltip />
+                                                <Legend />
+                                                <Bar yAxisId="left" dataKey="totalPnL" name="Total P&L" fill="#10b981" radius={[4, 4, 0, 0]} />
+                                                <Bar yAxisId="right" dataKey="winRate" name="Win Rate %" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                                            </BarChart>
+                                        </ResponsiveContainer>
+                                    )}
+                                </Paper>
+                            </Grid>
+                            <Grid item xs={12} lg={6}>
+                                <Paper sx={{ p: 2, height: 340 }}>
+                                    <Typography variant="subtitle1" fontWeight={700} mb={1}>Regime P&L</Typography>
+                                    {!regimeChartData.length ? (
+                                        <Alert severity="info">No regime-tagged trades in selected period.</Alert>
+                                    ) : (
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <BarChart data={regimeChartData} margin={{ top: 8, right: 16, left: -12, bottom: 20 }}>
+                                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+                                                <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 12 }} angle={-18} textAnchor="end" height={60} />
+                                                <YAxis yAxisId="left" tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                                                <YAxis yAxisId="right" orientation="right" tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                                                <RechartsTooltip />
+                                                <Legend />
+                                                <Bar yAxisId="left" dataKey="totalPnL" name="Total P&L" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                                                <Bar yAxisId="right" dataKey="winRate" name="Win Rate %" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+                                            </BarChart>
+                                        </ResponsiveContainer>
+                                    )}
+                                </Paper>
+                            </Grid>
+                        </Grid>
+
                         {/* By Hour */}
                         <Paper sx={{ p: 2 }}>
                             <Typography variant="subtitle1" fontWeight={700} mb={1}>Win Rate by Hour (EST)</Typography>

@@ -136,8 +136,8 @@ function buildCryptoTradeTags(signal = {}, tier) {
     const normalizedStrategy = signal.strategy || 'momentum';
     const score = signal.score != null ? parseFloat(Number(signal.score).toFixed(3)) : null;
 
-    let regime = signal.marketRegime || 'trend-expansion';
-    if (!signal.marketRegime) {
+    let regime = signal.regime || signal.marketRegime || 'trend-expansion';
+    if (!signal.regime && !signal.marketRegime) {
         if (normalizedStrategy === 'trendPullback') regime = 'pullback-trend';
         else if ((signal.sizingFactor || 1) < 1) regime = 'cautious-risk-on';
         else if (normalizedTier === 'tier3') regime = 'trend-expansion';
@@ -152,10 +152,12 @@ function buildCryptoTradeTags(signal = {}, tier) {
             momentum: signal.momentum ?? null,
             trendStrength: signal.trendStrength ?? null,
             pullbackPct: signal.pullbackPct ?? null,
+            atrPct: signal.atrPct ?? null,
             rsi: signal.rsi ?? null,
             volumeRatio: signal.volumeRatio ?? null,
             volume24h: signal.volume24h ?? null,
-            sizingFactor: signal.sizingFactor ?? null
+            sizingFactor: signal.sizingFactor ?? null,
+            regimeQuality: signal.regimeQuality ?? null
         }
     };
 }
@@ -343,6 +345,33 @@ function scoreCryptoSignal({ strategy, tier, momentum, trendStrength, volumeRati
         (tierWeight * strategyWeight * momentumComponent * Math.max(1, volumeRatio) * rsiSweetSpot * Math.max(0.5, sizingFactor) * macdWeight)
             .toFixed(3)
     );
+}
+
+function evaluateCryptoRegimeSignal({ strategy, btcBullish, trendStrength, volumeRatio, rsi, pullbackPct, tier }) {
+    let quality = btcBullish ? 1.08 : 0.86;
+    if (strategy === 'trendPullback') {
+        if (pullbackPct >= 0.4 && pullbackPct <= 1.8) quality *= 1.08;
+        else if (pullbackPct > 2.4) quality *= 0.82;
+    } else {
+        if (trendStrength >= 0.9) quality *= 1.08;
+        else if (trendStrength < 0.45) quality *= 0.84;
+    }
+
+    if (volumeRatio >= 1.5) quality *= 1.06;
+    else if (volumeRatio < 1.1) quality *= 0.84;
+
+    if (rsi >= 46 && rsi <= 68) quality *= 1.04;
+    else if (rsi > 75) quality *= 0.82;
+
+    let regime = btcBullish ? 'risk-on' : 'cautious';
+    if (strategy === 'trendPullback') regime = btcBullish ? 'pullback-trend' : 'cautious-pullback';
+    else if (tier === 'tier3') regime = btcBullish ? 'trend-expansion' : 'cautious-breakout';
+
+    return {
+        tradable: quality >= 0.9,
+        regime,
+        quality: parseFloat(quality.toFixed(3))
+    };
 }
 
 function isRealTradingEnabled() {
@@ -614,6 +643,29 @@ class CryptoTradingEngine {
         };
     }
 
+    calculateATR(klines, period = 14) {
+        if (!klines || klines.length < period + 1) return null;
+        const trs = [];
+        for (let i = 1; i < klines.length; i++) {
+            const high = parseFloat(klines[i][2]);
+            const low = parseFloat(klines[i][3]);
+            const prevClose = parseFloat(klines[i - 1][4]);
+            const tr = Math.max(
+                high - low,
+                Math.abs(high - prevClose),
+                Math.abs(low - prevClose)
+            );
+            trs.push(tr);
+        }
+        if (trs.length < period) return null;
+
+        let atr = trs.slice(0, period).reduce((sum, value) => sum + value, 0) / period;
+        for (let i = period; i < trs.length; i++) {
+            atr = ((atr * (period - 1)) + trs[i]) / period;
+        }
+        return atr;
+    }
+
     // ========================================================================
     // STRATEGY BRIDGE
     // ========================================================================
@@ -711,12 +763,16 @@ class CryptoTradingEngine {
             const currentPrice = parseFloat(ticker24h.lastPrice);
             const volume24h = parseFloat(ticker24h.quoteVolume); // USD volume
             const priceChange24h = parseFloat(ticker24h.priceChangePercent) / 100;
+            const atr = this.calculateATR(klines);
 
             return {
                 symbol,
                 currentPrice,
+                klines,
                 prices,
                 volumes,
+                atr,
+                atrPct: atr && currentPrice > 0 ? atr / currentPrice : null,
                 volume24h,
                 priceChange24h,
                 high24h: parseFloat(ticker24h.highPrice),
@@ -820,6 +876,16 @@ class CryptoTradingEngine {
             const momentum = (data.currentPrice - sma20) / sma20;
             const trendStrength = sma20 > 0 ? Math.abs(ema9 - sma20) / sma20 : 0;
             const pullbackFromEMA9 = ema9 > 0 ? Math.abs(data.currentPrice - ema9) / ema9 : 0;
+            const atrPct = data.atrPct || null;
+            const buildAtrRisk = (fallbackStopPct, fallbackTargetPct, rewardMultiple) => {
+                let stopPct = fallbackStopPct;
+                let targetPct = fallbackTargetPct;
+                if (atrPct && atrPct > 0) {
+                    stopPct = Math.min(Math.max(atrPct * 1.6, fallbackStopPct * 0.85), fallbackStopPct * 1.4);
+                    targetPct = Math.max(stopPct * rewardMultiple, fallbackTargetPct * 0.9);
+                }
+                return { stopPct, targetPct };
+            };
             let bestSignal = null;
 
             const pullbackConfig = this.config.pullbackStrategy;
@@ -838,23 +904,39 @@ class CryptoTradingEngine {
                 rsi <= pullbackConfig.rsiUpper &&
                 volumeRatio >= pullbackConfig.minVolumeRatio
             ) {
+                const regimeProfile = evaluateCryptoRegimeSignal({
+                    strategy: 'trendPullback',
+                    btcBullish,
+                    trendStrength: trendStrength * 100,
+                    volumeRatio,
+                    rsi,
+                    pullbackPct: pullbackFromEMA9 * 100,
+                    tier: 'pullback'
+                });
+                if (!regimeProfile.tradable) {
+                    continue;
+                }
+                const atrRisk = buildAtrRisk(pullbackConfig.stopLoss, pullbackConfig.profitTarget, 1.9);
                 const pullbackSignal = {
                     symbol,
                     tier: 'pullback',
                     strategy: 'trendPullback',
-                    marketRegime: btcBullish ? 'risk-on' : 'cautious',
+                    marketRegime: regimeProfile.regime,
+                    regime: regimeProfile.regime,
+                    regimeQuality: regimeProfile.quality,
                     price: data.currentPrice,
                     momentum: momentum * 100,
                     trendStrength: trendStrength * 100,
                     pullbackPct: pullbackFromEMA9 * 100,
+                    atrPct,
                     rsi,
                     volume24h: data.volume24h,
                     volumeRatio,
                     sizingFactor: combinedSizingFactor * pullbackConfig.sizingFactor,
-                    stopLoss: data.currentPrice * (1 - pullbackConfig.stopLoss),
-                    takeProfit: data.currentPrice * (1 + pullbackConfig.profitTarget),
-                    stopLossPercent: pullbackConfig.stopLoss * 100,
-                    profitTargetPercent: pullbackConfig.profitTarget * 100
+                    stopLoss: data.currentPrice * (1 - atrRisk.stopPct),
+                    takeProfit: data.currentPrice * (1 + atrRisk.targetPct),
+                    stopLossPercent: atrRisk.stopPct * 100,
+                    profitTargetPercent: atrRisk.targetPct * 100
                 };
                 pullbackSignal.score = scoreCryptoSignal({
                     strategy: pullbackSignal.strategy,
@@ -865,7 +947,8 @@ class CryptoTradingEngine {
                     rsi,
                     sizingFactor: pullbackSignal.sizingFactor,
                     macdBullish
-                });
+                }) * regimeProfile.quality;
+                pullbackSignal.score = parseFloat(pullbackSignal.score.toFixed(3));
                 bestSignal = pullbackSignal;
             }
 
@@ -909,23 +992,39 @@ class CryptoTradingEngine {
                     console.log(`[Bridge] ${symbol} neutral/weak (${bridgeResult.direction || 'neutral'}, conf: ${bridgeConfidence.toFixed(2)}) — proceeding on local signal`);
                 }
 
+                const regimeProfile = evaluateCryptoRegimeSignal({
+                    strategy: 'momentum',
+                    btcBullish,
+                    trendStrength: trendStrength * 100,
+                    volumeRatio,
+                    rsi,
+                    pullbackPct: pullbackFromEMA9 * 100,
+                    tier: tierName
+                });
+                if (!regimeProfile.tradable) {
+                    continue;
+                }
+                const atrRisk = buildAtrRisk(tier.stopLoss, tier.profitTarget, 2.2);
                 const momentumSignal = {
                     symbol,
                     tier: tierName,
                     strategy: 'momentum',
-                    marketRegime: btcBullish ? 'risk-on' : 'cautious',
+                    marketRegime: regimeProfile.regime,
+                    regime: regimeProfile.regime,
+                    regimeQuality: regimeProfile.quality,
                     price: data.currentPrice,
                     momentum: momentum * 100,
                     trendStrength: trendStrength * 100,
                     pullbackPct: pullbackFromEMA9 * 100,
+                    atrPct,
                     rsi,
                     volume24h: data.volume24h,
                     volumeRatio,
                     sizingFactor: combinedSizingFactor, // BTC + MACD sizing penalty
-                    stopLoss: data.currentPrice * (1 - tier.stopLoss),
-                    takeProfit: data.currentPrice * (1 + tier.profitTarget),
-                    stopLossPercent: tier.stopLoss * 100,
-                    profitTargetPercent: tier.profitTarget * 100
+                    stopLoss: data.currentPrice * (1 - atrRisk.stopPct),
+                    takeProfit: data.currentPrice * (1 + atrRisk.targetPct),
+                    stopLossPercent: atrRisk.stopPct * 100,
+                    profitTargetPercent: atrRisk.targetPct * 100
                 };
                 momentumSignal.score = scoreCryptoSignal({
                     strategy: momentumSignal.strategy,
@@ -936,7 +1035,8 @@ class CryptoTradingEngine {
                     rsi,
                     sizingFactor: momentumSignal.sizingFactor,
                     macdBullish
-                });
+                }) * regimeProfile.quality;
+                momentumSignal.score = parseFloat(momentumSignal.score.toFixed(3));
 
                 console.log(`✨ ${symbol} (${tierName}): Momentum ${(momentum * 100).toFixed(2)}%, RSI ${rsi.toFixed(1)}, Vol $${(data.volume24h / 1000000).toFixed(1)}M`);
                 if (!bestSignal || momentumSignal.score >= bestSignal.score) {
@@ -1114,6 +1214,8 @@ class CryptoTradingEngine {
                 openTime: new Date(),
                 momentum: signal.momentum,
                 rsi: signal.rsi,
+                atrPct: signal.atrPct,
+                regimeQuality: signal.regimeQuality,
                 signalScore: signal.score,
                 currentPrice: signal.price,
                 unrealizedPnL: 0,
@@ -1205,6 +1307,15 @@ class CryptoTradingEngine {
                     `Entry: $${position.entry.toFixed(2)} → Exit: $${currentPrice.toFixed(2)}`
                 ).catch(e => console.warn(`⚠️  Telegram max-hold-flat alert failed: ${e.message}`));
                 continue;
+            }
+
+            if (position.atrPct) {
+                const atrAdversePct = position.atrPct * 2.4 * 100;
+                if (pnlPercent <= -atrAdversePct) {
+                    console.log(`📉 ${symbol}: ATR ADVERSE EXIT at $${currentPrice.toFixed(2)} (${pnlPercent.toFixed(2)}%)`);
+                    await this.closePosition(symbol, currentPrice, 'ATR Adverse Exit');
+                    continue;
+                }
             }
 
             // Check stop loss
