@@ -52,6 +52,8 @@ interface BotStatus {
     mode: string;
     equity: number;
     dailyReturn: number;
+    dailyPnL: number;
+    openPnL: number;
     positions: Position[];
     stats: {
         totalTrades: number;
@@ -94,13 +96,23 @@ export default function StockBotPage() {
             const res = await axios.get(`${API_BASE}/api/trading/status`);
             // Stock bot wraps response in { success, data: {...} }
             const d = res.data?.data ?? res.data;
+            const positions = d?.positions ?? [];
+            const equity = Number(d?.account?.equity ?? d?.equity ?? d?.portfolioValue ?? 0);
+            const dailyPnL = Number(d?.dailyPnL ?? 0);
+            const priorCloseEquity = equity - dailyPnL;
+            const derivedDailyReturn = priorCloseEquity > 0 ? (dailyPnL / priorCloseEquity) * 100 : 0;
+            const openPnL = positions.reduce((sum: number, pos: Position) =>
+                sum + Number(pos.unrealizedPnL ?? pos.pnl ?? pos.unrealizedPL ?? 0), 0
+            );
             return {
                 isRunning: d?.isRunning ?? false,
                 isPaused: d?.isPaused ?? false,
                 mode: d?.mode ?? 'PAPER',
-                equity: d?.account?.equity ?? d?.equity ?? d?.portfolioValue ?? 0,
-                dailyReturn: d?.dailyReturn ?? (d?.dailyPnL ? (d.dailyPnL / (d?.account?.equity || 1)) * 100 : 0),
-                positions: d?.positions ?? [],
+                equity,
+                dailyReturn: derivedDailyReturn,
+                dailyPnL,
+                openPnL,
+                positions,
                 stats: {
                     totalTrades: d?.performance?.totalTrades ?? d?.stats?.totalTrades ?? d?.totalTrades ?? 0,
                     winners: d?.performance?.winners ?? d?.stats?.winners ?? 0,
@@ -355,7 +367,7 @@ export default function StockBotPage() {
                                 {(status?.dailyReturn ?? 0) >= 0 ? '+' : ''}{(status?.dailyReturn ?? 0).toFixed(2)}%
                             </Typography>
                             <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.68rem' }}>
-                                ${(status?.stats?.totalPnL ?? 0).toFixed(2)} P&L
+                                ${(status?.dailyPnL ?? 0).toFixed(2)} vs prior close · ${(status?.openPnL ?? 0).toFixed(2)} open
                             </Typography>
                         </CardContent>
                     </Card>
@@ -565,8 +577,11 @@ export default function StockBotPage() {
 
             {/* Positions */}
             <Paper sx={{ p: 2, mb: 3 }}>
-                <Typography variant="h6" sx={{ mb: 2 }}>
+                <Typography variant="h6" sx={{ mb: 0.5 }}>
                     Open Positions ({status?.positions?.length || 0}/{status?.config?.maxPositions || 5})
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                    ${(status?.openPnL ?? 0).toFixed(2)} unrealized from current entries. This will not always match daily return, which is based on account change since prior close.
                 </Typography>
                 {status?.positions && status.positions.length > 0 ? (
                     <Grid container spacing={2}>
