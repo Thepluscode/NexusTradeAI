@@ -286,12 +286,18 @@ class APIClient {
 
   // Real-trading toggle now goes through /api/config/mode
   async enableRealTrading(): Promise<{ realTradingEnabled: boolean; confirmation: string }> {
-    await this.tradingEngine.post('/api/config/mode', { mode: 'live' });
+    await Promise.allSettled([
+      this.tradingEngine.post('/api/config/mode', { mode: 'live' }),
+      this.cryptoService.post('/api/config/mode', { mode: 'live' }),
+    ]);
     return { realTradingEnabled: true, confirmation: 'Switched to live trading' };
   }
 
   async disableRealTrading(): Promise<{ realTradingEnabled: boolean; confirmation: string }> {
-    await this.tradingEngine.post('/api/config/mode', { mode: 'paper' });
+    await Promise.allSettled([
+      this.tradingEngine.post('/api/config/mode', { mode: 'paper' }),
+      this.cryptoService.post('/api/config/mode', { mode: 'paper' }),
+    ]);
     return { realTradingEnabled: false, confirmation: 'Switched to paper trading' };
   }
 

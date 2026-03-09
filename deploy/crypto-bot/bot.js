@@ -304,6 +304,10 @@ function scoreCryptoSignal({ strategy, tier, momentum, trendStrength, volumeRati
     );
 }
 
+function isRealTradingEnabled() {
+    return process.env.REAL_TRADING_ENABLED === 'true';
+}
+
 // ============================================================================
 // KRAKEN API CLIENT  (replaces Binance — US-friendly, no geo-block)
 // ============================================================================
@@ -1037,8 +1041,13 @@ class CryptoTradingEngine {
             console.log(`   Stop: $${signal.stopLoss.toFixed(2)} (-${signal.stopLossPercent.toFixed(1)}%)`);
             console.log(`   Target: $${signal.takeProfit.toFixed(2)} (+${signal.profitTargetPercent.toFixed(1)}%)`);
 
-            // Place order on Kraken
-            const order = await this.kraken.placeOrder(signal.symbol, 'BUY', quantity);
+            let order;
+            if (isRealTradingEnabled()) {
+                order = await this.kraken.placeOrder(signal.symbol, 'BUY', quantity);
+            } else {
+                order = { orderId: `paper-buy-${signal.symbol}-${Date.now()}` };
+                console.log(`🧪 PAPER MODE: Simulated BUY order for ${signal.symbol}`);
+            }
 
             if (!order) {
                 console.log(`❌ Failed to place order for ${signal.symbol}`);
@@ -1210,11 +1219,16 @@ class CryptoTradingEngine {
         if (!position) return;
 
         try {
-            // Place sell order
-            const order = await this.kraken.placeOrder(symbol, 'SELL', position.quantity);
-            if (!order) {
-                console.log(`❌ Failed to close position for ${symbol}`);
-                return;
+            let order;
+            if (isRealTradingEnabled()) {
+                order = await this.kraken.placeOrder(symbol, 'SELL', position.quantity);
+                if (!order) {
+                    console.log(`❌ Failed to close position for ${symbol}`);
+                    return;
+                }
+            } else {
+                order = { orderId: `paper-sell-${symbol}-${Date.now()}` };
+                console.log(`🧪 PAPER MODE: Simulated SELL order for ${symbol}`);
             }
 
             // Calculate P/L — apply slippage on exit (taker fee / spread)
@@ -1524,8 +1538,8 @@ class CryptoTradingEngine {
             isPaused: this.isPaused,
             isVolatilityPaused: false,
             demoMode: this.demoMode || false,
-            mode: this.demoMode ? 'DEMO' : (this.config.exchange.testnet ? 'TESTNET' : 'LIVE'),
-            tradingMode: this.demoMode ? 'DEMO' : 'PAPER',
+            mode: this.demoMode ? 'DEMO' : (isRealTradingEnabled() ? 'LIVE' : 'PAPER'),
+            tradingMode: this.demoMode ? 'DEMO' : (isRealTradingEnabled() ? 'LIVE' : 'PAPER'),
             btcTrend,
             equity,
             dailyReturn: netPnL / startingEquity,
@@ -1999,6 +2013,9 @@ app.get('/api/config', (req, res) => {
     res.json({
         success: true,
         data: {
+            trading: {
+                mode: isRealTradingEnabled() ? 'live' : 'paper',
+            },
             brokers: {
                 crypto: {
                     configured: !!(process.env.CRYPTO_API_KEY && process.env.CRYPTO_API_SECRET),
@@ -2008,6 +2025,22 @@ app.get('/api/config', (req, res) => {
             },
         },
     });
+});
+
+app.post('/api/config/mode', requireApiSecret, async (req, res) => {
+    try {
+        const { mode } = req.body;
+        if (!['paper', 'live'].includes(mode)) {
+            return res.status(400).json({ success: false, error: 'mode must be "paper" or "live"' });
+        }
+        const value = mode === 'live' ? 'true' : 'false';
+        process.env.REAL_TRADING_ENABLED = value;
+        await persistEnvVar('REAL_TRADING_ENABLED', value);
+        console.log(`⚙️  Crypto trading mode switched to: ${mode.toUpperCase()}`);
+        res.json({ success: true, mode });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
 // ── Credentials management ──────────────────────────────────────────────────
@@ -2457,13 +2490,14 @@ app.post('/api/crypto/close-all', async (req, res) => {
 
 const PORT = process.env.PORT || process.env.CRYPTO_PORT || 3006;
 app.listen(PORT, async () => {
+    const liveExecutionEnabled = isRealTradingEnabled();
     console.log(`
 ╔════════════════════════════════════════════════════════════════╗
 ║           UNIFIED CRYPTO TRADING BOT - LIVE 24/7              ║
 ╠════════════════════════════════════════════════════════════════╣
 ║  Port: ${PORT}                                                     ║
 ║  Exchange: ${CRYPTO_CONFIG.exchange.name.toUpperCase().padEnd(48)} ║
-║  Mode: ${CRYPTO_CONFIG.exchange.testnet ? 'TESTNET (Paper Trading)' : 'LIVE TRADING ⚠️ '} ║
+║  Mode: ${(liveExecutionEnabled ? 'LIVE TRADING ⚠️ ' : 'PAPER TRADING').padEnd(48)} ║
 ║  Pairs: ${CRYPTO_CONFIG.symbols.length} major cryptocurrencies                      ║
 ║  Trading Hours: 24/7/365 (Never closes)                        ║
 ║  Strategy: BTC-Correlation + 3-Tier Momentum                   ║
@@ -2478,7 +2512,7 @@ app.listen(PORT, async () => {
     console.log(`📱 Test Alert: POST http://localhost:${PORT}/test-telegram`);
     console.log(`\n💎 Crypto pairs: ${CRYPTO_CONFIG.symbols.join(', ')}`);
     console.log(`📈 BTC correlation: Altcoins only trade when BTC is bullish`);
-    console.log(`⚠️  ${CRYPTO_CONFIG.exchange.testnet ? 'Using TESTNET - Safe to experiment!' : 'LIVE TRADING - Real money at risk!'}`);
+    console.log(`⚠️  ${liveExecutionEnabled ? 'LIVE TRADING - Real money at risk!' : 'Paper trading active - orders are simulated locally.'}`);
 
     // Connect DB for trade persistence (non-blocking)
     await initTradeDb().catch(e => console.warn('⚠️  Crypto DB init error:', e.message));

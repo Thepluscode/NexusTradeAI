@@ -153,8 +153,17 @@ async function saveCredentials(payload: { broker: string; credentials: Record<st
 }
 
 async function setTradingMode(mode: 'paper' | 'live') {
-    const res = await axios.post(`${API_BASE}/api/config/mode`, { mode }, { headers: authHeaders });
-    return res.data;
+    const results = await Promise.allSettled([
+        axios.post(`${API_BASE}/api/config/mode`, { mode }, { headers: authHeaders, timeout: 5000 }),
+        axios.post(`${SERVICE_URLS.cryptoBot}/api/config/mode`, { mode }, { headers: authHeaders, timeout: 5000 }),
+    ]);
+
+    const fulfilled = results.filter(result => result.status === 'fulfilled') as PromiseFulfilledResult<import('axios').AxiosResponse<any>>[];
+    if (fulfilled.length === 0) {
+        throw new Error('Failed to switch trading mode');
+    }
+
+    return fulfilled[0].value.data;
 }
 
 // ─── SUB-COMPONENTS ─────────────────────────────────────────────────────────
