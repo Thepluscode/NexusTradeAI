@@ -2517,49 +2517,20 @@ app.listen(PORT, async () => {
     // Connect DB for trade persistence (non-blocking)
     await initTradeDb().catch(e => console.warn('⚠️  Crypto DB init error:', e.message));
 
-    // ── Load credentials from DB into process.env (fallback: env vars already set) ──
-    try {
-        if (dbPool) {
-            const firstUser = await dbPool.query('SELECT id FROM users ORDER BY id ASC LIMIT 1');
-            if (firstUser.rows.length > 0) {
-                const userId = firstUser.rows[0].id;
-                for (const broker of ['crypto', 'telegram', 'sms']) {
-                    const creds = await loadUserCredentials(userId, broker);
-                    for (const [key, value] of Object.entries(creds)) {
-                        if (!process.env[key]) process.env[key] = value;
-                    }
-                    if (Object.keys(creds).length > 0) console.log(`🔑 Loaded ${broker} credentials from DB for user ${userId}`);
-                }
-                // Reinitialise Kraken client with loaded keys and verify connection before exiting DEMO mode
-                if (process.env.CRYPTO_API_KEY && process.env.CRYPTO_API_SECRET) {
-                    engine.kraken = new KrakenClient({
-                        apiKey: process.env.CRYPTO_API_KEY,
-                        apiSecret: process.env.CRYPTO_API_SECRET,
-                    });
-                    try {
-                        const account = await engine.kraken._privateRequest('Balance');
-                        if (account) {
-                            engine.demoMode = false;
-                            console.log('✅ Kraken client reinitialised with DB credentials — DEMO mode disabled');
-                        } else {
-                            console.warn('⚠️  Kraken Balance returned empty — staying in DEMO mode. Re-enter credentials in Settings.');
-                        }
-                    } catch (krakenErr) {
-                        console.warn('⚠️  Kraken rejected DB credentials:', krakenErr.message, '— staying in DEMO mode. Re-enter credentials in Settings.');
-                    }
-                }
-            }
-        }
-    } catch (e) {
-        console.warn('⚠️  Startup credential load failed:', e.message);
+    if (dbPool) {
+        console.log('ℹ️  Multi-user DB mode detected — default crypto engine bootstrap disabled');
     }
 
     // Auto-start only if previously running (persistent state)
-    if (engine.loadState()) {
-        console.log('🔄 Restoring previous running state...');
-        engine.start();
+    if (!dbPool) {
+        if (engine.loadState()) {
+            console.log('🔄 Restoring previous running state...');
+            engine.start();
+        } else {
+            console.log('⏸️  Bot was stopped before restart - not auto-starting. POST /api/trading/start to begin.');
+        }
     } else {
-        console.log('⏸️  Bot was stopped before restart - not auto-starting. POST /api/trading/start to begin.');
+        console.log('ℹ️  Default crypto engine remains idle in multi-user mode; per-user engines will be restored instead.');
     }
 
     // ── Auto-restart engines for users who had isRunning=true at last save ──
