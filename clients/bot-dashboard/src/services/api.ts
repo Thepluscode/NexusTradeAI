@@ -13,6 +13,8 @@ import type {
   TradeRecord,
   TradesSummaryResult,
   TradeAnalyticsHour,
+  TradeAnalyticsRegime,
+  TradeAnalyticsStrategy,
   TradeAnalyticsSymbol,
   TradeAnalyticsTier,
   EquityCurvePoint,
@@ -212,9 +214,9 @@ class APIClient {
     }
   }
 
-  async getTradesSummary(days = 30): Promise<TradesSummaryResult | null> {
+  async getTradesSummary(days = 30, mine = false): Promise<TradesSummaryResult | null> {
     try {
-      const response = await this.tradingEngine.get('/api/trades/summary', { params: { days } });
+      const response = await this.tradingEngine.get('/api/trades/summary', { params: { days, mine } });
       return response.data;
     } catch {
       return null;
@@ -230,12 +232,18 @@ class APIClient {
     }
   }
 
-  async getTradeAnalytics(days = 30): Promise<{ byHour: TradeAnalyticsHour[]; bySymbol: TradeAnalyticsSymbol[]; byTier: TradeAnalyticsTier[] }> {
+  async getTradeAnalytics(days = 30, mine = false): Promise<{
+    byHour: TradeAnalyticsHour[];
+    bySymbol: TradeAnalyticsSymbol[];
+    byTier: TradeAnalyticsTier[];
+    byStrategy: TradeAnalyticsStrategy[];
+    byRegime: TradeAnalyticsRegime[];
+  }> {
     try {
-      const response = await this.tradingEngine.get(`/api/trades/analytics?days=${days}`);
-      return response.data.data ?? { byHour: [], bySymbol: [], byTier: [] };
+      const response = await this.tradingEngine.get('/api/trades/analytics', { params: { days, mine } });
+      return response.data.data ?? { byHour: [], bySymbol: [], byTier: [], byStrategy: [], byRegime: [] };
     } catch {
-      return { byHour: [], bySymbol: [], byTier: [] };
+      return { byHour: [], bySymbol: [], byTier: [], byStrategy: [], byRegime: [] };
     }
   }
 

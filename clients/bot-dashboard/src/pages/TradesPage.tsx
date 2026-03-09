@@ -28,7 +28,15 @@ import {
 import { TrendingUp, TrendingDown, Receipt, Download, Person, Analytics, Inbox } from '@mui/icons-material';
 import { apiClient } from '@/services/api';
 import { MetricCard } from '@/components/MetricCard';
-import type { TradeRecord, TradeBotTotal, TradeAnalyticsHour, TradeAnalyticsSymbol, TradeAnalyticsTier } from '@/types';
+import type {
+    TradeRecord,
+    TradeBotTotal,
+    TradeAnalyticsHour,
+    TradeAnalyticsSymbol,
+    TradeAnalyticsTier,
+    TradeAnalyticsStrategy,
+    TradeAnalyticsRegime,
+} from '@/types';
 
 type BotFilter = 'all' | 'stock' | 'forex' | 'crypto';
 
@@ -51,13 +59,14 @@ function fmt(val: number | string | null, prefix = '$') {
 function exportTradesToCSV(rows: TradeRecord[]) {
     const headers = [
         'id', 'bot', 'symbol', 'direction', 'tier', 'status',
+        'strategy', 'regime', 'signal_score',
         'entry_price', 'exit_price', 'quantity', 'position_size_usd',
         'pnl_usd', 'pnl_pct', 'stop_loss', 'take_profit',
         'entry_time', 'exit_time', 'close_reason', 'session',
     ];
-    const escape = (v: string | number | null) => {
+    const escape = (v: string | number | Record<string, unknown> | null) => {
         if (v == null) return '';
-        const s = String(v);
+        const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
         return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
     };
     const csv = [
@@ -87,14 +96,14 @@ export default function TradesPage() {
     );
 
     const { data: summary, isLoading: summaryLoading } = useQuery(
-        ['tradesSummary', days],
-        () => apiClient.getTradesSummary(days),
+        ['tradesSummary', days, myTrades],
+        () => apiClient.getTradesSummary(days, myTrades),
         { staleTime: 60 * 1000, refetchInterval: 120 * 1000 }
     );
 
     const { data: analytics, isLoading: analyticsLoading } = useQuery(
-        ['tradeAnalytics', days],
-        () => apiClient.getTradeAnalytics(days),
+        ['tradeAnalytics', days, myTrades],
+        () => apiClient.getTradeAnalytics(days, myTrades),
         { staleTime: 120 * 1000, refetchInterval: 5 * 60 * 1000, enabled: tab === 1 }
     );
 
@@ -319,10 +328,10 @@ export default function TradesPage() {
                                 <Table size="small" stickyHeader>
                                     <TableHead>
                                         <TableRow>
-                                            {['Bot', 'Symbol', 'Dir', 'Tier', 'Status', 'Entry', 'Exit', 'P&L', 'P&L %', 'Close Reason', 'Entry Time'].map((h, i) => (
+                                            {['Bot', 'Symbol', 'Dir', 'Tier', 'Strategy', 'Regime', 'Score', 'Status', 'Entry', 'Exit', 'P&L', 'P&L %', 'Close Reason', 'Entry Time'].map((h, i) => (
                                                 <TableCell
                                                     key={h}
-                                                    align={i >= 5 && i <= 8 ? 'right' : 'left'}
+                                                    align={i >= 8 && i <= 11 ? 'right' : 'left'}
                                                     sx={{
                                                         bgcolor: 'rgba(13,17,23,0.98)',
                                                         fontWeight: 700,
@@ -359,6 +368,11 @@ export default function TradesPage() {
                                                         color={t.direction === 'short' ? 'error' : 'success'} variant="outlined" />
                                                 </TableCell>
                                                 <TableCell sx={{ color: 'text.secondary', fontSize: '0.8rem' }}>{t.tier ?? '—'}</TableCell>
+                                                <TableCell sx={{ color: 'text.secondary', fontSize: '0.8rem' }}>{t.strategy ?? '—'}</TableCell>
+                                                <TableCell sx={{ color: 'text.secondary', fontSize: '0.8rem' }}>{t.regime ?? '—'}</TableCell>
+                                                <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontSize: '0.82rem' }}>
+                                                    {t.signal_score != null ? Number(t.signal_score).toFixed(3) : '—'}
+                                                </TableCell>
                                                 <TableCell>
                                                     <Chip label={t.status} size="small"
                                                         color={t.status === 'open' ? 'primary' : t.status === 'closed' ? 'default' : 'warning'}
@@ -529,6 +543,106 @@ export default function TradesPage() {
                                                 return (
                                                     <TableRow key={`${r.tier}-${r.bot}-${i}`} hover>
                                                         <TableCell><Chip label={r.tier} size="small" /></TableCell>
+                                                        <TableCell><Chip label={r.bot} size="small" color={BOT_COLORS[r.bot] ?? 'default'} variant="outlined" /></TableCell>
+                                                        <TableCell align="right">{r.total}</TableCell>
+                                                        <TableCell align="right">
+                                                            <Typography variant="body2" color={wr >= 0.5 ? 'success.main' : 'warning.main'}>
+                                                                {(wr * 100).toFixed(1)}%
+                                                            </Typography>
+                                                        </TableCell>
+                                                        <TableCell align="right">
+                                                            <Typography variant="body2" color={pnlColor(r.avg_pnl_pct)}>
+                                                                {parseFloat(r.avg_pnl_pct ?? '0').toFixed(2)}%
+                                                            </Typography>
+                                                        </TableCell>
+                                                        <TableCell align="right">
+                                                            <Typography variant="body2" color={pnlColor(r.total_pnl)}>
+                                                                {fmt(r.total_pnl)}
+                                                            </Typography>
+                                                        </TableCell>
+                                                    </TableRow>
+                                                );
+                                            })}
+                                        </TableBody>
+                                    </Table>
+                                </TableContainer>
+                            )}
+                        </Paper>
+
+                        <Paper sx={{ p: 2 }}>
+                            <Typography variant="subtitle1" fontWeight={700} mb={1}>Performance by Strategy</Typography>
+                            {(!analytics?.byStrategy?.length) ? (
+                                <Alert severity="info">No strategy-tagged trades in selected period.</Alert>
+                            ) : (
+                                <TableContainer>
+                                    <Table size="small">
+                                        <TableHead>
+                                            <TableRow>
+                                                <TableCell>Strategy</TableCell>
+                                                <TableCell>Bot</TableCell>
+                                                <TableCell align="right">Trades</TableCell>
+                                                <TableCell align="right">Win Rate</TableCell>
+                                                <TableCell align="right">Avg P&L %</TableCell>
+                                                <TableCell align="right">Total P&L</TableCell>
+                                            </TableRow>
+                                        </TableHead>
+                                        <TableBody>
+                                            {(analytics.byStrategy as TradeAnalyticsStrategy[]).map((r, i) => {
+                                                const total = parseInt(r.total);
+                                                const wr = total > 0 ? parseInt(r.winners) / total : 0;
+                                                return (
+                                                    <TableRow key={`${r.strategy}-${r.bot}-${i}`} hover>
+                                                        <TableCell><Typography fontWeight={600}>{r.strategy}</Typography></TableCell>
+                                                        <TableCell><Chip label={r.bot} size="small" color={BOT_COLORS[r.bot] ?? 'default'} variant="outlined" /></TableCell>
+                                                        <TableCell align="right">{r.total}</TableCell>
+                                                        <TableCell align="right">
+                                                            <Typography variant="body2" color={wr >= 0.5 ? 'success.main' : 'warning.main'}>
+                                                                {(wr * 100).toFixed(1)}%
+                                                            </Typography>
+                                                        </TableCell>
+                                                        <TableCell align="right">
+                                                            <Typography variant="body2" color={pnlColor(r.avg_pnl_pct)}>
+                                                                {parseFloat(r.avg_pnl_pct ?? '0').toFixed(2)}%
+                                                            </Typography>
+                                                        </TableCell>
+                                                        <TableCell align="right">
+                                                            <Typography variant="body2" color={pnlColor(r.total_pnl)}>
+                                                                {fmt(r.total_pnl)}
+                                                            </Typography>
+                                                        </TableCell>
+                                                    </TableRow>
+                                                );
+                                            })}
+                                        </TableBody>
+                                    </Table>
+                                </TableContainer>
+                            )}
+                        </Paper>
+
+                        <Paper sx={{ p: 2 }}>
+                            <Typography variant="subtitle1" fontWeight={700} mb={1}>Performance by Regime</Typography>
+                            {(!analytics?.byRegime?.length) ? (
+                                <Alert severity="info">No regime-tagged trades in selected period.</Alert>
+                            ) : (
+                                <TableContainer>
+                                    <Table size="small">
+                                        <TableHead>
+                                            <TableRow>
+                                                <TableCell>Regime</TableCell>
+                                                <TableCell>Bot</TableCell>
+                                                <TableCell align="right">Trades</TableCell>
+                                                <TableCell align="right">Win Rate</TableCell>
+                                                <TableCell align="right">Avg P&L %</TableCell>
+                                                <TableCell align="right">Total P&L</TableCell>
+                                            </TableRow>
+                                        </TableHead>
+                                        <TableBody>
+                                            {(analytics.byRegime as TradeAnalyticsRegime[]).map((r, i) => {
+                                                const total = parseInt(r.total);
+                                                const wr = total > 0 ? parseInt(r.winners) / total : 0;
+                                                return (
+                                                    <TableRow key={`${r.regime}-${r.bot}-${i}`} hover>
+                                                        <TableCell><Typography fontWeight={600}>{r.regime}</Typography></TableCell>
                                                         <TableCell><Chip label={r.bot} size="small" color={BOT_COLORS[r.bot] ?? 'default'} variant="outlined" /></TableCell>
                                                         <TableCell align="right">{r.total}</TableCell>
                                                         <TableCell align="right">

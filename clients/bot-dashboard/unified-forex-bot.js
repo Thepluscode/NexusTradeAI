@@ -45,6 +45,8 @@ async function initTradeDb() {
                 symbol VARCHAR(20) NOT NULL,
                 direction VARCHAR(10) NOT NULL,
                 tier VARCHAR(10),
+                strategy VARCHAR(50),
+                regime VARCHAR(50),
                 status VARCHAR(10) NOT NULL DEFAULT 'open',
                 entry_price DECIMAL(20,8),
                 exit_price DECIMAL(20,8),
@@ -58,17 +60,25 @@ async function initTradeDb() {
                 exit_time TIMESTAMPTZ,
                 close_reason VARCHAR(100),
                 session VARCHAR(30),
+                signal_score DECIMAL(10,3),
+                entry_context JSONB DEFAULT '{}'::jsonb,
                 rsi DECIMAL(6,2),
                 volume_ratio DECIMAL(6,2),
                 momentum_pct DECIMAL(8,4),
                 created_at TIMESTAMPTZ DEFAULT NOW()
             );
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS strategy VARCHAR(50);
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS regime VARCHAR(50);
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS signal_score DECIMAL(10,3);
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS entry_context JSONB DEFAULT '{}'::jsonb;
             CREATE INDEX IF NOT EXISTS idx_trades_bot ON trades(bot);
             CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
             CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time);
             CREATE INDEX IF NOT EXISTS idx_trades_user_id ON trades(user_id);
             CREATE INDEX IF NOT EXISTS idx_trades_user_bot ON trades(user_id, bot);
+            CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy);
+            CREATE INDEX IF NOT EXISTS idx_trades_regime ON trades(regime);
         `);
         console.log('✅ Forex bot: Trades table ready');
         await dbPool.query(`
@@ -109,16 +119,51 @@ async function initTradeDb() {
     }
 }
 
-async function dbForexOpen(pair, direction, tier, entry, stopLoss, takeProfit, units, session) {
+function buildForexTradeTags(signal = {}, tier, direction, session) {
+    const normalizedTier = tier || signal.tier || 'tier1';
+    const maxPullback = FOREX_PULLBACK_CONFIG[normalizedTier] || FOREX_PULLBACK_CONFIG.tier1 || 0;
+    const pullback = Number(signal.pullback || 0);
+    const trendStrength = Number(signal.trendStrength || 0);
+    const score = signal.score != null ? parseFloat(Number(signal.score).toFixed(3)) : null;
+    const normalizedStrategy = signal.strategy
+        || (pullback > 0 && maxPullback > 0 && pullback >= maxPullback * 0.55 ? 'pullbackContinuation' : 'trendContinuation');
+
+    let regime = 'session-trend';
+    if (session === 'London/NY Overlap') regime = 'overlap-expansion';
+    else if (trendStrength >= MOMENTUM_CONFIG.tier2.threshold) regime = 'trend-expansion';
+    else if (session === 'London') regime = 'london-trend';
+    else if (session === 'New York') regime = 'new-york-trend';
+
+    return {
+        strategy: normalizedStrategy,
+        regime,
+        score,
+        context: {
+            tier: normalizedTier,
+            direction: direction || signal.direction || null,
+            session: session || signal.session || null,
+            h1Trend: signal.h1Trend ?? null,
+            trendStrength: signal.trendStrength ?? null,
+            pullback: signal.pullback ?? null,
+            atrPct: signal.atrPct ?? null,
+            rsi: signal.rsi ?? null,
+            macdHistogram: signal.macdHistogram ?? null
+        }
+    };
+}
+
+async function dbForexOpen(pair, direction, tier, entry, stopLoss, takeProfit, units, session, signal = {}) {
     if (!dbPool) return null;
     try {
         const absUnits = Math.abs(units);
         const positionSizeUsd = entry > 0 ? parseFloat((absUnits * entry).toFixed(2)) : null;
+        const tags = buildForexTradeTags(signal, tier, direction, session);
         const r = await dbPool.query(
-            `INSERT INTO trades (bot,symbol,direction,tier,status,entry_price,quantity,
-             position_size_usd,stop_loss,take_profit,entry_time,session)
-             VALUES ('forex',$1,$2,$3,'open',$4,$5,$6,$7,$8,NOW(),$9) RETURNING id`,
-            [pair, direction, tier, entry, absUnits, positionSizeUsd, stopLoss, takeProfit, session || null]
+            `INSERT INTO trades (bot,symbol,direction,tier,strategy,regime,status,entry_price,quantity,
+             position_size_usd,stop_loss,take_profit,entry_time,session,signal_score,entry_context,rsi,momentum_pct)
+             VALUES ('forex',$1,$2,$3,$4,$5,'open',$6,$7,$8,$9,$10,NOW(),$11,$12,$13::jsonb,$14,$15) RETURNING id`,
+            [pair, direction, tier, tags.strategy, tags.regime, entry, absUnits, positionSizeUsd, stopLoss, takeProfit,
+             session || null, tags.score, JSON.stringify(tags.context), signal.rsi || null, signal.trendStrength || null]
         );
         return r.rows[0]?.id;
     } catch (e) { console.warn('DB forex open failed:', e.message); return null; }
@@ -1321,22 +1366,26 @@ async function executeTrade(signal) {
 
     if (result?.orderFillTransaction) {
         console.log(`✅ ORDER FILLED: ${signal.pair}`);
+        const tags = buildForexTradeTags(signal, signal.tier, signal.direction, signal.session);
 
         // Record position
         positions.set(signal.pair, {
             instrument: signal.pair,
             direction: signal.direction,
             tier: signal.tier,
+            strategy: tags.strategy,
+            regime: tags.regime,
             entry: signal.entry,
             stopLoss: signal.stopLoss,
             takeProfit: signal.takeProfit,
             units,
             entryTime: new Date(),
-            session: signal.session
+            session: signal.session,
+            signalScore: signal.score
         });
 
         // Persist trade opening to DB (fire-and-forget)
-        dbForexOpen(signal.pair, signal.direction, signal.tier, signal.entry, signal.stopLoss, signal.takeProfit, units, signal.session)
+        dbForexOpen(signal.pair, signal.direction, signal.tier, signal.entry, signal.stopLoss, signal.takeProfit, units, signal.session, signal)
             .then(id => { const p = positions.get(signal.pair); if (p) p.dbTradeId = id; })
             .catch(() => {});
 
@@ -2252,16 +2301,18 @@ class UserForexEngine {
             { longUnits: 'ALL', shortUnits: 'ALL' });
     }
 
-    async dbForexOpen(pair, direction, tier, entry, stopLoss, takeProfit, units, session) {
+    async dbForexOpen(pair, direction, tier, entry, stopLoss, takeProfit, units, session, signal = {}) {
         if (!dbPool) return null;
         try {
             const absUnits = Math.abs(units);
             const positionSizeUsd = entry > 0 ? parseFloat((absUnits * entry).toFixed(2)) : null;
+            const tags = buildForexTradeTags(signal, tier, direction, session);
             const r = await dbPool.query(
-                `INSERT INTO trades (user_id,bot,symbol,direction,tier,status,entry_price,quantity,
-                 position_size_usd,stop_loss,take_profit,entry_time,session)
-                 VALUES ($1,'forex',$2,$3,$4,'open',$5,$6,$7,$8,$9,NOW(),$10) RETURNING id`,
-                [this.userId, pair, direction, tier, entry, absUnits, positionSizeUsd, stopLoss, takeProfit, session || null]
+                `INSERT INTO trades (user_id,bot,symbol,direction,tier,strategy,regime,status,entry_price,quantity,
+                 position_size_usd,stop_loss,take_profit,entry_time,session,signal_score,entry_context,rsi,momentum_pct)
+                 VALUES ($1,'forex',$2,$3,$4,$5,$6,'open',$7,$8,$9,$10,$11,NOW(),$12,$13,$14::jsonb,$15,$16) RETURNING id`,
+                [this.userId, pair, direction, tier, tags.strategy, tags.regime, entry, absUnits, positionSizeUsd, stopLoss, takeProfit,
+                 session || null, tags.score, JSON.stringify(tags.context), signal.rsi || null, signal.trendStrength || null]
             );
             return r.rows[0]?.id;
         } catch (e) { console.warn('DB forex open failed:', e.message); return null; }
@@ -2375,12 +2426,14 @@ class UserForexEngine {
             : -Math.floor(positionValue / effectiveEntry * 10000);
         const result = await this.createOrder(signal.pair, units, signal.stopLoss, signal.takeProfit);
         if (result?.orderFillTransaction) {
+            const tags = buildForexTradeTags(signal, signal.tier, signal.direction, signal.session);
             this.positions.set(signal.pair, {
                 instrument: signal.pair, direction: signal.direction, tier: signal.tier,
                 entry: signal.entry, stopLoss: signal.stopLoss, takeProfit: signal.takeProfit,
-                units, entryTime: new Date(), session: signal.session
+                units, entryTime: new Date(), session: signal.session,
+                strategy: tags.strategy, regime: tags.regime, signalScore: signal.score
             });
-            this.dbForexOpen(signal.pair, signal.direction, signal.tier, signal.entry, signal.stopLoss, signal.takeProfit, units, signal.session)
+            this.dbForexOpen(signal.pair, signal.direction, signal.tier, signal.entry, signal.stopLoss, signal.takeProfit, units, signal.session, signal)
                 .then(id => { const p = this.positions.get(signal.pair); if (p) p.dbTradeId = id; })
                 .catch(() => {});
             this.totalTradesToday++;

@@ -57,6 +57,8 @@ async function initTradeDb() {
                 symbol VARCHAR(20) NOT NULL,
                 direction VARCHAR(10) NOT NULL,
                 tier VARCHAR(10),
+                strategy VARCHAR(50),
+                regime VARCHAR(50),
                 status VARCHAR(10) NOT NULL DEFAULT 'open',
                 entry_price DECIMAL(20,8),
                 exit_price DECIMAL(20,8),
@@ -70,17 +72,25 @@ async function initTradeDb() {
                 exit_time TIMESTAMPTZ,
                 close_reason VARCHAR(100),
                 session VARCHAR(30),
+                signal_score DECIMAL(10,3),
+                entry_context JSONB DEFAULT '{}'::jsonb,
                 rsi DECIMAL(6,2),
                 volume_ratio DECIMAL(6,2),
                 momentum_pct DECIMAL(8,4),
                 created_at TIMESTAMPTZ DEFAULT NOW()
             );
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS strategy VARCHAR(50);
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS regime VARCHAR(50);
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS signal_score DECIMAL(10,3);
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS entry_context JSONB DEFAULT '{}'::jsonb;
             CREATE INDEX IF NOT EXISTS idx_trades_bot ON trades(bot);
             CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
             CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time);
             CREATE INDEX IF NOT EXISTS idx_trades_user_id ON trades(user_id);
             CREATE INDEX IF NOT EXISTS idx_trades_user_bot ON trades(user_id, bot);
+            CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy);
+            CREATE INDEX IF NOT EXISTS idx_trades_regime ON trades(regime);
         `);
         console.log('✅ Crypto bot: Trades table ready');
         await dbPool.query(`
@@ -121,14 +131,45 @@ async function initTradeDb() {
     }
 }
 
-async function dbCryptoOpen(symbol, tier, entry, stopLoss, takeProfit, quantity, positionSize) {
+function buildCryptoTradeTags(signal = {}, tier) {
+    const normalizedTier = tier || signal.tier || 'tier1';
+    const normalizedStrategy = signal.strategy || 'momentum';
+    const score = signal.score != null ? parseFloat(Number(signal.score).toFixed(3)) : null;
+
+    let regime = signal.marketRegime || 'trend-expansion';
+    if (!signal.marketRegime) {
+        if (normalizedStrategy === 'trendPullback') regime = 'pullback-trend';
+        else if ((signal.sizingFactor || 1) < 1) regime = 'cautious-risk-on';
+        else if (normalizedTier === 'tier3') regime = 'trend-expansion';
+    }
+
+    return {
+        strategy: normalizedStrategy,
+        regime,
+        score,
+        context: {
+            tier: normalizedTier,
+            momentum: signal.momentum ?? null,
+            trendStrength: signal.trendStrength ?? null,
+            pullbackPct: signal.pullbackPct ?? null,
+            rsi: signal.rsi ?? null,
+            volumeRatio: signal.volumeRatio ?? null,
+            volume24h: signal.volume24h ?? null,
+            sizingFactor: signal.sizingFactor ?? null
+        }
+    };
+}
+
+async function dbCryptoOpen(symbol, tier, entry, stopLoss, takeProfit, quantity, positionSize, signal = {}) {
     if (!dbPool) return null;
     try {
+        const tags = buildCryptoTradeTags(signal, tier);
         const r = await dbPool.query(
-            `INSERT INTO trades (bot,symbol,direction,tier,status,entry_price,quantity,
-             position_size_usd,stop_loss,take_profit,entry_time)
-             VALUES ('crypto',$1,'long',$2,'open',$3,$4,$5,$6,$7,NOW()) RETURNING id`,
-            [symbol, tier, entry, quantity, positionSize, stopLoss, takeProfit]
+            `INSERT INTO trades (bot,symbol,direction,tier,strategy,regime,status,entry_price,quantity,
+             position_size_usd,stop_loss,take_profit,entry_time,signal_score,entry_context,rsi,volume_ratio,momentum_pct)
+             VALUES ('crypto',$1,'long',$2,$3,$4,'open',$5,$6,$7,$8,$9,NOW(),$10,$11::jsonb,$12,$13,$14) RETURNING id`,
+            [symbol, tier, tags.strategy, tags.regime, entry, quantity, positionSize, stopLoss, takeProfit,
+             tags.score, JSON.stringify(tags.context), signal.rsi || null, signal.volumeRatio || null, signal.momentum || null]
         );
         return r.rows[0]?.id;
     } catch (e) { console.warn('DB crypto open failed:', e.message); return null; }
@@ -801,6 +842,7 @@ class CryptoTradingEngine {
                     symbol,
                     tier: 'pullback',
                     strategy: 'trendPullback',
+                    marketRegime: btcBullish ? 'risk-on' : 'cautious',
                     price: data.currentPrice,
                     momentum: momentum * 100,
                     trendStrength: trendStrength * 100,
@@ -871,6 +913,7 @@ class CryptoTradingEngine {
                     symbol,
                     tier: tierName,
                     strategy: 'momentum',
+                    marketRegime: btcBullish ? 'risk-on' : 'cautious',
                     price: data.currentPrice,
                     momentum: momentum * 100,
                     trendStrength: trendStrength * 100,
@@ -1056,9 +1099,12 @@ class CryptoTradingEngine {
 
             // Create position — include currentPrice/unrealizedPnL so status
             // endpoint returns valid values before the first managePositions() cycle
+            const tags = buildCryptoTradeTags(signal, signal.tier);
             const position = {
                 symbol: signal.symbol,
                 tier: signal.tier,
+                strategy: tags.strategy,
+                regime: tags.regime,
                 entry: signal.price,
                 quantity,
                 positionSize: positionSizeUSD,
@@ -1068,6 +1114,7 @@ class CryptoTradingEngine {
                 openTime: new Date(),
                 momentum: signal.momentum,
                 rsi: signal.rsi,
+                signalScore: signal.score,
                 currentPrice: signal.price,
                 unrealizedPnL: 0,
                 unrealizedPnLPct: 0,
@@ -1076,7 +1123,8 @@ class CryptoTradingEngine {
             this.positions.set(signal.symbol, position);
 
             // Persist trade opening to DB (fire-and-forget)
-            dbCryptoOpen(signal.symbol, signal.tier, signal.price, signal.stopLoss, signal.takeProfit, quantity, positionSizeUSD)
+            const openTrade = this._dbOpen ? this._dbOpen.bind(this) : dbCryptoOpen;
+            openTrade(signal.symbol, signal.tier, signal.price, signal.stopLoss, signal.takeProfit, quantity, positionSizeUSD, signal)
                 .then(id => { const p = this.positions.get(signal.symbol); if (p) p.dbTradeId = id; })
                 .catch(() => {});
 
@@ -1252,7 +1300,8 @@ class CryptoTradingEngine {
             console.log(`   P/L: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}% ($${pnlUSD.toFixed(2)})`);
 
             // Persist close to DB (fire-and-forget)
-            dbCryptoClose(position.dbTradeId, adjustedExitPrice, pnlUSD, pnlPercent, reason).catch(() => {});
+            const closeTrade = this._dbClose ? this._dbClose.bind(this) : dbCryptoClose;
+            closeTrade(position.dbTradeId, adjustedExitPrice, pnlUSD, pnlPercent, reason).catch(() => {});
 
             // Remove position
             this.positions.delete(symbol);
@@ -2308,14 +2357,16 @@ async function getOrCreateCryptoEngine(userId) {
             } catch (e) { /* non-critical */ }
         };
         // Patch dbCryptoOpen/Close to include user_id
-        userEngine._dbOpen = async function(symbol, tier, entry, stopLoss, takeProfit, quantity, positionSize) {
+        userEngine._dbOpen = async function(symbol, tier, entry, stopLoss, takeProfit, quantity, positionSize, signal = {}) {
             if (!dbPool) return null;
             try {
+                const tags = buildCryptoTradeTags(signal, tier);
                 const r = await dbPool.query(
-                    `INSERT INTO trades (user_id,bot,symbol,direction,tier,status,entry_price,quantity,
-                     position_size_usd,stop_loss,take_profit,entry_time)
-                     VALUES ($1,'crypto',$2,'long',$3,'open',$4,$5,$6,$7,$8,NOW()) RETURNING id`,
-                    [userId, symbol, tier, entry, quantity, positionSize, stopLoss, takeProfit]
+                    `INSERT INTO trades (user_id,bot,symbol,direction,tier,strategy,regime,status,entry_price,quantity,
+                     position_size_usd,stop_loss,take_profit,entry_time,signal_score,entry_context,rsi,volume_ratio,momentum_pct)
+                     VALUES ($1,'crypto',$2,'long',$3,$4,$5,'open',$6,$7,$8,$9,$10,NOW(),$11,$12::jsonb,$13,$14,$15) RETURNING id`,
+                    [userId, symbol, tier, tags.strategy, tags.regime, entry, quantity, positionSize, stopLoss, takeProfit,
+                     tags.score, JSON.stringify(tags.context), signal.rsi || null, signal.volumeRatio || null, signal.momentum || null]
                 );
                 return r.rows[0]?.id;
             } catch (e) { console.warn('DB crypto open failed:', e.message); return null; }

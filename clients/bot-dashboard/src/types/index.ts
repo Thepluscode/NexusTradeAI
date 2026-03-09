@@ -563,6 +563,8 @@ export interface TradeRecord {
   symbol: string;
   direction: string;
   tier: string | null;
+  strategy: string | null;
+  regime: string | null;
   status: string;
   entry_price: string | null;
   exit_price: string | null;
@@ -576,6 +578,8 @@ export interface TradeRecord {
   exit_time: string | null;
   close_reason: string | null;
   session: string | null;
+  signal_score: string | null;
+  entry_context: Record<string, unknown> | null;
   created_at: string;
 }
 
@@ -605,6 +609,24 @@ export interface TradeAnalyticsSymbol {
 
 export interface TradeAnalyticsTier {
   tier: string;
+  bot: string;
+  total: string;
+  winners: string;
+  avg_pnl_pct: string;
+  total_pnl: string;
+}
+
+export interface TradeAnalyticsStrategy {
+  strategy: string;
+  bot: string;
+  total: string;
+  winners: string;
+  avg_pnl_pct: string;
+  total_pnl: string;
+}
+
+export interface TradeAnalyticsRegime {
+  regime: string;
   bot: string;
   total: string;
   winners: string;

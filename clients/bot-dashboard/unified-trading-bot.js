@@ -197,6 +197,8 @@ async function initDb() {
                 symbol VARCHAR(20) NOT NULL,
                 direction VARCHAR(10) NOT NULL,
                 tier VARCHAR(10),
+                strategy VARCHAR(50),
+                regime VARCHAR(50),
                 status VARCHAR(10) NOT NULL DEFAULT 'open',
                 entry_price DECIMAL(20,8),
                 exit_price DECIMAL(20,8),
@@ -210,17 +212,25 @@ async function initDb() {
                 exit_time TIMESTAMPTZ,
                 close_reason VARCHAR(100),
                 session VARCHAR(30),
+                signal_score DECIMAL(10,3),
+                entry_context JSONB DEFAULT '{}'::jsonb,
                 rsi DECIMAL(6,2),
                 volume_ratio DECIMAL(6,2),
                 momentum_pct DECIMAL(8,4),
                 created_at TIMESTAMPTZ DEFAULT NOW()
             );
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS strategy VARCHAR(50);
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS regime VARCHAR(50);
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS signal_score DECIMAL(10,3);
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS entry_context JSONB DEFAULT '{}'::jsonb;
             CREATE INDEX IF NOT EXISTS idx_trades_bot ON trades(bot);
             CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
             CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time);
             CREATE INDEX IF NOT EXISTS idx_trades_user_id ON trades(user_id);
             CREATE INDEX IF NOT EXISTS idx_trades_user_bot ON trades(user_id, bot);
+            CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy);
+            CREATE INDEX IF NOT EXISTS idx_trades_regime ON trades(regime);
         `);
         console.log('✅ Trades table ready');
         await dbPool.query(`
@@ -626,16 +636,18 @@ function recordTradeClose(symbol, entryPrice, exitPrice, shares, reason) {
 
 // ===== DB TRADE HELPERS =====
 
-async function dbTradeOpen(symbol, entryPrice, shares, config, signal, tier) {
+async function dbTradeOpen(symbol, entryPrice, shares, config, signal, tier, strategy) {
     if (!dbPool) return null;
     try {
+        const tags = buildStockTradeTags(signal, strategy, tier);
         const r = await dbPool.query(
-            `INSERT INTO trades (bot,symbol,direction,tier,status,entry_price,quantity,
-             position_size_usd,stop_loss,take_profit,entry_time,rsi,volume_ratio,momentum_pct)
-             VALUES ('stock',$1,'long',$2,'open',$3,$4,$5,$6,$7,NOW(),$8,$9,$10) RETURNING id`,
-            [symbol, tier, entryPrice, shares, shares * entryPrice,
+            `INSERT INTO trades (bot,symbol,direction,tier,strategy,regime,status,entry_price,quantity,
+             position_size_usd,stop_loss,take_profit,entry_time,signal_score,entry_context,rsi,volume_ratio,momentum_pct)
+             VALUES ('stock',$1,'long',$2,$3,$4,'open',$5,$6,$7,$8,$9,NOW(),$10,$11::jsonb,$12,$13,$14) RETURNING id`,
+            [symbol, tier, tags.strategy, tags.regime, entryPrice, shares, shares * entryPrice,
              config.stopLoss ? entryPrice * (1 - config.stopLoss) : null,
              config.profitTarget ? entryPrice * (1 + config.profitTarget) : null,
+             tags.score, JSON.stringify(tags.context),
              signal.rsi || null, signal.volumeRatio || null, signal.percentChange || null]
         );
         return r.rows[0]?.id;
@@ -651,6 +663,35 @@ async function dbTradeClose(id, exitPrice, pnlUsd, pnlPct, reason) {
             [exitPrice, pnlUsd, pnlPct, reason, id]
         );
     } catch (e) { console.warn('DB close failed:', e.message); }
+}
+
+function buildStockTradeTags(signal = {}, strategy, tier) {
+    const normalizedStrategy = strategy || signal.strategy || 'momentum';
+    const percentChange = parseFloat(signal.percentChange ?? '0');
+    const volumeRatio = parseFloat(signal.volumeRatio ?? '0');
+    const score = signal.score != null ? parseFloat(Number(signal.score).toFixed(3)) : null;
+
+    let regime = 'intraday-momentum';
+    if (normalizedStrategy === 'openingRangeBreakout') {
+        regime = 'opening-range';
+    } else if (percentChange >= MOMENTUM_CONFIG.tier2.threshold || volumeRatio >= 3) {
+        regime = 'trend-expansion';
+    }
+
+    return {
+        strategy: normalizedStrategy,
+        regime,
+        score,
+        context: {
+            tier: tier || signal.tier || null,
+            percentChange: signal.percentChange ?? null,
+            volumeRatio: signal.volumeRatio ?? null,
+            rsi: signal.rsi ?? null,
+            vwap: signal.vwap ?? null,
+            breakoutTrigger: signal.breakoutTrigger ?? null,
+            openingRangeHigh: signal.openingRangeHigh ?? null,
+        }
+    };
 }
 
 // ===== REGISTER DATA STRUCTURES WITH MEMORY MANAGER =====
@@ -1841,7 +1882,7 @@ async function executeTrade(signal, strategy) {
         savePositions();
 
         // Persist trade opening to DB (fire-and-forget)
-        dbTradeOpen(signal.symbol, signal.price, shares, config, signal, tier)
+        dbTradeOpen(signal.symbol, signal.price, shares, config, signal, tier, strategy)
             .then(id => { const p = positions.get(signal.symbol); if (p) p.dbTradeId = id; })
             .catch(() => {});
 
@@ -3072,16 +3113,18 @@ class UserTradingEngine {
         this.savePerfData();
     }
 
-    async dbTradeOpen(symbol, entryPrice, shares, config, signal, tier) {
+    async dbTradeOpen(symbol, entryPrice, shares, config, signal, tier, strategy) {
         if (!dbPool) return null;
         try {
+            const tags = buildStockTradeTags(signal, strategy, tier);
             const r = await dbPool.query(
-                `INSERT INTO trades (user_id,bot,symbol,direction,tier,status,entry_price,quantity,
-                 position_size_usd,stop_loss,take_profit,entry_time,rsi,volume_ratio,momentum_pct)
-                 VALUES ($1,'stock',$2,'long',$3,'open',$4,$5,$6,$7,$8,NOW(),$9,$10,$11) RETURNING id`,
-                [this.userId, symbol, tier, entryPrice, shares, shares * entryPrice,
+                `INSERT INTO trades (user_id,bot,symbol,direction,tier,strategy,regime,status,entry_price,quantity,
+                 position_size_usd,stop_loss,take_profit,entry_time,signal_score,entry_context,rsi,volume_ratio,momentum_pct)
+                 VALUES ($1,'stock',$2,'long',$3,$4,$5,'open',$6,$7,$8,$9,$10,NOW(),$11,$12::jsonb,$13,$14,$15) RETURNING id`,
+                [this.userId, symbol, tier, tags.strategy, tags.regime, entryPrice, shares, shares * entryPrice,
                  config.stopLoss ? entryPrice * (1 - config.stopLoss) : null,
                  config.profitTarget ? entryPrice * (1 + config.profitTarget) : null,
+                 tags.score, JSON.stringify(tags.context),
                  signal.rsi || null, signal.volumeRatio || null, signal.percentChange || null]
             );
             return r.rows[0]?.id;
@@ -3265,9 +3308,9 @@ class UserTradingEngine {
                 stopLoss: parseFloat(stopPrice), target: parseFloat(targetPrice),
                 strategy, tier, config, entryTime, entryVolume: signal.entryVolume,
                 rsi: signal.rsi, vwap: signal.vwap, volumeRatio: signal.volumeRatio,
-                percentChange: signal.percentChange
+                percentChange: signal.percentChange, signalScore: signal.score
             });
-            this.dbTradeOpen(signal.symbol, signal.price, shares, config, signal, tier)
+            this.dbTradeOpen(signal.symbol, signal.price, shares, config, signal, tier, strategy)
                 .then(id => { const p = this.positions.get(signal.symbol); if (p) p.dbTradeId = id; })
                 .catch(() => {});
             const tradeRecord = { time: Date.now(), side: 'buy', price: signal.price, shares, tier };
@@ -3611,11 +3654,28 @@ app.get('/api/trades', async (req, res) => {
     } catch (e) { res.status(500).json({ success: false, error: e.message, trades: [] }); }
 });
 
+function getOptionalTradeUserId(req) {
+    if (req.query.mine !== 'true') return null;
+    try {
+        const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+        const auth = req.headers.authorization || '';
+        if (!auth.startsWith('Bearer ')) return null;
+        const decoded = jwt.verify(auth.slice(7), JWT_SECRET);
+        return decoded?.sub || null;
+    } catch {
+        return null;
+    }
+}
+
 // Weekly / daily P&L summary across all bots
 app.get('/api/trades/summary', async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not configured', summary: [] });
     try {
         const days = Math.min(parseInt(req.query.days) || 30, 90);
+        const userId = getOptionalTradeUserId(req);
+        const whereClause = userId
+            ? `WHERE user_id = $2 AND created_at >= NOW() - INTERVAL '1 day' * $1`
+            : `WHERE created_at >= NOW() - INTERVAL '1 day' * $1`;
         const r = await dbPool.query(`
             SELECT
                 bot,
@@ -3628,22 +3688,25 @@ app.get('/api/trades/summary', async (req, res) => {
                 COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd > 0), 0)::FLOAT AS gross_profit,
                 COALESCE(ABS(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd < 0)), 0)::FLOAT AS gross_loss
             FROM trades
-            WHERE created_at >= NOW() - INTERVAL '1 day' * $1
+            ${whereClause}
             GROUP BY bot, day
             ORDER BY day DESC, bot
-        `, [days]);
+        `, userId ? [days, userId] : [days]);
         // Also compute totals
         const totals = await dbPool.query(`
             SELECT
                 bot,
+                COUNT(*) AS total_all_trades,
+                COUNT(*) FILTER (WHERE status='open') AS open_trades,
                 COUNT(*) FILTER (WHERE status='closed') AS total_trades,
                 COUNT(*) FILTER (WHERE status='closed' AND pnl_usd > 0) AS winners,
                 COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed'), 0)::FLOAT AS total_pnl,
                 COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd > 0), 0)::FLOAT AS gross_profit,
                 COALESCE(ABS(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd < 0)), 0)::FLOAT AS gross_loss
             FROM trades
+            ${userId ? 'WHERE user_id = $1' : ''}
             GROUP BY bot
-        `);
+        `, userId ? [userId] : []);
         res.json({ success: true, daily: r.rows, totals: totals.rows });
     } catch (e) { res.status(500).json({ success: false, error: e.message, daily: [], totals: [] }); }
 });
@@ -3683,17 +3746,22 @@ app.get('/api/performance/equity', async (req, res) => {
 
 // Trade analytics: win rate by hour, symbol breakdown, tier breakdown
 app.get('/api/trades/analytics', async (req, res) => {
-    if (!dbPool) return res.json({ success: true, data: { byHour: [], bySymbol: [], byTier: [] } });
+    if (!dbPool) return res.json({ success: true, data: { byHour: [], bySymbol: [], byTier: [], byStrategy: [], byRegime: [] } });
     const days = Math.min(parseInt(req.query.days) || 30, 90);
     try {
+        const userId = getOptionalTradeUserId(req);
+        const analyticsFilter = userId
+            ? `WHERE status='closed' AND user_id = $2 AND entry_time > NOW() - INTERVAL '1 day' * $1`
+            : `WHERE status='closed' AND entry_time > NOW() - INTERVAL '1 day' * $1`;
+        const analyticsParams = userId ? [days, userId] : [days];
         const byHour = await dbPool.query(`
             SELECT EXTRACT(HOUR FROM entry_time AT TIME ZONE 'America/New_York') AS hour,
                    COUNT(*) FILTER (WHERE pnl_usd > 0) AS winners,
                    COUNT(*) AS total,
                    ROUND(AVG(pnl_pct)::numeric, 2) AS avg_pnl_pct
             FROM trades
-            WHERE status='closed' AND entry_time > NOW() - INTERVAL '1 day' * $1
-            GROUP BY 1 ORDER BY 1`, [days]);
+            ${analyticsFilter}
+            GROUP BY 1 ORDER BY 1`, analyticsParams);
 
         const bySymbol = await dbPool.query(`
             SELECT symbol, bot,
@@ -3702,8 +3770,8 @@ app.get('/api/trades/analytics', async (req, res) => {
                    ROUND(AVG(pnl_pct)::numeric, 2) AS avg_pnl_pct,
                    ROUND(AVG(EXTRACT(EPOCH FROM (exit_time - entry_time))/3600)::numeric, 1) AS avg_hold_hours
             FROM trades
-            WHERE status='closed' AND entry_time > NOW() - INTERVAL '1 day' * $1
-            GROUP BY symbol, bot ORDER BY total DESC LIMIT 20`, [days]);
+            ${analyticsFilter}
+            GROUP BY symbol, bot ORDER BY total DESC LIMIT 20`, analyticsParams);
 
         const byTier = await dbPool.query(`
             SELECT COALESCE(tier,'—') AS tier, bot,
@@ -3712,10 +3780,39 @@ app.get('/api/trades/analytics', async (req, res) => {
                    ROUND(AVG(pnl_pct)::numeric, 2) AS avg_pnl_pct,
                    ROUND(SUM(pnl_usd)::numeric, 2) AS total_pnl
             FROM trades
-            WHERE status='closed' AND entry_time > NOW() - INTERVAL '1 day' * $1
-            GROUP BY tier, bot ORDER BY total DESC`, [days]);
+            ${analyticsFilter}
+            GROUP BY tier, bot ORDER BY total DESC`, analyticsParams);
 
-        res.json({ success: true, data: { byHour: byHour.rows, bySymbol: bySymbol.rows, byTier: byTier.rows } });
+        const byStrategy = await dbPool.query(`
+            SELECT COALESCE(strategy,'unlabeled') AS strategy, bot,
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE pnl_usd > 0) AS winners,
+                   ROUND(AVG(pnl_pct)::numeric, 2) AS avg_pnl_pct,
+                   ROUND(SUM(pnl_usd)::numeric, 2) AS total_pnl
+            FROM trades
+            ${analyticsFilter}
+            GROUP BY strategy, bot ORDER BY total DESC`, analyticsParams);
+
+        const byRegime = await dbPool.query(`
+            SELECT COALESCE(regime,'unlabeled') AS regime, bot,
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE pnl_usd > 0) AS winners,
+                   ROUND(AVG(pnl_pct)::numeric, 2) AS avg_pnl_pct,
+                   ROUND(SUM(pnl_usd)::numeric, 2) AS total_pnl
+            FROM trades
+            ${analyticsFilter}
+            GROUP BY regime, bot ORDER BY total DESC`, analyticsParams);
+
+        res.json({
+            success: true,
+            data: {
+                byHour: byHour.rows,
+                bySymbol: bySymbol.rows,
+                byTier: byTier.rows,
+                byStrategy: byStrategy.rows,
+                byRegime: byRegime.rows
+            }
+        });
     } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
