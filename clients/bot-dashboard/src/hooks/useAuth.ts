@@ -4,7 +4,7 @@ import type { User } from '@/types';
 import { SERVICE_URLS } from '@/services/api';
 
 interface JwtPayload {
-  sub: number;
+  sub: number | string;
   email: string;
   exp: number;
 }

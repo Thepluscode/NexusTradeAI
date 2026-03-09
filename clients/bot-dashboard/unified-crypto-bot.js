@@ -2,9 +2,11 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const crypto = require('crypto');
+const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
+const { createUserCredentialStore } = require('./userCredentialStore');
 require('dotenv').config();
 
 // Telegram alerts
@@ -247,6 +249,18 @@ const CRYPTO_CONFIG = {
         }
     },
 
+    pullbackStrategy: {
+        maxPullbackFromEMA9: 0.03,
+        minTrendStrength: 0.01,
+        rsiLower: 38,
+        rsiUpper: 62,
+        minVolumeRatio: 1.0,
+        stopLoss: 0.04,
+        profitTarget: 0.10,
+        maxPositions: 2,
+        sizingFactor: 0.85
+    },
+
     // Crypto-Specific Filters
     filters: {
         btcCorrelation: true,  // Check BTC trend before altcoin trades
@@ -271,6 +285,23 @@ const CRYPTO_CONFIG = {
     maxHoldDays: 3,         // Force-exit loss positions after 3 days
     stalePositionDays: 5    // Emergency close after 5 days regardless of P/L
 };
+
+function scoreCryptoSignal({ strategy, tier, momentum, trendStrength, volumeRatio, rsi, sizingFactor, macdBullish }) {
+    const tierWeight = tier === 'tier3' ? 2.6 : tier === 'tier2' ? 1.9 : tier === 'tier1' ? 1.3 : 1.1;
+    const strategyWeight = strategy === 'trendPullback' ? 1.05 : 1.25;
+    const rsiSweetSpot = strategy === 'trendPullback'
+        ? (rsi >= 42 && rsi <= 60 ? 1.12 : 1.0)
+        : (rsi >= 45 && rsi <= 70 ? 1.08 : 1.0);
+    const momentumComponent = strategy === 'trendPullback'
+        ? Math.max(0.5, trendStrength * 180)
+        : Math.max(0.5, momentum * 10);
+    const macdWeight = macdBullish ? 1.08 : 0.96;
+
+    return parseFloat(
+        (tierWeight * strategyWeight * momentumComponent * Math.max(1, volumeRatio) * rsiSweetSpot * Math.max(0.5, sizingFactor) * macdWeight)
+            .toFixed(3)
+    );
+}
 
 // ============================================================================
 // KRAKEN API CLIENT  (replaces Binance — US-friendly, no geo-block)
@@ -437,6 +468,9 @@ class CryptoTradingEngine {
         this.losingTrades = 0;
         this.totalProfit = 0;
         this.totalLoss = 0;
+        this.credentialsValid = null;
+        this.credentialsError = null;
+        this.lastCredentialCheckAt = 0;
     }
 
     // ========================================================================
@@ -704,6 +738,54 @@ class CryptoTradingEngine {
 
             // Momentum calculation
             const momentum = (data.currentPrice - sma20) / sma20;
+            const trendStrength = sma20 > 0 ? Math.abs(ema9 - sma20) / sma20 : 0;
+            const pullbackFromEMA9 = ema9 > 0 ? Math.abs(data.currentPrice - ema9) / ema9 : 0;
+            let bestSignal = null;
+
+            const pullbackConfig = this.config.pullbackStrategy;
+            const pullbackPositions = Array.from(this.positions.values())
+                .filter(position => position.tier === 'pullback').length;
+
+            if (
+                pullbackPositions < pullbackConfig.maxPositions &&
+                trendStrength >= pullbackConfig.minTrendStrength &&
+                ema9 >= sma20 &&
+                data.currentPrice >= sma20 * 0.995 &&
+                data.currentPrice <= ema9 * 1.01 &&
+                pullbackFromEMA9 <= pullbackConfig.maxPullbackFromEMA9 &&
+                rsi >= pullbackConfig.rsiLower &&
+                rsi <= pullbackConfig.rsiUpper &&
+                volumeRatio >= pullbackConfig.minVolumeRatio
+            ) {
+                const pullbackSignal = {
+                    symbol,
+                    tier: 'pullback',
+                    strategy: 'trendPullback',
+                    price: data.currentPrice,
+                    momentum: momentum * 100,
+                    trendStrength: trendStrength * 100,
+                    pullbackPct: pullbackFromEMA9 * 100,
+                    rsi,
+                    volume24h: data.volume24h,
+                    volumeRatio,
+                    sizingFactor: combinedSizingFactor * pullbackConfig.sizingFactor,
+                    stopLoss: data.currentPrice * (1 - pullbackConfig.stopLoss),
+                    takeProfit: data.currentPrice * (1 + pullbackConfig.profitTarget),
+                    stopLossPercent: pullbackConfig.stopLoss * 100,
+                    profitTargetPercent: pullbackConfig.profitTarget * 100
+                };
+                pullbackSignal.score = scoreCryptoSignal({
+                    strategy: pullbackSignal.strategy,
+                    tier: pullbackSignal.tier,
+                    momentum: pullbackSignal.momentum,
+                    trendStrength,
+                    volumeRatio,
+                    rsi,
+                    sizingFactor: pullbackSignal.sizingFactor,
+                    macdBullish
+                });
+                bestSignal = pullbackSignal;
+            }
 
             // Try each tier
             for (const [tierName, tier] of Object.entries(this.config.tiers)) {
@@ -733,11 +815,14 @@ class CryptoTradingEngine {
                     console.log(`[Bridge] ${symbol} confirmed ✓ conf: ${(bridgeResult.confidence || 0).toFixed(2)}`);
                 }
 
-                opportunities.push({
+                const momentumSignal = {
                     symbol,
                     tier: tierName,
+                    strategy: 'momentum',
                     price: data.currentPrice,
                     momentum: momentum * 100,
+                    trendStrength: trendStrength * 100,
+                    pullbackPct: pullbackFromEMA9 * 100,
                     rsi,
                     volume24h: data.volume24h,
                     volumeRatio,
@@ -746,13 +831,34 @@ class CryptoTradingEngine {
                     takeProfit: data.currentPrice * (1 + tier.profitTarget),
                     stopLossPercent: tier.stopLoss * 100,
                     profitTargetPercent: tier.profitTarget * 100
+                };
+                momentumSignal.score = scoreCryptoSignal({
+                    strategy: momentumSignal.strategy,
+                    tier: momentumSignal.tier,
+                    momentum: momentumSignal.momentum,
+                    trendStrength,
+                    volumeRatio,
+                    rsi,
+                    sizingFactor: momentumSignal.sizingFactor,
+                    macdBullish
                 });
 
                 console.log(`✨ ${symbol} (${tierName}): Momentum ${(momentum * 100).toFixed(2)}%, RSI ${rsi.toFixed(1)}, Vol $${(data.volume24h / 1000000).toFixed(1)}M`);
+                if (!bestSignal || momentumSignal.score >= bestSignal.score) {
+                    bestSignal = momentumSignal;
+                }
                 break; // Only match one tier
+            }
+
+            if (bestSignal) {
+                if (bestSignal.strategy === 'trendPullback') {
+                    console.log(`↩️ ${symbol} (pullback): Trend ${(trendStrength * 100).toFixed(2)}%, Pullback ${(pullbackFromEMA9 * 100).toFixed(2)}%, RSI ${rsi.toFixed(1)}`);
+                }
+                opportunities.push(bestSignal);
             }
         }
 
+        opportunities.sort((a, b) => (b.score || 0) - (a.score || 0));
         return opportunities;
     }
 
@@ -1174,15 +1280,17 @@ class CryptoTradingEngine {
             console.log('📊 Running in DEMO MODE - monitoring only, no real trades');
             this.isRunning = true;
             this.demoMode = true;
+            this.credentialsValid = false;
+            this.credentialsError = 'No Kraken credentials configured';
             this.saveState();
             this.tradingLoop().catch(e => console.error('❌ Crypto trading loop crashed:', e));
             return;
         }
 
         // Test connection
-        const account = await this.kraken.getAccountInfo();
-        if (!account) {
-            console.log('❌ Failed to connect to exchange - running in DEMO MODE');
+        const accountOk = await this.refreshConnectionState(true);
+        if (!accountOk) {
+            console.log(`❌ Failed to connect to exchange - running in DEMO MODE${this.credentialsError ? ` (${this.credentialsError})` : ''}`);
             this.isRunning = true;
             this.demoMode = true;
             this.saveState();
@@ -1271,6 +1379,37 @@ class CryptoTradingEngine {
         console.log('▶️  Resuming Crypto Trading Engine...');
         this.isPaused = false;
         this.saveState();
+    }
+
+    async refreshConnectionState(force = false) {
+        const hasKeys = this.config.exchange.apiKey && this.config.exchange.apiSecret;
+        if (!hasKeys) {
+            this.demoMode = true;
+            this.credentialsValid = false;
+            this.credentialsError = 'No Kraken credentials configured';
+            this.lastCredentialCheckAt = Date.now();
+            return false;
+        }
+
+        const cacheFresh = !force && this.lastCredentialCheckAt && (Date.now() - this.lastCredentialCheckAt) < 60000;
+        if (cacheFresh && this.credentialsValid !== null) {
+            return this.credentialsValid;
+        }
+
+        try {
+            const account = await this.kraken._privateRequest('Balance');
+            this.demoMode = false;
+            this.credentialsValid = Boolean(account);
+            this.credentialsError = null;
+            this.lastCredentialCheckAt = Date.now();
+            return this.credentialsValid;
+        } catch (error) {
+            this.demoMode = true;
+            this.credentialsValid = false;
+            this.credentialsError = error.message || 'Kraken credentials invalid or expired';
+            this.lastCredentialCheckAt = Date.now();
+            return false;
+        }
     }
 
     getStatus() {
@@ -1371,8 +1510,15 @@ async function persistEnvVar(name, value) {
 
 // ── Per-user credential encryption (AES-256-GCM) ───────────────────────────
 function getEncryptionKey() {
-    const envKey = process.env.CREDENTIAL_ENCRYPTION_KEY;
-    if (envKey) return Buffer.from(envKey, 'hex');
+    const envKey = (process.env.CREDENTIAL_ENCRYPTION_KEY || '').trim();
+    if (envKey) {
+        const normalized = envKey.startsWith('0x') ? envKey.slice(2) : envKey;
+        if (/^[0-9a-fA-F]{64}$/.test(normalized)) {
+            return Buffer.from(normalized, 'hex');
+        }
+        console.warn('⚠️ Invalid CREDENTIAL_ENCRYPTION_KEY format; hashing configured value instead of raw hex');
+        return crypto.createHash('sha256').update(envKey).digest();
+    }
     const secret = process.env.JWT_SECRET || 'dev-secret-change-me';
     return crypto.createHash('sha256').update(secret).digest();
 }
@@ -1398,14 +1544,36 @@ function decryptCredential(stored) {
     return decrypted;
 }
 
+function normalizeCredentialValue(value) {
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        return trimmed === '' ? null : trimmed;
+    }
+    if (typeof value === 'boolean' || typeof value === 'number') {
+        return String(value);
+    }
+    return null;
+}
+
+const credentialStore = createUserCredentialStore(path.join(__dirname, 'data/user-credentials.json'));
+
 async function loadUserCredentials(userId, broker) {
-    if (!dbPool) return {};
+    if (userId === undefined || userId === null) return {};
+
+    const creds = {};
+    const fileCreds = credentialStore.loadEncryptedCredentials(userId, broker);
+    for (const [key, encryptedValue] of Object.entries(fileCreds)) {
+        try { creds[key] = decryptCredential(encryptedValue); }
+        catch (e) { console.warn(`⚠️ Failed to decrypt file-backed ${key} for user ${userId}:`, e.message); }
+    }
+
+    if (!dbPool) return creds;
+
     try {
         const result = await dbPool.query(
             'SELECT credential_key, encrypted_value FROM user_credentials WHERE user_id=$1 AND broker=$2',
             [userId, broker]
         );
-        const creds = {};
         for (const row of result.rows) {
             try { creds[row.credential_key] = decryptCredential(row.encrypted_value); }
             catch (e) { console.warn(`⚠️ Failed to decrypt ${row.credential_key} for user ${userId}:`, e.message); }
@@ -1770,70 +1938,120 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
         if (!allowed) return res.status(400).json({ success: false, error: 'Unknown broker' });
         if (!creds || typeof creds !== 'object') return res.status(400).json({ success: false, error: 'No credentials provided' });
         const userId = req.user?.sub;
+        const warnings = [];
+        let persisted = 0;
+        let filePersisted = 0;
         let updated = 0;
-        for (const [key, value] of Object.entries(creds)) {
+        const fileCredentials = {};
+        for (const [key, rawValue] of Object.entries(creds)) {
             if (!allowed.includes(key)) continue;
-            if (typeof value !== 'string' || value === '') continue;
+            const value = normalizeCredentialValue(rawValue);
+            if (value === null) continue;
             // Apply immediately in-memory so current session picks it up
             process.env[key] = value;
+            if (userId) {
+                fileCredentials[key] = encryptCredential(value);
+            }
             // Persist encrypted to DB per user (if authenticated)
             if (userId && dbPool) {
-                const encrypted = encryptCredential(value);
-                await dbPool.query(
-                    `INSERT INTO user_credentials (user_id, broker, credential_key, encrypted_value, updated_at)
-                     VALUES ($1, $2, $3, $4, NOW())
-                     ON CONFLICT (user_id, broker, credential_key)
-                     DO UPDATE SET encrypted_value=$4, updated_at=NOW()`,
-                    [userId, broker, key, encrypted]
-                );
+                try {
+                    await dbPool.query(
+                        `INSERT INTO user_credentials (user_id, broker, credential_key, encrypted_value, updated_at)
+                         VALUES ($1, $2, $3, $4, NOW())
+                         ON CONFLICT (user_id, broker, credential_key)
+                         DO UPDATE SET encrypted_value=$4, updated_at=NOW()`,
+                        [userId, broker, key, fileCredentials[key]]
+                    );
+                    persisted++;
+                } catch (persistErr) {
+                    const warning = `Failed to persist ${key}; using current runtime value only`;
+                    warnings.push(warning);
+                    console.warn(`⚠️ Failed to persist ${broker}.${key} for user ${userId}:`, persistErr.message);
+                }
             }
             updated++;
         }
-        console.log(`⚙️  Credentials updated: broker=${broker} keys=${updated} storage=${userId ? 'database' : 'environment'}`);
+        if (updated === 0) {
+            return res.status(400).json({ success: false, error: 'No valid credential fields provided' });
+        }
+
+        if (userId && Object.keys(fileCredentials).length > 0) {
+            try {
+                filePersisted = credentialStore.saveEncryptedCredentials(userId, broker, fileCredentials);
+            } catch (fileErr) {
+                warnings.push('Failed to persist credentials to local fallback storage');
+                console.warn(`⚠️ Failed to persist ${broker} credentials to file for user ${userId}:`, fileErr.message);
+            }
+        }
+
+        const storage = userId && persisted === updated
+            ? 'database'
+            : userId && filePersisted === updated
+                ? 'file'
+                : 'environment';
+        console.log(`⚙️  Credentials updated: broker=${broker} keys=${updated} storage=${storage}`);
+
+        let reconnectWarning = null;
         // If crypto keys were updated, reinitialise the exchange client and reconnect
         if (broker === 'crypto' && updated > 0) {
-            engine.kraken = new KrakenClient({
-                apiKey: process.env.CRYPTO_API_KEY,
-                apiSecret: process.env.CRYPTO_API_SECRET,
-            });
-            if (engine.demoMode) {
+            const apiKey = process.env.CRYPTO_API_KEY;
+            const apiSecret = process.env.CRYPTO_API_SECRET;
+            if (!apiKey || !apiSecret) {
+                reconnectWarning = 'Credentials saved, but Kraken reconnect was skipped until both API key and secret are present';
+            } else {
                 try {
-                    // Call _privateRequest directly so real Kraken errors propagate (getAccountInfo swallows them)
-                    const account = await engine.kraken._privateRequest('Balance');
-                    if (account) {
-                        engine.demoMode = false;
-                        engine.saveState();
-                        console.log('✅ Kraken reconnected after credential update — exiting DEMO MODE');
-                        return res.json({ success: true, updated, reconnected: true, demoMode: false, storage: userId ? 'database' : 'environment' });
+                    engine.kraken = new KrakenClient({ apiKey, apiSecret });
+                    if (engine.demoMode) {
+                        // Call _privateRequest directly so real Kraken errors propagate (getAccountInfo swallows them)
+                        const account = await engine.kraken._privateRequest('Balance');
+                        if (account) {
+                            engine.demoMode = false;
+                            engine.saveState();
+                            console.log('✅ Kraken reconnected after credential update — exiting DEMO MODE');
+                        } else {
+                            reconnectWarning = 'Keys saved but Kraken Balance returned empty — check API key permissions';
+                        }
                     }
-                    return res.json({ success: true, updated, reconnected: false, demoMode: true,
-                        warning: 'Keys saved but Kraken Balance returned empty — check API key permissions',
-                        storage: userId ? 'database' : 'environment' });
                 } catch (reconnectErr) {
-                    const krakenErr = reconnectErr.message || 'Unknown error';
-                    console.error('❌ Kraken reconnect error:', krakenErr);
-                    return res.json({ success: true, updated, reconnected: false, demoMode: true,
-                        warning: `Kraken rejected keys: ${krakenErr}`, storage: userId ? 'database' : 'environment' });
+                    reconnectWarning = `Kraken rejected keys: ${reconnectErr.message || 'Unknown error'}`;
+                    console.error('❌ Kraken reconnect error:', reconnectWarning);
                 }
             }
         }
         // Register or update per-user crypto engine
         if (userId && broker === 'crypto') {
-            const existingEngine = cryptoEngineRegistry.get(String(userId));
-            if (existingEngine) {
-                existingEngine.kraken = new KrakenClient({
-                    apiKey: creds.CRYPTO_API_KEY || process.env.CRYPTO_API_KEY,
-                    apiSecret: creds.CRYPTO_API_SECRET || process.env.CRYPTO_API_SECRET,
-                });
-                console.log(`🔧 [CryptoEngine ${userId}] Kraken client updated`);
-            } else {
-                getOrCreateCryptoEngine(userId).then(eng => {
-                    if (eng) { eng.start().catch(() => {}); }
-                }).catch(() => {});
+            try {
+                const existingEngine = cryptoEngineRegistry.get(String(userId));
+                if (existingEngine && process.env.CRYPTO_API_KEY && process.env.CRYPTO_API_SECRET) {
+                    existingEngine.kraken = new KrakenClient({
+                        apiKey: process.env.CRYPTO_API_KEY,
+                        apiSecret: process.env.CRYPTO_API_SECRET,
+                    });
+                    console.log(`🔧 [CryptoEngine ${userId}] Kraken client updated`);
+                } else if (!existingEngine) {
+                    getOrCreateCryptoEngine(userId).then(eng => {
+                        if (eng) { eng.start().catch(() => {}); }
+                    }).catch(() => {});
+                }
+            } catch (engineErr) {
+                warnings.push('Credentials saved, but the personal crypto engine could not be refreshed immediately');
+                console.warn(`⚠️ Failed to refresh crypto engine for user ${userId}:`, engineErr.message);
             }
         }
 
-        res.json({ success: true, updated, reconnected: false, demoMode: engine.demoMode || false, storage: userId ? 'database' : 'environment', engineStarted: !!userId });
+        const response = {
+            success: true,
+            updated,
+            reconnected: reconnectWarning === null && engine.demoMode === false,
+            demoMode: engine.demoMode || false,
+            storage,
+            engineStarted: !!userId,
+        };
+        if (reconnectWarning) response.warning = reconnectWarning;
+        if (warnings.length === 1) response.warning = response.warning || warnings[0];
+        if (warnings.length > 1) response.warnings = warnings;
+
+        res.json(response);
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -1841,11 +2059,27 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
 
 app.get('/api/config/credentials/status', requireJwt, async (req, res) => {
     const userId = req.user?.sub;
-    if (!userId || !dbPool) {
+    const envStatus = {
+        crypto:   { configured: !!(process.env.CRYPTO_API_KEY && process.env.CRYPTO_API_SECRET) },
+        telegram: { configured: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) },
+        sms:      { configured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) },
+    };
+
+    const fileStatus = userId ? {
+        crypto: credentialStore.countCredentials(userId, 'crypto'),
+        telegram: credentialStore.countCredentials(userId, 'telegram'),
+        sms: credentialStore.countCredentials(userId, 'sms'),
+    } : null;
+
+    if (!userId) {
+        return res.json({ success: true, brokers: envStatus });
+    }
+
+    if (!dbPool) {
         return res.json({ success: true, brokers: {
-            crypto:   { configured: !!(process.env.CRYPTO_API_KEY && process.env.CRYPTO_API_SECRET) },
-            telegram: { configured: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) },
-            sms:      { configured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) },
+            crypto:   { configured: (fileStatus.crypto   || 0) >= 2 || envStatus.crypto.configured },
+            telegram: { configured: (fileStatus.telegram || 0) >= 2 || envStatus.telegram.configured },
+            sms:      { configured: (fileStatus.sms      || 0) >= 2 || envStatus.sms.configured },
         }});
     }
     try {
@@ -1855,12 +2089,17 @@ app.get('/api/config/credentials/status', requireJwt, async (req, res) => {
         );
         const stored = Object.fromEntries(r.rows.map(row => [row.broker, parseInt(row.key_count)]));
         res.json({ success: true, brokers: {
-            crypto:   { configured: (stored.crypto   || 0) >= 2 },
-            telegram: { configured: (stored.telegram || 0) >= 2 },
-            sms:      { configured: (stored.sms      || 0) >= 2 },
+            crypto:   { configured: Math.max(stored.crypto   || 0, fileStatus.crypto   || 0) >= 2 || envStatus.crypto.configured },
+            telegram: { configured: Math.max(stored.telegram || 0, fileStatus.telegram || 0) >= 2 || envStatus.telegram.configured },
+            sms:      { configured: Math.max(stored.sms      || 0, fileStatus.sms      || 0) >= 2 || envStatus.sms.configured },
         }});
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        console.warn('⚠️ Credential status lookup failed, falling back to environment values:', e.message);
+        res.json({ success: true, brokers: {
+            crypto:   { configured: (fileStatus.crypto   || 0) >= 2 || envStatus.crypto.configured },
+            telegram: { configured: (fileStatus.telegram || 0) >= 2 || envStatus.telegram.configured },
+            sms:      { configured: (fileStatus.sms      || 0) >= 2 || envStatus.sms.configured },
+        }, warning: 'Credential status fallback in use' });
     }
 });
 
@@ -1922,7 +2161,6 @@ const cryptoEngineRegistry = new Map(); // userId → CryptoTradingEngine
 async function getOrCreateCryptoEngine(userId) {
     const key = String(userId);
     if (cryptoEngineRegistry.has(key)) return cryptoEngineRegistry.get(key);
-    if (!dbPool) return null;
     try {
         const creds = await loadUserCredentials(userId, 'crypto');
         const apiKey    = creds.CRYPTO_API_KEY    || process.env.CRYPTO_API_KEY;
@@ -1973,16 +2211,18 @@ async function getOrCreateCryptoEngine(userId) {
             } catch (e) { console.warn('DB crypto close failed:', e.message); }
         };
         // Load saved state from DB
-        try {
-            const r = await dbPool.query('SELECT state_json FROM engine_state WHERE user_id=$1 AND bot=$2', [userId, 'crypto']);
-            if (r.rows.length > 0) {
-                const s = r.rows[0].state_json;
-                if (s.totalTrades !== undefined) userEngine.totalTrades = s.totalTrades;
-                if (s.winningTrades !== undefined) userEngine.winningTrades = s.winningTrades;
-                if (s.losingTrades !== undefined) userEngine.losingTrades = s.losingTrades;
-                if (s.totalProfit !== undefined) userEngine.totalProfit = s.totalProfit;
-            }
-        } catch (e) { /* non-critical */ }
+        if (dbPool) {
+            try {
+                const r = await dbPool.query('SELECT state_json FROM engine_state WHERE user_id=$1 AND bot=$2', [userId, 'crypto']);
+                if (r.rows.length > 0) {
+                    const s = r.rows[0].state_json;
+                    if (s.totalTrades !== undefined) userEngine.totalTrades = s.totalTrades;
+                    if (s.winningTrades !== undefined) userEngine.winningTrades = s.winningTrades;
+                    if (s.losingTrades !== undefined) userEngine.losingTrades = s.losingTrades;
+                    if (s.totalProfit !== undefined) userEngine.totalProfit = s.totalProfit;
+                }
+            } catch (e) { /* non-critical */ }
+        }
         // Hydrate open positions from trades table (KrakenClient has no getOpenPositions — trust DB)
         if (dbPool) {
             try {
@@ -2063,6 +2303,11 @@ app.get('/api/crypto/engine/status', requireJwt, async (req, res) => {
     const userEngine = await getOrCreateCryptoEngine(userId);
     if (!userEngine) return res.json({ success: true, credentialsRequired: true,
         message: 'No Kraken credentials configured — visit Settings' });
+    const connected = await userEngine.refreshConnectionState();
+    if (!connected) {
+        return res.json({ success: true, credentialsRequired: true,
+            message: userEngine.credentialsError || 'Kraken credentials invalid or expired' });
+    }
     const status = userEngine.getStatus();
     res.json({ success: true, ...status, userId });
 });
@@ -2071,6 +2316,10 @@ app.post('/api/crypto/engine/start', requireJwt, async (req, res) => {
     const userId = req.user.sub;
     const userEngine = await getOrCreateCryptoEngine(userId);
     if (!userEngine) return res.status(404).json({ success: false, error: 'Configure Kraken credentials first' });
+    const connected = await userEngine.refreshConnectionState(true);
+    if (!connected) {
+        return res.status(400).json({ success: false, error: userEngine.credentialsError || 'Kraken credentials invalid or expired' });
+    }
     await userEngine.start();
     res.json({ success: true, isRunning: userEngine.isRunning });
 });

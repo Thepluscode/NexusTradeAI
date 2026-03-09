@@ -70,6 +70,36 @@ function getJwtHeaders(): Record<string, string> {
     return {};
 }
 
+async function fetchCredentialStatuses(): Promise<Record<string, { configured: boolean }>> {
+    const headers = getJwtHeaders();
+    if (!headers.Authorization) return {};
+
+    const statusEndpoints = [
+        `${API_BASE}/api/config/credentials/status`,
+        `${SERVICE_URLS.forexBot}/api/config/credentials/status`,
+        `${SERVICE_URLS.cryptoBot}/api/config/credentials/status`,
+    ];
+
+    const results = await Promise.allSettled(
+        statusEndpoints.map(url => axios.get(url, { headers, timeout: 5000 }))
+    );
+
+    const merged: Record<string, { configured: boolean }> = {};
+
+    for (const result of results) {
+        if (result.status !== 'fulfilled') continue;
+        const brokers = result.value.data?.brokers;
+        if (!brokers || typeof brokers !== 'object') continue;
+
+        for (const [broker, status] of Object.entries(brokers as Record<string, { configured?: boolean }>)) {
+            if (typeof status?.configured !== 'boolean') continue;
+            merged[broker] = { configured: status.configured };
+        }
+    }
+
+    return merged;
+}
+
 // ─── API ────────────────────────────────────────────────────────────────────
 
 async function fetchConfig() {
@@ -92,6 +122,15 @@ async function fetchConfig() {
             config.brokers.crypto = cryptoConfig.brokers.crypto;
         }
     } catch { /* crypto bot offline — leave crypto section unconfigured */ }
+
+    const credentialStatuses = await fetchCredentialStatuses();
+    for (const [broker, status] of Object.entries(credentialStatuses)) {
+        config.brokers[broker] = {
+            ...(config.brokers[broker] || {}),
+            ...status,
+        };
+    }
+
     return config;
 }
 
@@ -976,7 +1015,7 @@ export default function SettingsPage() {
             void queryClient.invalidateQueries('botConfig');
         },
         onError: (_err, vars) => {
-            const botName = vars.broker === 'crypto' ? 'Crypto Bot' : vars.broker === 'forex' ? 'Forex Bot' : 'Stock Bot';
+            const botName = vars.broker === 'crypto' ? 'Crypto Bot' : vars.broker === 'oanda' ? 'Forex Bot' : 'Stock Bot';
             toast.error(`Failed to save — is the ${botName} running?`);
         },
     });

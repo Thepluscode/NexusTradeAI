@@ -6,6 +6,7 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
+const { createUserCredentialStore } = require('./userCredentialStore');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 // ── PostgreSQL trade persistence (optional — requires DATABASE_URL) ──────────
@@ -198,8 +199,15 @@ async function persistEnvVar(name, value) {
 
 // ── Per-user credential encryption (AES-256-GCM) ───────────────────────────
 function getEncryptionKey() {
-    const envKey = process.env.CREDENTIAL_ENCRYPTION_KEY;
-    if (envKey) return Buffer.from(envKey, 'hex');
+    const envKey = (process.env.CREDENTIAL_ENCRYPTION_KEY || '').trim();
+    if (envKey) {
+        const normalized = envKey.startsWith('0x') ? envKey.slice(2) : envKey;
+        if (/^[0-9a-fA-F]{64}$/.test(normalized)) {
+            return Buffer.from(normalized, 'hex');
+        }
+        console.warn('⚠️ Invalid CREDENTIAL_ENCRYPTION_KEY format; hashing configured value instead of raw hex');
+        return crypto.createHash('sha256').update(envKey).digest();
+    }
     const secret = process.env.JWT_SECRET || 'dev-secret-change-me';
     return crypto.createHash('sha256').update(secret).digest();
 }
@@ -225,14 +233,36 @@ function decryptCredential(stored) {
     return decrypted;
 }
 
+function normalizeCredentialValue(value) {
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        return trimmed === '' ? null : trimmed;
+    }
+    if (typeof value === 'boolean' || typeof value === 'number') {
+        return String(value);
+    }
+    return null;
+}
+
+const credentialStore = createUserCredentialStore(path.join(__dirname, 'data/user-credentials.json'));
+
 async function loadUserCredentials(userId, broker) {
-    if (!dbPool) return {};
+    if (userId === undefined || userId === null) return {};
+
+    const creds = {};
+    const fileCreds = credentialStore.loadEncryptedCredentials(userId, broker);
+    for (const [key, encryptedValue] of Object.entries(fileCreds)) {
+        try { creds[key] = decryptCredential(encryptedValue); }
+        catch (e) { console.warn(`⚠️ Failed to decrypt file-backed ${key} for user ${userId}:`, e.message); }
+    }
+
+    if (!dbPool) return creds;
+
     try {
         const result = await dbPool.query(
             'SELECT credential_key, encrypted_value FROM user_credentials WHERE user_id=$1 AND broker=$2',
             [userId, broker]
         );
-        const creds = {};
         for (const row of result.rows) {
             try { creds[row.credential_key] = decryptCredential(row.encrypted_value); }
             catch (e) { console.warn(`⚠️ Failed to decrypt ${row.credential_key} for user ${userId}:`, e.message); }
@@ -454,6 +484,10 @@ const oandaConfig = {
     isPractice: process.env.OANDA_PRACTICE !== 'false'
 };
 
+function hasGlobalOandaCredentials() {
+    return Boolean(oandaConfig.accountId && oandaConfig.accessToken);
+}
+
 // ===== FOREX PAIRS =====
 const FOREX_PAIRS = [
     // Major Pairs (highest liquidity, tightest spreads)
@@ -646,6 +680,12 @@ const MOMENTUM_CONFIG = {
     }
 };
 
+const FOREX_PULLBACK_CONFIG = {
+    tier1: 0.0040,
+    tier2: 0.0050,
+    tier3: 0.0065
+};
+
 // ===== TRADING SESSIONS (UTC) =====
 const TRADING_SESSIONS = {
     london: { start: 7, end: 16, name: 'London', quality: 'good' },
@@ -674,6 +714,23 @@ function getCurrentSession() {
     if (hour >= 0 && hour < 9) return { ...TRADING_SESSIONS.tokyo, isBest: false };
 
     return { name: 'Low Liquidity', quality: 'poor', isBest: false };
+}
+
+function scoreForexSignal({ tier, trendStrength, pullback, maxPullback, rsi, direction, session, macd }) {
+    const tierWeight = { tier1: 1.0, tier2: 1.35, tier3: 1.75 }[tier] || 1.0;
+    const sessionWeight = session?.isBest ? 1.35 : session?.quality === 'good' ? 1.15 : 0.95;
+    const pullbackQuality = maxPullback > 0
+        ? 1 + Math.max(0, (maxPullback - pullback) / maxPullback) * 0.35
+        : 1;
+    const rsiSweetSpot = direction === 'long'
+        ? (rsi >= 45 && rsi <= 62 ? 1.1 : 1.0)
+        : (rsi >= 38 && rsi <= 55 ? 1.1 : 1.0);
+    const macdStrength = macd ? Math.min(Math.abs(macd.histogram) * 100000, 3) : 1;
+
+    return parseFloat(
+        (tierWeight * sessionWeight * (trendStrength * 1000) * pullbackQuality * rsiSweetSpot + macdStrength)
+            .toFixed(3)
+    );
 }
 
 function isMarketOpen() {
@@ -773,6 +830,9 @@ function getCorrelatedPositions(pair, direction) {
 // ===== OANDA API =====
 
 async function oandaRequest(method, endpoint, data = null) {
+    if (!hasGlobalOandaCredentials()) {
+        return null;
+    }
     try {
         const config = {
             method,
@@ -1050,6 +1110,7 @@ async function analyzePair(pair) {
     const isUptrend = sma10 > sma20 && sma20 > sma50 && currentPrice > sma10;
     const isDowntrend = sma10 < sma20 && sma20 < sma50 && currentPrice < sma10;
     const trendStrength = Math.abs(currentPrice - sma50) / sma50;
+    const pullback = sma10 > 0 ? Math.abs(currentPrice - sma10) / sma10 : 0;
 
     // [v3.2] Entry candle direction — last completed M15 candle must align with signal
     const lastCandle = candles[candles.length - 1];
@@ -1061,7 +1122,7 @@ async function analyzePair(pair) {
 
     return {
         pair, currentPrice, sma10, sma20, sma50, rsi, atr,
-        atrPct, bb, macd,
+        atrPct, bb, macd, pullback,
         isUptrend, isDowntrend, trendStrength,
         lastCandleBullish, lastCandleBearish
     };
@@ -1097,7 +1158,7 @@ async function scanForSignals(heldPositions = positions) {
         const { pair, analysis, h1Trend } = result.value;
         const {
             currentPrice, rsi, isUptrend, isDowntrend, trendStrength,
-            atrPct, bb, macd, lastCandleBullish, lastCandleBearish
+            atrPct, bb, macd, pullback, lastCandleBullish, lastCandleBearish
         } = analysis;
 
         // Determine tier
@@ -1108,8 +1169,13 @@ async function scanForSignals(heldPositions = positions) {
         if (!tier) continue;
 
         const config = MOMENTUM_CONFIG[tier];
+        const maxPullback = FOREX_PULLBACK_CONFIG[tier] || FOREX_PULLBACK_CONFIG.tier1;
         const tierPositions = Array.from(positions.values()).filter(p => p.tier === tier).length;
         if (tierPositions >= config.maxPositions) continue;
+        if (pullback > maxPullback) {
+            console.log(`[Pullback Filter] ${pair} skipped — extended ${ (pullback * 100).toFixed(2)}% from M15 trend anchor (max ${(maxPullback * 100).toFixed(2)}%)`);
+            continue;
+        }
 
         // [v3.2] ATR-based stops/targets — adapts to each pair's volatility
         const atrStop   = atrPct > 0 ? atrPct * 1.5 : config.stopLoss;
@@ -1143,12 +1209,22 @@ async function scanForSignals(heldPositions = positions) {
                 if (bridgeLong !== null) {
                     console.log(`[Bridge] ${pair} LONG advisory: ${bridgeLong.direction} conf:${(bridgeLong.confidence || 0).toFixed(2)}`);
                 }
+                const score = scoreForexSignal({
+                    tier,
+                    trendStrength,
+                    pullback,
+                    maxPullback,
+                    rsi,
+                    direction: 'long',
+                    session,
+                    macd
+                });
                 signals.push({
                     pair, direction: 'long', tier,
                     entry: currentPrice,
                     stopLoss:   currentPrice * (1 - atrStop),
                     takeProfit: currentPrice * (1 + atrTarget),
-                    rsi, trendStrength, atrPct, h1Trend,
+                    rsi, trendStrength, atrPct, h1Trend, pullback, score,
                     macdHistogram: macd ? macd.histogram : null,
                     session: session.name
                 });
@@ -1182,12 +1258,22 @@ async function scanForSignals(heldPositions = positions) {
                 if (bridgeShort !== null) {
                     console.log(`[Bridge] ${pair} SHORT advisory: ${bridgeShort.direction} conf:${(bridgeShort.confidence || 0).toFixed(2)}`);
                 }
+                const score = scoreForexSignal({
+                    tier,
+                    trendStrength,
+                    pullback,
+                    maxPullback,
+                    rsi,
+                    direction: 'short',
+                    session,
+                    macd
+                });
                 signals.push({
                     pair, direction: 'short', tier,
                     entry: currentPrice,
                     stopLoss:   currentPrice * (1 + atrStop),
                     takeProfit: currentPrice * (1 - atrTarget),
-                    rsi, trendStrength, atrPct, h1Trend,
+                    rsi, trendStrength, atrPct, h1Trend, pullback, score,
                     macdHistogram: macd ? macd.histogram : null,
                     session: session.name
                 });
@@ -1195,6 +1281,7 @@ async function scanForSignals(heldPositions = positions) {
         }
     }
 
+    signals.sort((a, b) => (b.score || 0) - (a.score || 0));
     return signals;
 }
 
@@ -1822,57 +1909,109 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
         if (!creds || typeof creds !== 'object') return res.status(400).json({ success: false, error: 'No credentials provided' });
         const userId = req.user?.sub;
         let updated = 0;
-        for (const [key, value] of Object.entries(creds)) {
+        let persisted = 0;
+        let filePersisted = 0;
+        const warnings = [];
+        const fileCredentials = {};
+        for (const [key, rawValue] of Object.entries(creds)) {
             if (!allowed.includes(key)) continue;
-            if (typeof value !== 'string' || value === '') continue;
+            const value = normalizeCredentialValue(rawValue);
+            if (value === null) continue;
             // Apply immediately in-memory so current session picks it up
             process.env[key] = value;
+            if (userId) {
+                fileCredentials[key] = encryptCredential(value);
+            }
             // Persist encrypted to DB per user (if authenticated)
             if (userId && dbPool) {
-                const encrypted = encryptCredential(value);
-                await dbPool.query(
-                    `INSERT INTO user_credentials (user_id, broker, credential_key, encrypted_value, updated_at)
-                     VALUES ($1, $2, $3, $4, NOW())
-                     ON CONFLICT (user_id, broker, credential_key)
-                     DO UPDATE SET encrypted_value=$4, updated_at=NOW()`,
-                    [userId, broker, key, encrypted]
-                );
+                try {
+                    await dbPool.query(
+                        `INSERT INTO user_credentials (user_id, broker, credential_key, encrypted_value, updated_at)
+                         VALUES ($1, $2, $3, $4, NOW())
+                         ON CONFLICT (user_id, broker, credential_key)
+                         DO UPDATE SET encrypted_value=$4, updated_at=NOW()`,
+                        [userId, broker, key, fileCredentials[key]]
+                    );
+                    persisted++;
+                } catch (persistErr) {
+                    const warning = `Failed to persist ${key}; using current runtime value only`;
+                    warnings.push(warning);
+                    console.warn(`⚠️ Failed to persist ${broker}.${key} for user ${userId}:`, persistErr.message);
+                }
             }
             updated++;
         }
-        console.log(`⚙️  Credentials updated: broker=${broker} keys=${updated} storage=${userId ? 'database' : 'environment'}`);
+        if (updated === 0) {
+            return res.status(400).json({ success: false, error: 'No valid credential fields provided' });
+        }
+
+        if (userId && Object.keys(fileCredentials).length > 0) {
+            try {
+                filePersisted = credentialStore.saveEncryptedCredentials(userId, broker, fileCredentials);
+            } catch (fileErr) {
+                warnings.push('Failed to persist credentials to local fallback storage');
+                console.warn(`⚠️ Failed to persist ${broker} credentials to file for user ${userId}:`, fileErr.message);
+            }
+        }
+
+        const storage = userId && persisted === updated
+            ? 'database'
+            : userId && filePersisted === updated
+                ? 'file'
+                : 'environment';
+        console.log(`⚙️  Credentials updated: broker=${broker} keys=${updated} storage=${storage}`);
 
         // Refresh in-memory broker config
         if (broker === 'oanda') {
-            if (creds.OANDA_ACCOUNT_ID)   oandaConfig.accountId   = creds.OANDA_ACCOUNT_ID;
-            if (creds.OANDA_ACCESS_TOKEN) oandaConfig.accessToken = creds.OANDA_ACCESS_TOKEN;
-            if (creds.OANDA_PRACTICE !== undefined) oandaConfig.isPractice = creds.OANDA_PRACTICE !== 'false';
+            if (process.env.OANDA_ACCOUNT_ID)   oandaConfig.accountId   = process.env.OANDA_ACCOUNT_ID;
+            if (process.env.OANDA_ACCESS_TOKEN) oandaConfig.accessToken = process.env.OANDA_ACCESS_TOKEN;
+            if (process.env.OANDA_PRACTICE !== undefined) oandaConfig.isPractice = process.env.OANDA_PRACTICE !== 'false';
             // Register or update per-user engine
             if (userId) {
                 const existingEngine = forexEngineRegistry.get(String(userId));
                 if (existingEngine) {
-                    existingEngine.updateCredentials(creds.OANDA_ACCOUNT_ID, creds.OANDA_ACCESS_TOKEN,
-                        creds.OANDA_PRACTICE !== undefined ? creds.OANDA_PRACTICE !== 'false' : undefined,
-                        { TELEGRAM_BOT_TOKEN: creds.TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID: creds.TELEGRAM_CHAT_ID });
+                    existingEngine.updateCredentials(process.env.OANDA_ACCOUNT_ID, process.env.OANDA_ACCESS_TOKEN,
+                        process.env.OANDA_PRACTICE !== undefined ? process.env.OANDA_PRACTICE !== 'false' : undefined,
+                        { TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID });
                 } else {
                     getOrCreateForexEngine(userId).catch(() => {});
                 }
             }
         }
 
-        res.json({ success: true, updated, storage: userId ? 'database' : 'environment', engineStarted: !!userId });
+        const response = { success: true, updated, storage, engineStarted: !!userId };
+        if (warnings.length === 1) response.warning = warnings[0];
+        if (warnings.length > 1) response.warnings = warnings;
+        res.json(response);
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        console.error('Credentials update error:', err.message);
+        res.status(500).json({ success: false, error: err.message || 'Failed to save credentials' });
     }
 });
 
 app.get('/api/config/credentials/status', requireJwt, async (req, res) => {
     const userId = req.user?.sub;
-    if (!userId || !dbPool) {
+    const envStatus = {
+        oanda:    { configured: !!(process.env.OANDA_ACCOUNT_ID && process.env.OANDA_ACCESS_TOKEN) },
+        telegram: { configured: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) },
+        sms:      { configured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) },
+    };
+
+    const fileStatus = userId ? {
+        oanda: credentialStore.countCredentials(userId, 'oanda'),
+        telegram: credentialStore.countCredentials(userId, 'telegram'),
+        sms: credentialStore.countCredentials(userId, 'sms'),
+    } : null;
+
+    if (!userId) {
+        return res.json({ success: true, brokers: envStatus });
+    }
+
+    if (!dbPool) {
         return res.json({ success: true, brokers: {
-            oanda:    { configured: !!(process.env.OANDA_ACCOUNT_ID && process.env.OANDA_ACCESS_TOKEN) },
-            telegram: { configured: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) },
-            sms:      { configured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) },
+            oanda:    { configured: (fileStatus.oanda    || 0) >= 2 || envStatus.oanda.configured },
+            telegram: { configured: (fileStatus.telegram || 0) >= 2 || envStatus.telegram.configured },
+            sms:      { configured: (fileStatus.sms      || 0) >= 2 || envStatus.sms.configured },
         }});
     }
     try {
@@ -1882,12 +2021,17 @@ app.get('/api/config/credentials/status', requireJwt, async (req, res) => {
         );
         const stored = Object.fromEntries(r.rows.map(row => [row.broker, parseInt(row.key_count)]));
         res.json({ success: true, brokers: {
-            oanda:    { configured: (stored.oanda    || 0) >= 2 },
-            telegram: { configured: (stored.telegram || 0) >= 2 },
-            sms:      { configured: (stored.sms      || 0) >= 2 },
+            oanda:    { configured: Math.max(stored.oanda    || 0, fileStatus.oanda    || 0) >= 2 || envStatus.oanda.configured },
+            telegram: { configured: Math.max(stored.telegram || 0, fileStatus.telegram || 0) >= 2 || envStatus.telegram.configured },
+            sms:      { configured: Math.max(stored.sms      || 0, fileStatus.sms      || 0) >= 2 || envStatus.sms.configured },
         }});
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        console.warn('⚠️ Credential status lookup failed, falling back to environment values:', e.message);
+        res.json({ success: true, brokers: {
+            oanda:    { configured: (fileStatus.oanda    || 0) >= 2 || envStatus.oanda.configured },
+            telegram: { configured: (fileStatus.telegram || 0) >= 2 || envStatus.telegram.configured },
+            sms:      { configured: (fileStatus.sms      || 0) >= 2 || envStatus.sms.configured },
+        }, warning: 'Credential status fallback in use' });
     }
 });
 
@@ -1960,7 +2104,7 @@ class UserForexEngine {
         this.stoppedOutPairs = new Map();
         this.tradesPerPair = new Map();
         this.totalTradesToday = 0;
-        this.botRunning = true;
+        this.botRunning = false;
         this.botPaused = false;
         this.lastResetDate = new Date().toUTCDate ? new Date().toUTCString().slice(0, 16) : new Date().toDateString();
         this.simEquity = 100000;
@@ -2068,6 +2212,9 @@ class UserForexEngine {
     }
 
     async oandaReq(method, endpoint, data = null) {
+        if (!(this.oandaConfig.accountId && this.oandaConfig.accessToken)) {
+            return null;
+        }
         try {
             const config = {
                 method, url: `${this.oandaConfig.baseURL}${endpoint}`,
@@ -2288,7 +2435,6 @@ const forexEngineRegistry = new Map(); // userId → UserForexEngine
 async function getOrCreateForexEngine(userId) {
     const key = String(userId);
     if (forexEngineRegistry.has(key)) return forexEngineRegistry.get(key);
-    if (!dbPool) return null;
     try {
         const creds = await loadUserCredentials(userId, 'oanda');
         const accountId   = creds.OANDA_ACCOUNT_ID    || process.env.OANDA_ACCOUNT_ID;
@@ -2330,6 +2476,10 @@ app.get('/api/forex/engine/status', requireJwt, async (req, res) => {
         message: 'No OANDA credentials configured — visit Settings' });
     try {
         const account = await engine.getAccount();
+        if (!account) {
+            return res.json({ success: true, credentialsRequired: true,
+                message: 'OANDA credentials invalid or expired' });
+        }
         const equity = account ? parseFloat(account.balance) : 0;
         res.json({ success: true, isRunning: engine.botRunning, isPaused: engine.botPaused,
             mode: engine.oandaConfig.isPractice ? 'PAPER' : 'LIVE',
@@ -2344,6 +2494,10 @@ app.get('/api/forex/engine/status', requireJwt, async (req, res) => {
 app.post('/api/forex/engine/start', requireJwt, async (req, res) => {
     const engine = await getOrCreateForexEngine(req.user.sub);
     if (!engine) return res.status(404).json({ success: false, error: 'Configure OANDA credentials first' });
+    const account = await engine.getAccount();
+    if (!account) {
+        return res.status(400).json({ success: false, error: 'OANDA credentials invalid or expired' });
+    }
     engine.botRunning = true; engine.botPaused = false; await engine.saveState();
     res.json({ success: true, isRunning: true });
 });

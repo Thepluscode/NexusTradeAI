@@ -7,6 +7,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { Pool } = require('pg');
 const rateLimit = require('express-rate-limit');
+const { createUserCredentialStore } = require('./userCredentialStore');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 // ===== PRODUCTION INFRASTRUCTURE =====
@@ -72,8 +73,15 @@ async function persistEnvVar(name, value) {
 
 // ── Per-user credential encryption (AES-256-GCM) ───────────────────────────
 function getEncryptionKey() {
-    const envKey = process.env.CREDENTIAL_ENCRYPTION_KEY;
-    if (envKey) return Buffer.from(envKey, 'hex');
+    const envKey = (process.env.CREDENTIAL_ENCRYPTION_KEY || '').trim();
+    if (envKey) {
+        const normalized = envKey.startsWith('0x') ? envKey.slice(2) : envKey;
+        if (/^[0-9a-fA-F]{64}$/.test(normalized)) {
+            return Buffer.from(normalized, 'hex');
+        }
+        console.warn('⚠️ Invalid CREDENTIAL_ENCRYPTION_KEY format; hashing configured value instead of raw hex');
+        return crypto.createHash('sha256').update(envKey).digest();
+    }
     const secret = process.env.JWT_SECRET || 'dev-secret-change-me';
     return crypto.createHash('sha256').update(secret).digest();
 }
@@ -99,14 +107,36 @@ function decryptCredential(stored) {
     return decrypted;
 }
 
+function normalizeCredentialValue(value) {
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        return trimmed === '' ? null : trimmed;
+    }
+    if (typeof value === 'boolean' || typeof value === 'number') {
+        return String(value);
+    }
+    return null;
+}
+
+const credentialStore = createUserCredentialStore(path.join(__dirname, 'data/user-credentials.json'));
+
 async function loadUserCredentials(userId, broker) {
-    if (!dbPool) return {};
+    if (userId === undefined || userId === null) return {};
+
+    const creds = {};
+    const fileCreds = credentialStore.loadEncryptedCredentials(userId, broker);
+    for (const [key, encryptedValue] of Object.entries(fileCreds)) {
+        try { creds[key] = decryptCredential(encryptedValue); }
+        catch (e) { console.warn(`⚠️ Failed to decrypt file-backed ${key} for user ${userId}:`, e.message); }
+    }
+
+    if (!dbPool) return creds;
+
     try {
         const result = await dbPool.query(
             'SELECT credential_key, encrypted_value FROM user_credentials WHERE user_id=$1 AND broker=$2',
             [userId, broker]
         );
-        const creds = {};
         for (const row of result.rows) {
             try { creds[row.credential_key] = decryptCredential(row.encrypted_value); }
             catch (e) { console.warn(`⚠️ Failed to decrypt ${row.credential_key} for user ${userId}:`, e.message); }
@@ -263,6 +293,31 @@ const authRateLimit = rateLimit({
 
 // ── Auth Endpoints ────────────────────────────────────────────────────────────
 
+app.post('/api/auth/dev-login', authRateLimit, async (req, res) => {
+    if (dbPool) {
+        return res.status(404).json({ success: false, error: 'Dev login is disabled when DATABASE_URL is configured' });
+    }
+
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const name = String(req.body?.name || '').trim();
+    if (!email) {
+        return res.status(400).json({ success: false, error: 'Email is required for local dev login' });
+    }
+
+    const tokens = signTokens(email, email);
+    res.json({
+        success: true,
+        localDev: true,
+        user: {
+            id: email,
+            email,
+            name: name || email.split('@')[0],
+            role: 'user'
+        },
+        ...tokens
+    });
+});
+
 app.post('/api/auth/register', authRateLimit, async (req, res) => {
     if (!dbPool) return res.status(503).json({ success: false, error: 'Auth service unavailable' });
     const { email, password, name } = req.body || {};
@@ -401,6 +456,10 @@ const alpacaConfig = {
     secretKey: process.env.ALPACA_SECRET_KEY,
     dataURL: 'https://data.alpaca.markets'
 };
+
+function hasGlobalAlpacaCredentials() {
+    return Boolean(alpacaConfig.apiKey && alpacaConfig.secretKey);
+}
 
 // Returns the correct Alpaca base URL, reflecting runtime changes to REAL_TRADING_ENABLED.
 // alpacaConfig.baseURL is the startup default; this getter re-evaluates the env var each call.
@@ -694,6 +753,21 @@ const MOMENTUM_CONFIG = {
     }
 };
 
+const OPENING_RANGE_BREAKOUT_CONFIG = {
+    openingRangeMinutes: 15,
+    entryCutoffHour: 11,
+    breakoutBufferDollars: 0.10,
+    breakoutBufferPct: 0.001,
+    minBreakoutVolumeRatio: 1.8,
+    rsiMin: 48,
+    rsiMax: 72,
+    maxBreakoutPct: 0.03,
+    positionSize: 0.004,
+    stopLoss: 0.015,
+    profitTarget: 0.02,
+    maxPositions: 2
+};
+
 // Load persisted risk config overrides (survives restarts)
 try {
     if (fs.existsSync(RISK_CONFIG_FILE)) {
@@ -762,6 +836,76 @@ function isGoodTradingTime() {
     const isGoodTime = timeInMinutes >= tradingStart && timeInMinutes <= tradingEnd;
 
     return isMarketDay && isGoodTime;
+}
+
+function isOpeningRangeBreakoutWindow(now = getESTDate()) {
+    const isMarketDay = now.getDay() >= 1 && now.getDay() <= 5;
+    if (!isMarketDay) return false;
+
+    const hour = now.getHours();
+    const minute = now.getMinutes();
+    const timeInMinutes = hour * 60 + minute;
+    const openingRangeEnd = (TRADING_HOURS.marketOpen.hour * 60 + TRADING_HOURS.marketOpen.minute)
+        + OPENING_RANGE_BREAKOUT_CONFIG.openingRangeMinutes;
+    const entryCutoff = OPENING_RANGE_BREAKOUT_CONFIG.entryCutoffHour * 60;
+
+    return timeInMinutes >= openingRangeEnd && timeInMinutes <= entryCutoff;
+}
+
+function buildOpeningRangeBreakoutCandidate({ symbol, bars, current, rsi, vwap, volumeToday, positionsMap }) {
+    if (!isOpeningRangeBreakoutWindow()) return null;
+    if (!bars || bars.length < OPENING_RANGE_BREAKOUT_CONFIG.openingRangeMinutes + 3) return null;
+
+    const openingRangeBars = bars.slice(0, OPENING_RANGE_BREAKOUT_CONFIG.openingRangeMinutes);
+    if (openingRangeBars.length < OPENING_RANGE_BREAKOUT_CONFIG.openingRangeMinutes) return null;
+
+    const orbPositions = Array.from((positionsMap || new Map()).values())
+        .filter(position => position.strategy === 'openingRangeBreakout' || position.tier === 'orb')
+        .length;
+    if (orbPositions >= OPENING_RANGE_BREAKOUT_CONFIG.maxPositions) return null;
+
+    const openingRangeHigh = Math.max(...openingRangeBars.map(bar => bar.h));
+    const breakoutBuffer = Math.max(
+        OPENING_RANGE_BREAKOUT_CONFIG.breakoutBufferDollars,
+        openingRangeHigh * OPENING_RANGE_BREAKOUT_CONFIG.breakoutBufferPct
+    );
+    const breakoutTrigger = openingRangeHigh + breakoutBuffer;
+    if (current <= breakoutTrigger) return null;
+
+    const breakoutPct = (current - breakoutTrigger) / openingRangeHigh;
+    if (breakoutPct <= 0 || breakoutPct > OPENING_RANGE_BREAKOUT_CONFIG.maxBreakoutPct) return null;
+
+    const recentBars = bars.slice(-3);
+    const bullishCloses = recentBars.filter(bar => bar.c > bar.o).length;
+    if (bullishCloses < 2) return null;
+
+    const avgOpeningRangeVolume = openingRangeBars.reduce((sum, bar) => sum + bar.v, 0) / openingRangeBars.length;
+    const recentBreakoutVolume = recentBars.reduce((sum, bar) => sum + bar.v, 0) / recentBars.length;
+    const breakoutVolumeRatio = avgOpeningRangeVolume > 0 ? recentBreakoutVolume / avgOpeningRangeVolume : 0;
+    if (breakoutVolumeRatio < OPENING_RANGE_BREAKOUT_CONFIG.minBreakoutVolumeRatio) return null;
+
+    if (vwap && current < vwap) return null;
+    if (rsi < OPENING_RANGE_BREAKOUT_CONFIG.rsiMin || rsi > OPENING_RANGE_BREAKOUT_CONFIG.rsiMax) return null;
+
+    const rsiBonus = 1 + Math.max(0, 1 - Math.abs(rsi - 60) / 20) * 0.15;
+    const score = (8 + breakoutPct * 1000 + breakoutVolumeRatio * 4) * rsiBonus;
+
+    return {
+        symbol,
+        price: current,
+        percentChange: (((current - bars[0].o) / bars[0].o) * 100).toFixed(2),
+        volumeRatio: breakoutVolumeRatio.toFixed(2),
+        volume: volumeToday,
+        rsi: rsi.toFixed(2),
+        vwap: vwap ? vwap.toFixed(2) : null,
+        tier: 'orb',
+        score: parseFloat(score.toFixed(3)),
+        strategy: 'openingRangeBreakout',
+        config: OPENING_RANGE_BREAKOUT_CONFIG,
+        entryVolume: recentBreakoutVolume,
+        breakoutTrigger: breakoutTrigger.toFixed(2),
+        openingRangeHigh: openingRangeHigh.toFixed(2)
+    };
 }
 
 // Wilder's Smoothed RSI (industry standard, more accurate than simple average)
@@ -1155,6 +1299,9 @@ function updateTrailingStop(position, currentPrice, unrealizedPL) {
 }
 
 async function managePositions() {
+    if (!hasGlobalAlpacaCredentials()) {
+        return;
+    }
     try {
         const positionsUrl = `${alpacaConfig.baseURL}/v2/positions`;
         const response = await axios.get(positionsUrl, {
@@ -1314,7 +1461,7 @@ async function scanMomentumBreakouts() {
                     .sort((a, b) => (b.score || 0) - (a.score || 0));
 
                 for (const mover of ranked.slice(0, available)) {
-                    await executeTrade(mover, 'momentum');
+                    await executeTrade(mover, mover.strategy || 'momentum');
                 }
             } else {
                 console.log(`⏸  Max positions (${maxPositions}) reached - not entering new trades`);
@@ -1406,18 +1553,6 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
             return null;
         }
 
-        // Avoid chasing: if price is >90% through daily range, skip regardless of move size
-        // 90% (was 80%) — momentum stocks legitimately run near their highs; 80% was too tight
-        const dailyHigh = Math.max(...bars.map(b => b.h));
-        const dailyLow = Math.min(...bars.map(b => b.l));
-        const dailyRange = dailyHigh - dailyLow;
-        if (dailyRange > 0) {
-            const positionInRange = (current - dailyLow) / dailyRange;
-            if (positionInRange > 0.90) {
-                return null;
-            }
-        }
-
         // [v3.2] EMA 9/21 crossover filter — only enter in confirmed uptrends
         const closes = bars.map(b => b.c);
         const ema9 = calculateEMA(closes, 9);
@@ -1427,43 +1562,74 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
             return null;
         }
 
+        const candidates = [];
+        const orbCandidate = buildOpeningRangeBreakoutCandidate({
+            symbol,
+            bars,
+            current,
+            rsi,
+            vwap,
+            volumeToday,
+            positionsMap: positions
+        });
+        if (orbCandidate) candidates.push(orbCandidate);
+
+        let momentumAllowed = true;
+
+        // Avoid chasing: if price is >90% through daily range, skip regardless of move size
+        // 90% (was 80%) — momentum stocks legitimately run near their highs; 80% was too tight
+        const dailyHigh = Math.max(...bars.map(b => b.h));
+        const dailyLow = Math.min(...bars.map(b => b.l));
+        const dailyRange = dailyHigh - dailyLow;
+        if (dailyRange > 0) {
+            const positionInRange = (current - dailyLow) / dailyRange;
+            if (positionInRange > 0.90) {
+                momentumAllowed = false;
+            }
+        }
+
         // ADX filter — require minimum trend strength (15 = early breakout; 20 is already full trend)
         // Lowered from 20 → 15 to catch breakouts before ADX builds — momentum strats enter early
         const adx = calculateADX(bars);
-        if (adx !== null && adx < 15) {
-            return null;
+        if (momentumAllowed && adx !== null && adx < 15) {
+            momentumAllowed = false;
         }
 
         // [v3.4] MACD(12,26,9) confirmation — only enter when momentum is accelerating bullishly
         // Histogram must be positive AND rising (not just crossing zero)
         const macd = calculateMACD(bars);
-        if (macd !== null && !macd.bullish) {
+        if (momentumAllowed && macd !== null && !macd.bullish) {
             // MACD bearish/flat — skip unless histogram is nearly flat (>-0.001) or RSI divergence overrides
             const nearlyFlat = macd.histogram > -0.001;
-            if (!nearlyFlat && !detectRSIBullishDivergence(bars)) return null;
-            if (!nearlyFlat) console.log(`[MACD Override] ${symbol} — RSI divergence overrides bearish MACD, proceeding`);
+            if (!nearlyFlat && !detectRSIBullishDivergence(bars)) {
+                momentumAllowed = false;
+            } else if (!nearlyFlat) {
+                console.log(`[MACD Override] ${symbol} — RSI divergence overrides bearish MACD, proceeding`);
+            }
         }
 
         // [v3.5] Multi-timeframe filter — require intraday momentum to align with daily uptrend
         // Fetch last 20 daily bars; current price must be above 20-day SMA
         // Prevents buying intraday momentum that fights the larger trend
-        try {
-            const dailyResp = await axios.get(barUrl, {
-                headers: { 'APCA-API-KEY-ID': alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': alpacaConfig.secretKey },
-                params: { timeframe: '1Day', limit: 20, feed: 'sip' }
-            });
-            const dailyBars = dailyResp.data?.bars || [];
-            if (dailyBars.length >= 5) {
-                // Use 9-day SMA (faster response) + 3% tolerance — avoids filtering intraday
-                // breakouts that are just starting to reclaim the trend line
-                const lookback = Math.min(9, dailyBars.length);
-                const sma9d = dailyBars.slice(-lookback).map(b => b.c).reduce((a, v) => a + v, 0) / lookback;
-                if (current < sma9d * 0.97) {
-                    console.log(`[Daily Filter] ${symbol} below 9-day SMA ($${sma9d.toFixed(2)}) — counter-trend, skipping`);
-                    return null;
+        if (momentumAllowed) {
+            try {
+                const dailyResp = await axios.get(barUrl, {
+                    headers: { 'APCA-API-KEY-ID': alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': alpacaConfig.secretKey },
+                    params: { timeframe: '1Day', limit: 20, feed: 'sip' }
+                });
+                const dailyBars = dailyResp.data?.bars || [];
+                if (dailyBars.length >= 5) {
+                    // Use 9-day SMA (faster response) + 3% tolerance — avoids filtering intraday
+                    // breakouts that are just starting to reclaim the trend line
+                    const lookback = Math.min(9, dailyBars.length);
+                    const sma9d = dailyBars.slice(-lookback).map(b => b.c).reduce((a, v) => a + v, 0) / lookback;
+                    if (current < sma9d * 0.97) {
+                        console.log(`[Daily Filter] ${symbol} below 9-day SMA ($${sma9d.toFixed(2)}) — counter-trend, skipping`);
+                        momentumAllowed = false;
+                    }
                 }
-            }
-        } catch { /* daily bars unavailable — proceed on intraday signal */ }
+            } catch { /* daily bars unavailable — proceed on intraday signal */ }
+        }
 
         // ATR-based stop/target — adapts to each stock's volatility.
         // Hard cap: ATR stop must not exceed 1.5× the tier's config stopLoss.
@@ -1485,68 +1651,92 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
             // If R:R too low, fall through to tier config defaults (atrStop stays null)
         }
 
-        // Tier assignment with fallback: start at the highest qualifying tier,
-        // fall back to lower tiers if secondary filters (volume ratio, RSI) fail.
-        // Prevents a strong Tier3 move from being rejected just because ADX is 16 not 20.
-        let tier = null;
-        let config = null;
+        if (momentumAllowed) {
+            // Tier assignment with fallback: start at the highest qualifying tier,
+            // fall back to lower tiers if secondary filters (volume ratio, RSI) fail.
+            // Prevents a strong Tier3 move from being rejected just because ADX is 16 not 20.
+            let tier = null;
+            let config = null;
 
-        const tierCandidates = [];
-        if (percentChange >= MOMENTUM_CONFIG.tier3.threshold) tierCandidates.push('tier3');
-        if (percentChange >= MOMENTUM_CONFIG.tier2.threshold) tierCandidates.push('tier2');
-        if (percentChange >= MOMENTUM_CONFIG.tier1.threshold) tierCandidates.push('tier1');
+            const tierCandidates = [];
+            if (percentChange >= MOMENTUM_CONFIG.tier3.threshold) tierCandidates.push('tier3');
+            if (percentChange >= MOMENTUM_CONFIG.tier2.threshold) tierCandidates.push('tier2');
+            if (percentChange >= MOMENTUM_CONFIG.tier1.threshold) tierCandidates.push('tier1');
 
-        for (const candidate of tierCandidates) {
-            const c = MOMENTUM_CONFIG[candidate];
-            if (volumeRatio >= c.volumeRatio &&
-                volumeToday >= c.minVolume &&
-                rsi >= c.rsiMin &&
-                rsi <= c.rsiMax) {
-                tier = candidate;
-                config = c;
-                break; // use the highest qualifying tier
+            for (const candidate of tierCandidates) {
+                const c = MOMENTUM_CONFIG[candidate];
+                if (volumeRatio >= c.volumeRatio &&
+                    volumeToday >= c.minVolume &&
+                    rsi >= c.rsiMin &&
+                    rsi <= c.rsiMax) {
+                    tier = candidate;
+                    config = c;
+                    break; // use the highest qualifying tier
+                }
+            }
+
+            if (tier && config) {
+                const tierPositions = Array.from(positions.values())
+                    .filter(p => p.tier === tier).length;
+
+                if (tierPositions < config.maxPositions) {
+                    // [v3.3] Strategy Bridge advisory — only block if bridge explicitly signals SHORT with high confidence
+                    const bridgeResult = await queryStrategyBridge(symbol, bars, 'stock');
+                    if (bridgeResult !== null) {
+                        if (bridgeResult.direction === 'short' && bridgeResult.confidence > 0.7) {
+                            console.log(`[Bridge] ${symbol} rejected — bridge explicit SHORT conf:${bridgeResult.confidence.toFixed(2)}`);
+                        } else {
+                            console.log(`[Bridge] ${symbol} advisory: ${bridgeResult.direction} conf:${(bridgeResult.confidence || 0).toFixed(2)}`);
+                            const tierMultiplier = { tier1: 1, tier2: 2, tier3: 3 }[tier] || 1;
+                            const rsiBonus = rsi >= 45 && rsi <= 65 ? 1.15 : 1.0; // reward "goldilocks" RSI zone
+                            const score = tierMultiplier * parseFloat(percentChange) * parseFloat(volumeRatio.toFixed(2)) * rsiBonus;
+
+                            candidates.push({
+                                symbol,
+                                price: current,
+                                percentChange: percentChange.toFixed(2),
+                                volumeRatio: volumeRatio.toFixed(2),
+                                volume: volumeToday,
+                                rsi: rsi.toFixed(2),
+                                vwap: vwap ? vwap.toFixed(2) : null,
+                                tier,
+                                score: parseFloat(score.toFixed(3)),
+                                strategy: 'momentum',
+                                config,
+                                entryVolume: volumeToday,
+                                atrStop,    // [v3.2] ATR-based stop price (null if not applicable)
+                                atrTarget   // [v3.2] ATR-based target price (null if not applicable)
+                            });
+                        }
+                    } else {
+                        const tierMultiplier = { tier1: 1, tier2: 2, tier3: 3 }[tier] || 1;
+                        const rsiBonus = rsi >= 45 && rsi <= 65 ? 1.15 : 1.0;
+                        const score = tierMultiplier * parseFloat(percentChange) * parseFloat(volumeRatio.toFixed(2)) * rsiBonus;
+
+                        candidates.push({
+                            symbol,
+                            price: current,
+                            percentChange: percentChange.toFixed(2),
+                            volumeRatio: volumeRatio.toFixed(2),
+                            volume: volumeToday,
+                            rsi: rsi.toFixed(2),
+                            vwap: vwap ? vwap.toFixed(2) : null,
+                            tier,
+                            score: parseFloat(score.toFixed(3)),
+                            strategy: 'momentum',
+                            config,
+                            entryVolume: volumeToday,
+                            atrStop,
+                            atrTarget
+                        });
+                    }
+                }
             }
         }
 
-        if (!tier || !config) return null;
-
-        const tierPositions = Array.from(positions.values())
-            .filter(p => p.tier === tier).length;
-
-        if (tierPositions >= config.maxPositions) return null;
-
-        // [v3.3] Strategy Bridge advisory — only block if bridge explicitly signals SHORT with high confidence
-        const bridgeResult = await queryStrategyBridge(symbol, bars, 'stock');
-        if (bridgeResult !== null) {
-            if (bridgeResult.direction === 'short' && bridgeResult.confidence > 0.7) {
-                console.log(`[Bridge] ${symbol} rejected — bridge explicit SHORT conf:${bridgeResult.confidence.toFixed(2)}`);
-                return null;
-            }
-            console.log(`[Bridge] ${symbol} advisory: ${bridgeResult.direction} conf:${(bridgeResult.confidence || 0).toFixed(2)}`);
-        }
-
-        // [v3.5] Composite signal score — used for ranking when multiple signals compete
-        // Higher tier → multiplier 1/2/3; stronger move × volume surge; RSI mid-zone bonus
-        const tierMultiplier = { tier1: 1, tier2: 2, tier3: 3 }[tier] || 1;
-        const rsiBonus = rsi >= 45 && rsi <= 65 ? 1.15 : 1.0; // reward "goldilocks" RSI zone
-        const score = tierMultiplier * parseFloat(percentChange) * parseFloat(volumeRatio.toFixed(2)) * rsiBonus;
-
-        return {
-            symbol,
-            price: current,
-            percentChange: percentChange.toFixed(2),
-            volumeRatio: volumeRatio.toFixed(2),
-            volume: volumeToday,
-            rsi: rsi.toFixed(2),
-            vwap: vwap ? vwap.toFixed(2) : null,
-            tier,
-            score: parseFloat(score.toFixed(3)),
-            strategy: 'momentum',
-            config,
-            entryVolume: volumeToday,
-            atrStop,    // [v3.2] ATR-based stop price (null if not applicable)
-            atrTarget   // [v3.2] ATR-based target price (null if not applicable)
-        };
+        if (candidates.length === 0) return null;
+        candidates.sort((a, b) => (b.score || 0) - (a.score || 0));
+        return candidates[0];
 
     } catch (error) {
         return null;
@@ -1757,6 +1947,22 @@ async function closePosition(symbol, qty, reason = 'Manual') {
 
 // API Routes (same as before)
 app.get('/api/trading/status', async (req, res) => {
+    if (!hasGlobalAlpacaCredentials()) {
+        return res.json({
+            success: true,
+            data: {
+                isRunning: botRunning,
+                mode: 'PAPER',
+                credentialsRequired: true,
+                account: { equity: 0, cash: 0, buyingPower: 0 },
+                performance: { totalTrades: totalTradesToday, winRate: 0, profitFactor: 0, activePositions: 0 },
+                positions: [],
+                portfolioValue: 0,
+                dailyPnL: 0,
+                lastUpdate: lastScanTime
+            }
+        });
+    }
     try {
         const positionsUrl = `${alpacaConfig.baseURL}/v2/positions`;
         const positionsResponse = await axios.get(positionsUrl, {
@@ -1954,6 +2160,20 @@ app.post('/api/trading/engine/start', requireJwt, async (req, res) => {
     const userId = req.user.sub;
     const engine = await getOrCreateEngine(userId);
     if (!engine) return res.status(404).json({ success: false, error: 'No engine found — configure credentials first' });
+    try {
+        await axios.get(`${engine.alpacaConfig.baseURL}/v2/account`, {
+            headers: {
+                'APCA-API-KEY-ID': engine.alpacaConfig.apiKey,
+                'APCA-API-SECRET-KEY': engine.alpacaConfig.secretKey
+            }
+        });
+    } catch (error) {
+        const status = error?.response?.status;
+        if (status === 401 || status === 403) {
+            return res.status(400).json({ success: false, error: 'Alpaca credentials invalid or expired' });
+        }
+        return res.status(500).json({ success: false, error: error.message });
+    }
     engine.botRunning = true; engine.botPaused = false; engine.savePerfData();
     res.json({ success: true, isRunning: true, isPaused: false });
 });
@@ -2375,37 +2595,70 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
         }
 
         let updated = 0;
-        for (const [key, value] of Object.entries(creds)) {
+        let persisted = 0;
+        let filePersisted = 0;
+        const warnings = [];
+        const fileCredentials = {};
+        for (const [key, rawValue] of Object.entries(creds)) {
             if (!allowed.includes(key)) continue;
-            if (typeof value !== 'string' || value === '') continue;
+            const value = normalizeCredentialValue(rawValue);
+            if (value === null) continue;
             // Apply immediately in-memory so current session picks it up
             process.env[key] = value;
+            if (userId) {
+                fileCredentials[key] = encryptCredential(value);
+            }
             // Persist encrypted to DB per user (if authenticated)
             if (userId && dbPool) {
-                const encrypted = encryptCredential(value);
-                await dbPool.query(
-                    `INSERT INTO user_credentials (user_id, broker, credential_key, encrypted_value, updated_at)
-                     VALUES ($1, $2, $3, $4, NOW())
-                     ON CONFLICT (user_id, broker, credential_key)
-                     DO UPDATE SET encrypted_value=$4, updated_at=NOW()`,
-                    [userId, broker, key, encrypted]
-                );
+                try {
+                    await dbPool.query(
+                        `INSERT INTO user_credentials (user_id, broker, credential_key, encrypted_value, updated_at)
+                         VALUES ($1, $2, $3, $4, NOW())
+                         ON CONFLICT (user_id, broker, credential_key)
+                         DO UPDATE SET encrypted_value=$4, updated_at=NOW()`,
+                        [userId, broker, key, fileCredentials[key]]
+                    );
+                    persisted++;
+                } catch (persistErr) {
+                    const warning = `Failed to persist ${key}; using current runtime value only`;
+                    warnings.push(warning);
+                    console.warn(`⚠️ Failed to persist ${broker}.${key} for user ${userId}:`, persistErr.message);
+                }
             }
             updated++;
         }
 
-        console.log(`⚙️  Credentials updated: broker=${broker} keys=${updated} storage=${userId ? 'database' : 'environment'}`);
+        if (updated === 0) {
+            return res.status(400).json({ success: false, error: 'No valid credential fields provided' });
+        }
+
+        if (userId && Object.keys(fileCredentials).length > 0) {
+            try {
+                filePersisted = credentialStore.saveEncryptedCredentials(userId, broker, fileCredentials);
+            } catch (fileErr) {
+                warnings.push('Failed to persist credentials to local fallback storage');
+                console.warn(`⚠️ Failed to persist ${broker} credentials to file for user ${userId}:`, fileErr.message);
+            }
+        }
+
+        const storage = userId && persisted === updated
+            ? 'database'
+            : userId && filePersisted === updated
+                ? 'file'
+                : 'environment';
+
+        console.log(`⚙️  Credentials updated: broker=${broker} keys=${updated} storage=${storage}`);
 
         // Refresh in-memory broker config
         if (broker === 'alpaca') {
-            if (creds.ALPACA_API_KEY)    alpacaConfig.apiKey    = creds.ALPACA_API_KEY;
-            if (creds.ALPACA_SECRET_KEY) alpacaConfig.secretKey = creds.ALPACA_SECRET_KEY;
-            if (creds.ALPACA_BASE_URL)   alpacaConfig.baseURL   = creds.ALPACA_BASE_URL;
+            if (process.env.ALPACA_API_KEY)    alpacaConfig.apiKey    = process.env.ALPACA_API_KEY;
+            if (process.env.ALPACA_SECRET_KEY) alpacaConfig.secretKey = process.env.ALPACA_SECRET_KEY;
+            if (process.env.ALPACA_BASE_URL)   alpacaConfig.baseURL   = process.env.ALPACA_BASE_URL;
             // Register or update per-user engine if this is an Alpaca credential save
             if (userId) {
                 const existingEngine = engineRegistry.get(String(userId));
                 if (existingEngine) {
-                    existingEngine.updateCredentials(creds.ALPACA_API_KEY, creds.ALPACA_SECRET_KEY, creds.ALPACA_BASE_URL);
+                    existingEngine.updateCredentials(process.env.ALPACA_API_KEY, process.env.ALPACA_SECRET_KEY, process.env.ALPACA_BASE_URL);
                     console.log(`🔧 [Engine ${userId}] Credentials updated in running engine`);
                 } else {
                     // Create engine in background — don't block the response
@@ -2416,20 +2669,39 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
             }
         }
 
-        res.json({ success: true, updated, storage: userId ? 'database' : 'environment', engineStarted: !!userId });
+        const response = { success: true, updated, storage, engineStarted: !!userId };
+        if (warnings.length === 1) response.warning = warnings[0];
+        if (warnings.length > 1) response.warnings = warnings;
+        res.json(response);
     } catch (err) {
         console.error('Credentials update error:', err.message);
-        res.status(500).json({ success: false, error: 'Failed to save credentials' });
+        res.status(500).json({ success: false, error: err.message || 'Failed to save credentials' });
     }
 });
 
 app.get('/api/config/credentials/status', requireJwt, async (req, res) => {
     const userId = req.user?.sub;
-    if (!userId || !dbPool) {
+    const envStatus = {
+        alpaca:   { configured: !!(process.env.ALPACA_API_KEY && process.env.ALPACA_SECRET_KEY) },
+        telegram: { configured: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) },
+        sms:      { configured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) },
+    };
+
+    const fileStatus = userId ? {
+        alpaca: credentialStore.countCredentials(userId, 'alpaca'),
+        telegram: credentialStore.countCredentials(userId, 'telegram'),
+        sms: credentialStore.countCredentials(userId, 'sms'),
+    } : null;
+
+    if (!userId) {
+        return res.json({ success: true, brokers: envStatus });
+    }
+
+    if (!dbPool) {
         return res.json({ success: true, brokers: {
-            alpaca:   { configured: !!(process.env.ALPACA_API_KEY && process.env.ALPACA_SECRET_KEY) },
-            telegram: { configured: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) },
-            sms:      { configured: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) },
+            alpaca:   { configured: (fileStatus.alpaca   || 0) >= 2 || envStatus.alpaca.configured },
+            telegram: { configured: (fileStatus.telegram || 0) >= 2 || envStatus.telegram.configured },
+            sms:      { configured: (fileStatus.sms      || 0) >= 2 || envStatus.sms.configured },
         }});
     }
     try {
@@ -2439,12 +2711,17 @@ app.get('/api/config/credentials/status', requireJwt, async (req, res) => {
         );
         const stored = Object.fromEntries(r.rows.map(row => [row.broker, parseInt(row.key_count)]));
         res.json({ success: true, brokers: {
-            alpaca:   { configured: (stored.alpaca   || 0) >= 2 },
-            telegram: { configured: (stored.telegram || 0) >= 2 },
-            sms:      { configured: (stored.sms      || 0) >= 2 },
+            alpaca:   { configured: Math.max(stored.alpaca   || 0, fileStatus.alpaca   || 0) >= 2 || envStatus.alpaca.configured },
+            telegram: { configured: Math.max(stored.telegram || 0, fileStatus.telegram || 0) >= 2 || envStatus.telegram.configured },
+            sms:      { configured: Math.max(stored.sms      || 0, fileStatus.sms      || 0) >= 2 || envStatus.sms.configured },
         }});
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        console.warn('⚠️ Credential status lookup failed, falling back to environment values:', e.message);
+        res.json({ success: true, brokers: {
+            alpaca:   { configured: (fileStatus.alpaca   || 0) >= 2 || envStatus.alpaca.configured },
+            telegram: { configured: (fileStatus.telegram || 0) >= 2 || envStatus.telegram.configured },
+            sms:      { configured: (fileStatus.sms      || 0) >= 2 || envStatus.sms.configured },
+        }, warning: 'Credential status fallback in use' });
     }
 });
 
@@ -2654,7 +2931,7 @@ class UserTradingEngine {
         this.cachedDailyPnL = 0;
         this.scanCount = 0;
         this.lastScanTime = null;
-        this.botRunning = true;
+        this.botRunning = false;
         this.botPaused = false;
         this.lastResetDate = getESTDate().toDateString();
         this.perfData = {
@@ -2663,7 +2940,7 @@ class UserTradingEngine {
             maxDrawdown: 0, sharpeRatio: 0, winRate: 0, profitFactor: 0,
             consecutiveLosses: 0, maxConsecutiveLosses: 0,
             circuitBreakerStatus: 'OK', circuitBreakerReason: null,
-            isRunning: true, activePositions: 0, lastUpdate: new Date().toISOString()
+            isRunning: false, activePositions: 0, lastUpdate: new Date().toISOString()
         };
         console.log(`🔧 [Engine] Created engine for user ${userId}`);
     }
@@ -3027,7 +3304,7 @@ class UserTradingEngine {
             const ranked = movers.filter(m => !this.positions.has(m.symbol) && this.canTrade(m.symbol, 'buy'))
                 .sort((a, b) => (b.score || 0) - (a.score || 0));
             for (const mover of ranked.slice(0, available)) {
-                await this.executeTrade(mover, 'momentum');
+                await this.executeTrade(mover, mover.strategy || 'momentum');
             }
         }
         return movers;
@@ -3085,35 +3362,52 @@ async function analyzeMomentumForEngine(symbol, engine) {
         if (volumeToday < 500000) return null;
         const vwap = calculateVWAP(bars);
         if (vwap && current < vwap) return null;
-        const dailyHigh = Math.max(...bars.map(b => b.h));
-        const dailyLow = Math.min(...bars.map(b => b.l));
-        const dailyRange = dailyHigh - dailyLow;
-        if (dailyRange > 0 && (current - dailyLow) / dailyRange > 0.80) return null;
         const closes = bars.map(b => b.c);
         const ema9 = calculateEMA(closes, 9);
         const ema21 = calculateEMA(closes, 21);
         if (ema9 !== null && ema21 !== null && ema9 <= ema21) return null;
+        const candidates = [];
+        const orbCandidate = buildOpeningRangeBreakoutCandidate({
+            symbol,
+            bars,
+            current,
+            rsi,
+            vwap,
+            volumeToday,
+            positionsMap: engine.positions
+        });
+        if (orbCandidate) candidates.push(orbCandidate);
+
+        let momentumAllowed = true;
+        const dailyHigh = Math.max(...bars.map(b => b.h));
+        const dailyLow = Math.min(...bars.map(b => b.l));
+        const dailyRange = dailyHigh - dailyLow;
+        if (dailyRange > 0 && (current - dailyLow) / dailyRange > 0.90) momentumAllowed = false;
+
         const adx = calculateADX(bars);
-        if (adx !== null && adx < 20) return null;
+        if (momentumAllowed && adx !== null && adx < 15) momentumAllowed = false;
+
         const macd = calculateMACD(bars);
-        if (macd !== null && !macd.bullish) {
+        if (momentumAllowed && macd !== null && !macd.bullish) {
             const nearlyFlat = macd.histogram > -0.001;
-            if (!nearlyFlat && !detectRSIBullishDivergence(bars)) return null;
+            if (!nearlyFlat && !detectRSIBullishDivergence(bars)) momentumAllowed = false;
         }
-        // Multi-timeframe daily SMA filter
-        try {
-            const barUrl = `${engine.alpacaConfig.dataURL}/v2/stocks/${symbol}/bars`;
-            const dailyResp = await axios.get(barUrl, {
-                headers: { 'APCA-API-KEY-ID': engine.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': engine.alpacaConfig.secretKey },
-                params: { timeframe: '1Day', limit: 20, feed: 'sip' }
-            });
-            const dailyBars = dailyResp.data?.bars || [];
-            if (dailyBars.length >= 5) {
-                const lookback = Math.min(9, dailyBars.length);
-                const sma9d = dailyBars.slice(-lookback).map(b => b.c).reduce((a, v) => a + v, 0) / lookback;
-                if (current < sma9d * 0.97) return null;
-            }
-        } catch {}
+
+        if (momentumAllowed) {
+            try {
+                const barUrl = `${engine.alpacaConfig.dataURL}/v2/stocks/${symbol}/bars`;
+                const dailyResp = await axios.get(barUrl, {
+                    headers: { 'APCA-API-KEY-ID': engine.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': engine.alpacaConfig.secretKey },
+                    params: { timeframe: '1Day', limit: 20, feed: 'sip' }
+                });
+                const dailyBars = dailyResp.data?.bars || [];
+                if (dailyBars.length >= 5) {
+                    const lookback = Math.min(9, dailyBars.length);
+                    const sma9d = dailyBars.slice(-lookback).map(b => b.c).reduce((a, v) => a + v, 0) / lookback;
+                    if (current < sma9d * 0.97) momentumAllowed = false;
+                }
+            } catch {}
+        }
         const atr = calculateATR(bars);
         let atrStop = null, atrTarget = null;
         if (atr !== null && current > 0) {
@@ -3121,32 +3415,41 @@ async function analyzeMomentumForEngine(symbol, engine) {
             const candidateStop   = current * (1 - atrPct * 1.5);
             const candidateTarget = current * (1 + atrPct * 3.0);
             const rr = candidateStop > 0 ? (candidateTarget - current) / (current - candidateStop) : 0;
-            const actualStopPct = (current - candidateStop) / current;
             if (rr >= 1.8) { atrStop = candidateStop; atrTarget = candidateTarget; }
         }
-        let tier = null, config = null;
-        const tierCandidates = [];
-        if (percentChange >= MOMENTUM_CONFIG.tier3.threshold) tierCandidates.push('tier3');
-        if (percentChange >= MOMENTUM_CONFIG.tier2.threshold) tierCandidates.push('tier2');
-        if (percentChange >= MOMENTUM_CONFIG.tier1.threshold) tierCandidates.push('tier1');
-        for (const candidate of tierCandidates) {
-            const c = MOMENTUM_CONFIG[candidate];
-            if (volumeRatio >= c.volumeRatio && volumeToday >= c.minVolume && rsi >= c.rsiMin && rsi <= c.rsiMax) {
-                tier = candidate; config = c; break;
+        if (momentumAllowed) {
+            let tier = null, config = null;
+            const tierCandidates = [];
+            if (percentChange >= MOMENTUM_CONFIG.tier3.threshold) tierCandidates.push('tier3');
+            if (percentChange >= MOMENTUM_CONFIG.tier2.threshold) tierCandidates.push('tier2');
+            if (percentChange >= MOMENTUM_CONFIG.tier1.threshold) tierCandidates.push('tier1');
+            for (const candidate of tierCandidates) {
+                const c = MOMENTUM_CONFIG[candidate];
+                if (volumeRatio >= c.volumeRatio && volumeToday >= c.minVolume && rsi >= c.rsiMin && rsi <= c.rsiMax) {
+                    tier = candidate; config = c; break;
+                }
+            }
+            if (tier && config) {
+                const tierPositions = Array.from(engine.positions.values()).filter(p => p.tier === tier).length;
+                if (tierPositions < config.maxPositions) {
+                    const bridgeResult = await queryStrategyBridge(symbol, bars, 'stock');
+                    if (bridgeResult === null || !(bridgeResult.direction === 'short' && bridgeResult.confidence > 0.7)) {
+                        const tierMultiplier = { tier1: 1, tier2: 2, tier3: 3 }[tier] || 1;
+                        const rsiBonus = rsi >= 45 && rsi <= 65 ? 1.15 : 1.0;
+                        const score = tierMultiplier * parseFloat(percentChange) * parseFloat(volumeRatio.toFixed(2)) * rsiBonus;
+                        candidates.push({
+                            symbol, price: current, percentChange: percentChange.toFixed(2), volumeRatio: volumeRatio.toFixed(2),
+                            volume: volumeToday, rsi: rsi.toFixed(2), vwap: vwap ? vwap.toFixed(2) : null,
+                            tier, score: parseFloat(score.toFixed(3)), strategy: 'momentum', config,
+                            entryVolume: volumeToday, atrStop, atrTarget
+                        });
+                    }
+                }
             }
         }
-        if (!tier || !config) return null;
-        const tierPositions = Array.from(engine.positions.values()).filter(p => p.tier === tier).length;
-        if (tierPositions >= config.maxPositions) return null;
-        const bridgeResult = await queryStrategyBridge(symbol, bars, 'stock');
-        if (bridgeResult !== null && bridgeResult.direction === 'short' && bridgeResult.confidence > 0.7) return null;
-        const tierMultiplier = { tier1: 1, tier2: 2, tier3: 3 }[tier] || 1;
-        const rsiBonus = rsi >= 45 && rsi <= 65 ? 1.15 : 1.0;
-        const score = tierMultiplier * parseFloat(percentChange) * parseFloat(volumeRatio.toFixed(2)) * rsiBonus;
-        return { symbol, price: current, percentChange: percentChange.toFixed(2), volumeRatio: volumeRatio.toFixed(2),
-            volume: volumeToday, rsi: rsi.toFixed(2), vwap: vwap ? vwap.toFixed(2) : null,
-            tier, score: parseFloat(score.toFixed(3)), strategy: 'momentum', config,
-            entryVolume: volumeToday, atrStop, atrTarget };
+        if (candidates.length === 0) return null;
+        candidates.sort((a, b) => (b.score || 0) - (a.score || 0));
+        return candidates[0];
     } catch { return null; }
 }
 
@@ -3156,7 +3459,6 @@ const engineRegistry = new Map(); // userId (string) → UserTradingEngine
 async function getOrCreateEngine(userId) {
     const key = String(userId);
     if (engineRegistry.has(key)) return engineRegistry.get(key);
-    if (!dbPool) return null;
     try {
         const creds = await loadUserCredentials(userId, 'alpaca');
         const apiKey    = creds.ALPACA_API_KEY    || process.env.ALPACA_API_KEY;
@@ -3183,6 +3485,7 @@ async function getOrCreateEngine(userId) {
 // Engines run sequentially (not in parallel) to avoid rate limit spikes.
 // Each engine gets an independent 60-second slot; staggered 6s apart on startup.
 let scanQueueRunning = false;
+let globalCredentialWarningShown = false;
 
 // Dead-man heartbeat tracking
 let _heartbeatAlertSent = false;
@@ -3236,6 +3539,16 @@ async function tradingLoop() {
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         return;
     }
+
+    if (!hasGlobalAlpacaCredentials()) {
+        if (!globalCredentialWarningShown) {
+            console.log('🔑 Alpaca credentials not configured for the global stock bot — skipping module-level scans');
+            globalCredentialWarningShown = true;
+        }
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        return;
+    }
+    globalCredentialWarningShown = false;
 
     // Daily loss circuit breaker — halt new entries if loss exceeds limit
     if (cachedDailyPnL < -MAX_DAILY_LOSS) {

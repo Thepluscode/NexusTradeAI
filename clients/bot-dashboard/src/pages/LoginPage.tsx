@@ -41,7 +41,26 @@ export default function LoginPage() {
       localStorage.setItem('nexus_refresh_token', data.refreshToken);
       navigate('/');
     } catch (err: unknown) {
-      const errData = (err as { response?: { data?: { error?: string } } })?.response?.data;
+      const response = (err as { response?: { status?: number; data?: { error?: string } } })?.response;
+      const errData = response?.data;
+
+      if (response?.status === 503 && errData?.error === 'Auth service unavailable') {
+        try {
+          const { data } = await axios.post(`${AUTH_URL}/api/auth/dev-login`, {
+            email,
+            name: name || undefined,
+          });
+          localStorage.setItem('nexus_access_token', data.accessToken);
+          localStorage.setItem('nexus_refresh_token', data.refreshToken);
+          navigate('/');
+          return;
+        } catch (devErr: unknown) {
+          const devErrData = (devErr as { response?: { data?: { error?: string } } })?.response?.data;
+          setError(devErrData?.error || 'Local development login failed.');
+          return;
+        }
+      }
+
       setError(errData?.error || 'Something went wrong. Try again.');
     } finally {
       setLoading(false);
