@@ -851,11 +851,16 @@ class CryptoTradingEngine {
                 if (bridgeResult === null) {
                     // Bridge offline or slow — proceed on local signal (non-blocking by design)
                     console.log(`[Bridge] Offline/timeout for ${symbol} — proceeding on local signal`);
-                } else if (!bridgeResult.should_enter || bridgeResult.direction !== 'long') {
-                    console.log(`[Bridge] ${symbol} rejected — bridge: ${bridgeResult.direction} (conf: ${(bridgeResult.confidence || 0).toFixed(2)}): ${bridgeResult.reason || ''}`);
-                    break;
-                } else {
+                } else if (bridgeResult.should_enter && bridgeResult.direction === 'long') {
                     console.log(`[Bridge] ${symbol} confirmed ✓ conf: ${(bridgeResult.confidence || 0).toFixed(2)}`);
+                } else {
+                    const bridgeConfidence = bridgeResult.confidence || 0;
+                    const isContraryBridgeView = bridgeResult.direction === 'short' && bridgeConfidence >= 0.55;
+                    if (isContraryBridgeView) {
+                        console.log(`[Bridge] ${symbol} rejected — bridge: ${bridgeResult.direction} (conf: ${bridgeConfidence.toFixed(2)}): ${bridgeResult.reason || ''}`);
+                        break;
+                    }
+                    console.log(`[Bridge] ${symbol} neutral/weak (${bridgeResult.direction || 'neutral'}, conf: ${bridgeConfidence.toFixed(2)}) — proceeding on local signal`);
                 }
 
                 const momentumSignal = {
