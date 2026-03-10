@@ -48,6 +48,9 @@ from ou_estimator import fit_ou_to_pair
 # Import base types
 from strategy_framework import MarketData, SignalType
 
+# Import AI advisor
+from ai_advisor import ai_advisor
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -73,6 +76,30 @@ class PairAnalysisRequest(BaseModel):
     symbol_2: str
     prices_1: List[PriceBar]
     prices_2: List[PriceBar]
+
+class AIEvaluationRequest(BaseModel):
+    symbol: str
+    direction: str = "long"
+    tier: str = "tier1"
+    asset_class: str = "stock"
+    price: Optional[float] = None
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
+    rsi: Optional[float] = None
+    momentum: Optional[float] = None
+    percent_change: Optional[float] = None
+    volume_ratio: Optional[float] = None
+    trend_strength: Optional[float] = None
+    atr_pct: Optional[float] = None
+    vwap: Optional[float] = None
+    h1_trend: Optional[str] = None
+    session: Optional[str] = None
+    regime: Optional[str] = None
+    regime_quality: Optional[float] = None
+    macd_histogram: Optional[float] = None
+    score: Optional[float] = None
+    bridge_direction: Optional[str] = None
+    bridge_confidence: Optional[float] = None
 
 class StrategySignalResponse(BaseModel):
     strategy: str
@@ -204,6 +231,7 @@ if FASTAPI_AVAILABLE:
             "status": "ok",
             "service": "strategy-bridge",
             "strategies": ["regime_momentum", "volatility_arbitrage", "pairs_trading"],
+            "ai_advisor": {"available": ai_advisor.is_available, "model": ai_advisor.model},
             "pairs_cache": {
                 "symbols_cached": len(cached_symbols),
                 "symbols": sorted(cached_symbols),
@@ -430,6 +458,31 @@ if FASTAPI_AVAILABLE:
         """Get pre-defined sector pairs for trading"""
         return get_recommended_pairs()
 
+    # ========================================
+    # AI ADVISOR ENDPOINTS
+    # ========================================
+
+    @app.post("/ai/evaluate")
+    async def ai_evaluate(req: AIEvaluationRequest):
+        """Evaluate a trade signal using Claude AI advisor."""
+        signal_dict = req.dict(exclude_none=True)
+        result = await ai_advisor.evaluate(signal_dict)
+        return {
+            "symbol": req.symbol,
+            "direction": req.direction,
+            "tier": req.tier,
+            **result,
+            "timestamp": datetime.now().isoformat()
+        }
+
+    @app.get("/ai/stats")
+    def ai_stats():
+        """Get AI advisor statistics."""
+        return {
+            "ai_advisor": ai_advisor.get_stats(),
+            "timestamp": datetime.now().isoformat()
+        }
+
 # ========================================
 # STANDALONE SERVER
 # ========================================
@@ -443,7 +496,10 @@ if __name__ == "__main__":
     port = int(os.environ.get("STRATEGY_BRIDGE_PORT", 3010))
     print(f"\n🐍 Python Strategy Bridge starting on port {port}")
     print(f"   Strategies: regime_momentum, volatility_arbitrage, pairs_trading")
-    print(f"   Health: http://localhost:{port}/health")
-    print(f"   Signal: POST http://localhost:{port}/signal")
-    print(f"   Pairs:  POST http://localhost:{port}/pairs/analyze\n")
+    print(f"   AI Advisor: {'ENABLED' if ai_advisor.is_available else 'DISABLED (set ANTHROPIC_API_KEY)'}")
+    print(f"   Health:     http://localhost:{port}/health")
+    print(f"   Signal:     POST http://localhost:{port}/signal")
+    print(f"   AI Eval:    POST http://localhost:{port}/ai/evaluate")
+    print(f"   AI Stats:   GET  http://localhost:{port}/ai/stats")
+    print(f"   Pairs:      POST http://localhost:{port}/pairs/analyze\n")
     uvicorn.run(app, host="0.0.0.0", port=port)

@@ -1398,6 +1398,35 @@ async function queryStrategyBridge(symbol, bars, assetClass = 'stock') {
     }
 }
 
+// ===== AI TRADE ADVISOR =====
+// [v4.0] Agentic AI — Claude-powered trade evaluation via strategy bridge
+// Fail-open: if AI is offline/rate-limited, approve by default
+
+async function queryAIAdvisor(signal) {
+    try {
+        const payload = {
+            symbol: signal.symbol,
+            direction: 'long',
+            tier: signal.tier || 'tier1',
+            asset_class: 'stock',
+            price: signal.price,
+            rsi: parseFloat(signal.rsi) || undefined,
+            percent_change: parseFloat(signal.percentChange) || undefined,
+            volume_ratio: parseFloat(signal.volumeRatio) || undefined,
+            regime: signal.regime,
+            regime_quality: signal.regimeScore,
+            score: signal.score,
+            atr_pct: signal.atrPct || undefined,
+            vwap: signal.vwap ? parseFloat(signal.vwap) : undefined,
+        };
+        const response = await axios.post(`${BRIDGE_URL}/ai/evaluate`, payload, { timeout: 10000 });
+        return response.data; // { approved, confidence, reason, risk_flags, source }
+    } catch (e) {
+        // AI offline — fail-open, approve by default
+        return null;
+    }
+}
+
 function canTrade(symbol, side = 'buy') {
     const stopTime = stoppedOutSymbols.get(symbol);
     if (stopTime) {
@@ -1727,6 +1756,17 @@ async function scanMomentumBreakouts() {
                     .sort((a, b) => (b.score || 0) - (a.score || 0));
 
                 for (const mover of ranked.slice(0, available)) {
+                    // [v4.0] AI Trade Advisor gate — Claude evaluates before execution
+                    const aiResult = await queryAIAdvisor(mover);
+                    if (aiResult !== null) {
+                        if (!aiResult.approved && aiResult.confidence > 0.6) {
+                            console.log(`[AI] ${mover.symbol} REJECTED (conf: ${aiResult.confidence.toFixed(2)}) — ${aiResult.reason}`);
+                            if (aiResult.risk_flags?.length) console.log(`[AI]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
+                            continue;
+                        }
+                        const srcTag = aiResult.source === 'cache' ? ' (cached)' : '';
+                        console.log(`[AI] ${mover.symbol} APPROVED${srcTag} (conf: ${(aiResult.confidence || 0).toFixed(2)}) — ${aiResult.reason}`);
+                    }
                     await executeTrade(mover, mover.strategy || 'momentum');
                 }
             } else {

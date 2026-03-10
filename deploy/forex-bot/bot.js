@@ -1134,6 +1134,37 @@ const BRIDGE_URL = (() => {
     return `http://${raw}`;
 })();
 
+// ===== AI TRADE ADVISOR =====
+// [v4.0] Agentic AI — Claude-powered trade evaluation via strategy bridge
+// Fail-open: if AI is offline/rate-limited, approve by default
+
+async function queryAIAdvisor(signal) {
+    try {
+        const payload = {
+            symbol: signal.pair,
+            direction: signal.direction || 'long',
+            tier: signal.tier || 'tier1',
+            asset_class: 'forex',
+            price: signal.entry,
+            stop_loss: signal.stopLoss,
+            take_profit: signal.takeProfit,
+            rsi: signal.rsi,
+            trend_strength: signal.trendStrength,
+            atr_pct: signal.atrPct,
+            h1_trend: signal.h1Trend,
+            session: signal.session,
+            regime: signal.regime,
+            regime_quality: signal.regimeQuality,
+            macd_histogram: signal.macdHistogram,
+            score: signal.score,
+        };
+        const response = await axios.post(`${BRIDGE_URL}/ai/evaluate`, payload, { timeout: 10000 });
+        return response.data;
+    } catch (e) {
+        return null;
+    }
+}
+
 async function queryStrategyBridge(pair, _direction) {
     try {
         const candles = await getCandles(pair, 'M15', 60);
@@ -1794,6 +1825,17 @@ async function tradingLoop() {
         const signalsToExecute = signals.slice(0, Math.min(maxNewPositions, 2));
 
         for (const signal of signalsToExecute) {
+            // [v4.0] AI Trade Advisor gate — Claude evaluates before execution
+            const aiResult = await queryAIAdvisor(signal);
+            if (aiResult !== null) {
+                if (!aiResult.approved && aiResult.confidence > 0.6) {
+                    console.log(`[AI] ${signal.pair} ${signal.direction} REJECTED (conf: ${aiResult.confidence.toFixed(2)}) — ${aiResult.reason}`);
+                    if (aiResult.risk_flags?.length) console.log(`[AI]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
+                    continue;
+                }
+                const srcTag = aiResult.source === 'cache' ? ' (cached)' : '';
+                console.log(`[AI] ${signal.pair} ${signal.direction} APPROVED${srcTag} (conf: ${(aiResult.confidence || 0).toFixed(2)}) — ${aiResult.reason}`);
+            }
             await executeTrade(signal);
         }
     } catch (err) {
