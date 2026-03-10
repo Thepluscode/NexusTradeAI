@@ -30,6 +30,7 @@ from agents.decision_agent import DecisionAgent
 from agents.learning_agent import LearningAgent
 from agents.scan_engine import ScanEngine
 from agents.supervisor_bandit import supervisor
+from agents.analyst_rankings import analyst_rankings
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +148,16 @@ class AgentOrchestrator:
             market_analysis=market_analysis,
             lessons=lessons,
         )
+
+        # Step 6b: Adjust confidence based on analyst track record
+        agent_score = analyst_rankings.get_agent_score(
+            analyst=decision.source or "pipeline",
+            asset_class=snapshot.asset_class,
+            regime=snapshot.regime or "unknown",
+        )
+        # Blend: 70% agent's confidence + 30% historical reliability
+        if agent_score != 0.5:  # Only adjust when we have real data
+            decision.confidence = 0.7 * decision.confidence + 0.3 * agent_score
 
         # Step 7: Apply supervisor bandit constraints
         # Cap position size to bandit's recommendation
@@ -306,6 +317,7 @@ class AgentOrchestrator:
             "learning_agent": self.learning_agent.get_stats(),
             "scan_engine": self.scan_engine.get_stats(),
             "supervisor_bandit": self.supervisor.get_stats(),
+            "analyst_rankings": analyst_rankings.get_stats(),
             "outcome_store": outcome_store.get_stats(),
         }
 

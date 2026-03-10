@@ -56,6 +56,7 @@ from agents.orchestrator import orchestrator as agent_orchestrator
 from agents.base import MarketSnapshot, TradeOutcome, AgentDecision
 from agents.supervisor_bandit import supervisor as agent_supervisor
 from agents.backfill import backfill_from_db, backfill_from_json
+from agents.analyst_rankings import analyst_rankings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -766,11 +767,52 @@ if FASTAPI_AVAILABLE:
         # Step 3: Sync to DB
         await agent_supervisor.sync_to_db()
 
+        # Step 4: Update analyst rankings
+        rankings_result = await analyst_rankings.update_rankings(lookback_days=30)
+
         return {
             "status": "daily_training_complete",
             "backfill": backfill_stats,
             "bandit_rewards_processed": bandit_updates,
             "bandit_stats": agent_supervisor.get_stats(),
+            "rankings": rankings_result,
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    # ========================================
+    # ANALYST RANKINGS + DECISION HISTORY (v4.3)
+    # ========================================
+
+    @app.get("/agent/rankings")
+    async def get_rankings():
+        """Get analyst rankings by regime and asset class."""
+        return {
+            **analyst_rankings.get_stats(),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    @app.post("/agent/rankings/update")
+    async def update_rankings():
+        """Recompute analyst rankings from the last 30 days of data."""
+        result = await analyst_rankings.update_rankings(lookback_days=30)
+        return {
+            **result,
+            "stats": analyst_rankings.get_stats(),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    @app.get("/agent/decisions")
+    async def get_decisions(limit: int = 50):
+        """Get recent agent decisions with outcomes for dashboard display."""
+        decisions = await analyst_rankings.get_recent_decisions(limit=limit)
+        # Convert datetime objects to strings for JSON serialization
+        for d in decisions:
+            for k, v in d.items():
+                if hasattr(v, 'isoformat'):
+                    d[k] = v.isoformat()
+        return {
+            "decisions": decisions,
+            "total": len(decisions),
             "timestamp": datetime.now().isoformat(),
         }
 
@@ -793,9 +835,11 @@ if FASTAPI_AVAILABLE:
                 rewards = await outcome_store.get_recent_rewards(limit=200)
                 updated = agent_supervisor.batch_update_from_rewards(rewards)
                 await agent_supervisor.sync_to_db()
+                # Update analyst rankings
+                await analyst_rankings.update_rankings(lookback_days=30)
                 logger.info(
                     f"[DailyTraining] Done: backfilled {backfill_stats.get('trades_processed', 0)} trades, "
-                    f"bandit updated {updated} rewards"
+                    f"bandit updated {updated} rewards, rankings refreshed"
                 )
             except Exception as e:
                 logger.error(f"[DailyTraining] Error: {e}")

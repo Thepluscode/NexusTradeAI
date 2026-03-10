@@ -646,6 +646,29 @@ class APIClient {
     const response = await this.aiService.post('/agent/daily-training', {}, { timeout: 30000 });
     return response.data;
   }
+
+  async getAgentDecisions(limit = 50): Promise<{ decisions: Record<string, unknown>[]; total: number }> {
+    try {
+      const response = await this.aiService.get('/agent/decisions', { params: { limit }, timeout: 10000 });
+      return response.data;
+    } catch {
+      return { decisions: [], total: 0 };
+    }
+  }
+
+  async getAgentRankings(): Promise<Record<string, unknown>> {
+    try {
+      const response = await this.aiService.get('/agent/rankings');
+      return response.data;
+    } catch {
+      return {};
+    }
+  }
+
+  async updateAgentRankings(): Promise<Record<string, unknown>> {
+    const response = await this.aiService.post('/agent/rankings/update', {}, { timeout: 15000 });
+    return response.data;
+  }
 }
 
 export const apiClient = new APIClient();

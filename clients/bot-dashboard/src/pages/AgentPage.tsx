@@ -19,7 +19,7 @@ import toast from 'react-hot-toast';
 import { apiClient } from '../services/api';
 import type {
   AgentStats, BanditContextSummary,
-  AgentKillSwitchStatus, AgentClaudeStats,
+  AgentKillSwitchStatus, AgentClaudeStats, AnalystRankingsStats,
 } from '../types';
 
 function MetricBox({ label, value, color = '#3b82f6', icon }: {
@@ -257,6 +257,103 @@ function BanditChart({ contexts }: { contexts: Record<string, BanditContextSumma
   );
 }
 
+interface AgentDecisionRow {
+  timestamp: string;
+  symbol: string;
+  asset_class: string;
+  direction: string;
+  tier: string;
+  regime: string;
+  approved: boolean;
+  confidence: number;
+  reason: string;
+  risk_flags: string[];
+  source: string;
+  position_size_multiplier: number;
+  latency_ms: number;
+  reward_score: number | null;
+  pnl_pct: number | null;
+  exit_reason: string | null;
+}
+
+function DecisionHistoryTable({ decisions }: { decisions: AgentDecisionRow[] }) {
+  if (!decisions || decisions.length === 0) {
+    return <Alert severity="info">No agent decisions recorded yet.</Alert>;
+  }
+  return (
+    <TableContainer sx={{ maxHeight: 400 }}>
+      <Table size="small" stickyHeader>
+        <TableHead>
+          <TableRow>
+            <TableCell>Time</TableCell>
+            <TableCell>Symbol</TableCell>
+            <TableCell>Dir</TableCell>
+            <TableCell align="center">Decision</TableCell>
+            <TableCell align="right">Conf</TableCell>
+            <TableCell>Reason</TableCell>
+            <TableCell align="right">P&L</TableCell>
+            <TableCell align="right">Reward</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {decisions.map((d, i) => {
+            const ts = d.timestamp ? new Date(d.timestamp) : null;
+            const timeStr = ts ? ts.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+            return (
+              <TableRow key={i} hover sx={{ opacity: d.approved ? 1 : 0.7 }}>
+                <TableCell sx={{ fontSize: '0.7rem', whiteSpace: 'nowrap' }}>{timeStr}</TableCell>
+                <TableCell sx={{ fontWeight: 600, fontSize: '0.75rem' }}>{d.symbol}</TableCell>
+                <TableCell>
+                  <Chip
+                    label={d.direction?.toUpperCase()}
+                    size="small"
+                    sx={{
+                      bgcolor: d.direction === 'long' ? alpha('#22c55e', 0.15) : alpha('#ef4444', 0.15),
+                      color: d.direction === 'long' ? '#22c55e' : '#ef4444',
+                      fontSize: '0.6rem', fontWeight: 700, height: 20,
+                    }}
+                  />
+                </TableCell>
+                <TableCell align="center">
+                  <Chip
+                    label={d.approved ? 'APPROVED' : 'REJECTED'}
+                    size="small"
+                    sx={{
+                      bgcolor: d.approved ? alpha('#22c55e', 0.15) : alpha('#ef4444', 0.15),
+                      color: d.approved ? '#22c55e' : '#ef4444',
+                      fontSize: '0.6rem', fontWeight: 700, height: 20,
+                    }}
+                  />
+                </TableCell>
+                <TableCell align="right" sx={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
+                  {(d.confidence * 100).toFixed(0)}%
+                </TableCell>
+                <TableCell sx={{ fontSize: '0.7rem', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <Tooltip title={d.reason || ''}>
+                    <span>{d.reason || '—'}</span>
+                  </Tooltip>
+                </TableCell>
+                <TableCell align="right" sx={{
+                  fontFamily: 'monospace', fontSize: '0.75rem',
+                  color: d.pnl_pct != null ? (d.pnl_pct >= 0 ? '#22c55e' : '#ef4444') : 'text.secondary',
+                }}>
+                  {d.pnl_pct != null ? `${d.pnl_pct >= 0 ? '+' : ''}${Number(d.pnl_pct).toFixed(2)}%` : '—'}
+                </TableCell>
+                <TableCell align="right" sx={{
+                  fontFamily: 'monospace', fontSize: '0.75rem',
+                  color: d.reward_score != null ? (d.reward_score >= 0 ? '#22c55e' : '#ef4444') : 'text.secondary',
+                }}>
+                  {d.reward_score != null ? `${d.reward_score >= 0 ? '+' : ''}${Number(d.reward_score).toFixed(3)}` : '—'}
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </TableContainer>
+  );
+}
+
 export default function AgentPage() {
   const queryClient = useQueryClient();
   const [backfillRunning, setBackfillRunning] = useState(false);
@@ -265,6 +362,12 @@ export default function AgentPage() {
     'agentStats',
     () => apiClient.getAgentStats() as unknown as Promise<AgentStats>,
     { refetchInterval: 15000, staleTime: 10000 }
+  );
+
+  const { data: decisionsData } = useQuery(
+    'agentDecisions',
+    () => apiClient.getAgentDecisions(30),
+    { refetchInterval: 30000, staleTime: 20000 }
   );
 
   const killMutation = useMutation(
@@ -533,6 +636,79 @@ export default function AgentPage() {
           </Paper>
         </Grid>
       </Grid>
+
+      {/* Decision History */}
+      <Paper sx={{ p: 2, mt: 3 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+          <SmartToy sx={{ color: '#3b82f6', fontSize: 20 }} />
+          <Typography variant="subtitle1" fontWeight={600}>Recent Agent Decisions</Typography>
+          <Chip
+            label={`${decisionsData?.total || 0} total`}
+            size="small"
+            variant="outlined"
+            sx={{ fontSize: '0.65rem' }}
+          />
+        </Box>
+        <DecisionHistoryTable decisions={(decisionsData?.decisions || []) as unknown as AgentDecisionRow[]} />
+      </Paper>
+
+      {/* Analyst Rankings */}
+      {stats?.analyst_rankings && (() => {
+        const rankings: AnalystRankingsStats = stats.analyst_rankings;
+        const analystEntries = Object.entries(rankings.analysts || {});
+        return (
+          <Paper sx={{ p: 2, mt: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
+              <TrendingUp sx={{ color: '#8b5cf6', fontSize: 20 }} />
+              <Typography variant="subtitle1" fontWeight={600}>Analyst Rankings</Typography>
+              {rankings.last_updated && (
+                <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto' }}>
+                  Updated: {new Date(rankings.last_updated).toLocaleString()}
+                </Typography>
+              )}
+            </Box>
+            {analystEntries.length === 0 ? (
+              <Alert severity="info">No rankings yet. Run daily training to compute.</Alert>
+            ) : (
+              <Grid container spacing={2}>
+                {analystEntries.map(([name, data]) => (
+                  <Grid item xs={12} sm={6} md={4} key={name}>
+                    <Card sx={{ bgcolor: alpha('#8b5cf6', 0.05), border: `1px solid ${alpha('#8b5cf6', 0.15)}` }}>
+                      <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
+                        <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1 }}>
+                          {name.replace(/_/g, ' ')}
+                        </Typography>
+                        <Grid container spacing={1}>
+                          <Grid item xs={6}>
+                            <Typography variant="caption" color="text.secondary">Decisions</Typography>
+                            <Typography variant="body2" fontWeight={600}>{data.total_decisions}</Typography>
+                          </Grid>
+                          <Grid item xs={6}>
+                            <Typography variant="caption" color="text.secondary">Accuracy</Typography>
+                            <Typography variant="body2" fontWeight={600} sx={{ color: data.accuracy >= 0.5 ? '#22c55e' : '#ef4444' }}>
+                              {(data.accuracy * 100).toFixed(1)}%
+                            </Typography>
+                          </Grid>
+                          <Grid item xs={6}>
+                            <Typography variant="caption" color="text.secondary">Avg Reward</Typography>
+                            <Typography variant="body2" fontWeight={600} sx={{ color: data.avg_reward >= 0 ? '#22c55e' : '#ef4444' }}>
+                              {data.avg_reward >= 0 ? '+' : ''}{data.avg_reward.toFixed(3)}
+                            </Typography>
+                          </Grid>
+                          <Grid item xs={6}>
+                            <Typography variant="caption" color="text.secondary">Contexts</Typography>
+                            <Typography variant="body2" fontWeight={600}>{data.contexts}</Typography>
+                          </Grid>
+                        </Grid>
+                      </CardContent>
+                    </Card>
+                  </Grid>
+                ))}
+              </Grid>
+            )}
+          </Paper>
+        );
+      })()}
     </Box>
   );
 }

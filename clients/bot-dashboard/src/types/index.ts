@@ -738,6 +738,19 @@ export interface OutcomeStoreStats {
   total_rewards_calculated: number;
 }
 
+export interface AnalystRankingEntry {
+  contexts: number;
+  total_decisions: number;
+  accuracy: number;
+  avg_reward: number;
+}
+
+export interface AnalystRankingsStats {
+  last_updated: string | null;
+  analysts: Record<string, AnalystRankingEntry>;
+  total_contexts: number;
+}
+
 export interface AgentStats {
   orchestrator: AgentOrchestratorStats;
   claude: AgentClaudeStats;
@@ -747,6 +760,7 @@ export interface AgentStats {
   learning_agent: { total_lessons: number; total_trades_analyzed: number };
   scan_engine: { total_patterns: number; significant_patterns: number };
   supervisor_bandit: BanditStats;
+  analyst_rankings: AnalystRankingsStats;
   outcome_store: OutcomeStoreStats;
   timestamp: string;
 }
