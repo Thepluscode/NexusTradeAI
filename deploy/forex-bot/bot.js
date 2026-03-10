@@ -1158,10 +1158,46 @@ async function queryAIAdvisor(signal) {
             macd_histogram: signal.macdHistogram,
             score: signal.score,
         };
-        const response = await axios.post(`${BRIDGE_URL}/ai/evaluate`, payload, { timeout: 10000 });
+        // [v4.1] Use full agentic pipeline
+        const response = await axios.post(`${BRIDGE_URL}/agent/evaluate`, payload, { timeout: 15000 });
         return response.data;
     } catch (e) {
         return null;
+    }
+}
+
+// [v4.1] Report trade outcome to learning agent for Scan AI pattern tracking
+async function reportForexTradeOutcome(position, exitPrice, pnl, pnlPct, exitReason) {
+    try {
+        const rMultiple = position.stopLoss
+            ? Math.abs(pnl) / Math.abs(position.entry - position.stopLoss)
+            : 0;
+        const holdMinutes = (Date.now() - (position.entryTime || Date.now())) / 60000;
+        const payload = {
+            symbol: position.pair,
+            asset_class: 'forex',
+            direction: position.direction || 'long',
+            tier: position.tier || 'tier1',
+            entry_price: position.entry,
+            exit_price: exitPrice,
+            pnl: pnl,
+            pnl_pct: pnlPct * 100,
+            r_multiple: pnl > 0 ? rMultiple : -rMultiple,
+            hold_duration_minutes: holdMinutes,
+            exit_reason: exitReason,
+            entry_rsi: position.rsi || undefined,
+            entry_regime: position.regime || undefined,
+            entry_regime_quality: position.regimeQuality || undefined,
+            entry_atr_pct: position.atrPct || undefined,
+            entry_score: position.score || undefined,
+            agent_approved: position.agentApproved,
+            agent_confidence: position.agentConfidence,
+            agent_reason: position.agentReason,
+        };
+        await axios.post(`${BRIDGE_URL}/agent/trade-outcome`, payload, { timeout: 5000 });
+        console.log(`[Learn] ${position.pair} outcome reported: ${pnl > 0 ? 'WIN' : 'LOSS'} ${(pnlPct * 100).toFixed(2)}%`);
+    } catch (e) {
+        // Non-blocking
     }
 }
 
@@ -1825,16 +1861,24 @@ async function tradingLoop() {
         const signalsToExecute = signals.slice(0, Math.min(maxNewPositions, 2));
 
         for (const signal of signalsToExecute) {
-            // [v4.0] AI Trade Advisor gate — Claude evaluates before execution
+            // [v4.1] Agentic AI pipeline — multi-agent evaluation before execution
             const aiResult = await queryAIAdvisor(signal);
             if (aiResult !== null) {
                 if (!aiResult.approved && aiResult.confidence > 0.6) {
-                    console.log(`[AI] ${signal.pair} ${signal.direction} REJECTED (conf: ${aiResult.confidence.toFixed(2)}) — ${aiResult.reason}`);
-                    if (aiResult.risk_flags?.length) console.log(`[AI]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
+                    console.log(`[Agent] ${signal.pair} ${signal.direction} REJECTED (conf: ${aiResult.confidence.toFixed(2)}) — ${aiResult.reason}`);
+                    if (aiResult.risk_flags?.length) console.log(`[Agent]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
+                    if (aiResult.lessons_applied?.length) console.log(`[Agent]   Lessons: ${aiResult.lessons_applied.slice(0, 2).join('; ')}`);
                     continue;
                 }
                 const srcTag = aiResult.source === 'cache' ? ' (cached)' : '';
-                console.log(`[AI] ${signal.pair} ${signal.direction} APPROVED${srcTag} (conf: ${(aiResult.confidence || 0).toFixed(2)}) — ${aiResult.reason}`);
+                const regime = aiResult.market_regime ? ` [${aiResult.market_regime}]` : '';
+                console.log(`[Agent] ${signal.pair} ${signal.direction} APPROVED${srcTag}${regime} (conf: ${(aiResult.confidence || 0).toFixed(2)}, size: ${(aiResult.position_size_multiplier || 1).toFixed(2)}x) — ${aiResult.reason}`);
+                signal.agentApproved = aiResult.approved;
+                signal.agentConfidence = aiResult.confidence;
+                signal.agentReason = aiResult.reason;
+                if (aiResult.position_size_multiplier && aiResult.position_size_multiplier !== 1.0) {
+                    signal.agentSizeMultiplier = aiResult.position_size_multiplier;
+                }
             }
             await executeTrade(signal);
         }

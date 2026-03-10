@@ -48,8 +48,12 @@ from ou_estimator import fit_ou_to_pair
 # Import base types
 from strategy_framework import MarketData, SignalType
 
-# Import AI advisor
+# Import AI advisor (basic — kept for backward compat)
 from ai_advisor import ai_advisor
+
+# Import Agentic AI system (v4.1 — full multi-agent pipeline)
+from agents.orchestrator import orchestrator as agent_orchestrator
+from agents.base import MarketSnapshot, TradeOutcome, AgentDecision
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -100,6 +104,29 @@ class AIEvaluationRequest(BaseModel):
     score: Optional[float] = None
     bridge_direction: Optional[str] = None
     bridge_confidence: Optional[float] = None
+
+class TradeOutcomeRequest(BaseModel):
+    symbol: str
+    asset_class: str = "stock"
+    direction: str = "long"
+    tier: str = "tier1"
+    entry_price: float
+    exit_price: float
+    pnl: float
+    pnl_pct: float
+    r_multiple: float = 0.0
+    hold_duration_minutes: float = 0.0
+    exit_reason: str = "unknown"
+    entry_rsi: Optional[float] = None
+    entry_regime: Optional[str] = None
+    entry_regime_quality: Optional[float] = None
+    entry_momentum: Optional[float] = None
+    entry_volume_ratio: Optional[float] = None
+    entry_atr_pct: Optional[float] = None
+    entry_score: Optional[float] = None
+    agent_approved: Optional[bool] = None
+    agent_confidence: Optional[float] = None
+    agent_reason: Optional[str] = None
 
 class StrategySignalResponse(BaseModel):
     strategy: str
@@ -477,11 +504,118 @@ if FASTAPI_AVAILABLE:
 
     @app.get("/ai/stats")
     def ai_stats():
-        """Get AI advisor statistics."""
+        """Get AI advisor statistics (basic + agentic)."""
         return {
             "ai_advisor": ai_advisor.get_stats(),
             "timestamp": datetime.now().isoformat()
         }
+
+    # ========================================
+    # AGENTIC AI ENDPOINTS (v4.1)
+    # ========================================
+
+    @app.post("/agent/evaluate")
+    async def agent_evaluate(req: AIEvaluationRequest):
+        """
+        Full agentic pipeline evaluation.
+        KillSwitch → MarketAgent → DecisionAgent(+lessons) → SafetyGuardrails
+        """
+        snapshot = MarketSnapshot(
+            symbol=req.symbol,
+            asset_class=req.asset_class,
+            price=req.price or 0,
+            direction=req.direction,
+            tier=req.tier,
+            rsi=req.rsi,
+            momentum=req.momentum,
+            percent_change=req.percent_change,
+            volume_ratio=req.volume_ratio,
+            trend_strength=req.trend_strength,
+            atr_pct=req.atr_pct,
+            vwap=req.vwap,
+            h1_trend=req.h1_trend,
+            session=req.session,
+            regime=req.regime,
+            regime_quality=req.regime_quality,
+            macd_histogram=req.macd_histogram,
+            score=req.score,
+            stop_loss=req.stop_loss if hasattr(req, 'stop_loss') else None,
+            take_profit=req.take_profit if hasattr(req, 'take_profit') else None,
+            bridge_direction=req.bridge_direction,
+            bridge_confidence=req.bridge_confidence,
+        )
+        decision = await agent_orchestrator.evaluate_signal(snapshot)
+        return {
+            "symbol": req.symbol,
+            "direction": req.direction,
+            "tier": req.tier,
+            "approved": decision.approved,
+            "confidence": decision.confidence,
+            "reason": decision.reason,
+            "risk_flags": decision.risk_flags,
+            "position_size_multiplier": decision.position_size_multiplier,
+            "adjusted_stop": decision.adjusted_stop,
+            "market_regime": decision.market_regime,
+            "lessons_applied": decision.lessons_applied,
+            "source": decision.source,
+            "agents_consulted": decision.agents_consulted,
+            "timestamp": datetime.now().isoformat()
+        }
+
+    @app.post("/agent/trade-outcome")
+    async def agent_trade_outcome(req: TradeOutcomeRequest):
+        """Report a completed trade for learning and pattern tracking."""
+        outcome = TradeOutcome(
+            symbol=req.symbol,
+            asset_class=req.asset_class,
+            direction=req.direction,
+            tier=req.tier,
+            entry_price=req.entry_price,
+            exit_price=req.exit_price,
+            pnl=req.pnl,
+            pnl_pct=req.pnl_pct,
+            r_multiple=req.r_multiple,
+            hold_duration_minutes=req.hold_duration_minutes,
+            exit_reason=req.exit_reason,
+            entry_rsi=req.entry_rsi,
+            entry_regime=req.entry_regime,
+            entry_regime_quality=req.entry_regime_quality,
+            entry_momentum=req.entry_momentum,
+            entry_volume_ratio=req.entry_volume_ratio,
+            entry_atr_pct=req.entry_atr_pct,
+            entry_score=req.entry_score,
+            agent_approved=req.agent_approved,
+            agent_confidence=req.agent_confidence,
+            agent_reason=req.agent_reason,
+            timestamp=datetime.now().isoformat(),
+        )
+        await agent_orchestrator.record_trade_outcome(outcome)
+        return {
+            "status": "recorded",
+            "symbol": req.symbol,
+            "pnl_pct": req.pnl_pct,
+            "timestamp": datetime.now().isoformat()
+        }
+
+    @app.get("/agent/stats")
+    def agent_stats():
+        """Full agentic system statistics."""
+        return {
+            **agent_orchestrator.get_stats(),
+            "timestamp": datetime.now().isoformat()
+        }
+
+    @app.post("/agent/kill")
+    def agent_kill(reason: str = "Manual kill via API"):
+        """Activate the kill switch — stops all agent approvals."""
+        agent_orchestrator.kill_switch.kill(reason)
+        return {"status": "killed", "reason": reason}
+
+    @app.post("/agent/resume")
+    def agent_resume():
+        """Deactivate the kill switch — resume agent evaluations."""
+        agent_orchestrator.kill_switch.resume()
+        return {"status": "resumed"}
 
 # ========================================
 # STANDALONE SERVER
@@ -494,12 +628,17 @@ if __name__ == "__main__":
 
     import uvicorn
     port = int(os.environ.get("STRATEGY_BRIDGE_PORT", 3010))
+    ai_status = 'ENABLED' if ai_advisor.is_available else 'DISABLED (set ANTHROPIC_API_KEY)'
     print(f"\n🐍 Python Strategy Bridge starting on port {port}")
-    print(f"   Strategies: regime_momentum, volatility_arbitrage, pairs_trading")
-    print(f"   AI Advisor: {'ENABLED' if ai_advisor.is_available else 'DISABLED (set ANTHROPIC_API_KEY)'}")
-    print(f"   Health:     http://localhost:{port}/health")
-    print(f"   Signal:     POST http://localhost:{port}/signal")
-    print(f"   AI Eval:    POST http://localhost:{port}/ai/evaluate")
-    print(f"   AI Stats:   GET  http://localhost:{port}/ai/stats")
-    print(f"   Pairs:      POST http://localhost:{port}/pairs/analyze\n")
+    print(f"   Strategies:  regime_momentum, volatility_arbitrage, pairs_trading")
+    print(f"   AI Advisor:  {ai_status}")
+    print(f"   Agent System: ACTIVE (multi-agent pipeline with Scan AI)")
+    print(f"   Health:       http://localhost:{port}/health")
+    print(f"   Signal:       POST http://localhost:{port}/signal")
+    print(f"   Agent Eval:   POST http://localhost:{port}/agent/evaluate")
+    print(f"   Agent Learn:  POST http://localhost:{port}/agent/trade-outcome")
+    print(f"   Agent Stats:  GET  http://localhost:{port}/agent/stats")
+    print(f"   Agent Kill:   POST http://localhost:{port}/agent/kill")
+    print(f"   Agent Resume: POST http://localhost:{port}/agent/resume")
+    print(f"   Pairs:        POST http://localhost:{port}/pairs/analyze\n")
     uvicorn.run(app, host="0.0.0.0", port=port)

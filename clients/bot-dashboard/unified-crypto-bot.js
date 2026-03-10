@@ -701,8 +701,8 @@ class CryptoTradingEngine {
     // AI TRADE ADVISOR
     // ========================================================================
 
-    // [v4.0] Agentic AI — Claude-powered trade evaluation via strategy bridge
-    // Fail-open: if AI is offline/rate-limited, approve by default
+    // [v4.1] Agentic AI — full multi-agent pipeline via strategy bridge
+    // Fail-open: if agent is offline/rate-limited, approve by default
     async queryAIAdvisor(signal) {
         try {
             const bridgeUrl = (() => {
@@ -727,10 +727,47 @@ class CryptoTradingEngine {
                 score: signal.score || undefined,
                 atr_pct: signal.atrPct || undefined,
             };
-            const response = await axios.post(`${bridgeUrl}/ai/evaluate`, payload, { timeout: 10000 });
+            const response = await axios.post(`${bridgeUrl}/agent/evaluate`, payload, { timeout: 15000 });
             return response.data;
         } catch (e) {
             return null;
+        }
+    }
+
+    // [v4.1] Report trade outcome for Scan AI learning
+    async reportTradeOutcome(position, exitPrice, pnl, pnlPct, exitReason) {
+        try {
+            const bridgeUrl = (() => {
+                const raw = process.env.STRATEGY_BRIDGE_URL
+                    || process.env.RAILWAY_SERVICE_NEXUS_STRATEGY_BRIDGE_URL
+                    || 'localhost:3010';
+                if (raw.startsWith('http')) return raw;
+                if (raw.includes('railway.app')) return `https://${raw}`;
+                return `http://${raw}`;
+            })();
+            const holdMinutes = (Date.now() - (position.entryTime || Date.now())) / 60000;
+            const payload = {
+                symbol: position.symbol,
+                asset_class: 'crypto',
+                direction: 'long',
+                tier: position.tier || 'tier1',
+                entry_price: position.entryPrice || position.price,
+                exit_price: exitPrice,
+                pnl: pnl,
+                pnl_pct: pnlPct * 100,
+                r_multiple: 0,
+                hold_duration_minutes: holdMinutes,
+                exit_reason: exitReason,
+                entry_regime: position.regime || undefined,
+                entry_regime_quality: position.regimeQuality || undefined,
+                entry_score: position.score || undefined,
+                agent_approved: position.agentApproved,
+                agent_confidence: position.agentConfidence,
+            };
+            await axios.post(`${bridgeUrl}/agent/trade-outcome`, payload, { timeout: 5000 });
+            console.log(`[Learn] ${position.symbol} outcome reported: ${pnl > 0 ? 'WIN' : 'LOSS'} ${(pnlPct * 100).toFixed(2)}%`);
+        } catch (e) {
+            // Non-blocking
         }
     }
 
@@ -1539,16 +1576,21 @@ class CryptoTradingEngine {
                     // Execute trades
                     for (const signal of opportunities) {
                         if (this.positions.size >= this.config.maxTotalPositions) break;
-                        // [v4.0] AI Trade Advisor gate — Claude evaluates before execution
+                        // [v4.1] Agentic AI pipeline — multi-agent evaluation before execution
                         const aiResult = await this.queryAIAdvisor(signal);
                         if (aiResult !== null) {
                             if (!aiResult.approved && aiResult.confidence > 0.6) {
-                                console.log(`[AI] ${signal.symbol} REJECTED (conf: ${aiResult.confidence.toFixed(2)}) — ${aiResult.reason}`);
-                                if (aiResult.risk_flags?.length) console.log(`[AI]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
+                                console.log(`[Agent] ${signal.symbol} REJECTED (conf: ${aiResult.confidence.toFixed(2)}) — ${aiResult.reason}`);
+                                if (aiResult.risk_flags?.length) console.log(`[Agent]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
+                                if (aiResult.lessons_applied?.length) console.log(`[Agent]   Lessons: ${aiResult.lessons_applied.slice(0, 2).join('; ')}`);
                                 continue;
                             }
                             const srcTag = aiResult.source === 'cache' ? ' (cached)' : '';
-                            console.log(`[AI] ${signal.symbol} APPROVED${srcTag} (conf: ${(aiResult.confidence || 0).toFixed(2)}) — ${aiResult.reason}`);
+                            const regime = aiResult.market_regime ? ` [${aiResult.market_regime}]` : '';
+                            console.log(`[Agent] ${signal.symbol} APPROVED${srcTag}${regime} (conf: ${(aiResult.confidence || 0).toFixed(2)}, size: ${(aiResult.position_size_multiplier || 1).toFixed(2)}x) — ${aiResult.reason}`);
+                            signal.agentApproved = aiResult.approved;
+                            signal.agentConfidence = aiResult.confidence;
+                            signal.agentReason = aiResult.reason;
                         }
                         await this.executeTrade(signal);
                     }
