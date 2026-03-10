@@ -700,28 +700,28 @@ const EXIT_CONFIG = {
 // ===== TIERED MOMENTUM CONFIG (Forex) =====
 const MOMENTUM_CONFIG = {
     tier1: {
-        threshold: 0.003,       // 0.3% (30 pips)
-        rsiMax: 70,
-        rsiMin: 30,
-        positionSize: 0.01,     // 1% of account
-        stopLoss: 0.02,         // 2.0% (raised from 1.5% — avoids noise-triggered stops on JPY pairs)
+        threshold: 0.004,       // 0.4% (40 pips) — raised from 0.3% to filter noise
+        rsiMax: 65,             // tightened from 70
+        rsiMin: 35,             // tightened from 30
+        positionSize: 0.008,    // 0.8% of account (cut from 1%)
+        stopLoss: 0.02,         // 2.0%
         profitTarget: 0.04,     // 4% (2:1 R/R)
-        maxPositions: 4
+        maxPositions: 3         // reduced from 4
     },
     tier2: {
-        threshold: 0.005,       // 0.5% (50 pips)
-        rsiMax: 72,
-        rsiMin: 28,
-        positionSize: 0.015,    // 1.5%
+        threshold: 0.006,       // 0.6% (60 pips) — raised from 0.5%
+        rsiMax: 68,             // tightened from 72
+        rsiMin: 32,             // tightened from 28
+        positionSize: 0.012,    // 1.2% (cut from 1.5%)
         stopLoss: 0.02,         // 2%
         profitTarget: 0.045,    // 4.5% (2.25:1 R/R)
         maxPositions: 2
     },
     tier3: {
-        threshold: 0.008,       // 0.8% (80 pips) - strong move
-        rsiMax: 75,
-        rsiMin: 25,
-        positionSize: 0.02,     // 2%
+        threshold: 0.010,       // 1.0% (100 pips) — raised from 0.8% to require real moves
+        rsiMax: 72,             // tightened from 75
+        rsiMin: 28,             // tightened from 25
+        positionSize: 0.015,    // 1.5% (cut from 2%)
         stopLoss: 0.025,        // 2.5%
         profitTarget: 0.06,     // 6% (2.4:1 R/R)
         maxPositions: 1
@@ -770,9 +770,10 @@ function scoreForexSignal({ tier, trendStrength, pullback, maxPullback, rsi, dir
     const pullbackQuality = maxPullback > 0
         ? 1 + Math.max(0, (maxPullback - pullback) / maxPullback) * 0.35
         : 1;
+    // [v3.9] Tighter RSI sweet spots matching new entry bounds
     const rsiSweetSpot = direction === 'long'
-        ? (rsi >= 45 && rsi <= 62 ? 1.1 : 1.0)
-        : (rsi >= 38 && rsi <= 55 ? 1.1 : 1.0);
+        ? (rsi >= 45 && rsi <= 58 ? 1.12 : 1.0)
+        : (rsi >= 42 && rsi <= 55 ? 1.12 : 1.0);
     const macdStrength = macd ? Math.min(Math.abs(macd.histogram) * 100000, 3) : 1;
 
     return parseFloat(
@@ -797,9 +798,10 @@ function evaluateForexRegimeSignal({ tier, trendStrength, pullback, maxPullback,
     if (trendStrength >= (MOMENTUM_CONFIG[tier]?.threshold || MOMENTUM_CONFIG.tier1.threshold) * 1.15) quality *= 1.08;
     else if (trendStrength < (MOMENTUM_CONFIG[tier]?.threshold || MOMENTUM_CONFIG.tier1.threshold)) quality *= 0.9;
 
+    // [v3.9] Tighter regime RSI bands
     const rsiSweetSpot = direction === 'long'
-        ? (rsi >= 46 && rsi <= 60)
-        : (rsi >= 40 && rsi <= 54);
+        ? (rsi >= 45 && rsi <= 58)
+        : (rsi >= 42 && rsi <= 55);
     if (rsiSweetSpot) quality *= 1.04;
 
     if (macd) {
@@ -1231,9 +1233,11 @@ async function scanForSignals(heldPositions = positions) {
     const signals = [];
     const session = getCurrentSession();
 
-    // Skip low liquidity sessions
-    if (session.quality === 'poor') {
-        console.log(`⏸️ ${session.name} - Low liquidity, skipping`);
+    // [v3.9] Only enter during London or London/NY Overlap — highest-quality setups
+    // Tokyo, Sydney, standalone NY, and off-peak are now blocked for new entries
+    const allowedSessions = ['London', 'London/NY Overlap'];
+    if (!allowedSessions.includes(session.name)) {
+        console.log(`⏸️ ${session.name} — restricted to London/Overlap only, skipping new entries`);
         return signals;
     }
 
@@ -1276,12 +1280,33 @@ async function scanForSignals(heldPositions = positions) {
             continue;
         }
 
+        // [v3.9] Require real pullback — reject pure trend continuations that catch tops/bottoms
+        const minPullbackRatio = 0.20; // Must have retraced at least 20% of the move
+        if (maxPullback > 0 && pullback < maxPullback * minPullbackRatio) {
+            console.log(`[Pullback Depth] ${pair} skipped — pullback ${(pullback * 100).toFixed(2)}% < ${(maxPullback * minPullbackRatio * 100).toFixed(2)}% min (${(minPullbackRatio * 100).toFixed(0)}% of max)`);
+            continue;
+        }
+
+        // [v3.9] ATR noise cap — skip choppy/volatile pairs where stops get hunted
+        const MAX_ATR_PCT = 0.012; // 1.2% — pairs above this are too noisy for reliable signals
+        if (atrPct > MAX_ATR_PCT) {
+            console.log(`[ATR Cap] ${pair} skipped — ATR ${(atrPct * 100).toFixed(2)}% > ${(MAX_ATR_PCT * 100).toFixed(1)}% cap (too volatile)`);
+            continue;
+        }
+
+        // [v3.9] Minimum trend strength — require stronger directional conviction
+        const MIN_TREND_STRENGTH = MOMENTUM_CONFIG[tier].threshold * 1.15;
+        if (trendStrength < MIN_TREND_STRENGTH) {
+            console.log(`[Trend Strength] ${pair} skipped — strength ${(trendStrength * 100).toFixed(2)}% < ${(MIN_TREND_STRENGTH * 100).toFixed(2)}% min for ${tier}`);
+            continue;
+        }
+
         // [v3.2] ATR-based stops/targets — adapts to each pair's volatility
         const atrStop   = atrPct > 0 ? atrPct * 1.5 : config.stopLoss;
         const atrTarget = atrPct > 0 ? atrPct * 3.0 : config.profitTarget;
 
-        // LONG Signal
-        if (isUptrend && rsi < config.rsiMax && rsi > config.rsiMin - 10) {
+        // LONG Signal — [v3.9] tighter RSI: must be 40-65 (was rsiMin-10 to rsiMax)
+        if (isUptrend && rsi < config.rsiMax && rsi >= 40) {
             if (h1Trend !== 'up') {
                 console.log(`[H1 Filter] ${pair} LONG skipped — H1 trend is ${h1Trend}`);
                 continue;
@@ -1347,8 +1372,8 @@ async function scanForSignals(heldPositions = positions) {
             }
         }
 
-        // SHORT Signal
-        if (isDowntrend && rsi > (100 - config.rsiMax) && rsi < (100 - config.rsiMin + 10)) {
+        // SHORT Signal — [v3.9] tighter RSI: must be 35-60 (was 100-rsiMax to 100-rsiMin+10)
+        if (isDowntrend && rsi > (100 - config.rsiMax) && rsi <= 60) {
             if (h1Trend !== 'down') {
                 console.log(`[H1 Filter] ${pair} SHORT skipped — H1 trend is ${h1Trend}`);
                 continue;
@@ -1437,14 +1462,14 @@ async function executeTrade(signal) {
     const slippageAdj = signal.direction === 'long' ? 1 + FOREX_SLIPPAGE : 1 - FOREX_SLIPPAGE;
     const effectiveEntry = signal.entry * slippageAdj;
 
-    // Session multiplier: increase size 1.5x during London/NY overlap (best liquidity + trend)
-    const sessionMultiplier = signal.session === 'London/NY Overlap' ? 1.5 : 1.0;
+    // [v3.9] Session multiplier: reduced from 1.5→1.15 to cut exposure during overlap
+    const sessionMultiplier = signal.session === 'London/NY Overlap' ? 1.15 : 1.0;
     const positionValue = balance * config.positionSize * sessionMultiplier;
 
-    // Calculate units (forex uses lot sizes), sized from effective entry
+    // [v3.9] Calculate units — reduced multiplier from 10000→7000 (smaller lots = smaller losses)
     const units = signal.direction === 'long'
-        ? Math.floor(positionValue / effectiveEntry * 10000)  // Mini lots
-        : -Math.floor(positionValue / effectiveEntry * 10000);
+        ? Math.floor(positionValue / effectiveEntry * 7000)
+        : -Math.floor(positionValue / effectiveEntry * 7000);
 
     console.log(`\n🎯 EXECUTING ${signal.direction.toUpperCase()} ${signal.pair} (${signal.tier})`);
     console.log(`   Entry: ${signal.entry.toFixed(5)}, Stop: ${signal.stopLoss.toFixed(5)}, Target: ${signal.takeProfit.toFixed(5)}`);
@@ -2521,11 +2546,11 @@ class UserForexEngine {
         const FOREX_SLIPPAGE = 0.001;
         const slippageAdj = signal.direction === 'long' ? 1 + FOREX_SLIPPAGE : 1 - FOREX_SLIPPAGE;
         const effectiveEntry = signal.entry * slippageAdj;
-        const sessionMultiplier = signal.session === 'London/NY Overlap' ? 1.5 : 1.0;
+        const sessionMultiplier = signal.session === 'London/NY Overlap' ? 1.15 : 1.0;
         const positionValue = balance * config.positionSize * sessionMultiplier;
         const units = signal.direction === 'long'
-            ? Math.floor(positionValue / effectiveEntry * 10000)
-            : -Math.floor(positionValue / effectiveEntry * 10000);
+            ? Math.floor(positionValue / effectiveEntry * 7000)
+            : -Math.floor(positionValue / effectiveEntry * 7000);
         const result = await this.createOrder(signal.pair, units, signal.stopLoss, signal.takeProfit);
         if (result?.orderFillTransaction) {
             const tags = buildForexTradeTags(signal, signal.tier, signal.direction, signal.session);
