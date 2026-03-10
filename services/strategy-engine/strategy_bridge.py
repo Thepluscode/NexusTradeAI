@@ -55,6 +55,7 @@ from ai_advisor import ai_advisor
 from agents.orchestrator import orchestrator as agent_orchestrator
 from agents.base import MarketSnapshot, TradeOutcome, AgentDecision
 from agents.supervisor_bandit import supervisor as agent_supervisor
+from agents.backfill import backfill_from_db, backfill_from_json
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -679,6 +680,100 @@ if FASTAPI_AVAILABLE:
             "timestamp": datetime.now().isoformat(),
         }
 
+    # ========================================
+    # BACKFILL + PERIODIC TRAINING (v4.2)
+    # ========================================
+
+    class BackfillRequest(BaseModel):
+        limit: int = 500
+        since_days: int = 90
+        bot_db_url: Optional[str] = None
+
+    class TradeRecord(BaseModel):
+        bot: str = "stock"
+        symbol: str
+        direction: str = "long"
+        tier: Optional[str] = "tier1"
+        strategy: Optional[str] = None
+        regime: Optional[str] = None
+        entry_price: float
+        exit_price: float
+        pnl_usd: Optional[float] = None
+        pnl_pct: Optional[float] = None
+        stop_loss: Optional[float] = None
+        take_profit: Optional[float] = None
+        entry_time: Optional[str] = None
+        exit_time: Optional[str] = None
+        close_reason: Optional[str] = None
+        rsi: Optional[float] = None
+        volume_ratio: Optional[float] = None
+        momentum_pct: Optional[float] = None
+        signal_score: Optional[float] = None
+        entry_context: Optional[Dict[str, Any]] = None
+
+    class BackfillJsonRequest(BaseModel):
+        trades: List[TradeRecord]
+
+    @app.post("/agent/backfill")
+    async def agent_backfill(req: BackfillRequest):
+        """
+        Backfill historical trades from the DB into the outcome store + bandit.
+        Reads closed trades from the bots' `trades` table.
+        """
+        stats = await backfill_from_db(
+            bot_db_url=req.bot_db_url,
+            limit=req.limit,
+            since_days=req.since_days,
+        )
+        return {
+            **stats,
+            "bandit_stats": agent_supervisor.get_stats(),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    @app.post("/agent/backfill/json")
+    async def agent_backfill_json(req: BackfillJsonRequest):
+        """
+        Backfill trades pushed as JSON from bots.
+        Use when bridge DB differs from bot DB.
+        """
+        trades = [t.dict() for t in req.trades]
+        stats = await backfill_from_json(trades)
+        return {
+            **stats,
+            "bandit_stats": agent_supervisor.get_stats(),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    @app.post("/agent/daily-training")
+    async def agent_daily_training():
+        """
+        Combined daily training routine:
+        1. Backfill any new trades from DB (last 2 days)
+        2. Train bandit from accumulated rewards
+        3. Sync state to DB
+
+        Call this from a cron job or Railway cron.
+        """
+        # Step 1: Backfill recent trades
+        backfill_stats = await backfill_from_db(limit=100, since_days=2)
+
+        # Step 2: Train bandit from all rewards
+        from agents.outcome_store import outcome_store
+        rewards = await outcome_store.get_recent_rewards(limit=200)
+        bandit_updates = agent_supervisor.batch_update_from_rewards(rewards)
+
+        # Step 3: Sync to DB
+        await agent_supervisor.sync_to_db()
+
+        return {
+            "status": "daily_training_complete",
+            "backfill": backfill_stats,
+            "bandit_rewards_processed": bandit_updates,
+            "bandit_stats": agent_supervisor.get_stats(),
+            "timestamp": datetime.now().isoformat(),
+        }
+
 # ========================================
 # STANDALONE SERVER
 # ========================================
@@ -705,5 +800,7 @@ if __name__ == "__main__":
     print(f"   Bandit Select:POST http://localhost:{port}/agent/bandit/select")
     print(f"   Bandit Stats: GET  http://localhost:{port}/agent/bandit/stats")
     print(f"   Bandit Train: POST http://localhost:{port}/agent/bandit/train")
+    print(f"   Backfill:     POST http://localhost:{port}/agent/backfill")
+    print(f"   Daily Train:  POST http://localhost:{port}/agent/daily-training")
     print(f"   Pairs:        POST http://localhost:{port}/pairs/analyze\n")
     uvicorn.run(app, host="0.0.0.0", port=port)
