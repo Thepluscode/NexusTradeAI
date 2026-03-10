@@ -70,6 +70,15 @@ interface BotStatus {
         profitTarget: number;
         dailyLossLimit: number;
     };
+    guardrails?: {
+        consecutiveLosses: number;
+        recentWinRate: string;
+        lanePaused: boolean;
+        lanePausedUntil?: string | null;
+        lossSizeMultiplier: number;
+        todayWins: number;
+        todayLosses: number;
+    };
 }
 
 export default function ForexBotPage() {
@@ -443,6 +452,19 @@ export default function ForexBotPage() {
                     </Button>
                 </Box>
             </Paper>
+
+            {/* Guardrails Banner (v4.6) */}
+            {status?.guardrails && (status.guardrails.lanePaused || status.guardrails.consecutiveLosses > 0 || status.guardrails.lossSizeMultiplier < 1) && (
+                <Alert
+                    severity={status.guardrails.lanePaused ? 'error' : status.guardrails.consecutiveLosses >= 2 ? 'warning' : 'info'}
+                    sx={{ mb: 2 }}
+                >
+                    {status.guardrails.lanePaused
+                        ? `Lane PAUSED — ${status.guardrails.consecutiveLosses} consecutive losses. Resumes ${status.guardrails.lanePausedUntil ? new Date(status.guardrails.lanePausedUntil).toLocaleTimeString() : 'soon'}.`
+                        : `Guardrails active — ${status.guardrails.consecutiveLosses} consecutive loss${status.guardrails.consecutiveLosses !== 1 ? 'es' : ''}, size ${status.guardrails.lossSizeMultiplier}x, win rate ${status.guardrails.recentWinRate}. W/L today: ${status.guardrails.todayWins}/${status.guardrails.todayLosses}`
+                    }
+                </Alert>
+            )}
 
             {/* Positions */}
             <Paper sx={{ p: 2, mb: 3 }}>

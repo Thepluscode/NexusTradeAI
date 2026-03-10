@@ -1584,9 +1584,19 @@ async function executeTrade(signal) {
     const positionValue = balance * config.positionSize * sessionMultiplier;
 
     // [v3.9] Calculate units — reduced multiplier from 10000→7000 (smaller lots = smaller losses)
-    const units = signal.direction === 'long'
+    let units = signal.direction === 'long'
         ? Math.floor(positionValue / effectiveEntry * 7000)
         : -Math.floor(positionValue / effectiveEntry * 7000);
+
+    // [v4.7] Cap units via RISK_PER_TRADE — never risk more than 0.35% of equity per trade
+    const stopDistPct = Math.abs(signal.entry - signal.stopLoss) / signal.entry;
+    if (stopDistPct > 0) {
+        const maxRiskUnits = Math.floor((balance * RISK_PER_TRADE) / (signal.entry * stopDistPct));
+        if (Math.abs(units) > maxRiskUnits) {
+            console.log(`   [RiskCap] Units capped: ${Math.abs(units)} → ${maxRiskUnits} (RISK_PER_TRADE=${RISK_PER_TRADE})`);
+            units = signal.direction === 'long' ? maxRiskUnits : -maxRiskUnits;
+        }
+    }
 
     console.log(`\n🎯 EXECUTING ${signal.direction.toUpperCase()} ${signal.pair} (${signal.tier})`);
     console.log(`   Entry: ${signal.entry.toFixed(5)}, Stop: ${signal.stopLoss.toFixed(5)}, Target: ${signal.takeProfit.toFixed(5)}`);
@@ -1955,6 +1965,14 @@ async function tradingLoop() {
             if (aiResult && aiResult.confidence < MIN_SIGNAL_CONFIDENCE) {
                 console.log(`[Guardrail] ${signal.pair} BLOCKED — confidence ${aiResult.confidence.toFixed(2)} < ${MIN_SIGNAL_CONFIDENCE}`);
                 continue;
+            }
+            // [v4.7] Reward/Risk quality gate — reject trades below MIN_REWARD_RISK
+            if (signal.stopLoss && signal.takeProfit && signal.entry) {
+                const rewardRisk = Math.abs(signal.takeProfit - signal.entry) / Math.abs(signal.entry - signal.stopLoss);
+                if (rewardRisk < MIN_REWARD_RISK) {
+                    console.log(`[Guardrail] ${signal.pair} BLOCKED — R:R ${rewardRisk.toFixed(2)} < ${MIN_REWARD_RISK}`);
+                    continue;
+                }
             }
             // Apply loss-adjusted position sizing
             if (guardrails.lossSizeMultiplier < 1.0) {
