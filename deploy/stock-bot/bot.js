@@ -1903,6 +1903,13 @@ async function scanMomentumBreakouts() {
                         console.log(`[Guardrail] ${mover.symbol} BLOCKED — confidence ${aiResult.confidence.toFixed(2)} < ${MIN_SIGNAL_CONFIDENCE}`);
                         continue;
                     }
+                    // [v4.7] Check reward/risk ratio meets minimum threshold
+                    const tierCfg = MOMENTUM_CONFIG[mover.tier] || MOMENTUM_CONFIG.tier1;
+                    const rewardRisk = (tierCfg.profitTarget || 0.08) / (tierCfg.stopLoss || 0.04);
+                    if (rewardRisk < MIN_REWARD_RISK) {
+                        console.log(`[Guardrail] ${mover.symbol} BLOCKED — R:R ${rewardRisk.toFixed(2)} < ${MIN_REWARD_RISK}`);
+                        continue;
+                    }
                     // Apply loss-adjusted position sizing
                     if (guardrails.lossSizeMultiplier < 1.0) {
                         mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * guardrails.lossSizeMultiplier;
@@ -2270,7 +2277,15 @@ async function executeTrade(signal, strategy) {
             console.log(`⚠️  [SKIP] ${signal.symbol}: invalid price ${signal.price}`);
             return null;
         }
-        const shares = Math.floor(positionSize / effectiveEntry);
+        let shares = Math.floor(positionSize / effectiveEntry);
+
+        // [v4.7] Cap shares by RISK_PER_TRADE — max dollar risk per trade = equity * RISK_PER_TRADE
+        const stopLossPct = config.stopLoss || 0.04;
+        const maxRiskShares = Math.floor((equity * RISK_PER_TRADE) / (effectiveEntry * stopLossPct));
+        if (maxRiskShares > 0 && shares > maxRiskShares) {
+            console.log(`   [RiskCap] ${signal.symbol}: capped ${shares} → ${maxRiskShares} shares (RISK_PER_TRADE=${(RISK_PER_TRADE * 100).toFixed(2)}%, stopLoss=${(stopLossPct * 100).toFixed(1)}%)`);
+            shares = maxRiskShares;
+        }
 
         if (shares < 1) {
             console.log(`⚠️  [SKIP] ${signal.symbol}: position size $${positionSize.toFixed(0)} too small to buy 1 share @ $${signal.price} (need $${Math.ceil(signal.price)} min)`);
@@ -3760,7 +3775,11 @@ class UserTradingEngine {
             const effectiveEntry = signal.price * (1 + STOCK_SLIPPAGE);
             const positionSize = equity * config.positionSize * kellyMultiplier;
             if (!signal.price || signal.price <= 0) return null;
-            const shares = Math.floor(positionSize / effectiveEntry);
+            let shares = Math.floor(positionSize / effectiveEntry);
+            // [v4.7] Cap shares by RISK_PER_TRADE
+            const stopLossPct = config.stopLoss || 0.04;
+            const maxRiskShares = Math.floor((equity * RISK_PER_TRADE) / (effectiveEntry * stopLossPct));
+            if (maxRiskShares > 0 && shares > maxRiskShares) shares = maxRiskShares;
             if (shares < 1) return null;
             const stopPrice  = (signal.atrStop  || effectiveEntry * (1 - config.stopLoss)).toFixed(2);
             const targetPrice = (signal.atrTarget || effectiveEntry * (1 + config.profitTarget)).toFixed(2);

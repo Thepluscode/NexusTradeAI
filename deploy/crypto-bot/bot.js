@@ -1242,11 +1242,17 @@ class CryptoTradingEngine {
                 : 0.5;
             const sizingMultiplier = Math.max(0.25, Math.min(2.0, runningWinRate / 0.5));
             const signalSizingFactor = signal.sizingFactor ?? 1.0;
+            // [v4.7] Risk-based position cap: max position = equity * RISK_PER_TRADE / stopLossPct
+            const stopPctDecimal = (signal.stopLossPercent || 5) / 100; // e.g. 5.0% → 0.05
+            const currentEquity = (this.config.basePositionSizeUSD * 20) + (this.totalProfit - this.totalLoss);
+            const riskCapUSD = (currentEquity * RISK_PER_TRADE) / stopPctDecimal;
+
             const positionSizeUSD = Math.min(
                 this.config.basePositionSizeUSD * sizingMultiplier * signalSizingFactor,
-                this.config.maxPositionSizeUSD
+                this.config.maxPositionSizeUSD,
+                riskCapUSD
             );
-            console.log(`   [Kelly Sizing] WinRate: ${(runningWinRate * 100).toFixed(1)}% → kelly ${sizingMultiplier.toFixed(2)}x · signal ${signalSizingFactor.toFixed(2)}x → $${positionSizeUSD.toFixed(0)}`);
+            console.log(`   [Kelly Sizing] WinRate: ${(runningWinRate * 100).toFixed(1)}% → kelly ${sizingMultiplier.toFixed(2)}x · signal ${signalSizingFactor.toFixed(2)}x → $${positionSizeUSD.toFixed(0)} (risk cap $${riskCapUSD.toFixed(0)})`);
 
             // [v3.5] Crypto slippage model — Kraken taker fee is 0.26%; market orders
             // also move the book. Model as 0.30% total execution cost.
@@ -1638,6 +1644,14 @@ class CryptoTradingEngine {
                         }
                         if (aiResult && aiResult.confidence < MIN_SIGNAL_CONFIDENCE) {
                             console.log(`[Guardrail] ${signal.symbol} BLOCKED — confidence ${aiResult.confidence.toFixed(2)} < ${MIN_SIGNAL_CONFIDENCE}`);
+                            continue;
+                        }
+                        // [v4.7] Reward/risk ratio gate
+                        const stopPct = (signal.stopLossPercent || 5) / 100;
+                        const tpPct = (signal.profitTargetPercent || 10) / 100;
+                        const rewardRisk = tpPct / stopPct;
+                        if (rewardRisk < MIN_REWARD_RISK) {
+                            console.log(`[Guardrail] ${signal.symbol} BLOCKED — R:R ${rewardRisk.toFixed(2)} < ${MIN_REWARD_RISK}`);
                             continue;
                         }
                         if (this.getLossSizeMultiplier() < 1.0) {
