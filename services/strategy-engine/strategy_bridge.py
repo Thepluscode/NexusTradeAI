@@ -774,6 +774,39 @@ if FASTAPI_AVAILABLE:
             "timestamp": datetime.now().isoformat(),
         }
 
+    # ========================================
+    # BACKGROUND DAILY TRAINING LOOP
+    # ========================================
+
+    import asyncio
+
+    _training_task = None
+
+    async def _daily_training_loop():
+        """Run daily training every 6 hours in the background."""
+        await asyncio.sleep(60)  # Wait 1 min after startup
+        while True:
+            try:
+                logger.info("[DailyTraining] Starting scheduled training run...")
+                backfill_stats = await backfill_from_db(limit=100, since_days=2)
+                from agents.outcome_store import outcome_store
+                rewards = await outcome_store.get_recent_rewards(limit=200)
+                updated = agent_supervisor.batch_update_from_rewards(rewards)
+                await agent_supervisor.sync_to_db()
+                logger.info(
+                    f"[DailyTraining] Done: backfilled {backfill_stats.get('trades_processed', 0)} trades, "
+                    f"bandit updated {updated} rewards"
+                )
+            except Exception as e:
+                logger.error(f"[DailyTraining] Error: {e}")
+            await asyncio.sleep(6 * 3600)  # Every 6 hours
+
+    @app.on_event("startup")
+    async def start_training_loop():
+        global _training_task
+        _training_task = asyncio.create_task(_daily_training_loop())
+        logger.info("Background daily training loop scheduled (every 6h)")
+
 # ========================================
 # STANDALONE SERVER
 # ========================================
