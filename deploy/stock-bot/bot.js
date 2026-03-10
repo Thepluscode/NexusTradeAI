@@ -934,6 +934,72 @@ const MIN_TIME_AFTER_STOP = 60 * 60 * 1000;
 let MAX_DAILY_LOSS = Math.abs(parseFloat(process.env.MAX_DAILY_LOSS || '500'));   // $ amount (always positive)
 let MAX_DRAWDOWN_PCT = parseFloat(process.env.MAX_DRAWDOWN_PCT || '10'); // percent
 
+// ===== ADAPTIVE GUARDRAILS (v4.6) =====
+// Env-overridable thresholds — stricter than legacy defaults
+const RISK_PER_TRADE = parseFloat(process.env.RISK_PER_TRADE || '0.0075');      // 0.75% per trade (was 2%)
+const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.68');
+const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.68');
+const MIN_REWARD_RISK = parseFloat(process.env.MIN_REWARD_RISK || '1.75');
+const MAX_SIGNALS_PER_CYCLE = parseInt(process.env.MAX_SIGNALS_PER_CYCLE || '1');
+const MAX_CONSECUTIVE_LOSSES = parseInt(process.env.MAX_CONSECUTIVE_LOSSES || '3');
+const LOSS_PAUSE_MS = parseInt(process.env.LOSS_PAUSE_MS || '7200000');          // 2h pause after N consecutive losses
+const STOP_LOSS_COOLDOWN_MS = parseInt(process.env.STOP_LOSS_COOLDOWN_MS || '2700000'); // 45min after stop loss
+
+// Adaptive guardrail state
+const guardrails = {
+    consecutiveLosses: 0,
+    recentResults: [],          // last 20 trade results: true=win, false=loss
+    lanePausedUntil: 0,         // timestamp when lane resumes
+    totalLossesToday: 0,
+    totalWinsToday: 0,
+
+    get recentWinRate() {
+        if (this.recentResults.length < 5) return 0.5;
+        const wins = this.recentResults.filter(Boolean).length;
+        return wins / this.recentResults.length;
+    },
+    get recentProfitFactor() {
+        // Rough proxy: wins/losses ratio
+        const wins = this.recentResults.filter(Boolean).length;
+        const losses = this.recentResults.length - wins;
+        if (losses === 0) return 3.0;
+        return wins / losses;
+    },
+    get isPaused() {
+        return Date.now() < this.lanePausedUntil;
+    },
+    recordOutcome(isWin) {
+        this.recentResults.push(isWin);
+        if (this.recentResults.length > 20) this.recentResults.shift();
+        if (isWin) {
+            this.consecutiveLosses = 0;
+            this.totalWinsToday++;
+        } else {
+            this.consecutiveLosses++;
+            this.totalLossesToday++;
+            if (this.consecutiveLosses >= MAX_CONSECUTIVE_LOSSES) {
+                this.lanePausedUntil = Date.now() + LOSS_PAUSE_MS;
+                console.log(`🚫 [Guardrail] Stock lane PAUSED until ${new Date(this.lanePausedUntil).toLocaleTimeString()} — ${this.consecutiveLosses} consecutive losses`);
+            }
+        }
+    },
+    resetDaily() {
+        this.consecutiveLosses = 0;
+        this.recentResults = [];
+        this.lanePausedUntil = 0;
+        this.totalLossesToday = 0;
+        this.totalWinsToday = 0;
+    },
+    // Position size multiplier: cut aggressively after losses
+    get lossSizeMultiplier() {
+        if (this.consecutiveLosses >= 3) return 0.25;
+        if (this.consecutiveLosses >= 2) return 0.5;
+        if (this.consecutiveLosses >= 1) return 0.75;
+        if (this.recentWinRate < 0.35) return 0.5;
+        return 1.0;
+    },
+};
+
 // ===== NEW: TIME-BASED EXIT CONFIGURATION =====
 const EXIT_CONFIG = {
     maxHoldDays: 7,           // Max 7 days per position
@@ -1793,7 +1859,7 @@ async function scanMomentumBreakouts() {
                     .filter(m => !positions.has(m.symbol) && canTrade(m.symbol, 'buy'))
                     .sort((a, b) => (b.score || 0) - (a.score || 0));
 
-                for (const mover of ranked.slice(0, available)) {
+                for (const mover of ranked.slice(0, Math.min(available, MAX_SIGNALS_PER_CYCLE))) {
                     // [v4.1] Agentic AI pipeline — multi-agent evaluation before execution
                     const aiResult = await queryAIAdvisor(mover);
                     if (aiResult !== null) {
@@ -1823,6 +1889,24 @@ async function scanMomentumBreakouts() {
                         if (aiResult.position_size_multiplier && aiResult.position_size_multiplier !== 1.0) {
                             mover.agentSizeMultiplier = aiResult.position_size_multiplier;
                         }
+                    }
+                    // [v4.6] Adaptive guardrails — pre-trade quality gate
+                    if (guardrails.isPaused) {
+                        console.log(`[Guardrail] ${mover.symbol} BLOCKED — lane paused until ${new Date(guardrails.lanePausedUntil).toLocaleTimeString()}`);
+                        continue;
+                    }
+                    if ((mover.score || 0) < MIN_SIGNAL_SCORE) {
+                        console.log(`[Guardrail] ${mover.symbol} BLOCKED — score ${(mover.score || 0).toFixed(2)} < ${MIN_SIGNAL_SCORE}`);
+                        continue;
+                    }
+                    if (aiResult && aiResult.confidence < MIN_SIGNAL_CONFIDENCE) {
+                        console.log(`[Guardrail] ${mover.symbol} BLOCKED — confidence ${aiResult.confidence.toFixed(2)} < ${MIN_SIGNAL_CONFIDENCE}`);
+                        continue;
+                    }
+                    // Apply loss-adjusted position sizing
+                    if (guardrails.lossSizeMultiplier < 1.0) {
+                        mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * guardrails.lossSizeMultiplier;
+                        console.log(`[Guardrail] ${mover.symbol} size cut to ${mover.agentSizeMultiplier.toFixed(2)}x (${guardrails.consecutiveLosses} consecutive losses)`);
                     }
                     await executeTrade(mover, mover.strategy || 'momentum');
                 }
@@ -2318,6 +2402,8 @@ async function closePosition(symbol, qty, reason = 'Manual') {
                 dbTradeClose(position?.dbTradeId, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct, reason).catch(() => {});
                 // [v4.1] Report to Agentic AI learning loop — Scan AI pattern tracking
                 reportTradeOutcome(position, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct / 100, reason).catch(() => {});
+                    // [v4.6] Feed outcome into adaptive guardrails
+                    guardrails.recordOutcome(closeMetrics.pnlUsd > 0);
             } else {
                 console.warn(`⚠️ Skipping stock DB close write for ${symbol}: unresolved close metrics`);
             }
@@ -2460,6 +2546,15 @@ app.get('/api/trading/status', async (req, res) => {
                 stopLoss: MOMENTUM_CONFIG.tier1.stopLoss * 100,
                 profitTarget: MOMENTUM_CONFIG.tier1.profitTarget * 100,
                 dailyLossLimit: MAX_DAILY_LOSS
+            },
+            guardrails: {
+                consecutiveLosses: guardrails.consecutiveLosses,
+                recentWinRate: guardrails.recentWinRate.toFixed(2),
+                lanePaused: guardrails.isPaused,
+                lanePausedUntil: guardrails.isPaused ? new Date(guardrails.lanePausedUntil).toISOString() : null,
+                lossSizeMultiplier: guardrails.lossSizeMultiplier,
+                todayWins: guardrails.totalWinsToday,
+                todayLosses: guardrails.totalLossesToday,
             },
             portfolioValue: equity,
             dailyPnL: equity - lastEquity,
@@ -2746,6 +2841,7 @@ app.post('/api/accounts/demo/reset', (req, res) => {
         recentTrades.clear();
         tradesPerSymbol.clear();      // was missing — prevented new trades after reset
         stoppedOutSymbols.clear();    // was missing — cooldowns persisted after reset
+        guardrails.resetDaily();
 
         // Reset the global perfData in memory (use Object.assign, not const — don't shadow)
         Object.assign(perfData, {
@@ -3257,6 +3353,7 @@ function resetDailyCounters() {
         totalTradesToday = 0;
         tradesPerSymbol.clear();
         stoppedOutSymbols.clear();
+        guardrails.resetDaily();
         lastResetDate = today;
     }
 }

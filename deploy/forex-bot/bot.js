@@ -664,6 +664,56 @@ const MAX_TRADES_PER_PAIR = 2;       // Forex pairs trend longer
 const MIN_TIME_BETWEEN_TRADES = 30 * 60 * 1000;  // 30 min (forex moves slower)
 const MIN_TIME_AFTER_STOP = 2 * 60 * 60 * 1000;  // 2 hours after stop-out
 
+// ===== ADAPTIVE GUARDRAILS (v4.6) =====
+const RISK_PER_TRADE = parseFloat(process.env.RISK_PER_TRADE || '0.0035');      // 0.35% per trade — forex is worst lane
+const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.74');
+const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.74');
+const MIN_REWARD_RISK = parseFloat(process.env.MIN_REWARD_RISK || '2.1');
+const MAX_SIGNALS_PER_CYCLE = parseInt(process.env.MAX_SIGNALS_PER_CYCLE || '1');
+const MAX_CONSECUTIVE_LOSSES = parseInt(process.env.MAX_CONSECUTIVE_LOSSES || '3');
+const LOSS_PAUSE_MS = parseInt(process.env.LOSS_PAUSE_MS || '7200000');
+const STOP_LOSS_COOLDOWN_MS = parseInt(process.env.STOP_LOSS_COOLDOWN_MS || '2700000');
+
+const guardrails = {
+    consecutiveLosses: 0,
+    recentResults: [],
+    lanePausedUntil: 0,
+    totalLossesToday: 0,
+    totalWinsToday: 0,
+    get recentWinRate() {
+        if (this.recentResults.length < 5) return 0.5;
+        return this.recentResults.filter(Boolean).length / this.recentResults.length;
+    },
+    get isPaused() { return Date.now() < this.lanePausedUntil; },
+    recordOutcome(isWin) {
+        this.recentResults.push(isWin);
+        if (this.recentResults.length > 20) this.recentResults.shift();
+        if (isWin) { this.consecutiveLosses = 0; this.totalWinsToday++; }
+        else {
+            this.consecutiveLosses++;
+            this.totalLossesToday++;
+            if (this.consecutiveLosses >= MAX_CONSECUTIVE_LOSSES) {
+                this.lanePausedUntil = Date.now() + LOSS_PAUSE_MS;
+                console.log(`🚫 [Guardrail] Forex lane PAUSED until ${new Date(this.lanePausedUntil).toLocaleTimeString()} — ${this.consecutiveLosses} consecutive losses`);
+            }
+        }
+    },
+    resetDaily() {
+        this.consecutiveLosses = 0;
+        this.recentResults = [];
+        this.lanePausedUntil = 0;
+        this.totalLossesToday = 0;
+        this.totalWinsToday = 0;
+    },
+    get lossSizeMultiplier() {
+        if (this.consecutiveLosses >= 3) return 0.25;
+        if (this.consecutiveLosses >= 2) return 0.5;
+        if (this.consecutiveLosses >= 1) return 0.75;
+        if (this.recentWinRate < 0.35) return 0.5;
+        return 1.0;
+    },
+};
+
 // ===== FOREX-SPECIFIC EXIT CONFIG =====
 const EXIT_CONFIG = {
     maxHoldDays: 5,              // Forex momentum trades shorter
@@ -1694,6 +1744,8 @@ async function closePositionWithReason(pair, reason) {
             dbForexClose(pos.dbTradeId, exitPrice, exitPnl, exitPct, reason).catch(() => {});
             // [v4.1] Report to Agentic AI learning loop — Scan AI pattern tracking
             reportForexTradeOutcome(pos, exitPrice, exitPnl, exitPct / 100, reason).catch(() => {});
+            // [v4.6] Record outcome into adaptive guardrails
+            guardrails.recordOutcome(exitPnl > 0);
         }
 
         positions.delete(pair);
@@ -1860,7 +1912,7 @@ async function tradingLoop() {
 
         // Execute top signals
         const maxNewPositions = 5 - positions.size;
-        const signalsToExecute = signals.slice(0, Math.min(maxNewPositions, 2));
+        const signalsToExecute = signals.slice(0, Math.min(maxNewPositions, MAX_SIGNALS_PER_CYCLE));
 
         for (const signal of signalsToExecute) {
             // [v4.1] Agentic AI pipeline — multi-agent evaluation before execution
@@ -1891,6 +1943,24 @@ async function tradingLoop() {
                     signal.agentSizeMultiplier = aiResult.position_size_multiplier;
                 }
             }
+            // [v4.6] Adaptive guardrails — pre-trade quality gate
+            if (guardrails.isPaused) {
+                console.log(`[Guardrail] ${signal.pair} BLOCKED — lane paused until ${new Date(guardrails.lanePausedUntil).toLocaleTimeString()}`);
+                continue;
+            }
+            if ((signal.score || 0) < MIN_SIGNAL_SCORE) {
+                console.log(`[Guardrail] ${signal.pair} BLOCKED — score ${(signal.score || 0).toFixed(2)} < ${MIN_SIGNAL_SCORE}`);
+                continue;
+            }
+            if (aiResult && aiResult.confidence < MIN_SIGNAL_CONFIDENCE) {
+                console.log(`[Guardrail] ${signal.pair} BLOCKED — confidence ${aiResult.confidence.toFixed(2)} < ${MIN_SIGNAL_CONFIDENCE}`);
+                continue;
+            }
+            // Apply loss-adjusted position sizing
+            if (guardrails.lossSizeMultiplier < 1.0) {
+                signal.agentSizeMultiplier = (signal.agentSizeMultiplier || 1.0) * guardrails.lossSizeMultiplier;
+                console.log(`[Guardrail] ${signal.pair} size cut to ${signal.agentSizeMultiplier.toFixed(2)}x (${guardrails.consecutiveLosses} consecutive losses)`);
+            }
             await executeTrade(signal);
         }
     } catch (err) {
@@ -1907,6 +1977,7 @@ function resetDailyCounters() {
         stoppedOutPairs.clear();
         simDailyPnL = 0;
         lastEquity = null; // reset daily baseline for LIVE mode too
+        guardrails.resetDaily();
         console.log('🔄 Daily counters reset');
     }
 }
@@ -1963,7 +2034,16 @@ app.get('/api/forex/status', async (req, res) => {
                     stopLoss: MOMENTUM_CONFIG.tier1.stopLoss,
                     profitTarget: MOMENTUM_CONFIG.tier1.profitTarget,
                     dailyLossLimit: -MAX_DAILY_LOSS_FOREX
-                }
+                },
+                guardrails: {
+                    consecutiveLosses: guardrails.consecutiveLosses,
+                    recentWinRate: guardrails.recentWinRate.toFixed(2),
+                    lanePaused: guardrails.isPaused,
+                    lanePausedUntil: guardrails.isPaused ? new Date(guardrails.lanePausedUntil).toISOString() : null,
+                    lossSizeMultiplier: guardrails.lossSizeMultiplier,
+                    todayWins: guardrails.totalWinsToday,
+                    todayLosses: guardrails.totalLossesToday,
+                },
             });
             return;
         }
@@ -2039,7 +2119,16 @@ app.get('/api/forex/status', async (req, res) => {
                 stopLoss: MOMENTUM_CONFIG.tier1.stopLoss,
                 profitTarget: MOMENTUM_CONFIG.tier1.profitTarget,
                 dailyLossLimit: -500
-            }
+            },
+            guardrails: {
+                consecutiveLosses: guardrails.consecutiveLosses,
+                recentWinRate: guardrails.recentWinRate.toFixed(2),
+                lanePaused: guardrails.isPaused,
+                lanePausedUntil: guardrails.isPaused ? new Date(guardrails.lanePausedUntil).toISOString() : null,
+                lossSizeMultiplier: guardrails.lossSizeMultiplier,
+                todayWins: guardrails.totalWinsToday,
+                todayLosses: guardrails.totalLossesToday,
+            },
         });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -2690,7 +2779,7 @@ class UserForexEngine {
             Object.assign(oandaConfig, savedConfig);
         }
         const maxNewPos = 5 - this.positions.size;
-        for (const signal of signals.slice(0, Math.min(maxNewPos, 2))) {
+        for (const signal of signals.slice(0, Math.min(maxNewPos, MAX_SIGNALS_PER_CYCLE))) {
             if (!this.positions.has(signal.pair) && this.canTrade(signal.pair, signal.direction)) {
                 await this.executeTrade(signal);
             }
