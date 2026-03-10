@@ -786,6 +786,10 @@ function evaluateStockRegimeSignal({ strategy, percentChange, volumeRatio, rsi, 
         if (numericVolumeRatio < OPENING_RANGE_BREAKOUT_CONFIG.minBreakoutVolumeRatio + 0.2) quality *= 0.9;
     } else if (numericPercentChange >= MOMENTUM_CONFIG.tier2.threshold || numericVolumeRatio >= 3) {
         regime = 'trend-expansion';
+        // Data: momentum in trend-expansion = 14.3% WR, -$54.76. Block non-ORB entries.
+        if (normalizedStrategy === 'momentum') {
+            return { tradable: false, regime, quality: 0, reason: 'momentum_blocked_in_trend_expansion' };
+        }
     }
 
     if (numericVwap && numericCurrent > 0) {
@@ -1119,7 +1123,7 @@ const TRADING_HOURS = {
     marketOpen: { hour: 9, minute: 30 },
     marketClose: { hour: 16, minute: 0 },
     avoidFirstMinutes: 0,
-    avoidLastMinutes: 30
+    avoidLastMinutes: 60  // was 30 — block after 3:00 PM EST (20% WR, late-day reversals)
 };
 
 function getESTDate() {
@@ -1154,7 +1158,12 @@ function isGoodTradingTime() {
     const isMarketDay = now.getDay() >= 1 && now.getDay() <= 5;
     const isGoodTime = timeInMinutes >= tradingStart && timeInMinutes <= tradingEnd;
 
-    return isMarketDay && isGoodTime;
+    // Midday dead zone: 11:30 AM - 1:30 PM EST (0% WR at noon, historically net-negative)
+    const middayStart = 11 * 60 + 30; // 11:30 AM
+    const middayEnd   = 13 * 60 + 30; // 1:30 PM
+    const isMiddayDeadZone = timeInMinutes >= middayStart && timeInMinutes <= middayEnd;
+
+    return isMarketDay && isGoodTime && !isMiddayDeadZone;
 }
 
 function isOpeningRangeBreakoutWindow(now = getESTDate()) {
@@ -1859,7 +1868,9 @@ async function scanMomentumBreakouts() {
                     .filter(m => !positions.has(m.symbol) && canTrade(m.symbol, 'buy'))
                     .sort((a, b) => (b.score || 0) - (a.score || 0));
 
-                for (const mover of ranked.slice(0, Math.min(available, MAX_SIGNALS_PER_CYCLE))) {
+                // ORB window gets 2 signals/cycle; otherwise 1 (data: ORB = 59% WR, +$85)
+                const effectiveMaxSignals = isOpeningRangeBreakoutWindow() ? 2 : MAX_SIGNALS_PER_CYCLE;
+                for (const mover of ranked.slice(0, Math.min(available, effectiveMaxSignals))) {
                     // [v4.1] Agentic AI pipeline — multi-agent evaluation before execution
                     const aiResult = await queryAIAdvisor(mover);
                     if (aiResult !== null) {
@@ -3864,7 +3875,8 @@ class UserTradingEngine {
             const available = maxPositions - this.positions.size;
             const ranked = movers.filter(m => !this.positions.has(m.symbol) && this.canTrade(m.symbol, 'buy'))
                 .sort((a, b) => (b.score || 0) - (a.score || 0));
-            for (const mover of ranked.slice(0, available)) {
+            const engineMaxSignals = isOpeningRangeBreakoutWindow() ? 2 : MAX_SIGNALS_PER_CYCLE;
+            for (const mover of ranked.slice(0, Math.min(available, engineMaxSignals))) {
                 await this.executeTrade(mover, mover.strategy || 'momentum');
             }
         }
@@ -4290,10 +4302,12 @@ app.get('/api/trades/analytics', async (req, res) => {
         const userId = getOptionalTradeUserId(req);
         const cleanPnlUsd = `CASE WHEN pnl_usd IS NULL OR pnl_usd::text = 'NaN' THEN NULL ELSE pnl_usd END`;
         const cleanPnlPct = `CASE WHEN pnl_pct IS NULL OR pnl_pct::text = 'NaN' THEN NULL ELSE pnl_pct END`;
-        const analyticsFilter = userId
-            ? `WHERE status='closed' AND COALESCE(close_reason, '') <> 'orphaned_restart' AND user_id = $2 AND entry_time > NOW() - INTERVAL '1 day' * $1`
-            : `WHERE status='closed' AND COALESCE(close_reason, '') <> 'orphaned_restart' AND entry_time > NOW() - INTERVAL '1 day' * $1`;
-        const analyticsParams = userId ? [days, userId] : [days];
+        const botFilter = req.query.bot; // optional: 'stock', 'forex', 'crypto'
+        let filterClauses = [`status='closed'`, `COALESCE(close_reason, '') <> 'orphaned_restart'`, `entry_time > NOW() - INTERVAL '1 day' * $1`];
+        const analyticsParams = [days];
+        if (userId) { analyticsParams.push(userId); filterClauses.push(`user_id = $${analyticsParams.length}`); }
+        if (botFilter) { analyticsParams.push(botFilter); filterClauses.push(`bot = $${analyticsParams.length}`); }
+        const analyticsFilter = `WHERE ${filterClauses.join(' AND ')}`;
         const byHour = await dbPool.query(`
             SELECT EXTRACT(HOUR FROM entry_time AT TIME ZONE 'America/New_York') AS hour,
                    COUNT(*) FILTER (WHERE ${cleanPnlUsd} > 0) AS winners,

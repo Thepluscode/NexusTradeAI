@@ -234,7 +234,7 @@ class APIClient {
     }
   }
 
-  async getTradeAnalytics(days = 30, mine = false): Promise<{
+  async getTradeAnalytics(days = 30, mine = false, bot?: string): Promise<{
     byHour: TradeAnalyticsHour[];
     bySymbol: TradeAnalyticsSymbol[];
     byTier: TradeAnalyticsTier[];
@@ -242,7 +242,9 @@ class APIClient {
     byRegime: TradeAnalyticsRegime[];
   }> {
     try {
-      const response = await this.tradingEngine.get('/api/trades/analytics', { params: { days, mine } });
+      const params: Record<string, unknown> = { days, mine };
+      if (bot) params.bot = bot;
+      const response = await this.tradingEngine.get('/api/trades/analytics', { params });
       return response.data.data ?? { byHour: [], bySymbol: [], byTier: [], byStrategy: [], byRegime: [] };
     } catch {
       return { byHour: [], bySymbol: [], byTier: [], byStrategy: [], byRegime: [] };
