@@ -1488,6 +1488,9 @@ class CryptoTradingEngine {
             const closeTrade = this._dbClose ? this._dbClose.bind(this) : dbCryptoClose;
             closeTrade(position.dbTradeId, adjustedExitPrice, pnlUSD, pnlPercent, reason).catch(() => {});
 
+            // [v4.1] Report to Agentic AI learning loop — Scan AI pattern tracking
+            this.reportTradeOutcome(position, adjustedExitPrice, pnlUSD, pnlPercent / 100, reason).catch(() => {});
+
             // Remove position
             this.positions.delete(symbol);
 

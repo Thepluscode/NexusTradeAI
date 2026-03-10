@@ -2307,6 +2307,8 @@ async function closePosition(symbol, qty, reason = 'Manual') {
             if (closeMetrics) {
                 recordTradeClose(symbol, closeMetrics.entryPrice, closeMetrics.exitPrice, closeMetrics.shares, reason);
                 dbTradeClose(position?.dbTradeId, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct, reason).catch(() => {});
+                // [v4.1] Report to Agentic AI learning loop — Scan AI pattern tracking
+                reportTradeOutcome(position, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct / 100, reason).catch(() => {});
             } else {
                 console.warn(`⚠️ Skipping stock DB close write for ${symbol}: unresolved close metrics`);
             }

@@ -25,6 +25,7 @@ from agents.base import AgentDecision, MarketSnapshot, AgentAuditEntry, TradeOut
 from agents.safety import KillSwitch, SafetyGuardrails
 from agents.claude_client import ClaudeClient
 from agents.market_agent import MarketAnalysisAgent
+from agents.outcome_store import outcome_store
 from agents.decision_agent import DecisionAgent
 from agents.learning_agent import LearningAgent
 from agents.scan_engine import ScanEngine
@@ -147,6 +148,12 @@ class AgentOrchestrator:
         self._cache_decision(cache_key, decision)
         self._audit(snapshot, decision, latency)
 
+        # [v4.1] Log decision to outcome store (four-learner shared store)
+        try:
+            await outcome_store.log_decision(snapshot, decision, latency * 1000)
+        except Exception as e:
+            logger.error(f"Outcome store decision log error: {e}")
+
         logger.info(
             f"[Agent] {snapshot.symbol} {snapshot.direction} → "
             f"{'APPROVED' if decision.approved else 'REJECTED'} "
@@ -160,6 +167,8 @@ class AgentOrchestrator:
         """
         Process a completed trade for learning.
         Called by bots when a position is closed.
+
+        Pipeline: LearningAgent → ScanEngine → OutcomeStore(+reward) → KillSwitch
         """
         # Learning agent extracts lessons
         lesson = await self.learning_agent.analyze_trade(outcome)
@@ -170,6 +179,19 @@ class AgentOrchestrator:
         # Update kill switch with P&L info
         if outcome.pnl_pct:
             self.kill_switch.update_pnl(outcome.pnl_pct / 100)
+
+        # [v4.1] Log outcome + calculate reward in shared outcome store
+        try:
+            reward = await outcome_store.log_outcome(
+                outcome=outcome,
+                pattern_type=lesson.get("pattern_type", "") if lesson else "",
+                actionable_lesson=lesson.get("actionable_lesson", "") if lesson else "",
+                lesson_confidence=lesson.get("confidence_in_lesson", 0) if lesson else 0,
+            )
+            if reward:
+                logger.info(f"[Reward] {outcome.symbol}: {reward.reward_score:+.3f}")
+        except Exception as e:
+            logger.error(f"Outcome store log error: {e}")
 
         if lesson:
             logger.info(f"[Learn] {outcome.symbol}: {lesson.get('actionable_lesson', 'no lesson')}")
@@ -228,6 +250,7 @@ class AgentOrchestrator:
             "decision_agent": self.decision_agent.get_stats(),
             "learning_agent": self.learning_agent.get_stats(),
             "scan_engine": self.scan_engine.get_stats(),
+            "outcome_store": outcome_store.get_stats(),
         }
 
 

@@ -1692,6 +1692,8 @@ async function closePositionWithReason(pair, reason) {
             const exitPct = exitEntry > 0 ? (exitPnl / (exitEntry * Math.abs(pos.units ?? 1))) * 100 : 0;
             const exitPrice = pos.currentPrice ?? exitEntry;
             dbForexClose(pos.dbTradeId, exitPrice, exitPnl, exitPct, reason).catch(() => {});
+            // [v4.1] Report to Agentic AI learning loop — Scan AI pattern tracking
+            reportForexTradeOutcome(pos, exitPrice, exitPnl, exitPct / 100, reason).catch(() => {});
         }
 
         positions.delete(pair);
