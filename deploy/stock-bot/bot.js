@@ -2511,28 +2511,59 @@ app.get('/api/trading/status', async (req, res) => {
         perfData.activePositions = positionsData.length;
         savePerfData();
 
-        // If global perfData shows 0 trades, pull real stats from DB
+        // If global perfData shows 0 trades, hydrate ALL fields from DB
         if (perfData.totalTrades === 0 && dbPool) {
             try {
+                const cleanPnl = `CASE WHEN pnl_usd IS NULL OR pnl_usd::text = 'NaN' THEN NULL ELSE pnl_usd END`;
                 const dbStats = await dbPool.query(`
                     SELECT
                         COUNT(*) FILTER (WHERE status='closed') AS total,
-                        COUNT(*) FILTER (WHERE status='closed' AND pnl_usd > 0) AS winners,
-                        COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed'), 0) AS total_pnl,
+                        COUNT(*) FILTER (WHERE status='closed' AND ${cleanPnl} > 0) AS winners,
+                        COUNT(*) FILTER (WHERE status='closed' AND ${cleanPnl} <= 0) AS losers,
+                        COALESCE(SUM(${cleanPnl}) FILTER (WHERE status='closed'), 0)::FLOAT AS total_pnl,
+                        COALESCE(SUM(${cleanPnl}) FILTER (WHERE status='closed' AND ${cleanPnl} > 0), 0)::FLOAT AS win_amount,
+                        COALESCE(ABS(SUM(${cleanPnl}) FILTER (WHERE status='closed' AND ${cleanPnl} < 0)), 0)::FLOAT AS loss_amount,
                         COUNT(*) FILTER (WHERE status='open') AS open_count
                     FROM trades WHERE bot='stock'
                 `);
                 const row = dbStats.rows[0];
                 const total = parseInt(row.total) || 0;
                 const winners = parseInt(row.winners) || 0;
+                const losers = parseInt(row.losers) || 0;
+                const winAmt = parseFloat(row.win_amount) || 0;
+                const lossAmt = parseFloat(row.loss_amount) || 0;
                 if (total > 0) {
                     perfData.totalTrades = total;
                     perfData.winningTrades = winners;
-                    perfData.losingTrades = total - winners;
+                    perfData.losingTrades = losers;
                     perfData.winRate = parseFloat(((winners / total) * 100).toFixed(1));
                     perfData.totalProfit = parseFloat(row.total_pnl) || 0;
+                    perfData.totalWinAmount = winAmt;
+                    perfData.totalLossAmount = lossAmt;
+                    perfData.profitFactor = total < 5 ? 0
+                        : lossAmt > 0 ? parseFloat((winAmt / lossAmt).toFixed(2))
+                        : winAmt > 0 ? 9.99 : 0;
                 }
-            } catch (e) { /* non-fatal */ }
+                // Compute consecutive losses from most recent trades
+                const recent = await dbPool.query(`
+                    SELECT ${cleanPnl} AS pnl FROM trades
+                    WHERE bot='stock' AND status='closed' AND ${cleanPnl} IS NOT NULL
+                    ORDER BY exit_time DESC NULLS LAST LIMIT 50
+                `);
+                let consec = 0, maxConsec = 0;
+                for (const r of recent.rows) {
+                    if (parseFloat(r.pnl) <= 0) { consec++; maxConsec = Math.max(maxConsec, consec); }
+                    else break; // stop at first win (counting from most recent)
+                }
+                // Also scan full sequence for max consecutive
+                let runConsec = 0;
+                for (const r of recent.rows) {
+                    if (parseFloat(r.pnl) <= 0) { runConsec++; maxConsec = Math.max(maxConsec, runConsec); }
+                    else runConsec = 0;
+                }
+                perfData.consecutiveLosses = consec;
+                perfData.maxConsecutiveLosses = Math.max(perfData.maxConsecutiveLosses, maxConsec);
+            } catch (e) { console.warn('DB perfData hydration failed:', e.message); }
         }
 
         // Flat response matching StockBotPage BotStatus interface
@@ -4219,7 +4250,11 @@ app.get('/api/trades/summary', async (req, res) => {
 app.get('/api/performance/equity', async (req, res) => {
     if (!dbPool) return res.json({ success: true, data: [] });
     const days = Math.min(parseInt(req.query.days) || 90, 365);
+    const botFilter = req.query.bot; // optional: 'stock', 'forex', 'crypto'
     try {
+        const params = [days];
+        let whereClauses = [`status = 'closed'`, `exit_time > NOW() - INTERVAL '1 day' * $1`];
+        if (botFilter) { params.push(botFilter); whereClauses.push(`bot = $${params.length}`); }
         const result = await dbPool.query(`
             SELECT
                 DATE_TRUNC('day', exit_time AT TIME ZONE 'America/New_York')::date AS date,
@@ -4227,10 +4262,9 @@ app.get('/api/performance/equity', async (req, res) => {
                 COUNT(*)                                                            AS trades_closed,
                 COUNT(*) FILTER (WHERE pnl_usd > 0)                                AS winners
             FROM trades
-            WHERE status = 'closed'
-              AND exit_time > NOW() - INTERVAL '1 day' * $1
+            WHERE ${whereClauses.join(' AND ')}
             GROUP BY 1
-            ORDER BY 1 ASC`, [days]);
+            ORDER BY 1 ASC`, params);
 
         // Build cumulative sum in JS (simple fold)
         let cumulative = 0;
@@ -4517,6 +4551,59 @@ app.listen(PORT, async () => {
     console.log('╚════════════════════════════════════════════════════════════╝\n');
 
     await initDb().catch(e => console.warn('Auth DB init error:', e.message));
+
+    // ── Hydrate perfData from DB so stats survive redeploys ──
+    if (dbPool && perfData.totalTrades === 0) {
+        try {
+            const cleanPnl = `CASE WHEN pnl_usd IS NULL OR pnl_usd::text = 'NaN' THEN NULL ELSE pnl_usd END`;
+            const dbStats = await dbPool.query(`
+                SELECT
+                    COUNT(*) FILTER (WHERE status='closed') AS total,
+                    COUNT(*) FILTER (WHERE status='closed' AND ${cleanPnl} > 0) AS winners,
+                    COUNT(*) FILTER (WHERE status='closed' AND ${cleanPnl} <= 0) AS losers,
+                    COALESCE(SUM(${cleanPnl}) FILTER (WHERE status='closed'), 0)::FLOAT AS total_pnl,
+                    COALESCE(SUM(${cleanPnl}) FILTER (WHERE status='closed' AND ${cleanPnl} > 0), 0)::FLOAT AS win_amount,
+                    COALESCE(ABS(SUM(${cleanPnl}) FILTER (WHERE status='closed' AND ${cleanPnl} < 0)), 0)::FLOAT AS loss_amount
+                FROM trades WHERE bot='stock'
+            `);
+            const row = dbStats.rows[0];
+            const total = parseInt(row.total) || 0;
+            const winners = parseInt(row.winners) || 0;
+            const losers = parseInt(row.losers) || 0;
+            const winAmt = parseFloat(row.win_amount) || 0;
+            const lossAmt = parseFloat(row.loss_amount) || 0;
+            if (total > 0) {
+                perfData.totalTrades = total;
+                perfData.winningTrades = winners;
+                perfData.losingTrades = losers;
+                perfData.winRate = parseFloat(((winners / total) * 100).toFixed(1));
+                perfData.totalProfit = parseFloat(row.total_pnl) || 0;
+                perfData.totalWinAmount = winAmt;
+                perfData.totalLossAmount = lossAmt;
+                perfData.profitFactor = total < 5 ? 0
+                    : lossAmt > 0 ? parseFloat((winAmt / lossAmt).toFixed(2))
+                    : winAmt > 0 ? 9.99 : 0;
+            }
+            // Consecutive losses from most recent trades
+            const recent = await dbPool.query(`
+                SELECT ${cleanPnl} AS pnl FROM trades
+                WHERE bot='stock' AND status='closed' AND ${cleanPnl} IS NOT NULL
+                ORDER BY exit_time DESC NULLS LAST LIMIT 50
+            `);
+            let consec = 0, maxConsec = 0, runConsec = 0;
+            for (const r of recent.rows) {
+                if (parseFloat(r.pnl) <= 0) { consec++; } else break;
+            }
+            for (const r of recent.rows) {
+                if (parseFloat(r.pnl) <= 0) { runConsec++; maxConsec = Math.max(maxConsec, runConsec); }
+                else runConsec = 0;
+            }
+            perfData.consecutiveLosses = consec;
+            perfData.maxConsecutiveLosses = Math.max(perfData.maxConsecutiveLosses, maxConsec);
+            savePerfData();
+            console.log(`📊 Hydrated perfData from DB: ${total} trades, ${winners}W/${losers}L, PF ${perfData.profitFactor}, Win $${winAmt.toFixed(2)}, Loss $${lossAmt.toFixed(2)}`);
+        } catch (e) { console.warn('⚠️  DB perfData hydration failed:', e.message); }
+    }
 
     // ── Load credentials from DB into process.env (fallback: env vars already set) ──
     // Loads the first registered user's keys so the bot can trade immediately after restart.
