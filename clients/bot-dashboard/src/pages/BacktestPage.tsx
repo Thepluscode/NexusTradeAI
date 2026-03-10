@@ -91,7 +91,7 @@ export default function BacktestPage() {
 
     const { data: equityCurve = [] } = useQuery(
         'equityCurve',
-        () => apiClient.getEquityCurve(90),
+        () => apiClient.getEquityCurve(90, 'stock'),
         { staleTime: 5 * 60 * 1000, refetchInterval: 10 * 60 * 1000 }
     );
 

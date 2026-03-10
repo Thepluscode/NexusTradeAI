@@ -601,6 +601,12 @@ let simLosers = 0;
 let simLongTrades = 0;
 let simShortTrades = 0;
 let simDailyPnL = 0;
+let simTotalPnL = 0;
+let simTotalWinAmount = 0;
+let simTotalLossAmount = 0;
+let simProfitFactor = 0;
+let simConsecutiveLosses = 0;
+let simMaxConsecutiveLosses = 0;
 
 // ===== FOREX PERFORMANCE PERSISTENCE =====
 const fs = require('fs');
@@ -615,8 +621,14 @@ function loadForexPerf() {
             simLosers = saved.losers || 0;
             simLongTrades = saved.longTrades || 0;
             simShortTrades = saved.shortTrades || 0;
+            simTotalPnL = saved.totalPnL || 0;
+            simTotalWinAmount = saved.totalWinAmount || 0;
+            simTotalLossAmount = saved.totalLossAmount || 0;
+            simProfitFactor = saved.profitFactor || 0;
+            simConsecutiveLosses = saved.consecutiveLosses || 0;
+            simMaxConsecutiveLosses = saved.maxConsecutiveLosses || 0;
             // Don't restore equity or dailyPnL — those are session-specific
-            console.log(`📊 Forex perf restored: ${simTotalTrades} trades, ${simWinners}W/${simLosers}L`);
+            console.log(`📊 Forex perf restored: ${simTotalTrades} trades, ${simWinners}W/${simLosers}L, PF ${simProfitFactor}, Win $${simTotalWinAmount.toFixed(2)}, Loss $${simTotalLossAmount.toFixed(2)}`);
         }
     } catch {}
 }
@@ -631,6 +643,12 @@ function saveForexPerf() {
             losers: simLosers,
             longTrades: simLongTrades,
             shortTrades: simShortTrades,
+            totalPnL: simTotalPnL,
+            totalWinAmount: simTotalWinAmount,
+            totalLossAmount: simTotalLossAmount,
+            profitFactor: simProfitFactor,
+            consecutiveLosses: simConsecutiveLosses,
+            maxConsecutiveLosses: simMaxConsecutiveLosses,
             lastUpdate: new Date().toISOString()
         }));
     } catch {}
@@ -1742,6 +1760,18 @@ async function closePositionWithReason(pair, reason) {
             // Update daily P&L so the circuit breaker has real data
             const tradePnL = pos.unrealizedPL ?? 0;
             simDailyPnL += tradePnL;
+            simTotalPnL += tradePnL;
+            if (tradePnL > 0) {
+                simTotalWinAmount += tradePnL;
+                simConsecutiveLosses = 0;
+            } else if (tradePnL < 0) {
+                simTotalLossAmount += Math.abs(tradePnL);
+                simConsecutiveLosses++;
+                simMaxConsecutiveLosses = Math.max(simMaxConsecutiveLosses, simConsecutiveLosses);
+            }
+            simProfitFactor = simTotalTrades < 5 ? 0
+                : simTotalLossAmount > 0 ? parseFloat((simTotalWinAmount / simTotalLossAmount).toFixed(2))
+                : simTotalWinAmount > 0 ? 9.99 : 0;
         }
         saveForexPerf();
 
@@ -1849,7 +1879,20 @@ async function managePositions() {
                     // Update in-memory perf counters
                     simTotalTrades++;
                     simDailyPnL += realPnl;
-                    if (realPnl > 0) simWinners++; else simLosers++;
+                    simTotalPnL += realPnl;
+                    if (realPnl > 0) {
+                        simWinners++;
+                        simTotalWinAmount += realPnl;
+                        simConsecutiveLosses = 0;
+                    } else {
+                        simLosers++;
+                        simTotalLossAmount += Math.abs(realPnl);
+                        simConsecutiveLosses++;
+                        simMaxConsecutiveLosses = Math.max(simMaxConsecutiveLosses, simConsecutiveLosses);
+                    }
+                    simProfitFactor = simTotalTrades < 5 ? 0
+                        : simTotalLossAmount > 0 ? parseFloat((simTotalWinAmount / simTotalLossAmount).toFixed(2))
+                        : simTotalWinAmount > 0 ? 9.99 : 0;
                     saveForexPerf();
                     console.log(`📊 [DB] Synced closed trade ${pair}: exit=${exitPrice} pnl=${realPnl.toFixed(2)} reason=${reason}`);
                 }
@@ -2043,7 +2086,12 @@ app.get('/api/forex/status', async (req, res) => {
                     winners: simWinners,
                     losers: simLosers,
                     winRate: simTotalTrades > 0 ? (simWinners / simTotalTrades) * 100 : 0,
-                    totalPnL: simEquity - SIM_STARTING_EQUITY,
+                    totalPnL: simTotalPnL || (simEquity - SIM_STARTING_EQUITY),
+                    totalWinAmount: simTotalWinAmount,
+                    totalLossAmount: simTotalLossAmount,
+                    profitFactor: simProfitFactor,
+                    consecutiveLosses: simConsecutiveLosses,
+                    maxConsecutiveLosses: simMaxConsecutiveLosses,
                     maxDrawdown: 0
                 },
                 config: {
@@ -2128,7 +2176,12 @@ app.get('/api/forex/status', async (req, res) => {
                 shortTrades,
                 winners,
                 losers,
-                totalPnL: dailyPnL,
+                totalPnL: simTotalPnL || dailyPnL,
+                totalWinAmount: simTotalWinAmount,
+                totalLossAmount: simTotalLossAmount,
+                profitFactor: simProfitFactor,
+                consecutiveLosses: simConsecutiveLosses,
+                maxConsecutiveLosses: simMaxConsecutiveLosses,
                 maxDrawdown: 0
             },
             config: {
@@ -3028,6 +3081,60 @@ app.listen(PORT, async () => {
         }
     } catch (e) {
         console.warn('⚠️  DB reconciliation failed:', e.message);
+    }
+
+    // ── Hydrate perfData from DB so stats survive redeploys ──
+    if (dbPool && simTotalTrades === 0) {
+        try {
+            const cleanPnl = `CASE WHEN pnl_usd IS NULL OR pnl_usd::text = 'NaN' THEN NULL ELSE pnl_usd END`;
+            const dbStats = await dbPool.query(`
+                SELECT
+                    COUNT(*) FILTER (WHERE status='closed') AS total,
+                    COUNT(*) FILTER (WHERE status='closed' AND ${cleanPnl} > 0) AS winners,
+                    COUNT(*) FILTER (WHERE status='closed' AND ${cleanPnl} <= 0) AS losers,
+                    COALESCE(SUM(${cleanPnl}) FILTER (WHERE status='closed'), 0)::FLOAT AS total_pnl,
+                    COALESCE(SUM(${cleanPnl}) FILTER (WHERE status='closed' AND ${cleanPnl} > 0), 0)::FLOAT AS win_amount,
+                    COALESCE(ABS(SUM(${cleanPnl}) FILTER (WHERE status='closed' AND ${cleanPnl} < 0)), 0)::FLOAT AS loss_amount
+                FROM trades WHERE bot='forex'
+            `);
+            const row = dbStats.rows[0];
+            const total = parseInt(row.total) || 0;
+            const winners = parseInt(row.winners) || 0;
+            const losers = parseInt(row.losers) || 0;
+            const winAmt = parseFloat(row.win_amount) || 0;
+            const lossAmt = parseFloat(row.loss_amount) || 0;
+            if (total > 0) {
+                simTotalTrades = total;
+                simWinners = winners;
+                simLosers = losers;
+                simTotalPnL = parseFloat(row.total_pnl) || 0;
+                simTotalWinAmount = winAmt;
+                simTotalLossAmount = lossAmt;
+                simProfitFactor = total < 5 ? 0
+                    : lossAmt > 0 ? parseFloat((winAmt / lossAmt).toFixed(2))
+                    : winAmt > 0 ? 9.99 : 0;
+            }
+            // Consecutive losses from most recent trades
+            const recent = await dbPool.query(`
+                SELECT ${cleanPnl} AS pnl FROM trades
+                WHERE bot='forex' AND status='closed' AND ${cleanPnl} IS NOT NULL
+                ORDER BY exit_time DESC NULLS LAST LIMIT 50
+            `);
+            let consec = 0, maxConsec = 0, runConsec = 0;
+            for (const r of recent.rows) {
+                if (parseFloat(r.pnl) <= 0) { consec++; } else break;
+            }
+            for (const r of recent.rows) {
+                if (parseFloat(r.pnl) <= 0) { runConsec++; maxConsec = Math.max(maxConsec, runConsec); }
+                else runConsec = 0;
+            }
+            simConsecutiveLosses = consec;
+            simMaxConsecutiveLosses = Math.max(simMaxConsecutiveLosses, maxConsec);
+            // Also seed guardrails with consecutive losses from DB
+            guardrails.consecutiveLosses = consec;
+            saveForexPerf();
+            console.log(`📊 Hydrated forex perfData from DB: ${total} trades, ${winners}W/${losers}L, PF ${simProfitFactor}, Win $${winAmt.toFixed(2)}, Loss $${lossAmt.toFixed(2)}`);
+        } catch (e) { console.warn('⚠️  DB forex perfData hydration failed:', e.message); }
     }
 
     // Initial scan (default env-var mode)

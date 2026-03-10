@@ -223,9 +223,11 @@ class APIClient {
     }
   }
 
-  async getEquityCurve(days = 90): Promise<EquityCurvePoint[]> {
+  async getEquityCurve(days = 90, bot?: string): Promise<EquityCurvePoint[]> {
     try {
-      const response = await this.tradingEngine.get(`/api/performance/equity?days=${days}`);
+      const params = new URLSearchParams({ days: String(days) });
+      if (bot) params.set('bot', bot);
+      const response = await this.tradingEngine.get(`/api/performance/equity?${params}`);
       return response.data.data ?? [];
     } catch {
       return [];

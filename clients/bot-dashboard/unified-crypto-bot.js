@@ -2878,6 +2878,52 @@ app.listen(PORT, async () => {
     // Connect DB for trade persistence (non-blocking)
     await initTradeDb().catch(e => console.warn('⚠️  Crypto DB init error:', e.message));
 
+    // ── Hydrate performance data from DB so stats survive redeploys ──
+    if (dbPool && engine.totalTrades === 0) {
+        try {
+            const cleanPnl = `CASE WHEN pnl_usd IS NULL OR pnl_usd::text = 'NaN' THEN NULL ELSE pnl_usd END`;
+            const dbStats = await dbPool.query(`
+                SELECT
+                    COUNT(*) FILTER (WHERE status='closed') AS total,
+                    COUNT(*) FILTER (WHERE status='closed' AND ${cleanPnl} > 0) AS winners,
+                    COUNT(*) FILTER (WHERE status='closed' AND ${cleanPnl} <= 0) AS losers,
+                    COALESCE(SUM(${cleanPnl}) FILTER (WHERE status='closed'), 0)::FLOAT AS total_pnl,
+                    COALESCE(SUM(${cleanPnl}) FILTER (WHERE status='closed' AND ${cleanPnl} > 0), 0)::FLOAT AS win_amount,
+                    COALESCE(ABS(SUM(${cleanPnl}) FILTER (WHERE status='closed' AND ${cleanPnl} < 0)), 0)::FLOAT AS loss_amount
+                FROM trades WHERE bot='crypto'
+            `);
+            const row = dbStats.rows[0];
+            const total = parseInt(row.total) || 0;
+            const winners = parseInt(row.winners) || 0;
+            const losers = parseInt(row.losers) || 0;
+            const winAmt = parseFloat(row.win_amount) || 0;
+            const lossAmt = parseFloat(row.loss_amount) || 0;
+            if (total > 0) {
+                engine.totalTrades = total;
+                engine.winningTrades = winners;
+                engine.losingTrades = losers;
+                engine.totalProfit = winAmt;
+                engine.totalLoss = lossAmt;
+            }
+            // Consecutive losses from most recent trades
+            const recent = await dbPool.query(`
+                SELECT ${cleanPnl} AS pnl FROM trades
+                WHERE bot='crypto' AND status='closed' AND ${cleanPnl} IS NOT NULL
+                ORDER BY exit_time DESC NULLS LAST LIMIT 50
+            `);
+            let consec = 0, maxConsec = 0, runConsec = 0;
+            for (const r of recent.rows) {
+                if (parseFloat(r.pnl) <= 0) { consec++; } else break;
+            }
+            for (const r of recent.rows) {
+                if (parseFloat(r.pnl) <= 0) { runConsec++; maxConsec = Math.max(maxConsec, runConsec); }
+                else runConsec = 0;
+            }
+            engine.guardrails.consecutiveLosses = consec;
+            console.log(`📊 Hydrated crypto perfData from DB: ${total} trades, ${winners}W/${losers}L, PF ${lossAmt > 0 ? (winAmt / lossAmt).toFixed(2) : 'N/A'}, Win $${winAmt.toFixed(2)}, Loss $${lossAmt.toFixed(2)}`);
+        } catch (e) { console.warn('⚠️  DB crypto perfData hydration failed:', e.message); }
+    }
+
     if (dbPool) {
         console.log('ℹ️  Multi-user DB mode detected — default crypto engine bootstrap disabled');
     }
