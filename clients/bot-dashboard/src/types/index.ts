@@ -665,3 +665,98 @@ export interface TradesSummaryResult {
   daily: TradeDaySummary[];
   totals: TradeBotTotal[];
 }
+
+// ── Agent System Types ────────────────────────────────────────────────────
+
+export interface AgentOrchestratorStats {
+  total_evaluations: number;
+  total_approvals: number;
+  total_rejections: number;
+  total_kills: number;
+  total_cache_hits: number;
+  approval_rate: string;
+  avg_latency_ms: string;
+}
+
+export interface AgentClaudeStats {
+  available: boolean;
+  model: string;
+  daily_calls: number;
+  daily_budget: number;
+  daily_remaining: number;
+  hourly_calls: number;
+  hourly_limit: number;
+  hourly_remaining: number;
+}
+
+export interface AgentKillSwitchStatus {
+  killed: boolean;
+  reason: string;
+  consecutive_errors: number;
+  auto_kill_threshold: number;
+}
+
+export interface BanditContextSummary {
+  best_arm: string;
+  best_arm_mean: number;
+  total_pulls: number;
+}
+
+export interface BanditStats {
+  total_contexts: number;
+  total_pulls: number;
+  total_updates: number;
+  arms: string[];
+  contexts: Record<string, BanditContextSummary>;
+}
+
+export interface BanditArmDetail {
+  alpha: number;
+  beta: number;
+  mean: number;
+  std: number;
+  pulls: number;
+  avg_reward: number;
+  profile: {
+    position_size_cap: number;
+    conviction_floor: number;
+    description: string;
+  };
+}
+
+export interface BanditContextDetail {
+  context_key: string;
+  arms: Record<string, BanditArmDetail>;
+  recommended: string;
+}
+
+export interface OutcomeStoreStats {
+  db_available: boolean;
+  total_decisions_logged: number;
+  total_executions_logged: number;
+  total_outcomes_logged: number;
+  total_rewards_calculated: number;
+}
+
+export interface AgentStats {
+  orchestrator: AgentOrchestratorStats;
+  claude: AgentClaudeStats;
+  kill_switch: AgentKillSwitchStatus;
+  market_agent: { total_calls: number; total_cache_hits: number; cache_entries: number };
+  decision_agent: { total_decisions: number; total_approvals: number; total_rejections: number; approval_rate: number };
+  learning_agent: { total_lessons: number; total_trades_analyzed: number };
+  scan_engine: { total_patterns: number; significant_patterns: number };
+  supervisor_bandit: BanditStats;
+  outcome_store: OutcomeStoreStats;
+  timestamp: string;
+}
+
+export interface BackfillResult {
+  trades_found: number;
+  trades_processed: number;
+  trades_skipped: number;
+  rewards_calculated: number;
+  bandit_updates: number;
+  errors: number;
+  bandit_stats: BanditStats;
+}

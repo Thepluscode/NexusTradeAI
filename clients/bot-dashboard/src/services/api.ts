@@ -593,6 +593,59 @@ class APIClient {
     const response = await this.tradingEngine.post('/api/admin/trades/fix-stuck', params || {});
     return response.data;
   }
+
+  // ── Agent System (Strategy Bridge) ────────────────────────────────────────
+
+  async getAgentStats(): Promise<Record<string, unknown>> {
+    try {
+      const response = await this.aiService.get('/agent/stats', { timeout: 10000 });
+      return response.data;
+    } catch {
+      return {};
+    }
+  }
+
+  async getBanditStats(): Promise<Record<string, unknown>> {
+    try {
+      const response = await this.aiService.get('/agent/bandit/stats');
+      return response.data;
+    } catch {
+      return {};
+    }
+  }
+
+  async getBanditContextDetail(regime: string, assetClass: string, tier: string): Promise<Record<string, unknown>> {
+    try {
+      const response = await this.aiService.post('/agent/bandit/context', {
+        regime, asset_class: assetClass, tier,
+      });
+      return response.data;
+    } catch {
+      return {};
+    }
+  }
+
+  async agentKill(reason: string): Promise<{ status: string }> {
+    const response = await this.aiService.post('/agent/kill', null, { params: { reason } });
+    return response.data;
+  }
+
+  async agentResume(): Promise<{ status: string }> {
+    const response = await this.aiService.post('/agent/resume');
+    return response.data;
+  }
+
+  async agentBackfill(limit = 500, sinceDays = 90): Promise<Record<string, unknown>> {
+    const response = await this.aiService.post('/agent/backfill', {
+      limit, since_days: sinceDays,
+    }, { timeout: 30000 });
+    return response.data;
+  }
+
+  async agentDailyTraining(): Promise<Record<string, unknown>> {
+    const response = await this.aiService.post('/agent/daily-training', {}, { timeout: 30000 });
+    return response.data;
+  }
 }
 
 export const apiClient = new APIClient();

@@ -28,6 +28,7 @@ import {
   CurrencyBitcoin,
   Assessment,
   Receipt,
+  SmartToy,
   Menu as MenuIcon,
   Settings,
   Logout,
@@ -50,6 +51,7 @@ import LoginPage from './pages/LoginPage';
 import ForgotPasswordPage from './pages/ForgotPasswordPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import AdminPage from './pages/AdminPage';
+import AgentPage from './pages/AgentPage';
 import ProtectedRoute from './components/ProtectedRoute';
 import { useAuth } from './hooks/useAuth';
 
@@ -93,6 +95,7 @@ const NAV_ITEMS = [
   { path: '/crypto', label: 'Crypto Bot', icon: <CurrencyBitcoin />, color: '#f59e0b' },
   { path: '/backtest', label: 'Backtest', icon: <Assessment />, color: '#8b5cf6' },
   { path: '/trades', label: 'Trade History', icon: <Receipt />, color: '#ec4899' },
+  { path: '/agent', label: 'Agent AI', icon: <SmartToy />, color: '#8b5cf6' },
 ];
 
 function Navigation() {
@@ -559,6 +562,7 @@ function Navigation() {
             <Route path="/backtest" element={<ProtectedRoute><BacktestPage /></ProtectedRoute>} />
             <Route path="/trades" element={<ProtectedRoute><TradesPage /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+            <Route path="/agent" element={<ProtectedRoute><AgentPage /></ProtectedRoute>} />
             <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
