@@ -57,6 +57,7 @@ from agents.base import MarketSnapshot, TradeOutcome, AgentDecision
 from agents.supervisor_bandit import supervisor as agent_supervisor
 from agents.backfill import backfill_from_db, backfill_from_json
 from agents.analyst_rankings import analyst_rankings
+from agents.portfolio_agent import portfolio_agent
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -813,6 +814,46 @@ if FASTAPI_AVAILABLE:
         return {
             "decisions": decisions,
             "total": len(decisions),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    # ========================================
+    # PORTFOLIO RISK (v4.5)
+    # ========================================
+
+    @app.get("/agent/portfolio")
+    async def get_portfolio_risk():
+        """Get current portfolio risk snapshot across all bots."""
+        snapshot = await portfolio_agent._get_portfolio_snapshot()
+        return {
+            "total_positions": snapshot['total'],
+            "by_asset_class": snapshot['by_class'],
+            "currency_exposure": snapshot['currency_net'],
+            "daily_pnl": snapshot['daily_pnl'],
+            "stats": portfolio_agent.get_stats(),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    class PortfolioCheckRequest(BaseModel):
+        symbol: str
+        asset_class: str
+        direction: str = 'long'
+
+    @app.post("/agent/portfolio/check")
+    async def check_portfolio_risk(req: PortfolioCheckRequest):
+        """Check if a proposed trade passes portfolio risk checks."""
+        result = await portfolio_agent.check_risk(
+            new_symbol=req.symbol,
+            new_asset_class=req.asset_class,
+            new_direction=req.direction,
+        )
+        return {
+            "blocked": result.blocked,
+            "risk_flags": result.risk_flags,
+            "size_cap": result.size_cap,
+            "total_positions": result.total_positions,
+            "positions_by_class": result.positions_by_class,
+            "currency_exposure": result.currency_exposure,
             "timestamp": datetime.now().isoformat(),
         }
 

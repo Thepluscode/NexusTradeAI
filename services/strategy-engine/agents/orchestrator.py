@@ -31,6 +31,7 @@ from agents.learning_agent import LearningAgent
 from agents.scan_engine import ScanEngine
 from agents.supervisor_bandit import supervisor
 from agents.analyst_rankings import analyst_rankings
+from agents.portfolio_agent import portfolio_agent
 
 logger = logging.getLogger(__name__)
 
@@ -174,8 +175,28 @@ class AgentOrchestrator:
             )
             decision.risk_flags.append("below_supervisor_threshold")
 
+        # Step 7b: Portfolio-level risk check (cross-bot exposure)
+        try:
+            portfolio_risk = await portfolio_agent.check_risk(
+                new_symbol=snapshot.symbol,
+                new_asset_class=snapshot.asset_class,
+                new_direction=snapshot.direction,
+            )
+            if portfolio_risk.blocked:
+                decision.approved = False
+                decision.reason = f"Portfolio risk: {', '.join(portfolio_risk.risk_flags)}"
+                decision.risk_flags.extend(portfolio_risk.risk_flags)
+            elif portfolio_risk.risk_flags:
+                decision.risk_flags.extend(portfolio_risk.risk_flags)
+                decision.position_size_multiplier = min(
+                    decision.position_size_multiplier,
+                    portfolio_risk.size_cap,
+                )
+        except Exception as e:
+            logger.error(f"Portfolio risk check error: {e}")
+
         # Enrich decision with bandit metadata
-        decision.agents_consulted = ["market_agent", "decision_agent", "scan_engine", "supervisor_bandit"]
+        decision.agents_consulted = ["market_agent", "decision_agent", "scan_engine", "supervisor_bandit", "portfolio_agent"]
         decision.market_regime = market_analysis.get("regime") if market_analysis else None
         decision.lessons_applied = lessons[:3]
 
@@ -318,6 +339,7 @@ class AgentOrchestrator:
             "scan_engine": self.scan_engine.get_stats(),
             "supervisor_bandit": self.supervisor.get_stats(),
             "analyst_rankings": analyst_rankings.get_stats(),
+            "portfolio_agent": portfolio_agent.get_stats(),
             "outcome_store": outcome_store.get_stats(),
         }
 

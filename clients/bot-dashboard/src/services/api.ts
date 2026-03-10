@@ -669,6 +669,11 @@ class APIClient {
     const response = await this.aiService.post('/agent/rankings/update', {}, { timeout: 15000 });
     return response.data;
   }
+
+  async getPortfolioRisk(): Promise<Record<string, unknown>> {
+    const response = await this.aiService.get('/agent/portfolio', { timeout: 10000 });
+    return response.data;
+  }
 }
 
 export const apiClient = new APIClient();

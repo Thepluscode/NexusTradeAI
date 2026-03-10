@@ -761,8 +761,17 @@ export interface AgentStats {
   scan_engine: { total_patterns: number; significant_patterns: number };
   supervisor_bandit: BanditStats;
   analyst_rankings: AnalystRankingsStats;
+  portfolio_agent: PortfolioAgentStats;
   outcome_store: OutcomeStoreStats;
   timestamp: string;
+}
+
+export interface PortfolioAgentStats {
+  total_checks: number;
+  total_cache_hits: number;
+  total_blocks: number;
+  total_warnings: number;
+  db_available: boolean;
 }
 
 export interface BackfillResult {

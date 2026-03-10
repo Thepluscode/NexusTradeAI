@@ -370,6 +370,12 @@ export default function AgentPage() {
     { refetchInterval: 30000, staleTime: 20000 }
   );
 
+  const { data: portfolioData } = useQuery(
+    'portfolioRisk',
+    () => apiClient.getPortfolioRisk(),
+    { refetchInterval: 30000, staleTime: 20000 }
+  );
+
   const killMutation = useMutation(
     () => apiClient.agentKill('Manual kill from dashboard'),
     {
@@ -709,6 +715,91 @@ export default function AgentPage() {
           </Paper>
         );
       })()}
+
+      {/* Portfolio Risk (v4.5) */}
+      {portfolioData && (
+        <Paper sx={{ p: 2, mt: 2 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
+            <Shield sx={{ color: '#f59e0b', fontSize: 20 }} />
+            <Typography variant="subtitle1" fontWeight={600}>Portfolio Risk (Cross-Bot)</Typography>
+            <Chip
+              label={`${(portfolioData as Record<string, unknown>).total_positions || 0} positions`}
+              size="small"
+              sx={{ ml: 'auto' }}
+            />
+          </Box>
+          <Grid container spacing={2}>
+            {/* Positions by asset class */}
+            <Grid item xs={12} sm={4}>
+              <Card sx={{ bgcolor: alpha('#3b82f6', 0.05), border: `1px solid ${alpha('#3b82f6', 0.15)}` }}>
+                <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', fontSize: '0.65rem', letterSpacing: 1 }}>
+                    By Asset Class
+                  </Typography>
+                  {Object.entries((portfolioData as Record<string, Record<string, number>>).by_asset_class || {}).map(([ac, count]) => (
+                    <Box key={ac} sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.5 }}>
+                      <Typography variant="body2">{ac}</Typography>
+                      <Typography variant="body2" fontWeight={600}>{count}</Typography>
+                    </Box>
+                  ))}
+                  {Object.keys((portfolioData as Record<string, Record<string, number>>).by_asset_class || {}).length === 0 && (
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>No open positions</Typography>
+                  )}
+                </CardContent>
+              </Card>
+            </Grid>
+            {/* Currency exposure */}
+            <Grid item xs={12} sm={4}>
+              <Card sx={{ bgcolor: alpha('#f59e0b', 0.05), border: `1px solid ${alpha('#f59e0b', 0.15)}` }}>
+                <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', fontSize: '0.65rem', letterSpacing: 1 }}>
+                    Currency Exposure
+                  </Typography>
+                  {Object.entries((portfolioData as Record<string, Record<string, number>>).currency_exposure || {}).map(([ccy, net]) => (
+                    <Box key={ccy} sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.5 }}>
+                      <Typography variant="body2">{ccy}</Typography>
+                      <Typography variant="body2" fontWeight={600} sx={{ color: net > 0 ? '#22c55e' : net < 0 ? '#ef4444' : 'text.primary' }}>
+                        {net > 0 ? '+' : ''}{net}
+                      </Typography>
+                    </Box>
+                  ))}
+                  {Object.keys((portfolioData as Record<string, Record<string, number>>).currency_exposure || {}).length === 0 && (
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>No exposure</Typography>
+                  )}
+                </CardContent>
+              </Card>
+            </Grid>
+            {/* Risk stats */}
+            <Grid item xs={12} sm={4}>
+              <Card sx={{ bgcolor: alpha('#22c55e', 0.05), border: `1px solid ${alpha('#22c55e', 0.15)}` }}>
+                <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', fontSize: '0.65rem', letterSpacing: 1 }}>
+                    Risk Agent Stats
+                  </Typography>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.5 }}>
+                    <Typography variant="body2">Checks</Typography>
+                    <Typography variant="body2" fontWeight={600}>{(portfolioData as Record<string, Record<string, number>>).stats?.total_checks || 0}</Typography>
+                  </Box>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.5 }}>
+                    <Typography variant="body2">Blocks</Typography>
+                    <Typography variant="body2" fontWeight={600} sx={{ color: '#ef4444' }}>{(portfolioData as Record<string, Record<string, number>>).stats?.total_blocks || 0}</Typography>
+                  </Box>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.5 }}>
+                    <Typography variant="body2">Warnings</Typography>
+                    <Typography variant="body2" fontWeight={600} sx={{ color: '#f59e0b' }}>{(portfolioData as Record<string, Record<string, number>>).stats?.total_warnings || 0}</Typography>
+                  </Box>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.5 }}>
+                    <Typography variant="body2">Daily P&L</Typography>
+                    <Typography variant="body2" fontWeight={600} sx={{ color: ((portfolioData as Record<string, number>).daily_pnl || 0) >= 0 ? '#22c55e' : '#ef4444' }}>
+                      ${((portfolioData as Record<string, number>).daily_pnl || 0).toFixed(2)}
+                    </Typography>
+                  </Box>
+                </CardContent>
+              </Card>
+            </Grid>
+          </Grid>
+        </Paper>
+      )}
     </Box>
   );
 }
