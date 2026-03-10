@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import SEO from '@/components/SEO';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Box,
@@ -59,6 +60,8 @@ export default function ResetPasswordPage() {
   }
 
   return (
+    <>
+    <SEO title="Reset Password" description="Create a new password for your NexusTradeAI account." path="/reset-password" noindex />
     <Box
       sx={{
         minHeight: '100vh',
@@ -264,5 +267,6 @@ export default function ResetPasswordPage() {
         </CardContent>
       </Card>
     </Box>
+    </>
   );
 }

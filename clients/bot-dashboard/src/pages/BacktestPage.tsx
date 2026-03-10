@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import SEO from '@/components/SEO';
 import { useQuery } from 'react-query';
 import {
     Box,
@@ -153,6 +154,8 @@ export default function BacktestPage() {
     const noTradesYet = (summary.totalTrades ?? 0) === 0;
 
     return (
+        <>
+        <SEO title="Backtest" description="Backtest trading strategies against historical data. Validate momentum, mean-reversion, and AI-powered signals before live deployment." path="/backtest" />
         <Box sx={{ p: { xs: 1.5, sm: 2 } }}>
             {/* Header */}
             <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'flex-start', sm: 'center' }, gap: 2, mb: 3 }}>
@@ -564,5 +567,6 @@ export default function BacktestPage() {
                 )}
             </Grid>
         </Box>
+        </>
     );
 }

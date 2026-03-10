@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import SEO from '@/components/SEO';
 import {
     Box, Paper, Typography, Table, TableBody, TableCell,
     TableContainer, TableHead, TableRow, Chip, Alert,
@@ -54,6 +55,8 @@ export default function AdminPage() {
     }
 
     return (
+        <>
+        <SEO title="Admin" description="NexusTradeAI admin panel — manage users, monitor engine status, and fix stuck trades." path="/admin" noindex />
         <Box sx={{ p: { xs: 1.5, sm: 2, md: 3 } }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
                 <AdminPanelSettings sx={{ fontSize: 32, color: 'primary.main' }} />
@@ -219,5 +222,6 @@ export default function AdminPage() {
                 )}
             </Paper>
         </Box>
+        </>
     );
 }

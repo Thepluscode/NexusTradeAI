@@ -1,3 +1,4 @@
+import SEO from '@/components/SEO';
 import {
     Box,
     Paper,
@@ -202,6 +203,8 @@ export default function ForexBotPage() {
     };
 
     return (
+        <>
+        <SEO title="Forex Bot" description="Automated forex trading bot with OANDA integration. Trade 12 major and cross currency pairs with session-optimized strategies." path="/forex" />
         <Box sx={{ p: { xs: 1.5, sm: 2, md: 3 } }}>
             {/* Credential prompt */}
             {credentialsRequired && (
@@ -613,5 +616,6 @@ export default function ForexBotPage() {
                 </Grid>
             </Paper>
         </Box>
+        </>
     );
 }

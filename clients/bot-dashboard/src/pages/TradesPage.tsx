@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import SEO from '@/components/SEO';
 import { useQuery } from 'react-query';
 import {
     Box,
@@ -175,6 +176,8 @@ export default function TradesPage() {
     }, [trades]);
 
     return (
+        <>
+        <SEO title="Trade History" description="Complete trade history and analytics across stocks, forex, and crypto. Win rates, P&L breakdowns, strategy performance, and exportable CSV reports." path="/trades" />
         <Box sx={{ p: { xs: 1.5, sm: 2 } }}>
             {/* Header */}
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2, flexWrap: 'wrap' }}>
@@ -761,5 +764,6 @@ export default function TradesPage() {
                 )
             ) : null}
         </Box>
+        </>
     );
 }

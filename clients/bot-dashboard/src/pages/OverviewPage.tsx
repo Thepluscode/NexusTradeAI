@@ -1,4 +1,5 @@
 import React from 'react';
+import SEO from '@/components/SEO';
 import {
     Box,
     Paper,
@@ -412,6 +413,8 @@ export default function OverviewPage() {
     ];
 
     return (
+        <>
+        <SEO title="Overview" description="NexusTradeAI overview dashboard — monitor all trading bots, account balances, and portfolio performance in real time." path="/" />
         <Box sx={{ p: { xs: 1.5, sm: 2, md: 3 }, animation: 'fadeIn 0.3s ease both' }}>
 
             {/* ── Hero Header ──────────────────────────────────────── */}
@@ -944,5 +947,6 @@ export default function OverviewPage() {
                 </Paper>
             </Box>
         </Box>
+        </>
     );
 }

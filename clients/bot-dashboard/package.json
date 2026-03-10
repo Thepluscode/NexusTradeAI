@@ -18,6 +18,7 @@
     "pg": "^8.19.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "react-helmet-async": "^3.0.0",
     "react-hot-toast": "^2.4.1",
     "react-query": "^3.39.0",
     "react-router-dom": "^6.20.0",

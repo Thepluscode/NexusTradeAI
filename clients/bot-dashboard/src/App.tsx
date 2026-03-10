@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { QueryClient, QueryClientProvider } from 'react-query';
 import { ThemeProvider, CssBaseline, alpha } from '@mui/material';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
+import { HelmetProvider } from 'react-helmet-async';
 import {
   Box,
   Drawer,
@@ -569,6 +570,7 @@ function Navigation() {
 
 function App() {
   return (
+    <HelmetProvider>
     <QueryClientProvider client={queryClient}>
       <ThemeProvider theme={darkTheme}>
         <CssBaseline />
@@ -610,6 +612,7 @@ function App() {
         </Box>
       </ThemeProvider>
     </QueryClientProvider>
+    </HelmetProvider>
   );
 }
 

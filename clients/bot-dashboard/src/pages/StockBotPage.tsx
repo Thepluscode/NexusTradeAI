@@ -1,3 +1,4 @@
+import SEO from '@/components/SEO';
 import {
     Box,
     Paper,
@@ -242,6 +243,8 @@ export default function StockBotPage() {
         : '0';
 
     return (
+        <>
+        <SEO title="Stock Bot" description="AI-powered stock trading bot with multi-tier momentum strategy. Real-time positions, P&L tracking, and automated risk management." path="/stock" />
         <Box sx={{ p: { xs: 1.5, sm: 2, md: 3 } }}>
             {/* Credential prompt — shown when user is logged in but hasn't saved Alpaca keys yet */}
             {credentialsRequired && (
@@ -727,5 +730,6 @@ export default function StockBotPage() {
                 </Grid>
             </Paper>
         </Box>
+        </>
     );
 }

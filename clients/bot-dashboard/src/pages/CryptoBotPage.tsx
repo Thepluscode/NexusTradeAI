@@ -1,3 +1,4 @@
+import SEO from '@/components/SEO';
 import {
     Box,
     Paper,
@@ -206,6 +207,8 @@ export default function CryptoBotPage() {
     };
 
     return (
+        <>
+        <SEO title="Crypto Bot" description="AI-powered cryptocurrency trading bot. Automated crypto strategies with real-time monitoring and risk management." path="/crypto" />
         <Box sx={{ p: { xs: 1.5, sm: 2, md: 3 } }}>
             {/* Credential prompt */}
             {credentialsRequired && (
@@ -640,5 +643,6 @@ export default function CryptoBotPage() {
                 </Grid>
             </Paper>
         </Box>
+        </>
     );
 }

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import SEO from '@/components/SEO';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -68,6 +69,8 @@ export default function LoginPage() {
   }
 
   return (
+    <>
+    <SEO title="Sign In" description="Sign in to NexusTradeAI — access your AI-powered trading dashboard for stocks, forex, and crypto." path="/login" />
     <Box
       sx={{
         minHeight: '100vh',
@@ -302,5 +305,6 @@ export default function LoginPage() {
         </CardContent>
       </Card>
     </Box>
+    </>
   );
 }

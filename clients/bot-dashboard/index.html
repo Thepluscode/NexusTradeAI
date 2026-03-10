@@ -8,20 +8,177 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description"
     content="NexusTradeAI — Premium AI-powered trading dashboard for stocks, forex, and crypto. Real-time monitoring, automated strategies, and advanced analytics." />
+  <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1" />
   <meta name="theme-color" content="#06080d" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="NexusTrade" />
   <link rel="manifest" href="/manifest.json" />
+  <link rel="canonical" href="https://nexus-dashboard-production-e6e6.up.railway.app/" />
   <title>NexusTradeAI — AI Trading Dashboard</title>
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="NexusTradeAI" />
+  <meta property="og:title" content="NexusTradeAI — AI Trading Dashboard" />
+  <meta property="og:description" content="AI-powered automated trading dashboard for stocks, forex, and crypto. Real-time monitoring, automated strategies, and advanced analytics." />
+  <meta property="og:url" content="https://nexus-dashboard-production-e6e6.up.railway.app/" />
+  <meta property="og:image" content="https://nexus-dashboard-production-e6e6.up.railway.app/og-image.svg" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="NexusTradeAI — AI Trading Dashboard" />
+  <meta name="twitter:description" content="AI-powered automated trading dashboard for stocks, forex, and crypto." />
+  <meta name="twitter:image" content="https://nexus-dashboard-production-e6e6.up.railway.app/og-image.svg" />
+
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap"
     rel="stylesheet" />
+
+  <!-- Structured Data: WebApplication -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "NexusTradeAI",
+    "description": "AI-powered automated trading dashboard for stocks, forex, and crypto with real-time monitoring, automated strategies, and advanced analytics.",
+    "applicationCategory": "FinanceApplication",
+    "operatingSystem": "Web",
+    "url": "https://nexus-dashboard-production-e6e6.up.railway.app",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "featureList": [
+      "AI-powered stock trading bot",
+      "Automated forex trading",
+      "Cryptocurrency trading automation",
+      "Real-time portfolio monitoring",
+      "Multi-tier momentum strategy",
+      "Advanced risk management",
+      "Trade history and analytics"
+    ]
+  }
+  </script>
+
+  <!-- Structured Data: Organization -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    "name": "NexusTradeAI",
+    "url": "https://nexus-dashboard-production-e6e6.up.railway.app",
+    "logo": "https://nexus-dashboard-production-e6e6.up.railway.app/og-image.svg",
+    "description": "AI-powered automated trading platform for stocks, forex, and cryptocurrency."
+  }
+  </script>
+
+  <!-- Structured Data: BreadcrumbList -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      { "@type": "ListItem", "position": 1, "name": "Home", "item": "https://nexus-dashboard-production-e6e6.up.railway.app/" },
+      { "@type": "ListItem", "position": 2, "name": "Stock Bot", "item": "https://nexus-dashboard-production-e6e6.up.railway.app/stock" },
+      { "@type": "ListItem", "position": 3, "name": "Forex Bot", "item": "https://nexus-dashboard-production-e6e6.up.railway.app/forex" },
+      { "@type": "ListItem", "position": 4, "name": "Crypto Bot", "item": "https://nexus-dashboard-production-e6e6.up.railway.app/crypto" },
+      { "@type": "ListItem", "position": 5, "name": "Trade History", "item": "https://nexus-dashboard-production-e6e6.up.railway.app/trades" },
+      { "@type": "ListItem", "position": 6, "name": "Backtest", "item": "https://nexus-dashboard-production-e6e6.up.railway.app/backtest" }
+    ]
+  }
+  </script>
+
+  <!-- Structured Data: FAQPage (AI Search Visibility) -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "What is NexusTradeAI?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "NexusTradeAI is an AI-powered automated trading platform that supports stocks, forex, and cryptocurrency. It uses multi-tier momentum strategies, advanced risk management, and real-time analytics to execute trades automatically."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "What markets does NexusTradeAI support?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "NexusTradeAI supports three markets: US stocks via Alpaca Markets, forex (12 major and cross currency pairs) via OANDA, and cryptocurrency via Kraken."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "How does the AI trading bot work?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "The bot scans markets every 60 seconds using a multi-tier momentum strategy. It identifies stocks, forex pairs, or crypto assets with significant price moves, validates signals through volume and trend filters, and executes trades with built-in risk management including progressive trailing stops and anti-churning protection."
+        }
+      }
+    ]
+  }
+  </script>
+
+  <!-- Crawler-accessible styles (sr-only pattern) -->
+  <style>
+    .seo-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+  </style>
 </head>
 
 <body>
+  <!-- Semantic HTML for crawlers — hidden visually, readable by bots -->
+  <div class="seo-only">
+    <h1>NexusTradeAI — AI-Powered Trading Dashboard</h1>
+    <p>Real-time automated trading platform for stocks, forex, and cryptocurrency. Monitor AI-driven strategies, track portfolio performance, and manage risk with advanced analytics.</p>
+
+    <nav aria-label="Main navigation">
+      <h2>Dashboard Navigation</h2>
+      <ul>
+        <li><a href="/">Overview — Portfolio dashboard and account summary</a></li>
+        <li><a href="/stock">Stock Bot — AI-powered US stock trading with Alpaca Markets</a></li>
+        <li><a href="/forex">Forex Bot — Automated forex trading across 12 currency pairs</a></li>
+        <li><a href="/crypto">Crypto Bot — Cryptocurrency trading automation via Kraken</a></li>
+        <li><a href="/backtest">Backtest — Validate trading strategies against historical data</a></li>
+        <li><a href="/trades">Trade History — Complete trade analytics and P&L reports</a></li>
+        <li><a href="/settings">Settings — Configure trading parameters and preferences</a></li>
+        <li><a href="/login">Sign In — Access your trading dashboard</a></li>
+      </ul>
+    </nav>
+
+    <section>
+      <h2>Platform Features</h2>
+      <h3>AI-Powered Stock Trading</h3>
+      <p>Multi-tier momentum strategy scanning 135 stocks every 60 seconds. Automatic entry and exit with progressive trailing stops at 5%, 10%, 15%, and 18% levels.</p>
+      <h3>Automated Forex Trading</h3>
+      <p>Trade 12 major and cross currency pairs including EUR/USD, GBP/USD, and USD/JPY. Session-optimized for London and New York overlap with 24/5 market coverage.</p>
+      <h3>Cryptocurrency Automation</h3>
+      <p>Automated crypto trading with real-time monitoring, risk management, and strategy execution across major digital assets.</p>
+      <h3>Advanced Risk Management</h3>
+      <p>Built-in anti-churning protection limits trades to 15 per day with per-symbol cooldowns. Progressive trailing stops lock in profits while letting winners run.</p>
+      <h3>Trade Analytics</h3>
+      <p>Comprehensive trade history with win rate analysis, profit factor calculations, strategy performance breakdowns, and exportable CSV reports across all three markets.</p>
+    </section>
+  </div>
+
   <div id="root"></div>
   <script type="module" src="/src/main.tsx"></script>
 </body>

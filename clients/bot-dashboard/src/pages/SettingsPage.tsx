@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import SEO from '@/components/SEO';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import {
     Box,
@@ -1032,6 +1033,8 @@ export default function SettingsPage() {
     const isPaper = config?.trading?.mode !== 'live';
 
     return (
+        <>
+        <SEO title="Settings" description="Configure NexusTradeAI trading parameters, broker credentials, risk limits, and notification preferences." path="/settings" noindex />
         <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', bgcolor: 'background.default' }}>
             {/* ── Content ── */}
             <Box sx={{ flex: 1, p: { xs: 2, sm: 3, md: 4 }, maxWidth: 860, mx: 'auto', width: '100%', overflow: 'auto' }}>
@@ -1807,5 +1810,6 @@ export default function SettingsPage() {
                 </Paper>
             </Box>
         </Box>
+        </>
     );
 }
