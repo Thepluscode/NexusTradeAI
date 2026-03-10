@@ -29,6 +29,7 @@ from agents.outcome_store import outcome_store
 from agents.decision_agent import DecisionAgent
 from agents.learning_agent import LearningAgent
 from agents.scan_engine import ScanEngine
+from agents.supervisor_bandit import supervisor
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,7 @@ class AgentOrchestrator:
         self.decision_agent = DecisionAgent(self._client)
         self.learning_agent = LearningAgent(self._client)
         self.scan_engine = ScanEngine()
+        self.supervisor = supervisor
 
         # Decision cache (5-min TTL)
         self._cache: Dict[str, Dict] = {}
@@ -103,7 +105,26 @@ class AgentOrchestrator:
         # Step 3: Market analysis (60s cache)
         market_analysis = await self.market_agent.analyze(snapshot)
 
-        # Step 4: Adaptive context — get lessons and patterns
+        # Step 4: Supervisor bandit — select strategy arm for this context
+        bandit_rec = self.supervisor.select_arm(
+            regime=snapshot.regime or "unknown",
+            asset_class=snapshot.asset_class,
+            tier=snapshot.tier,
+        )
+
+        # If bandit says "skip", reject immediately
+        if bandit_rec.selected_arm == "skip":
+            self.total_rejections += 1
+            decision = AgentDecision(
+                approved=False,
+                confidence=0.9,
+                reason=f"Supervisor bandit: skip context {bandit_rec.context_key}",
+                source="supervisor_skip",
+            )
+            self._audit(snapshot, decision, time.time() - start)
+            return decision
+
+        # Step 5: Adaptive context — get lessons and patterns
         lessons = self.learning_agent.get_applicable_lessons(
             symbol=snapshot.symbol,
             asset_class=snapshot.asset_class,
@@ -120,22 +141,41 @@ class AgentOrchestrator:
             if p.actionable_lesson and p.actionable_lesson not in lessons:
                 lessons.append(p.actionable_lesson)
 
-        # Step 5: Decision agent
+        # Step 6: Decision agent
         decision = await self.decision_agent.evaluate(
             snapshot=snapshot,
             market_analysis=market_analysis,
             lessons=lessons,
         )
 
-        # Enrich decision
-        decision.agents_consulted = ["market_agent", "decision_agent", "scan_engine"]
+        # Step 7: Apply supervisor bandit constraints
+        # Cap position size to bandit's recommendation
+        decision.position_size_multiplier = min(
+            decision.position_size_multiplier,
+            bandit_rec.position_size_cap,
+        )
+        # Reject if confidence below bandit's conviction floor
+        if decision.approved and decision.confidence < bandit_rec.conviction_floor:
+            decision.approved = False
+            decision.reason = (
+                f"Below supervisor conviction floor ({decision.confidence:.2f} < "
+                f"{bandit_rec.conviction_floor:.2f} for {bandit_rec.selected_arm} arm)"
+            )
+            decision.risk_flags.append("below_supervisor_threshold")
+
+        # Enrich decision with bandit metadata
+        decision.agents_consulted = ["market_agent", "decision_agent", "scan_engine", "supervisor_bandit"]
         decision.market_regime = market_analysis.get("regime") if market_analysis else None
         decision.lessons_applied = lessons[:3]
 
-        # Step 6: Safety guardrails (hardcoded, non-negotiable)
+        # Store bandit arm on the decision for reward attribution
+        self._last_bandit_arm = bandit_rec.selected_arm
+        self._last_bandit_context = bandit_rec.context_key
+
+        # Step 8: Safety guardrails (hardcoded, non-negotiable)
         decision = SafetyGuardrails.validate_decision(decision, snapshot)
 
-        # Step 7: Audit and cache
+        # Step 9: Audit and cache
         latency = time.time() - start
         self.total_latency_ms += latency * 1000
 
@@ -168,7 +208,7 @@ class AgentOrchestrator:
         Process a completed trade for learning.
         Called by bots when a position is closed.
 
-        Pipeline: LearningAgent → ScanEngine → OutcomeStore(+reward) → KillSwitch
+        Pipeline: LearningAgent → ScanEngine → OutcomeStore(+reward) → KillSwitch → SupervisorBandit
         """
         # Learning agent extracts lessons
         lesson = await self.learning_agent.analyze_trade(outcome)
@@ -181,6 +221,7 @@ class AgentOrchestrator:
             self.kill_switch.update_pnl(outcome.pnl_pct / 100)
 
         # [v4.1] Log outcome + calculate reward in shared outcome store
+        reward = None
         try:
             reward = await outcome_store.log_outcome(
                 outcome=outcome,
@@ -192,6 +233,20 @@ class AgentOrchestrator:
                 logger.info(f"[Reward] {outcome.symbol}: {reward.reward_score:+.3f}")
         except Exception as e:
             logger.error(f"Outcome store log error: {e}")
+
+        # [v4.2] Feed reward back to supervisor bandit
+        if reward:
+            try:
+                arm = getattr(self, '_last_bandit_arm', 'moderate')
+                self.supervisor.update(
+                    regime=outcome.entry_regime or "unknown",
+                    asset_class=outcome.asset_class,
+                    tier=outcome.tier,
+                    arm=arm,
+                    reward_score=reward.reward_score,
+                )
+            except Exception as e:
+                logger.error(f"Bandit update error: {e}")
 
         if lesson:
             logger.info(f"[Learn] {outcome.symbol}: {lesson.get('actionable_lesson', 'no lesson')}")
@@ -250,6 +305,7 @@ class AgentOrchestrator:
             "decision_agent": self.decision_agent.get_stats(),
             "learning_agent": self.learning_agent.get_stats(),
             "scan_engine": self.scan_engine.get_stats(),
+            "supervisor_bandit": self.supervisor.get_stats(),
             "outcome_store": outcome_store.get_stats(),
         }
 

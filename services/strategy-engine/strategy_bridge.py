@@ -54,6 +54,7 @@ from ai_advisor import ai_advisor
 # Import Agentic AI system (v4.1 — full multi-agent pipeline)
 from agents.orchestrator import orchestrator as agent_orchestrator
 from agents.base import MarketSnapshot, TradeOutcome, AgentDecision
+from agents.supervisor_bandit import supervisor as agent_supervisor
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -617,6 +618,67 @@ if FASTAPI_AVAILABLE:
         agent_orchestrator.kill_switch.resume()
         return {"status": "resumed"}
 
+    # ========================================
+    # SUPERVISOR BANDIT ENDPOINTS (v4.2)
+    # ========================================
+
+    class BanditQueryRequest(BaseModel):
+        regime: str = "unknown"
+        asset_class: str = "stock"
+        tier: str = "tier1"
+
+    @app.post("/agent/bandit/select")
+    def bandit_select(req: BanditQueryRequest):
+        """Query the supervisor bandit for the optimal arm in a given context."""
+        rec = agent_supervisor.select_arm(
+            regime=req.regime,
+            asset_class=req.asset_class,
+            tier=req.tier,
+        )
+        return {
+            **rec.to_dict(),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    @app.post("/agent/bandit/context")
+    def bandit_context_detail(req: BanditQueryRequest):
+        """Get detailed arm distributions for a specific context."""
+        return {
+            **agent_supervisor.get_context_detail(req.regime, req.asset_class, req.tier),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    @app.get("/agent/bandit/stats")
+    def bandit_stats():
+        """Full supervisor bandit statistics."""
+        return {
+            **agent_supervisor.get_stats(),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    @app.post("/agent/bandit/sync")
+    async def bandit_sync_db():
+        """Sync bandit state to PostgreSQL."""
+        await agent_supervisor.sync_to_db()
+        return {"status": "synced", "timestamp": datetime.now().isoformat()}
+
+    @app.post("/agent/bandit/train")
+    async def bandit_train():
+        """
+        Train the bandit from recent rewards in the outcome store.
+        Call this periodically (e.g. daily) to update arm distributions.
+        """
+        from agents.outcome_store import outcome_store
+        rewards = await outcome_store.get_recent_rewards(limit=100)
+        updated = agent_supervisor.batch_update_from_rewards(rewards)
+        await agent_supervisor.sync_to_db()
+        return {
+            "status": "trained",
+            "rewards_processed": updated,
+            "bandit_stats": agent_supervisor.get_stats(),
+            "timestamp": datetime.now().isoformat(),
+        }
+
 # ========================================
 # STANDALONE SERVER
 # ========================================
@@ -640,5 +702,8 @@ if __name__ == "__main__":
     print(f"   Agent Stats:  GET  http://localhost:{port}/agent/stats")
     print(f"   Agent Kill:   POST http://localhost:{port}/agent/kill")
     print(f"   Agent Resume: POST http://localhost:{port}/agent/resume")
+    print(f"   Bandit Select:POST http://localhost:{port}/agent/bandit/select")
+    print(f"   Bandit Stats: GET  http://localhost:{port}/agent/bandit/stats")
+    print(f"   Bandit Train: POST http://localhost:{port}/agent/bandit/train")
     print(f"   Pairs:        POST http://localhost:{port}/pairs/analyze\n")
     uvicorn.run(app, host="0.0.0.0", port=port)
