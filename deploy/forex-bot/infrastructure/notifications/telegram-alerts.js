@@ -243,6 +243,48 @@ ${directionEmoji} *Direction:* ${directionText}
         return await this.send(message);
     }
 
+    // ===== AGENT AI ALERTS (v4.4) =====
+
+    async sendAgentRejection(botName, symbol, direction, reason, confidence, riskFlags) {
+        if (!this.enabled) return false;
+        const flagsLine = riskFlags?.length ? `\n🚩 *Flags:* ${riskFlags.join(', ')}` : '';
+        const message = `🤖 *AGENT REJECTION* — ${botName}
+
+📛 *${symbol}* ${direction.toUpperCase()}
+🧠 *Confidence:* ${(confidence * 100).toFixed(0)}%
+📝 *Reason:* ${reason}${flagsLine}
+
+⏰ ${new Date().toLocaleString()}`;
+        return await this.send(message);
+    }
+
+    async sendAgentApproval(botName, symbol, direction, confidence, sizeMultiplier, regime) {
+        if (!this.enabled) return false;
+        const regimeLine = regime ? `\n📊 *Regime:* ${regime}` : '';
+        const message = `✅ *AGENT APPROVED* — ${botName}
+
+💎 *${symbol}* ${direction.toUpperCase()}
+🧠 *Confidence:* ${(confidence * 100).toFixed(0)}%
+📏 *Size:* ${sizeMultiplier.toFixed(2)}x${regimeLine}
+
+⏰ ${new Date().toLocaleString()}`;
+        return await this.send(message);
+    }
+
+    async sendKillSwitchAlert(botName, reason) {
+        if (!this.enabled) return false;
+        const message = `🚨🚨 *KILL SWITCH ACTIVATED* 🚨🚨
+
+🤖 *Bot:* ${botName}
+⛔ *Reason:* ${reason}
+
+All trades blocked until manually resumed.
+Check /agent dashboard or POST /agent/resume.
+
+⏰ ${new Date().toLocaleString()}`;
+        return await this.send(message);
+    }
+
     // Test Telegram
     async sendTestAlert() {
         const message = `📱 *NexusTradeAI Telegram Test*

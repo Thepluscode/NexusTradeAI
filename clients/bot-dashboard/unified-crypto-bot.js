@@ -1586,11 +1586,20 @@ class CryptoTradingEngine {
                                 console.log(`[Agent] ${signal.symbol} REJECTED (conf: ${aiResult.confidence.toFixed(2)}) — ${aiResult.reason}`);
                                 if (aiResult.risk_flags?.length) console.log(`[Agent]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
                                 if (aiResult.lessons_applied?.length) console.log(`[Agent]   Lessons: ${aiResult.lessons_applied.slice(0, 2).join('; ')}`);
+                                // [v4.4] Telegram alert for high-confidence rejections
+                                if (aiResult.confidence > 0.8 || aiResult.source === 'kill_switch') {
+                                    (this._userTelegram || telegramAlerts).sendAgentRejection('Crypto Bot', signal.symbol, 'long', aiResult.reason, aiResult.confidence, aiResult.risk_flags).catch(() => {});
+                                }
+                                if (aiResult.source === 'kill_switch') {
+                                    (this._userTelegram || telegramAlerts).sendKillSwitchAlert('Crypto Bot', aiResult.reason).catch(() => {});
+                                }
                                 continue;
                             }
                             const srcTag = aiResult.source === 'cache' ? ' (cached)' : '';
                             const regime = aiResult.market_regime ? ` [${aiResult.market_regime}]` : '';
                             console.log(`[Agent] ${signal.symbol} APPROVED${srcTag}${regime} (conf: ${(aiResult.confidence || 0).toFixed(2)}, size: ${(aiResult.position_size_multiplier || 1).toFixed(2)}x) — ${aiResult.reason}`);
+                            // [v4.4] Telegram alert for agent approvals
+                            (this._userTelegram || telegramAlerts).sendAgentApproval('Crypto Bot', signal.symbol, 'long', aiResult.confidence || 0, aiResult.position_size_multiplier || 1, aiResult.market_regime).catch(() => {});
                             signal.agentApproved = aiResult.approved;
                             signal.agentConfidence = aiResult.confidence;
                             signal.agentReason = aiResult.reason;

@@ -1801,11 +1801,20 @@ async function scanMomentumBreakouts() {
                             console.log(`[Agent] ${mover.symbol} REJECTED (conf: ${aiResult.confidence.toFixed(2)}) — ${aiResult.reason}`);
                             if (aiResult.risk_flags?.length) console.log(`[Agent]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
                             if (aiResult.lessons_applied?.length) console.log(`[Agent]   Lessons: ${aiResult.lessons_applied.slice(0, 2).join('; ')}`);
+                            // [v4.4] Telegram alert for high-confidence rejections
+                            if (aiResult.confidence > 0.8 || aiResult.source === 'kill_switch') {
+                                telegramAlerts.sendAgentRejection('Stock Bot', mover.symbol, 'long', aiResult.reason, aiResult.confidence, aiResult.risk_flags).catch(() => {});
+                            }
+                            if (aiResult.source === 'kill_switch') {
+                                telegramAlerts.sendKillSwitchAlert('Stock Bot', aiResult.reason).catch(() => {});
+                            }
                             continue;
                         }
                         const srcTag = aiResult.source === 'cache' ? ' (cached)' : '';
                         const regime = aiResult.market_regime ? ` [${aiResult.market_regime}]` : '';
                         console.log(`[Agent] ${mover.symbol} APPROVED${srcTag}${regime} (conf: ${(aiResult.confidence || 0).toFixed(2)}, size: ${(aiResult.position_size_multiplier || 1).toFixed(2)}x) — ${aiResult.reason}`);
+                        // [v4.4] Telegram alert for agent approvals
+                        telegramAlerts.sendAgentApproval('Stock Bot', mover.symbol, 'long', aiResult.confidence || 0, aiResult.position_size_multiplier || 1, aiResult.market_regime).catch(() => {});
                         // Store agent decision metadata for learning
                         mover.agentApproved = aiResult.approved;
                         mover.agentConfidence = aiResult.confidence;

@@ -137,6 +137,9 @@ jobs:
           cp clients/bot-dashboard/userCredentialStore.js  deploy/stock-bot/userCredentialStore.js
           cp clients/bot-dashboard/userCredentialStore.js  deploy/forex-bot/userCredentialStore.js
           cp clients/bot-dashboard/userCredentialStore.js  deploy/crypto-bot/userCredentialStore.js
+          cp infrastructure/notifications/telegram-alerts.js deploy/stock-bot/infrastructure/notifications/telegram-alerts.js
+          cp infrastructure/notifications/telegram-alerts.js deploy/forex-bot/infrastructure/notifications/telegram-alerts.js
+          cp infrastructure/notifications/telegram-alerts.js deploy/crypto-bot/infrastructure/notifications/telegram-alerts.js
           echo "Bot files synced:"
           wc -l \
             deploy/stock-bot/bot.js deploy/stock-bot/userCredentialStore.js \
