@@ -598,6 +598,10 @@ function savePerfData() {
 }
 
 function recordTradeClose(symbol, entryPrice, exitPrice, shares, reason) {
+    if (!Number.isFinite(entryPrice) || !Number.isFinite(exitPrice) || !Number.isFinite(shares) || entryPrice <= 0 || shares <= 0) {
+        console.warn(`⚠️ Skipping trade-close stats for ${symbol}: invalid metrics entry=${entryPrice} exit=${exitPrice} shares=${shares}`);
+        return;
+    }
     const pnlPct = ((exitPrice - entryPrice) / entryPrice) * 100;
     const pnlDollar = (exitPrice - entryPrice) * shares;
     const isWin = pnlPct > 0;
@@ -663,6 +667,69 @@ async function dbTradeClose(id, exitPrice, pnlUsd, pnlPct, reason) {
             [exitPrice, pnlUsd, pnlPct, reason, id]
         );
     } catch (e) { console.warn('DB close failed:', e.message); }
+}
+
+function resolveClosedTradeMetrics(position, qty, exitPrice) {
+    const entryPrice = parseFloat(position?.entry ?? position?.entryPrice ?? '0');
+    const shares = parseFloat(qty ?? position?.shares ?? position?.quantity ?? '0');
+    const normalizedExitPrice = parseFloat(exitPrice ?? '0');
+    if (!Number.isFinite(entryPrice) || entryPrice <= 0) return null;
+    if (!Number.isFinite(shares) || shares <= 0) return null;
+    if (!Number.isFinite(normalizedExitPrice) || normalizedExitPrice <= 0) return null;
+    const pnlUsd = (normalizedExitPrice - entryPrice) * shares;
+    const pnlPct = ((normalizedExitPrice - entryPrice) / entryPrice) * 100;
+    if (!Number.isFinite(pnlUsd) || !Number.isFinite(pnlPct)) return null;
+    return { entryPrice, shares, exitPrice: normalizedExitPrice, pnlUsd, pnlPct };
+}
+
+async function repairInvalidTradePnL({ limit = 1000 } = {}) {
+    if (!dbPool) return { scanned: 0, repaired: 0, rows: [] };
+    const cappedLimit = Math.min(Math.max(parseInt(limit, 10) || 0, 1), 5000);
+    const result = await dbPool.query(
+        `WITH invalid AS (
+            SELECT id
+            FROM trades
+            WHERE status='closed'
+              AND exit_price IS NOT NULL
+              AND entry_price IS NOT NULL
+              AND quantity IS NOT NULL
+              AND (
+                    pnl_usd IS NULL OR pnl_pct IS NULL
+                 OR pnl_usd::text = 'NaN'
+                 OR pnl_pct::text = 'NaN'
+              )
+            ORDER BY exit_time DESC NULLS LAST, id DESC
+            LIMIT $1
+        )
+        UPDATE trades t
+        SET pnl_usd = ROUND((
+                CASE
+                    WHEN LOWER(COALESCE(t.direction, 'long')) = 'short'
+                        THEN (t.entry_price - t.exit_price) * t.quantity
+                    ELSE (t.exit_price - t.entry_price) * t.quantity
+                END
+            )::numeric, 2),
+            pnl_pct = ROUND((
+                CASE
+                    WHEN t.entry_price > 0 THEN
+                        CASE
+                            WHEN LOWER(COALESCE(t.direction, 'long')) = 'short'
+                                THEN ((t.entry_price - t.exit_price) / t.entry_price) * 100
+                            ELSE ((t.exit_price - t.entry_price) / t.entry_price) * 100
+                        END
+                    ELSE 0
+                END
+            )::numeric, 4)
+        FROM invalid
+        WHERE t.id = invalid.id
+        RETURNING t.id, t.bot, t.symbol, t.pnl_usd, t.pnl_pct`,
+        [cappedLimit]
+    );
+    return {
+        scanned: cappedLimit,
+        repaired: result.rows.length,
+        rows: result.rows,
+    };
 }
 
 function buildStockTradeTags(signal = {}, strategy, tier) {
@@ -2148,10 +2215,13 @@ async function closePosition(symbol, qty, reason = 'Manual') {
         if (position && currentPrice) {
             const STOCK_EXIT_SLIPPAGE = 0.0005; // 0.05% — matches entry slippage assumption
             const adjustedExitPrice = currentPrice * (1 - STOCK_EXIT_SLIPPAGE);
-            recordTradeClose(symbol, position.entry, adjustedExitPrice, parseFloat(qty), reason);
-            const pnlUsd = (adjustedExitPrice - position.entry) * parseFloat(qty);
-            const pnlPct = ((adjustedExitPrice - position.entry) / position.entry) * 100;
-            dbTradeClose(position?.dbTradeId, adjustedExitPrice, pnlUsd, pnlPct, reason).catch(() => {});
+            const closeMetrics = resolveClosedTradeMetrics(position, qty, adjustedExitPrice);
+            if (closeMetrics) {
+                recordTradeClose(symbol, closeMetrics.entryPrice, closeMetrics.exitPrice, closeMetrics.shares, reason);
+                dbTradeClose(position?.dbTradeId, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct, reason).catch(() => {});
+            } else {
+                console.warn(`⚠️ Skipping stock DB close write for ${symbol}: unresolved close metrics`);
+            }
         }
 
         console.log(`✅ Position closed: ${symbol} (${reason})`);
@@ -3258,15 +3328,22 @@ class UserTradingEngine {
 
                 for (const row of dbOpen.rows) {
                     if (alpacaSymbols.size === 0 || alpacaSymbols.has(row.symbol)) {
+                        const entryPrice = parseFloat(row.entry_price || '0');
+                        const quantity = parseFloat(row.quantity || '0');
+                        const stopLoss = parseFloat(row.stop_loss || '0');
+                        const takeProfit = parseFloat(row.take_profit || '0');
                         this.positions.set(row.symbol, {
                             dbTradeId: row.id,
                             symbol: row.symbol,
                             side: row.direction || 'long',
-                            entryPrice: parseFloat(row.entry_price || '0'),
-                            quantity: parseFloat(row.quantity || '0'),
-                            stopLoss: parseFloat(row.stop_loss || '0'),
-                            takeProfit: parseFloat(row.take_profit || '0'),
-                            entryTime: row.entry_time,
+                            entry: entryPrice,
+                            entryPrice,
+                            shares: quantity,
+                            quantity,
+                            stopLoss,
+                            target: takeProfit,
+                            takeProfit,
+                            entryTime: row.entry_time ? new Date(row.entry_time) : new Date(),
                             tier: 'restored'
                         });
                     }
@@ -3406,10 +3483,13 @@ class UserTradingEngine {
         if (position && currentPrice) {
             const STOCK_EXIT_SLIPPAGE = 0.0005;
             const adjustedExitPrice = currentPrice * (1 - STOCK_EXIT_SLIPPAGE);
-            this.recordTradeClose(symbol, position.entry, adjustedExitPrice, parseFloat(qty), reason);
-            const pnlUsd = (adjustedExitPrice - position.entry) * parseFloat(qty);
-            const pnlPct = ((adjustedExitPrice - position.entry) / position.entry) * 100;
-            this.dbTradeClose(position?.dbTradeId, adjustedExitPrice, pnlUsd, pnlPct, reason).catch(() => {});
+            const closeMetrics = resolveClosedTradeMetrics(position, qty, adjustedExitPrice);
+            if (closeMetrics) {
+                this.recordTradeClose(symbol, closeMetrics.entryPrice, closeMetrics.exitPrice, closeMetrics.shares, reason);
+                this.dbTradeClose(position?.dbTradeId, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct, reason).catch(() => {});
+            } else {
+                console.warn(`⚠️ [Engine ${this.userId}] Skipping DB close write for ${symbol}: unresolved close metrics`);
+            }
         }
         const tradeRecord = { time: Date.now(), side: 'sell', reason };
         const recent = this.recentTrades.get(symbol) || [];
@@ -3878,6 +3958,7 @@ app.get('/api/trades/summary', async (req, res) => {
     try {
         const days = Math.min(parseInt(req.query.days) || 30, 90);
         const userId = getOptionalTradeUserId(req);
+        const cleanPnlUsd = `CASE WHEN pnl_usd IS NULL OR pnl_usd::text = 'NaN' THEN NULL ELSE pnl_usd END`;
         const whereClause = userId
             ? `WHERE user_id = $2 AND created_at >= NOW() - INTERVAL '1 day' * $1`
             : `WHERE created_at >= NOW() - INTERVAL '1 day' * $1`;
@@ -3887,11 +3968,12 @@ app.get('/api/trades/summary', async (req, res) => {
                 DATE_TRUNC('day', COALESCE(exit_time, created_at)) AS day,
                 COUNT(*) FILTER (WHERE status='closed') AS closed_trades,
                 COUNT(*) FILTER (WHERE status='open')   AS open_trades,
-                COUNT(*) FILTER (WHERE status='closed' AND pnl_usd > 0) AS winners,
-                COUNT(*) FILTER (WHERE status='closed' AND pnl_usd <= 0) AS losers,
-                COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed'), 0)::FLOAT AS daily_pnl,
-                COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd > 0), 0)::FLOAT AS gross_profit,
-                COALESCE(ABS(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd < 0)), 0)::FLOAT AS gross_loss
+                COUNT(*) FILTER (WHERE status='closed' AND ${cleanPnlUsd} > 0) AS winners,
+                COUNT(*) FILTER (WHERE status='closed' AND ${cleanPnlUsd} < 0) AS losers,
+                COUNT(*) FILTER (WHERE status='closed' AND ${cleanPnlUsd} = 0) AS breakeven_trades,
+                COALESCE(SUM(${cleanPnlUsd}) FILTER (WHERE status='closed'), 0)::FLOAT AS daily_pnl,
+                COALESCE(SUM(${cleanPnlUsd}) FILTER (WHERE status='closed' AND ${cleanPnlUsd} > 0), 0)::FLOAT AS gross_profit,
+                COALESCE(ABS(SUM(${cleanPnlUsd}) FILTER (WHERE status='closed' AND ${cleanPnlUsd} < 0)), 0)::FLOAT AS gross_loss
             FROM trades
             ${whereClause}
             GROUP BY bot, day
@@ -3904,10 +3986,12 @@ app.get('/api/trades/summary', async (req, res) => {
                 COUNT(*) AS total_all_trades,
                 COUNT(*) FILTER (WHERE status='open') AS open_trades,
                 COUNT(*) FILTER (WHERE status='closed') AS total_trades,
-                COUNT(*) FILTER (WHERE status='closed' AND pnl_usd > 0) AS winners,
-                COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed'), 0)::FLOAT AS total_pnl,
-                COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd > 0), 0)::FLOAT AS gross_profit,
-                COALESCE(ABS(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd < 0)), 0)::FLOAT AS gross_loss
+                COUNT(*) FILTER (WHERE status='closed' AND ${cleanPnlUsd} > 0) AS winners,
+                COUNT(*) FILTER (WHERE status='closed' AND ${cleanPnlUsd} < 0) AS losers,
+                COUNT(*) FILTER (WHERE status='closed' AND ${cleanPnlUsd} = 0) AS breakeven_trades,
+                COALESCE(SUM(${cleanPnlUsd}) FILTER (WHERE status='closed'), 0)::FLOAT AS total_pnl,
+                COALESCE(SUM(${cleanPnlUsd}) FILTER (WHERE status='closed' AND ${cleanPnlUsd} > 0), 0)::FLOAT AS gross_profit,
+                COALESCE(ABS(SUM(${cleanPnlUsd}) FILTER (WHERE status='closed' AND ${cleanPnlUsd} < 0)), 0)::FLOAT AS gross_loss
             FROM trades
             ${userId ? 'WHERE user_id = $1' : ''}
             GROUP BY bot
@@ -3955,15 +4039,17 @@ app.get('/api/trades/analytics', async (req, res) => {
     const days = Math.min(parseInt(req.query.days) || 30, 90);
     try {
         const userId = getOptionalTradeUserId(req);
+        const cleanPnlUsd = `CASE WHEN pnl_usd IS NULL OR pnl_usd::text = 'NaN' THEN NULL ELSE pnl_usd END`;
+        const cleanPnlPct = `CASE WHEN pnl_pct IS NULL OR pnl_pct::text = 'NaN' THEN NULL ELSE pnl_pct END`;
         const analyticsFilter = userId
-            ? `WHERE status='closed' AND user_id = $2 AND entry_time > NOW() - INTERVAL '1 day' * $1`
-            : `WHERE status='closed' AND entry_time > NOW() - INTERVAL '1 day' * $1`;
+            ? `WHERE status='closed' AND COALESCE(close_reason, '') <> 'orphaned_restart' AND user_id = $2 AND entry_time > NOW() - INTERVAL '1 day' * $1`
+            : `WHERE status='closed' AND COALESCE(close_reason, '') <> 'orphaned_restart' AND entry_time > NOW() - INTERVAL '1 day' * $1`;
         const analyticsParams = userId ? [days, userId] : [days];
         const byHour = await dbPool.query(`
             SELECT EXTRACT(HOUR FROM entry_time AT TIME ZONE 'America/New_York') AS hour,
-                   COUNT(*) FILTER (WHERE pnl_usd > 0) AS winners,
+                   COUNT(*) FILTER (WHERE ${cleanPnlUsd} > 0) AS winners,
                    COUNT(*) AS total,
-                   ROUND(AVG(pnl_pct)::numeric, 2) AS avg_pnl_pct
+                   ROUND(AVG(${cleanPnlPct})::numeric, 2) AS avg_pnl_pct
             FROM trades
             ${analyticsFilter}
             GROUP BY 1 ORDER BY 1`, analyticsParams);
@@ -3971,8 +4057,8 @@ app.get('/api/trades/analytics', async (req, res) => {
         const bySymbol = await dbPool.query(`
             SELECT symbol, bot,
                    COUNT(*) AS total,
-                   COUNT(*) FILTER (WHERE pnl_usd > 0) AS winners,
-                   ROUND(AVG(pnl_pct)::numeric, 2) AS avg_pnl_pct,
+                   COUNT(*) FILTER (WHERE ${cleanPnlUsd} > 0) AS winners,
+                   ROUND(AVG(${cleanPnlPct})::numeric, 2) AS avg_pnl_pct,
                    ROUND(AVG(EXTRACT(EPOCH FROM (exit_time - entry_time))/3600)::numeric, 1) AS avg_hold_hours
             FROM trades
             ${analyticsFilter}
@@ -3981,9 +4067,9 @@ app.get('/api/trades/analytics', async (req, res) => {
         const byTier = await dbPool.query(`
             SELECT COALESCE(tier,'—') AS tier, bot,
                    COUNT(*) AS total,
-                   COUNT(*) FILTER (WHERE pnl_usd > 0) AS winners,
-                   ROUND(AVG(pnl_pct)::numeric, 2) AS avg_pnl_pct,
-                   ROUND(SUM(pnl_usd)::numeric, 2) AS total_pnl
+                   COUNT(*) FILTER (WHERE ${cleanPnlUsd} > 0) AS winners,
+                   ROUND(AVG(${cleanPnlPct})::numeric, 2) AS avg_pnl_pct,
+                   ROUND(SUM(${cleanPnlUsd})::numeric, 2) AS total_pnl
             FROM trades
             ${analyticsFilter}
             GROUP BY tier, bot ORDER BY total DESC`, analyticsParams);
@@ -3991,9 +4077,9 @@ app.get('/api/trades/analytics', async (req, res) => {
         const byStrategy = await dbPool.query(`
             SELECT COALESCE(strategy,'unlabeled') AS strategy, bot,
                    COUNT(*) AS total,
-                   COUNT(*) FILTER (WHERE pnl_usd > 0) AS winners,
-                   ROUND(AVG(pnl_pct)::numeric, 2) AS avg_pnl_pct,
-                   ROUND(SUM(pnl_usd)::numeric, 2) AS total_pnl
+                   COUNT(*) FILTER (WHERE ${cleanPnlUsd} > 0) AS winners,
+                   ROUND(AVG(${cleanPnlPct})::numeric, 2) AS avg_pnl_pct,
+                   ROUND(SUM(${cleanPnlUsd})::numeric, 2) AS total_pnl
             FROM trades
             ${analyticsFilter}
             GROUP BY strategy, bot ORDER BY total DESC`, analyticsParams);
@@ -4001,9 +4087,9 @@ app.get('/api/trades/analytics', async (req, res) => {
         const byRegime = await dbPool.query(`
             SELECT COALESCE(regime,'unlabeled') AS regime, bot,
                    COUNT(*) AS total,
-                   COUNT(*) FILTER (WHERE pnl_usd > 0) AS winners,
-                   ROUND(AVG(pnl_pct)::numeric, 2) AS avg_pnl_pct,
-                   ROUND(SUM(pnl_usd)::numeric, 2) AS total_pnl
+                   COUNT(*) FILTER (WHERE ${cleanPnlUsd} > 0) AS winners,
+                   ROUND(AVG(${cleanPnlPct})::numeric, 2) AS avg_pnl_pct,
+                   ROUND(SUM(${cleanPnlUsd})::numeric, 2) AS total_pnl
             FROM trades
             ${analyticsFilter}
             GROUP BY regime, bot ORDER BY total DESC`, analyticsParams);
@@ -4028,6 +4114,19 @@ app.post('/api/admin/trades/backfill-tags', requireJwtOrApiSecret, async (req, r
     try {
         const limit = Math.min(parseInt(req.body?.limit || req.query.limit || '500', 10), 5000);
         const result = await backfillTradeTags({ limit });
+        res.json({ success: true, ...result });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+app.post('/api/admin/trades/repair-pnl', requireJwtOrApiSecret, async (req, res) => {
+    if (req.user?.role && req.user.role !== 'admin') {
+        return res.status(403).json({ success: false, error: 'Admin only' });
+    }
+    try {
+        const limit = Math.min(parseInt(req.body?.limit || req.query.limit || '1000', 10), 5000);
+        const result = await repairInvalidTradePnL({ limit });
         res.json({ success: true, ...result });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
@@ -4253,6 +4352,19 @@ app.listen(PORT, async () => {
         }
     } catch (e) {
         console.warn('⚠️  DB reconciliation failed:', e.message);
+    }
+
+    if (process.env.AUTO_REPAIR_TRADE_PNL !== 'false') {
+        setTimeout(async () => {
+            try {
+                const repaired = await repairInvalidTradePnL({ limit: 5000 });
+                if (repaired.repaired > 0) {
+                    console.log(`🩹 Repaired ${repaired.repaired} trade(s) with invalid stored P&L`);
+                }
+            } catch (e) {
+                console.warn('⚠️  Trade P&L repair failed:', e.message);
+            }
+        }, 15000);
     }
 
     // Pre-seed strategy bridge pairs cache 30s after startup (non-blocking).

@@ -57,13 +57,20 @@ const BOT_COLORS: Record<string, 'success' | 'primary' | 'warning'> = {
 };
 
 function pnlColor(val: number | string | null) {
-    const n = parseFloat(String(val ?? 0));
+    const n = typeof val === 'number' ? val : parseFloat(String(val ?? ''));
+    if (!Number.isFinite(n)) return 'text.secondary';
     return n > 0 ? 'success.main' : n < 0 ? 'error.main' : 'text.secondary';
 }
 
 function fmt(val: number | string | null, prefix = '$') {
-    const n = parseFloat(String(val ?? 0));
+    const n = typeof val === 'number' ? val : parseFloat(String(val ?? ''));
+    if (!Number.isFinite(n)) return '—';
     return `${n >= 0 ? '' : '-'}${prefix}${Math.abs(n).toFixed(2)}`;
+}
+
+function safeNum(val: number | string | null | undefined, fallback = 0) {
+    const n = typeof val === 'number' ? val : parseFloat(String(val ?? ''));
+    return Number.isFinite(n) ? n : fallback;
 }
 
 function exportTradesToCSV(rows: TradeRecord[]) {
@@ -96,7 +103,7 @@ export default function TradesPage() {
     const [tab, setTab] = useState(0);
     const [botFilter, setBotFilter] = useState<BotFilter>('all');
     const [days, setDays] = useState(30);
-    const [myTrades, setMyTrades] = useState(false);
+    const [myTrades, setMyTrades] = useState(() => !!localStorage.getItem('nexus_access_token'));
     const isLoggedIn = !!localStorage.getItem('nexus_access_token');
 
     const { data: trades = [], isLoading: tradesLoading } = useQuery(
@@ -126,16 +133,19 @@ export default function TradesPage() {
             open_trades: String(parseInt(acc.open_trades || '0') + parseInt(tAny.open_trades || '0')),
             total_trades: String(parseInt(acc.total_trades) + parseInt(t.total_trades)),
             winners: String(parseInt(acc.winners) + parseInt(t.winners)),
-            total_pnl: acc.total_pnl + t.total_pnl,
-            gross_profit: acc.gross_profit + t.gross_profit,
-            gross_loss: acc.gross_loss + t.gross_loss,
+            losers: String(parseInt(acc.losers || '0') + parseInt(t.losers || '0')),
+            breakeven_trades: String(parseInt(acc.breakeven_trades || '0') + parseInt(t.breakeven_trades || '0')),
+            total_pnl: acc.total_pnl + safeNum(t.total_pnl),
+            gross_profit: acc.gross_profit + safeNum(t.gross_profit),
+            gross_loss: acc.gross_loss + safeNum(t.gross_loss),
         };
-    }, { bot: 'all', total_all_trades: '0', open_trades: '0', total_trades: '0', winners: '0', total_pnl: 0, gross_profit: 0, gross_loss: 0 });
+    }, { bot: 'all', total_all_trades: '0', open_trades: '0', total_trades: '0', winners: '0', losers: '0', breakeven_trades: '0', total_pnl: 0, gross_profit: 0, gross_loss: 0 });
 
     const allTradesCount = parseInt(allTotal.total_all_trades || allTotal.total_trades);
     const closedTradesCount = parseInt(allTotal.total_trades);
     const openTradesCount = parseInt(allTotal.open_trades || '0');
-    const winRate = closedTradesCount > 0 ? parseInt(allTotal.winners) / closedTradesCount : 0;
+    const decisiveClosedTradesCount = parseInt(allTotal.winners) + parseInt(allTotal.losers || '0');
+    const winRate = decisiveClosedTradesCount > 0 ? parseInt(allTotal.winners) / decisiveClosedTradesCount : 0;
     const profitFactor = allTotal.gross_loss > 0 ? allTotal.gross_profit / allTotal.gross_loss : allTotal.gross_profit > 0 ? Infinity : 0;
 
     const isLoading = tradesLoading || summaryLoading;
@@ -146,7 +156,7 @@ export default function TradesPage() {
             bot: r.bot,
             trades: total,
             winRate: total > 0 ? (parseInt(r.winners) / total) * 100 : 0,
-            totalPnL: Number(r.total_pnl ?? 0),
+            totalPnL: safeNum(r.total_pnl),
         };
     });
     const regimeChartData = (analytics?.byRegime ?? []).slice(0, 8).map((r) => {
@@ -156,7 +166,7 @@ export default function TradesPage() {
             bot: r.bot,
             trades: total,
             winRate: total > 0 ? (parseInt(r.winners) / total) * 100 : 0,
-            totalPnL: Number(r.total_pnl ?? 0),
+            totalPnL: safeNum(r.total_pnl),
         };
     });
 
@@ -243,9 +253,11 @@ export default function TradesPage() {
                                 const tAny = t as TradeBotTotal & { total_all_trades?: string; open_trades?: string };
                                 const tt = parseInt(t.total_trades);
                                 const openTt = parseInt(tAny.open_trades || '0');
-                                const wr = tt > 0 ? parseInt(t.winners) / tt : 0;
+                                const flatTt = parseInt(t.breakeven_trades || '0');
+                                const decisiveTt = parseInt(t.winners) + parseInt(t.losers || '0');
+                                const wr = decisiveTt > 0 ? parseInt(t.winners) / decisiveTt : 0;
                                 const wrPct = wr * 100;
-                                const pf = t.gross_loss > 0 ? t.gross_profit / t.gross_loss : t.gross_profit > 0 ? Infinity : 0;
+                                const pf = safeNum(t.gross_loss) > 0 ? safeNum(t.gross_profit) / safeNum(t.gross_loss) : safeNum(t.gross_profit) > 0 ? Infinity : 0;
                                 const BOT_ACCENT: Record<string, string> = { stock: '#10b981', forex: '#3b82f6', crypto: '#f59e0b' };
                                 const accent = BOT_ACCENT[t.bot] ?? '#8b5cf6';
                                 return (
@@ -260,7 +272,7 @@ export default function TradesPage() {
                                                 <Chip label={t.bot.toUpperCase()} size="small" color={BOT_COLORS[t.bot] ?? 'default'}
                                                     sx={{ fontWeight: 700, fontSize: '0.7rem' }} />
                                                 <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
-                                                    {tt} closed{openTt > 0 ? ` · ${openTt} open` : ''}
+                                                    {tt} closed{openTt > 0 ? ` · ${openTt} open` : ''}{flatTt > 0 ? ` · ${flatTt} flat` : ''}
                                                 </Typography>
                                             </Box>
                                             <Box sx={{ display: 'flex', gap: 3, mb: 2 }}>
@@ -426,7 +438,9 @@ export default function TradesPage() {
                                                 </TableCell>
                                                 <TableCell align="right">
                                                     {t.pnl_pct != null ? (
-                                                        <Typography variant="body2" fontWeight={600} color={pnlColor(t.pnl_pct)}>{parseFloat(t.pnl_pct).toFixed(2)}%</Typography>
+                                                        <Typography variant="body2" fontWeight={600} color={pnlColor(t.pnl_pct)}>
+                                                            {Number.isFinite(parseFloat(t.pnl_pct)) ? `${parseFloat(t.pnl_pct).toFixed(2)}%` : '—'}
+                                                        </Typography>
                                                     ) : (
                                                         <Typography variant="body2" color="text.disabled">—</Typography>
                                                     )}

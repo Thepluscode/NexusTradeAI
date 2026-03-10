@@ -641,6 +641,7 @@ export interface TradeDaySummary {
   open_trades: string;
   winners: string;
   losers: string;
+  breakeven_trades?: string;
   daily_pnl: number;
   gross_profit: number;
   gross_loss: number;
@@ -648,8 +649,12 @@ export interface TradeDaySummary {
 
 export interface TradeBotTotal {
   bot: string;
+  total_all_trades?: string;
+  open_trades?: string;
   total_trades: string;
   winners: string;
+  losers?: string;
+  breakeven_trades?: string;
   total_pnl: number;
   gross_profit: number;
   gross_loss: number;

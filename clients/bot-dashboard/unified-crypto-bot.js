@@ -2396,16 +2396,18 @@ app.get('/api/trades/summary', async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not configured', summary: [] });
     try {
         const days = Math.min(parseInt(req.query.days) || 30, 90);
+        const cleanPnlUsd = `CASE WHEN pnl_usd IS NULL OR pnl_usd::text = 'NaN' THEN NULL ELSE pnl_usd END`;
         const r = await dbPool.query(`
             SELECT
                 DATE_TRUNC('day', COALESCE(exit_time, created_at)) AS day,
                 COUNT(*) FILTER (WHERE status='closed') AS closed_trades,
                 COUNT(*) FILTER (WHERE status='open')   AS open_trades,
-                COUNT(*) FILTER (WHERE status='closed' AND pnl_usd > 0) AS winners,
-                COUNT(*) FILTER (WHERE status='closed' AND pnl_usd <= 0) AS losers,
-                COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed'), 0)::FLOAT AS daily_pnl,
-                COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd > 0), 0)::FLOAT AS gross_profit,
-                COALESCE(ABS(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd < 0)), 0)::FLOAT AS gross_loss
+                COUNT(*) FILTER (WHERE status='closed' AND ${cleanPnlUsd} > 0) AS winners,
+                COUNT(*) FILTER (WHERE status='closed' AND ${cleanPnlUsd} < 0) AS losers,
+                COUNT(*) FILTER (WHERE status='closed' AND ${cleanPnlUsd} = 0) AS breakeven_trades,
+                COALESCE(SUM(${cleanPnlUsd}) FILTER (WHERE status='closed'), 0)::FLOAT AS daily_pnl,
+                COALESCE(SUM(${cleanPnlUsd}) FILTER (WHERE status='closed' AND ${cleanPnlUsd} > 0), 0)::FLOAT AS gross_profit,
+                COALESCE(ABS(SUM(${cleanPnlUsd}) FILTER (WHERE status='closed' AND ${cleanPnlUsd} < 0)), 0)::FLOAT AS gross_loss
             FROM trades
             WHERE bot='crypto' AND created_at >= NOW() - INTERVAL '1 day' * $1
             GROUP BY day ORDER BY day DESC
@@ -2413,10 +2415,12 @@ app.get('/api/trades/summary', async (req, res) => {
         const totals = await dbPool.query(`
             SELECT
                 COUNT(*) FILTER (WHERE status='closed') AS total_trades,
-                COUNT(*) FILTER (WHERE status='closed' AND pnl_usd > 0) AS winners,
-                COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed'), 0)::FLOAT AS total_pnl,
-                COALESCE(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd > 0), 0)::FLOAT AS gross_profit,
-                COALESCE(ABS(SUM(pnl_usd) FILTER (WHERE status='closed' AND pnl_usd < 0)), 0)::FLOAT AS gross_loss
+                COUNT(*) FILTER (WHERE status='closed' AND ${cleanPnlUsd} > 0) AS winners,
+                COUNT(*) FILTER (WHERE status='closed' AND ${cleanPnlUsd} < 0) AS losers,
+                COUNT(*) FILTER (WHERE status='closed' AND ${cleanPnlUsd} = 0) AS breakeven_trades,
+                COALESCE(SUM(${cleanPnlUsd}) FILTER (WHERE status='closed'), 0)::FLOAT AS total_pnl,
+                COALESCE(SUM(${cleanPnlUsd}) FILTER (WHERE status='closed' AND ${cleanPnlUsd} > 0), 0)::FLOAT AS gross_profit,
+                COALESCE(ABS(SUM(${cleanPnlUsd}) FILTER (WHERE status='closed' AND ${cleanPnlUsd} < 0)), 0)::FLOAT AS gross_loss
             FROM trades WHERE bot='crypto'
         `);
         res.json({ success: true, daily: r.rows, totals: totals.rows });
