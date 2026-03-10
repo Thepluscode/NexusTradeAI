@@ -527,6 +527,16 @@ class KrakenClient {
     }
 }
 
+// ===== ADAPTIVE GUARDRAILS (v4.6) =====
+const RISK_PER_TRADE = parseFloat(process.env.RISK_PER_TRADE || '0.005');
+const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.72');
+const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.72');
+const MIN_REWARD_RISK = parseFloat(process.env.MIN_REWARD_RISK || '1.95');
+const MAX_SIGNALS_PER_CYCLE = parseInt(process.env.MAX_SIGNALS_PER_CYCLE || '1');
+const MAX_CONSECUTIVE_LOSSES = parseInt(process.env.MAX_CONSECUTIVE_LOSSES || '3');
+const LOSS_PAUSE_MS = parseInt(process.env.LOSS_PAUSE_MS || '7200000');
+const STOP_LOSS_COOLDOWN_MS = parseInt(process.env.STOP_LOSS_COOLDOWN_MS || '2700000');
+
 // ============================================================================
 // CRYPTO TRADING ENGINE
 // ============================================================================
@@ -564,6 +574,15 @@ class CryptoTradingEngine {
         this.credentialsValid = null;
         this.credentialsError = null;
         this.lastCredentialCheckAt = 0;
+
+        // Adaptive guardrails state (v4.6)
+        this.guardrails = {
+            consecutiveLosses: 0,
+            recentResults: [],
+            lanePausedUntil: 0,
+            totalLossesToday: 0,
+            totalWinsToday: 0,
+        };
     }
 
     // ========================================================================
@@ -1491,6 +1510,9 @@ class CryptoTradingEngine {
             // [v4.1] Report to Agentic AI learning loop — Scan AI pattern tracking
             this.reportTradeOutcome(position, adjustedExitPrice, pnlUSD, pnlPercent / 100, reason).catch(() => {});
 
+            // [v4.6] Record outcome for adaptive guardrails
+            this.recordGuardrailOutcome(pnlUSD > 0);
+
             // Remove position
             this.positions.delete(symbol);
 
@@ -1516,6 +1538,7 @@ class CryptoTradingEngine {
                     this.dailyTradeCount = 0;
                     this.tradesToday = [];
                     this.dailyLoss = 0;
+                    this.resetGuardrails();
                     lastResetDay = currentDay;
                     console.log('🔄 Daily trade counters reset (UTC midnight)');
                 }
@@ -1603,6 +1626,23 @@ class CryptoTradingEngine {
                             signal.agentApproved = aiResult.approved;
                             signal.agentConfidence = aiResult.confidence;
                             signal.agentReason = aiResult.reason;
+                        }
+                        // [v4.6] Adaptive guardrails — pre-trade quality gate
+                        if (this.isLanePaused()) {
+                            console.log(`[Guardrail] ${signal.symbol} BLOCKED — lane paused until ${new Date(this.guardrails.lanePausedUntil).toLocaleTimeString()}`);
+                            continue;
+                        }
+                        if ((signal.score || 0) < MIN_SIGNAL_SCORE) {
+                            console.log(`[Guardrail] ${signal.symbol} BLOCKED — score ${(signal.score || 0).toFixed(2)} < ${MIN_SIGNAL_SCORE}`);
+                            continue;
+                        }
+                        if (aiResult && aiResult.confidence < MIN_SIGNAL_CONFIDENCE) {
+                            console.log(`[Guardrail] ${signal.symbol} BLOCKED — confidence ${aiResult.confidence.toFixed(2)} < ${MIN_SIGNAL_CONFIDENCE}`);
+                            continue;
+                        }
+                        if (this.getLossSizeMultiplier() < 1.0) {
+                            signal.guardrailSizeMultiplier = this.getLossSizeMultiplier();
+                            console.log(`[Guardrail] ${signal.symbol} size cut to ${signal.guardrailSizeMultiplier.toFixed(2)}x (${this.guardrails.consecutiveLosses} consecutive losses)`);
                         }
                         await this.executeTrade(signal);
                     }
@@ -1773,6 +1813,37 @@ class CryptoTradingEngine {
         }
     }
 
+    // ===== ADAPTIVE GUARDRAILS (v4.6) =====
+    getRecentWinRate() {
+        const r = this.guardrails.recentResults;
+        if (r.length < 5) return 0.5;
+        return r.filter(Boolean).length / r.length;
+    }
+    isLanePaused() { return Date.now() < this.guardrails.lanePausedUntil; }
+    getLossSizeMultiplier() {
+        if (this.guardrails.consecutiveLosses >= 3) return 0.25;
+        if (this.guardrails.consecutiveLosses >= 2) return 0.5;
+        if (this.guardrails.consecutiveLosses >= 1) return 0.75;
+        if (this.getRecentWinRate() < 0.35) return 0.5;
+        return 1.0;
+    }
+    recordGuardrailOutcome(isWin) {
+        this.guardrails.recentResults.push(isWin);
+        if (this.guardrails.recentResults.length > 20) this.guardrails.recentResults.shift();
+        if (isWin) { this.guardrails.consecutiveLosses = 0; this.guardrails.totalWinsToday++; }
+        else {
+            this.guardrails.consecutiveLosses++;
+            this.guardrails.totalLossesToday++;
+            if (this.guardrails.consecutiveLosses >= MAX_CONSECUTIVE_LOSSES) {
+                this.guardrails.lanePausedUntil = Date.now() + LOSS_PAUSE_MS;
+                console.log(`🚫 [Guardrail] Crypto lane PAUSED until ${new Date(this.guardrails.lanePausedUntil).toLocaleTimeString()} — ${this.guardrails.consecutiveLosses} consecutive losses`);
+            }
+        }
+    }
+    resetGuardrails() {
+        this.guardrails = { consecutiveLosses: 0, recentResults: [], lanePausedUntil: 0, totalLossesToday: 0, totalWinsToday: 0 };
+    }
+
     getStatus() {
         const winRate = this.totalTrades > 0
             ? (this.winningTrades / this.totalTrades * 100).toFixed(1)
@@ -1827,7 +1898,15 @@ class CryptoTradingEngine {
             dailyTrades: this.dailyTradeCount,
             winRate: `${winRate}%`,
             profitFactor,
-            netPnL: netPnL.toFixed(2)
+            netPnL: netPnL.toFixed(2),
+            guardrails: {
+                consecutiveLosses: this.guardrails.consecutiveLosses,
+                recentWinRate: this.getRecentWinRate().toFixed(2),
+                lanePaused: this.isLanePaused(),
+                lossSizeMultiplier: this.getLossSizeMultiplier(),
+                todayWins: this.guardrails.totalWinsToday,
+                todayLosses: this.guardrails.totalLossesToday,
+            },
         };
     }
 }
