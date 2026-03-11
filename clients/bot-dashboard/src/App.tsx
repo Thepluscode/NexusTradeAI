@@ -56,6 +56,7 @@ import AdminPage from './pages/AdminPage';
 import AgentPage from './pages/AgentPage';
 import APIPage from './pages/APIPage';
 import DocsPage from './pages/DocsPage';
+import LandingPage from './pages/LandingPage';
 import ProtectedRoute from './components/ProtectedRoute';
 import { useAuth } from './hooks/useAuth';
 
@@ -93,7 +94,7 @@ function LiveClock() {
 const DRAWER_WIDTH = 272;
 
 const NAV_ITEMS = [
-  { path: '/', label: 'Overview', icon: <Dashboard />, color: '#3b82f6' },
+  { path: '/dashboard', label: 'Overview', icon: <Dashboard />, color: '#3b82f6' },
   { path: '/stock', label: 'Stock Bot', icon: <ShowChart />, color: '#10b981' },
   { path: '/forex', label: 'Forex Bot', icon: <CurrencyExchange />, color: '#3b82f6' },
   { path: '/crypto', label: 'Crypto Bot', icon: <CurrencyBitcoin />, color: '#f59e0b' },
@@ -558,10 +559,12 @@ function Navigation() {
           }}
         >
           <Routes>
+            {/* Public routes (no sidebar, no auth required) */}
             <Route path="/login" element={<LoginPage />} />
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
-            <Route path="/" element={<ProtectedRoute><OverviewPage /></ProtectedRoute>} />
+            {/* Dashboard routes (sidebar + auth required) */}
+            <Route path="/dashboard" element={<ProtectedRoute><OverviewPage /></ProtectedRoute>} />
             <Route path="/stock" element={<ProtectedRoute><StockBotPage /></ProtectedRoute>} />
             <Route path="/forex" element={<ProtectedRoute><ForexBotPage /></ProtectedRoute>} />
             <Route path="/crypto" element={<ProtectedRoute><CryptoBotPage /></ProtectedRoute>} />
@@ -572,12 +575,28 @@ function Navigation() {
             <Route path="/api" element={<ProtectedRoute><APIPage /></ProtectedRoute>} />
             <Route path="/docs" element={<ProtectedRoute><DocsPage /></ProtectedRoute>} />
             <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
-            <Route path="*" element={<Navigate to="/" replace />} />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </Box>
       </Box>
     </Box>
   );
+}
+
+// ── Route switch: landing page (public) vs dashboard (authenticated) ──────────
+function RouterSwitch() {
+  const location = useLocation();
+  const isPublicRoute = location.pathname === '/';
+
+  // Landing page is full-width, no sidebar
+  if (isPublicRoute) {
+    const token = localStorage.getItem('nexus_access_token');
+    // If logged in, redirect to dashboard
+    if (token) return <Navigate to="/dashboard" replace />;
+    return <LandingPage />;
+  }
+
+  return <Navigation />;
 }
 
 function App() {
@@ -594,7 +613,7 @@ function App() {
           flexDirection: 'column',
         }}>
           <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-            <Navigation />
+            <RouterSwitch />
           </BrowserRouter>
           <Toaster
             position="top-right"

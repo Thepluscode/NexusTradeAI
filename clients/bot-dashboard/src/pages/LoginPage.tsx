@@ -40,7 +40,7 @@ export default function LoginPage() {
       const { data } = await axios.post(`${AUTH_URL}${endpoint}`, payload);
       localStorage.setItem('nexus_access_token', data.accessToken);
       localStorage.setItem('nexus_refresh_token', data.refreshToken);
-      navigate('/');
+      navigate('/dashboard');
     } catch (err: unknown) {
       const response = (err as { response?: { status?: number; data?: { error?: string } } })?.response;
       const errData = response?.data;
@@ -53,7 +53,7 @@ export default function LoginPage() {
           });
           localStorage.setItem('nexus_access_token', data.accessToken);
           localStorage.setItem('nexus_refresh_token', data.refreshToken);
-          navigate('/');
+          navigate('/dashboard');
           return;
         } catch (devErr: unknown) {
           const devErrData = (devErr as { response?: { data?: { error?: string } } })?.response?.data;
