@@ -105,7 +105,7 @@ const NAV_ITEMS = [
   { path: '/docs', label: 'API Docs', icon: <MenuBook />, color: '#f59e0b' },
 ];
 
-function Navigation() {
+function Navigation({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
@@ -558,26 +558,7 @@ function Navigation() {
             animation: 'fadeIn 0.3s cubic-bezier(0.4, 0, 0.2, 1) both',
           }}
         >
-          <Routes>
-            {/* Public routes (no sidebar, no auth required) */}
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-            <Route path="/reset-password" element={<ResetPasswordPage />} />
-            <Route path="/public-docs" element={<DocsPage />} />
-            {/* Dashboard routes (sidebar + auth required) */}
-            <Route path="/dashboard" element={<ProtectedRoute><OverviewPage /></ProtectedRoute>} />
-            <Route path="/stock" element={<ProtectedRoute><StockBotPage /></ProtectedRoute>} />
-            <Route path="/forex" element={<ProtectedRoute><ForexBotPage /></ProtectedRoute>} />
-            <Route path="/crypto" element={<ProtectedRoute><CryptoBotPage /></ProtectedRoute>} />
-            <Route path="/backtest" element={<ProtectedRoute><BacktestPage /></ProtectedRoute>} />
-            <Route path="/trades" element={<ProtectedRoute><TradesPage /></ProtectedRoute>} />
-            <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
-            <Route path="/agent" element={<ProtectedRoute><AgentPage /></ProtectedRoute>} />
-            <Route path="/api" element={<ProtectedRoute><APIPage /></ProtectedRoute>} />
-            <Route path="/docs" element={<ProtectedRoute><DocsPage /></ProtectedRoute>} />
-            <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
-          </Routes>
+          {children}
         </Box>
       </Box>
     </Box>
@@ -591,16 +572,36 @@ function AuthRedirect() {
   return <LandingPage />;
 }
 
-// ── Route switch: public pages (full-width) vs dashboard (sidebar) ────────────
+// ── Wrap page in sidebar layout ──────────────────────────────────────────────
+function WithNav({ children }: { children: React.ReactNode }) {
+  return <Navigation>{children}</Navigation>;
+}
+
+// ── Single flat Routes — no nesting ──────────────────────────────────────────
 function RouterSwitch() {
   return (
     <Routes>
-      {/* Public full-width routes */}
+      {/* Public full-width routes (no sidebar) */}
       <Route path="/" element={<AuthRedirect />} />
       <Route path="/pricing" element={<LandingPage />} />
       <Route path="/public-docs" element={<DocsPage />} />
-      {/* Everything else goes through the sidebar navigation */}
-      <Route path="/*" element={<Navigation />} />
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
+      {/* Dashboard routes (with sidebar + auth) */}
+      <Route path="/dashboard" element={<WithNav><ProtectedRoute><OverviewPage /></ProtectedRoute></WithNav>} />
+      <Route path="/stock" element={<WithNav><ProtectedRoute><StockBotPage /></ProtectedRoute></WithNav>} />
+      <Route path="/forex" element={<WithNav><ProtectedRoute><ForexBotPage /></ProtectedRoute></WithNav>} />
+      <Route path="/crypto" element={<WithNav><ProtectedRoute><CryptoBotPage /></ProtectedRoute></WithNav>} />
+      <Route path="/backtest" element={<WithNav><ProtectedRoute><BacktestPage /></ProtectedRoute></WithNav>} />
+      <Route path="/trades" element={<WithNav><ProtectedRoute><TradesPage /></ProtectedRoute></WithNav>} />
+      <Route path="/settings" element={<WithNav><ProtectedRoute><SettingsPage /></ProtectedRoute></WithNav>} />
+      <Route path="/agent" element={<WithNav><ProtectedRoute><AgentPage /></ProtectedRoute></WithNav>} />
+      <Route path="/api" element={<WithNav><ProtectedRoute><APIPage /></ProtectedRoute></WithNav>} />
+      <Route path="/docs" element={<WithNav><ProtectedRoute><DocsPage /></ProtectedRoute></WithNav>} />
+      <Route path="/admin" element={<WithNav><ProtectedRoute><AdminPage /></ProtectedRoute></WithNav>} />
+      {/* Catch-all */}
+      <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );
 }
