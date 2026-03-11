@@ -609,6 +609,32 @@ if FASTAPI_AVAILABLE:
             "timestamp": datetime.now().isoformat()
         }
 
+    @app.get("/agent/debug-claude")
+    async def agent_debug_claude():
+        """Debug endpoint: test Claude call directly and return raw result."""
+        from agents.claude_client import ClaudeClient, TRADE_DECISION_TOOL
+        client = agent_orchestrator._client
+        result = {
+            "available": client.available,
+            "model": client.model,
+            "api_key_set": bool(client.api_key),
+            "api_key_prefix": client.api_key[:12] + "..." if client.api_key else "NONE",
+        }
+        if client.available:
+            try:
+                test_result = await client.call_with_tool(
+                    system="You are a test. Just approve the trade.",
+                    user_message="TEST: BUY BTCUSD at $68000, RSI 55, volume 2x. Is this a good trade?",
+                    tool=TRADE_DECISION_TOOL,
+                    timeout_seconds=15
+                )
+                result["claude_call_result"] = test_result
+                result["claude_call_success"] = test_result is not None
+            except Exception as e:
+                result["claude_call_error"] = str(e)
+                result["claude_call_success"] = False
+        return result
+
     @app.post("/agent/kill")
     def agent_kill(reason: str = "Manual kill via API"):
         """Activate the kill switch — stops all agent approvals."""
