@@ -76,7 +76,7 @@ class PublicAPIKeyManager:
                     user_id         INTEGER NOT NULL,
                     name            VARCHAR(100) NOT NULL DEFAULT 'default',
                     key_hash        VARCHAR(64) NOT NULL,
-                    prefix          VARCHAR(20) NOT NULL,
+                    prefix          VARCHAR(50) NOT NULL,
                     scopes          JSONB DEFAULT '["evaluate"]',
                     tier            VARCHAR(20) DEFAULT 'free',
                     rate_limit      INTEGER DEFAULT 100,
@@ -104,6 +104,9 @@ class PublicAPIKeyManager:
                 );
                 CREATE INDEX IF NOT EXISTS idx_usage_events_key ON usage_events(api_key_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_usage_events_user_month ON usage_events(user_id, created_at);
+
+                -- Migrate: widen prefix column if it was created too small
+                ALTER TABLE api_keys ALTER COLUMN prefix TYPE VARCHAR(50);
             """)
         logger.info("Public API tables ensured")
 
@@ -119,7 +122,7 @@ class PublicAPIKeyManager:
         random_part = secrets.token_hex(16)  # 32 hex chars
         raw_key = f"{KEY_PREFIX}{random_part}"
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
-        prefix = f"{KEY_PREFIX}{random_part[:8]}..."
+        prefix = f"ntai_{random_part[:8]}..."
         return raw_key, key_hash, prefix
 
     # ── CRUD operations ───────────────────────────────────────────────

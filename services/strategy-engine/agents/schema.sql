@@ -154,7 +154,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     user_id         INTEGER NOT NULL,
     name            VARCHAR(100) NOT NULL DEFAULT 'default',
     key_hash        VARCHAR(64) NOT NULL,          -- SHA-256 hex digest (raw key never stored)
-    prefix          VARCHAR(20) NOT NULL,           -- ntai_live_a1b2c3d4 (display-safe prefix)
+    prefix          VARCHAR(50) NOT NULL,           -- ntai_a1b2c3d4... (display-safe prefix)
     scopes          JSONB DEFAULT '["evaluate"]',
     tier            VARCHAR(20) DEFAULT 'free',     -- free, pro, enterprise
     rate_limit      INTEGER DEFAULT 100,            -- calls per month
