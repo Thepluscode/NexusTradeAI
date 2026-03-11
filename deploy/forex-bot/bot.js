@@ -1196,15 +1196,16 @@ async function getH1Trend(pair) {
 const BRIDGE_URL = (() => {
     const raw = process.env.STRATEGY_BRIDGE_URL
         || process.env.RAILWAY_SERVICE_NEXUS_STRATEGY_BRIDGE_URL
-        || 'localhost:3010';
+        || (process.env.RAILWAY_ENVIRONMENT ? 'https://nexus-strategy-bridge-production.up.railway.app' : 'http://localhost:3010');
     if (raw.startsWith('http')) return raw;
     if (raw.includes('railway.app')) return `https://${raw}`;
     return `http://${raw}`;
 })();
+console.log(`🤖 Strategy Bridge URL: ${BRIDGE_URL}`);
 
 // ===== AI TRADE ADVISOR =====
-// [v4.0] Agentic AI — Claude-powered trade evaluation via strategy bridge
-// Fail-open: if AI is offline/rate-limited, approve by default
+// [v5.0] Agentic AI — Claude-powered trade evaluation via strategy bridge
+// HARD GATE: every trade MUST be approved by the agent pipeline
 
 async function queryAIAdvisor(signal) {
     try {
@@ -1226,11 +1227,21 @@ async function queryAIAdvisor(signal) {
             macd_histogram: signal.macdHistogram,
             score: signal.score,
         };
-        // [v4.1] Use full agentic pipeline
+        console.log(`[Agent] Evaluating ${signal.pair} via ${BRIDGE_URL}/agent/evaluate`);
         const response = await axios.post(`${BRIDGE_URL}/agent/evaluate`, payload, { timeout: 15000 });
-        return response.data;
+        const result = response.data;
+        console.log(`[Agent] ${signal.pair}: ${result.approved ? 'APPROVED' : 'REJECTED'} (source: ${result.source}, conf: ${(result.confidence || 0).toFixed(2)}) — ${result.reason}`);
+        return result;
     } catch (e) {
-        return null;
+        console.error(`[Agent] ${signal.pair} call FAILED: ${e.message} — BLOCKING trade (hard gate)`);
+        return {
+            approved: false,
+            confidence: 1.0,
+            reason: `Agent unreachable: ${e.message.slice(0, 80)}`,
+            source: 'hard_gate_offline',
+            risk_flags: ['agent_offline'],
+            position_size_multiplier: 0,
+        };
     }
 }
 
