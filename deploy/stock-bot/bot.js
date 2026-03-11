@@ -810,7 +810,8 @@ function evaluateStockRegimeSignal({ strategy, percentChange, volumeRatio, rsi, 
     }
 
     return {
-        tradable: quality >= (normalizedStrategy === 'openingRangeBreakout' ? 0.95 : 0.9),
+        // v5.0: Raised quality gates — data shows 53% of trades hit stop loss, entry quality too loose
+        tradable: quality >= (normalizedStrategy === 'openingRangeBreakout' ? 0.97 : 0.93),
         regime,
         quality: parseFloat(quality.toFixed(3))
     };
@@ -942,7 +943,7 @@ let MAX_DRAWDOWN_PCT = parseFloat(process.env.MAX_DRAWDOWN_PCT || '10'); // perc
 // Env-overridable thresholds — stricter than legacy defaults
 const RISK_PER_TRADE = parseFloat(process.env.RISK_PER_TRADE || '0.0075');      // 0.75% per trade (was 2%)
 const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.68');
-const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.68');
+const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.75');  // v5.0: raised from 0.68 — filter out low-conviction entries
 const MIN_REWARD_RISK = parseFloat(process.env.MIN_REWARD_RISK || '1.75');
 const MAX_SIGNALS_PER_CYCLE = parseInt(process.env.MAX_SIGNALS_PER_CYCLE || '1');
 const MAX_CONSECUTIVE_LOSSES = parseInt(process.env.MAX_CONSECUTIVE_LOSSES || '3');
@@ -1044,9 +1045,9 @@ const MOMENTUM_CONFIG = {
     tier1: {
         threshold: 3.5,       // raised from 2.5 — 2.5% catches noise; 3.5% is real momentum
         minVolume: 500000,    // raised from 300k — require meaningful liquidity
-        volumeRatio: 1.5,     // raised from 1.2 — require clear volume surge
-        rsiMax: 68,           // tightened from 70 — avoid overbought entries
-        rsiMin: 38,           // tightened from 35 — avoid deeply oversold
+        volumeRatio: 1.8,     // v5.0: raised from 1.5 — higher volume = higher conviction (30% WR at 1.5x)
+        rsiMax: 66,           // v5.0: tightened from 68 — avoid approaching overbought
+        rsiMin: 40,           // v5.0: tightened from 38 — avoid deeply oversold mean-reversion traps
         positionSize: 0.005,
         stopLoss: 0.04,
         profitTarget: 0.08,
@@ -1055,9 +1056,9 @@ const MOMENTUM_CONFIG = {
     tier2: {
         threshold: 5.0,
         minVolume: 750000,    // raised from 500k
-        volumeRatio: 1.5,
-        rsiMax: 68,           // tightened from 70
-        rsiMin: 38,           // tightened from 35
+        volumeRatio: 2.0,     // v5.0: raised from 1.5 — require strong volume surge
+        rsiMax: 66,           // v5.0: tightened from 68
+        rsiMin: 40,           // v5.0: tightened from 38
         positionSize: 0.0075,
         stopLoss: 0.05,
         profitTarget: 0.10,
@@ -1066,9 +1067,9 @@ const MOMENTUM_CONFIG = {
     tier3: {
         threshold: 10.0,
         minVolume: 1000000,   // raised from 750k — high-momentum moves need high volume
-        volumeRatio: 1.8,     // raised from 1.5 — strong volume surge required
-        rsiMax: 70,
-        rsiMin: 38,           // tightened from 35
+        volumeRatio: 2.2,     // v5.0: raised from 1.8 — extreme moves need extreme volume
+        rsiMax: 68,           // v5.0: tightened from 70
+        rsiMin: 40,           // v5.0: tightened from 38
         positionSize: 0.01,
         stopLoss: 0.06,
         profitTarget: 0.15,
@@ -1769,8 +1770,13 @@ async function managePositions() {
                 continue;
             }
 
+            // v5.0: 3-minute grace period — new entries get micro-pullback tolerance
+            // Data: many stop-outs happen within seconds of entry due to normal volatility
+            const holdMinutes = (Date.now() - new Date(position.entryTime).getTime()) / (1000 * 60);
+            const gracePeriodActive = holdMinutes < 3;
+
             // Traditional exits with ENHANCED ALERTS + SMS
-            if (currentPrice <= position.stopLoss) {
+            if (currentPrice <= position.stopLoss && !gracePeriodActive) {
                 console.log('\n' + '🚨'.repeat(30));
                 console.log('║                    STOP LOSS ALERT                    ║');
                 console.log('🚨'.repeat(30));
@@ -2045,35 +2051,36 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
 
         let momentumAllowed = true;
 
-        // Avoid chasing: if price is >90% through daily range, skip regardless of move size
-        // 90% (was 80%) — momentum stocks legitimately run near their highs; 80% was too tight
+        // v5.0: Tightened from 90% to 82% — data shows buying near daily highs = stop-outs
+        // 53% of all trades exit via stop loss; most entered at extended levels
         const dailyHigh = Math.max(...bars.map(b => b.h));
         const dailyLow = Math.min(...bars.map(b => b.l));
         const dailyRange = dailyHigh - dailyLow;
         if (dailyRange > 0) {
             const positionInRange = (current - dailyLow) / dailyRange;
-            if (positionInRange > 0.90) {
+            if (positionInRange > 0.82) {
                 momentumAllowed = false;
             }
         }
 
-        // ADX filter — require minimum trend strength (15 = early breakout; 20 is already full trend)
-        // Lowered from 20 → 15 to catch breakouts before ADX builds — momentum strats enter early
+        // v5.0: Raised from 15 → 20 — data shows ADX < 20 entries = noise, not real trends
+        // 30% momentum WR is partly caused by entering before trend is established
         const adx = calculateADX(bars);
-        if (momentumAllowed && adx !== null && adx < 15) {
+        if (momentumAllowed && adx !== null && adx < 20) {
             momentumAllowed = false;
         }
 
-        // [v3.4] MACD(12,26,9) confirmation — only enter when momentum is accelerating bullishly
-        // Histogram must be positive AND rising (not just crossing zero)
+        // v5.0: MACD confirmation tightened — require histogram > 0 (truly bullish)
+        // Old logic allowed nearly-flat OR RSI divergence override, which caught falling knives
+        // Now: only proceed if histogram is positive, OR if BOTH nearly flat AND RSI divergence confirm
         const macd = calculateMACD(bars);
         if (momentumAllowed && macd !== null && !macd.bullish) {
-            // MACD bearish/flat — skip unless histogram is nearly flat (>-0.001) or RSI divergence overrides
             const nearlyFlat = macd.histogram > -0.001;
-            if (!nearlyFlat && !detectRSIBullishDivergence(bars)) {
+            const rsiDivergence = detectRSIBullishDivergence(bars);
+            if (nearlyFlat && rsiDivergence) {
+                console.log(`[MACD Override] ${symbol} — nearly flat histogram + RSI divergence, proceeding cautiously`);
+            } else {
                 momentumAllowed = false;
-            } else if (!nearlyFlat) {
-                console.log(`[MACD Override] ${symbol} — RSI divergence overrides bearish MACD, proceeding`);
             }
         }
 
@@ -2088,11 +2095,11 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                 });
                 const dailyBars = dailyResp.data?.bars || [];
                 if (dailyBars.length >= 5) {
-                    // Use 9-day SMA (faster response) + 3% tolerance — avoids filtering intraday
-                    // breakouts that are just starting to reclaim the trend line
+                    // v5.0: Tightened from 3% to 1.5% tolerance — 3% allowed entries far below trend
+                    // that were fighting the daily downtrend and hitting stops
                     const lookback = Math.min(9, dailyBars.length);
                     const sma9d = dailyBars.slice(-lookback).map(b => b.c).reduce((a, v) => a + v, 0) / lookback;
-                    if (current < sma9d * 0.97) {
+                    if (current < sma9d * 0.985) {
                         console.log(`[Daily Filter] ${symbol} below 9-day SMA ($${sma9d.toFixed(2)}) — counter-trend, skipping`);
                         momentumAllowed = false;
                     }
