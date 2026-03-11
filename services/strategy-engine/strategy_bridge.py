@@ -780,6 +780,8 @@ if FASTAPI_AVAILABLE:
             bot_db_url=req.bot_db_url,
             limit=req.limit,
             since_days=req.since_days,
+            scan_engine=agent_orchestrator.scan_engine,
+            learning_agent=agent_orchestrator.learning_agent,
         )
         return {
             **stats,
@@ -811,8 +813,12 @@ if FASTAPI_AVAILABLE:
 
         Call this from a cron job or Railway cron.
         """
-        # Step 1: Backfill recent trades
-        backfill_stats = await backfill_from_db(limit=100, since_days=2)
+        # Step 1: Backfill recent trades (with scan engine for pattern learning)
+        backfill_stats = await backfill_from_db(
+            limit=100, since_days=2,
+            scan_engine=agent_orchestrator.scan_engine,
+            learning_agent=agent_orchestrator.learning_agent,
+        )
 
         # Step 2: Train bandit from all rewards
         from agents.outcome_store import outcome_store

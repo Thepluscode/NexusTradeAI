@@ -141,6 +141,8 @@ async def backfill_from_db(
     bot_db_url: Optional[str] = None,
     limit: int = 500,
     since_days: int = 90,
+    scan_engine=None,
+    learning_agent=None,
 ) -> Dict:
     """
     Read closed trades from the trades table and feed into outcome store + bandit.
@@ -168,6 +170,8 @@ async def backfill_from_db(
         "trades_skipped": 0,
         "rewards_calculated": 0,
         "bandit_updates": 0,
+        "patterns_ingested": 0,
+        "lessons_extracted": 0,
         "errors": 0,
     }
 
@@ -202,12 +206,30 @@ async def backfill_from_db(
                 continue
 
             try:
+                # Feed to scan engine (cheap, in-memory pattern tracking)
+                if scan_engine:
+                    try:
+                        scan_engine.ingest_trade(outcome)
+                        stats["patterns_ingested"] += 1
+                    except Exception as e:
+                        logger.error(f"[Backfill] Scan engine error for {outcome.symbol}: {e}")
+
+                # Feed to learning agent (Claude calls — only for subset)
+                lesson = None
+                if learning_agent and stats["lessons_extracted"] < 20:
+                    try:
+                        lesson = await learning_agent.analyze_trade(outcome)
+                        if lesson:
+                            stats["lessons_extracted"] += 1
+                    except Exception as e:
+                        logger.error(f"[Backfill] Learning agent error for {outcome.symbol}: {e}")
+
                 # Log to outcome store (calculates reward)
                 reward = await outcome_store.log_outcome(
                     outcome=outcome,
-                    pattern_type="",
-                    actionable_lesson="",
-                    lesson_confidence=0.0,
+                    pattern_type=lesson.get("pattern_type", "") if lesson else "",
+                    actionable_lesson=lesson.get("actionable_lesson", "") if lesson else "",
+                    lesson_confidence=lesson.get("confidence_in_lesson", 0) if lesson else 0.0,
                 )
                 stats["trades_processed"] += 1
 
