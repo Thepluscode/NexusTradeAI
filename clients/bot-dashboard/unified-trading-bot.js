@@ -4586,7 +4586,7 @@ app.post('/api/backtest/run', async (req, res) => {
 // Reads historical trades from DB, re-scores them with adjustable thresholds,
 // and returns projected win rates for the frontend backtest tool.
 app.post('/api/backtest/threshold-analysis', async (req, res) => {
-    if (!pool) return res.status(503).json({ success: false, error: 'Database not available' });
+    if (!dbPool) return res.status(503).json({ success: false, error: 'Database not available' });
 
     try {
         const {
@@ -4601,7 +4601,7 @@ app.post('/api/backtest/threshold-analysis', async (req, res) => {
         } = req.body || {};
 
         // Fetch closed trades with entry context
-        const result = await pool.query(`
+        const result = await dbPool.query(`
             SELECT symbol, direction, tier, strategy, regime, status,
                    entry_price, exit_price, pnl_usd, pnl_pct,
                    stop_loss, close_reason, entry_time, exit_time,
