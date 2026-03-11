@@ -268,8 +268,8 @@ const CRYPTO_CONFIG = {
         tier1: {
             name: 'Standard Crypto',
             momentumThreshold: 0.005, // 0.5% momentum (was 0.3% — too noisy)
-            stopLoss: 0.02,          // 2% stop (was 5%)
-            profitTarget: 0.04,      // 4% target (2:1 R/R)
+            stopLoss: 0.035,         // 3.5% stop (was 2% — too tight for crypto 5-min bars + 0.6% slippage)
+            profitTarget: 0.05,      // 5% target (~1.4:1 R/R after slippage)
             rsiLower: 30,            // Tighter RSI (was 20 — too oversold)
             rsiUpper: 70,            // Tighter RSI (was 80 — too overbought)
             maxPositions: 4
@@ -277,8 +277,8 @@ const CRYPTO_CONFIG = {
         tier2: {
             name: 'High Momentum',
             momentumThreshold: 0.015, // 1.5% momentum (was 1.2%)
-            stopLoss: 0.03,          // 3% stop (was 6%)
-            profitTarget: 0.06,      // 6% target (2:1 R/R)
+            stopLoss: 0.045,         // 4.5% stop (was 3% — too tight)
+            profitTarget: 0.07,      // 7% target (~1.6:1 R/R after slippage)
             rsiLower: 35,
             rsiUpper: 75,
             maxPositions: 2
@@ -286,8 +286,8 @@ const CRYPTO_CONFIG = {
         tier3: {
             name: 'Extreme Momentum',
             momentumThreshold: 0.03,  // 3% momentum (was 2.5%)
-            stopLoss: 0.04,          // 4% stop (was 8%)
-            profitTarget: 0.10,      // 10% target (2.5:1 R/R)
+            stopLoss: 0.06,          // 6% stop (was 4% — too tight)
+            profitTarget: 0.10,      // 10% target (~1.7:1 R/R after slippage)
             rsiLower: 35,
             rsiUpper: 80,
             maxPositions: 1
@@ -659,8 +659,8 @@ class CryptoTradingEngine {
             macd: macdLine[macdLine.length - 1],
             signal: signalLine,
             histogram,
-            // Bullish = histogram positive AND rising (momentum accelerating)
-            bullish: histogram > 0 && histogram > (prevHistogram || 0)
+            // Bullish = histogram positive (relaxed — was && rising, which filtered too many valid entries)
+            bullish: histogram > 0
         };
     }
 
@@ -921,9 +921,16 @@ class CryptoTradingEngine {
             // Calculate indicators
             const sma20 = this.calculateSMA(data.prices, 20);
             const ema9 = this.calculateEMA(data.prices, 9);
+            const sma50 = this.calculateSMA(data.prices, 50); // downtrend filter
             const rsi = this.calculateRSI(data.prices, 14);
 
             if (!sma20 || !ema9) continue;
+
+            // [v6.2] Downtrend skip — if SMA50 available and price below it, skip long entries
+            if (sma50 && data.currentPrice < sma50) {
+                console.log(`🔻 ${symbol}: price $${data.currentPrice.toFixed(2)} below SMA50 $${sma50.toFixed(2)} — skipping (downtrend)`);
+                continue;
+            }
 
             // [v3.2] MACD confirmation — prefer bullish MACD but don't hard-block.
             // Hard-blocking meant zero signals during MACD consolidation phases.
@@ -1026,8 +1033,9 @@ class CryptoTradingEngine {
                     volume24h: data.volume24h,
                     volumeRatio,
                     sizingFactor: combinedSizingFactor * pullbackConfig.sizingFactor,
-                    stopLoss: data.currentPrice * (1 - atrRisk.stopPct),
-                    takeProfit: data.currentPrice * (1 + atrRisk.targetPct),
+                    // [v6.2] Stop/target from slippage-adjusted effective entry, not raw price
+                    stopLoss: data.currentPrice * (1 + 0.003) * (1 - atrRisk.stopPct),
+                    takeProfit: data.currentPrice * (1 + 0.003) * (1 + atrRisk.targetPct),
                     stopLossPercent: atrRisk.stopPct * 100,
                     profitTargetPercent: atrRisk.targetPct * 100
                 };
@@ -1054,14 +1062,18 @@ class CryptoTradingEngine {
 
             // Try each tier
             for (const [tierName, tier] of Object.entries(this.config.tiers)) {
-                // Check momentum threshold
-                if (momentum < tier.momentumThreshold) continue;
-
                 // Check RSI range
                 if (rsi < tier.rsiLower || rsi > tier.rsiUpper) continue;
 
-                // Check uptrend
+                // Check uptrend (EMA9 > SMA20)
                 if (ema9 < sma20) continue; // Not in uptrend
+
+                // [v6.2] Pullback-to-SMA entry: buy the dip, not the top.
+                // Old: required momentum > threshold (price far above SMA20 = chasing).
+                // New: require price NEAR SMA20 (pulled back to support in uptrend).
+                // momentum = (price - sma20) / sma20; near SMA20 means momentum close to 0.
+                if (momentum > 0.003) continue; // Price >0.3% above SMA20 = already moved, skip
+                if (momentum < -0.01) continue;  // Price >1% below SMA20 = broken support, skip
 
                 // Check position limits for this tier
                 const tierPositions = Array.from(this.positions.values())
@@ -1114,8 +1126,9 @@ class CryptoTradingEngine {
                     volume24h: data.volume24h,
                     volumeRatio,
                     sizingFactor: combinedSizingFactor, // BTC + MACD sizing penalty
-                    stopLoss: data.currentPrice * (1 - atrRisk.stopPct),
-                    takeProfit: data.currentPrice * (1 + atrRisk.targetPct),
+                    // [v6.2] Stop/target from slippage-adjusted effective entry, not raw price
+                    stopLoss: data.currentPrice * (1 + 0.003) * (1 - atrRisk.stopPct),
+                    takeProfit: data.currentPrice * (1 + 0.003) * (1 + atrRisk.targetPct),
                     stopLossPercent: atrRisk.stopPct * 100,
                     profitTargetPercent: atrRisk.targetPct * 100
                 };

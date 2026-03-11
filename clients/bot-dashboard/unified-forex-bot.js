@@ -841,14 +841,18 @@ function scoreForexSignal({ tier, trendStrength, pullback, maxPullback, rsi, dir
     const pullbackQuality = maxPullback > 0
         ? 1 + Math.max(0, (maxPullback - pullback) / maxPullback) * 0.35
         : 1;
-    // [v3.9] Tighter RSI sweet spots matching new entry bounds
+    // [v7.0] RSI sweet spots aligned with pullback entry logic
     const rsiSweetSpot = direction === 'long'
-        ? (rsi >= 45 && rsi <= 58 ? 1.12 : 1.0)
-        : (rsi >= 42 && rsi <= 55 ? 1.12 : 1.0);
+        ? (rsi >= 38 && rsi <= 50 ? 1.12 : 1.0)
+        : (rsi >= 50 && rsi <= 62 ? 1.12 : 1.0);
     const macdStrength = macd ? Math.min(Math.abs(macd.histogram) * 100000, 3) : 1;
 
+    // [v7.0] Invert trendStrength scoring — closer to SMA20 (lower value) = higher score
+    // Map: 0.0000 → 2.0 (best), 0.0015 → 1.0 (threshold), 0.003+ → 0.0 (worst)
+    const proximityScore = Math.max(0, 2.0 - (trendStrength / 0.0015) * 1.0);
+
     return parseFloat(
-        (tierWeight * sessionWeight * (trendStrength * 1000) * pullbackQuality * rsiSweetSpot + macdStrength)
+        (tierWeight * sessionWeight * proximityScore * pullbackQuality * rsiSweetSpot + macdStrength)
             .toFixed(3)
     );
 }
@@ -866,13 +870,16 @@ function evaluateForexRegimeSignal({ tier, trendStrength, pullback, maxPullback,
     else if (pullbackRatio > 0.9) quality *= 0.82;
     else if (pullbackRatio < 0.08) quality *= 0.88;
 
-    if (trendStrength >= (MOMENTUM_CONFIG[tier]?.threshold || MOMENTUM_CONFIG.tier1.threshold) * 1.15) quality *= 1.08;
-    else if (trendStrength < (MOMENTUM_CONFIG[tier]?.threshold || MOMENTUM_CONFIG.tier1.threshold)) quality *= 0.9;
+    // [v7.0] trendStrength now measures proximity to SMA20 (lower = closer = better entry)
+    // Reward entries near SMA20 (low trendStrength), penalize extended entries
+    if (trendStrength <= 0.001) quality *= 1.10;  // very close to SMA20 — ideal pullback
+    else if (trendStrength <= 0.0015) quality *= 1.04;  // within threshold — acceptable
+    else if (trendStrength > 0.003) quality *= 0.85;  // too far from SMA20 — penalize
 
-    // [v3.9] Tighter regime RSI bands
+    // [v7.0] RSI sweet spots aligned with pullback entry logic
     const rsiSweetSpot = direction === 'long'
-        ? (rsi >= 45 && rsi <= 58)
-        : (rsi >= 42 && rsi <= 55);
+        ? (rsi >= 38 && rsi <= 50)   // oversold zone in uptrend — buying the dip
+        : (rsi >= 50 && rsi <= 62);  // overbought zone in downtrend — selling the rally
     if (rsiSweetSpot) quality *= 1.04;
 
     if (macd) {
@@ -1359,7 +1366,10 @@ async function analyzePair(pair) {
 
     const isUptrend = sma10 > sma20 && sma20 > sma50 && currentPrice > sma10;
     const isDowntrend = sma10 < sma20 && sma20 < sma50 && currentPrice < sma10;
-    const trendStrength = Math.abs(currentPrice - sma50) / sma50;
+    // [v7.0] Measure proximity to SMA20 (pullback-to-support), NOT extension from SMA50
+    // Old: Math.abs(currentPrice - sma50) / sma50 — bought tops (most extended = highest score)
+    // New: small value = price is near SMA20 (good entry); large value = price is far from SMA20 (skip)
+    const trendStrength = Math.abs(currentPrice - sma20) / sma20;
     const pullback = sma10 > 0 ? Math.abs(currentPrice - sma10) / sma10 : 0;
 
     // [v3.2] Entry candle direction — last completed M15 candle must align with signal
@@ -1413,12 +1423,12 @@ async function scanForSignals(heldPositions = positions) {
             atrPct, bb, macd, pullback, lastCandleBullish, lastCandleBearish
         } = analysis;
 
-        // Determine tier
-        let tier = null;
-        if (trendStrength >= MOMENTUM_CONFIG.tier3.threshold) tier = 'tier3';
-        else if (trendStrength >= MOMENTUM_CONFIG.tier2.threshold) tier = 'tier2';
-        else if (trendStrength >= MOMENTUM_CONFIG.tier1.threshold) tier = 'tier1';
-        if (!tier) continue;
+        // [v7.0] Determine tier by ATR volatility, NOT by distance from SMA
+        // Old logic required trendStrength >= threshold (i.e. price far from SMA = high tier)
+        // which contradicted the pullback-entry goal. Now: ATR-based tiers for position sizing.
+        let tier = 'tier1';  // default
+        if (atrPct >= 0.008) tier = 'tier3';       // high volatility pair → smaller size, wider stops
+        else if (atrPct >= 0.005) tier = 'tier2';   // medium volatility
 
         const config = MOMENTUM_CONFIG[tier];
         const maxPullback = FOREX_PULLBACK_CONFIG[tier] || FOREX_PULLBACK_CONFIG.tier1;
@@ -1429,12 +1439,8 @@ async function scanForSignals(heldPositions = positions) {
             continue;
         }
 
-        // [v3.9] Require real pullback — reject pure trend continuations that catch tops/bottoms
-        const minPullbackRatio = 0.20; // Must have retraced at least 20% of the move
-        if (maxPullback > 0 && pullback < maxPullback * minPullbackRatio) {
-            console.log(`[Pullback Depth] ${pair} skipped — pullback ${(pullback * 100).toFixed(2)}% < ${(maxPullback * minPullbackRatio * 100).toFixed(2)}% min (${(minPullbackRatio * 100).toFixed(0)}% of max)`);
-            continue;
-        }
+        // [v7.0] Removed v3.9 minPullbackRatio — pullback quality is now checked directly
+        // via pullbackToMA <= 0.0015 in the entry conditions (proximity to SMA20)
 
         // [v3.9] ATR noise cap — skip choppy/volatile pairs where stops get hunted
         const MAX_ATR_PCT = 0.012; // 1.2% — pairs above this are too noisy for reliable signals
@@ -1443,12 +1449,8 @@ async function scanForSignals(heldPositions = positions) {
             continue;
         }
 
-        // [v3.9] Minimum trend strength — require stronger directional conviction
-        const MIN_TREND_STRENGTH = MOMENTUM_CONFIG[tier].threshold * 1.15;
-        if (trendStrength < MIN_TREND_STRENGTH) {
-            console.log(`[Trend Strength] ${pair} skipped — strength ${(trendStrength * 100).toFixed(2)}% < ${(MIN_TREND_STRENGTH * 100).toFixed(2)}% min for ${tier}`);
-            continue;
-        }
+        // [v7.0] Removed v3.9 MIN_TREND_STRENGTH multiplier — it required price to be MORE extended
+        // from SMA, which is the opposite of what we want (pullback entries near SMA20)
 
         // [v6.1] ATR-based stops/targets — adapts to each pair's volatility
         // v3.2 had 2.0x ATR for BOTH stop and target (1:1 R:R) → 0% win rate.
@@ -1456,25 +1458,10 @@ async function scanForSignals(heldPositions = positions) {
         const atrStop   = atrPct > 0 ? atrPct * 2.5 : config.stopLoss;
         const atrTarget = atrPct > 0 ? atrPct * 5.0 : config.profitTarget;
 
-        // LONG Signal — [v6.1] tighter RSI: must be 45-65 (was 40-65; RSI 40-44 is noise)
-        if (isUptrend && rsi < config.rsiMax && rsi >= 45) {
-            if (h1Trend !== 'up') {
-                console.log(`[H1 Filter] ${pair} LONG skipped — H1 trend is ${h1Trend}`);
-                continue;
-            }
-            if (!lastCandleBullish) {
-                console.log(`[Candle Filter] ${pair} LONG skipped — last candle not bullish`);
-                continue;
-            }
-            if (bb && currentPrice < bb.middle) {
-                console.log(`[BB Filter] ${pair} LONG skipped — below BB midline ${bb.middle.toFixed(5)}`);
-                continue;
-            }
-            // [v3.4] MACD confirmation — only enter when momentum is accelerating bullishly
-            if (macd !== null && !macd.bullish) {
-                console.log(`[MACD Filter] ${pair} LONG skipped — MACD histogram not bullish/rising (${macd.histogram.toFixed(6)})`);
-                continue;
-            }
+        // LONG Signal — [v7.0] Pullback-to-support entry: 4 key filters only
+        // 1) H1 trend up  2) Price near SMA20  3) RSI 35-55  4) MACD histogram > 0
+        const pullbackToMA = Math.abs(currentPrice - analysis.sma20) / analysis.sma20;
+        if (h1Trend === 'up' && pullbackToMA <= 0.0015 && rsi >= 35 && rsi <= 55 && macd !== null && macd.histogram > 0) {
             // [v3.3] Strategy Bridge advisory — only block if bridge explicitly signals SHORT with high confidence
             const bridgeLong = await queryStrategyBridge(pair, 'long');
             if (bridgeLong !== null && bridgeLong.direction === 'short' && bridgeLong.confidence > 0.7) {
@@ -1506,12 +1493,9 @@ async function scanForSignals(heldPositions = positions) {
                     macd
                 });
                 if (!regimeProfile.tradable) continue;
+                // [v7.0] Re-enabled pullbackContinuation — this IS the correct forex strategy
+                // (was 0% WR under old logic that bought tops; now we buy pullbacks to SMA20)
                 const strategy = pullback >= maxPullback * 0.55 ? 'pullbackContinuation' : 'trendContinuation';
-                // Data: pullbackContinuation = 0% WR, -$308 across 5 trades. Block it.
-                if (strategy === 'pullbackContinuation') {
-                    console.log(`[Strategy Block] ${pair} LONG skipped — pullbackContinuation disabled (0% WR)`);
-                    continue;
-                }
                 signals.push({
                     pair, direction: 'long', tier,
                     entry: currentPrice,
@@ -1528,25 +1512,9 @@ async function scanForSignals(heldPositions = positions) {
             }
         }
 
-        // SHORT Signal — [v6.1] tighter RSI: must be 35-55 (was 35-60; RSI 56-60 is noise)
-        if (isDowntrend && rsi > (100 - config.rsiMax) && rsi <= 55) {
-            if (h1Trend !== 'down') {
-                console.log(`[H1 Filter] ${pair} SHORT skipped — H1 trend is ${h1Trend}`);
-                continue;
-            }
-            if (!lastCandleBearish) {
-                console.log(`[Candle Filter] ${pair} SHORT skipped — last candle not bearish`);
-                continue;
-            }
-            if (bb && currentPrice > bb.middle) {
-                console.log(`[BB Filter] ${pair} SHORT skipped — above BB midline ${bb.middle.toFixed(5)}`);
-                continue;
-            }
-            // [v3.4] MACD confirmation — only enter when momentum is accelerating bearishly
-            if (macd !== null && !macd.bearish) {
-                console.log(`[MACD Filter] ${pair} SHORT skipped — MACD histogram not bearish/falling (${macd.histogram.toFixed(6)})`);
-                continue;
-            }
+        // SHORT Signal — [v7.0] Pullback-to-resistance entry: 4 key filters only
+        // 1) H1 trend down  2) Price near SMA20  3) RSI 45-65  4) MACD histogram < 0
+        if (h1Trend === 'down' && pullbackToMA <= 0.0015 && rsi >= 45 && rsi <= 65 && macd !== null && macd.histogram < 0) {
             // [v3.3] Strategy Bridge advisory — only block if bridge explicitly signals LONG with high confidence
             const bridgeShort = await queryStrategyBridge(pair, 'short');
             if (bridgeShort !== null && bridgeShort.direction === 'long' && bridgeShort.confidence > 0.7) {
@@ -1577,11 +1545,8 @@ async function scanForSignals(heldPositions = positions) {
                     macd
                 });
                 if (!regimeProfile.tradable) continue;
+                // [v7.0] Re-enabled pullbackContinuation — correct strategy for pullback-to-SMA20 entries
                 const strategy = pullback >= maxPullback * 0.55 ? 'pullbackContinuation' : 'trendContinuation';
-                if (strategy === 'pullbackContinuation') {
-                    console.log(`[Strategy Block] ${pair} SHORT skipped — pullbackContinuation disabled (0% WR)`);
-                    continue;
-                }
                 signals.push({
                     pair, direction: 'short', tier,
                     entry: currentPrice,
