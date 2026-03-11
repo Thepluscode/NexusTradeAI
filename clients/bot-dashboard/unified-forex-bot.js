@@ -711,8 +711,11 @@ const guardrails = {
             this.consecutiveLosses++;
             this.totalLossesToday++;
             if (this.consecutiveLosses >= MAX_CONSECUTIVE_LOSSES) {
-                this.lanePausedUntil = Date.now() + LOSS_PAUSE_MS;
-                console.log(`🚫 [Guardrail] Forex lane PAUSED until ${new Date(this.lanePausedUntil).toLocaleTimeString()} — ${this.consecutiveLosses} consecutive losses`);
+                // [v6.1] Escalating pause: 2h base × (losses / 3), capped at 24h
+                const escalation = Math.min(8, Math.ceil(this.consecutiveLosses / MAX_CONSECUTIVE_LOSSES));
+                const pauseMs = LOSS_PAUSE_MS * escalation;
+                this.lanePausedUntil = Date.now() + pauseMs;
+                console.log(`🚫 [Guardrail] Forex lane PAUSED ${escalation * 2}h until ${new Date(this.lanePausedUntil).toLocaleTimeString()} — ${this.consecutiveLosses} consecutive losses`);
             }
         }
     },
@@ -1447,14 +1450,14 @@ async function scanForSignals(heldPositions = positions) {
             continue;
         }
 
-        // [v3.2] ATR-based stops/targets — adapts to each pair's volatility
-        // Data: 1.5x ATR stops too tight for forex (swept by noise). Widened to 2.0x.
-        // Target reduced from 3.0x to 2.0x (1:1 R/R, higher win probability)
-        const atrStop   = atrPct > 0 ? atrPct * 2.0 : config.stopLoss;
-        const atrTarget = atrPct > 0 ? atrPct * 2.0 : config.profitTarget;
+        // [v6.1] ATR-based stops/targets — adapts to each pair's volatility
+        // v3.2 had 2.0x ATR for BOTH stop and target (1:1 R:R) → 0% win rate.
+        // Fix: 2.5x ATR stop (wider to avoid noise sweep) + 5.0x ATR target (2:1 R:R minimum)
+        const atrStop   = atrPct > 0 ? atrPct * 2.5 : config.stopLoss;
+        const atrTarget = atrPct > 0 ? atrPct * 5.0 : config.profitTarget;
 
-        // LONG Signal — [v3.9] tighter RSI: must be 40-65 (was rsiMin-10 to rsiMax)
-        if (isUptrend && rsi < config.rsiMax && rsi >= 40) {
+        // LONG Signal — [v6.1] tighter RSI: must be 45-65 (was 40-65; RSI 40-44 is noise)
+        if (isUptrend && rsi < config.rsiMax && rsi >= 45) {
             if (h1Trend !== 'up') {
                 console.log(`[H1 Filter] ${pair} LONG skipped — H1 trend is ${h1Trend}`);
                 continue;
@@ -1525,8 +1528,8 @@ async function scanForSignals(heldPositions = positions) {
             }
         }
 
-        // SHORT Signal — [v3.9] tighter RSI: must be 35-60 (was 100-rsiMax to 100-rsiMin+10)
-        if (isDowntrend && rsi > (100 - config.rsiMax) && rsi <= 60) {
+        // SHORT Signal — [v6.1] tighter RSI: must be 35-55 (was 35-60; RSI 56-60 is noise)
+        if (isDowntrend && rsi > (100 - config.rsiMax) && rsi <= 55) {
             if (h1Trend !== 'down') {
                 console.log(`[H1 Filter] ${pair} SHORT skipped — H1 trend is ${h1Trend}`);
                 continue;
