@@ -16,6 +16,7 @@ import {
 } from '@mui/material';
 import { StrategiesPanel } from '@/components/StrategiesPanel';
 import { AIChat } from '@/components/AIChat';
+import OnboardingBanner from '@/components/OnboardingBanner';
 import {
     ShowChart,
     CurrencyExchange,
@@ -412,10 +413,21 @@ export default function OverviewPage() {
         },
     ];
 
+    // API onboarding data
+    const { data: apiUsage } = useQuery('overviewApiUsage', () => apiClient.getAPIUsage(), {
+        staleTime: 60000, retry: false, enabled: isLoggedIn,
+    });
+
     return (
         <>
-        <SEO title="Overview" description="NexusTradeAI overview dashboard — monitor all trading bots, account balances, and portfolio performance in real time." path="/" />
+        <SEO title="Overview" description="NexusTradeAI overview dashboard — monitor all trading bots, account balances, and portfolio performance in real time." path="/dashboard" />
         <Box sx={{ p: { xs: 1.5, sm: 2, md: 3 }, animation: 'fadeIn 0.3s ease both' }}>
+
+            {/* ── Onboarding Banner (new users) ──────────────────── */}
+            <OnboardingBanner
+                activeKeys={(apiUsage as Record<string, number>)?.active_keys ?? 0}
+                totalCalls={(apiUsage as Record<string, number>)?.calls_month ?? 0}
+            />
 
             {/* ── Hero Header ──────────────────────────────────────── */}
             <Paper

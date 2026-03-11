@@ -563,6 +563,7 @@ function Navigation() {
             <Route path="/login" element={<LoginPage />} />
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route path="/public-docs" element={<DocsPage />} />
             {/* Dashboard routes (sidebar + auth required) */}
             <Route path="/dashboard" element={<ProtectedRoute><OverviewPage /></ProtectedRoute>} />
             <Route path="/stock" element={<ProtectedRoute><StockBotPage /></ProtectedRoute>} />
@@ -583,17 +584,20 @@ function Navigation() {
   );
 }
 
-// ── Route switch: landing page (public) vs dashboard (authenticated) ──────────
+// ── Route switch: public pages (full-width) vs dashboard (sidebar) ────────────
 function RouterSwitch() {
   const location = useLocation();
-  const isPublicRoute = location.pathname === '/';
+  const PUBLIC_ROUTES = ['/', '/pricing'];
 
-  // Landing page is full-width, no sidebar
-  if (isPublicRoute) {
+  if (PUBLIC_ROUTES.includes(location.pathname)) {
     const token = localStorage.getItem('nexus_access_token');
-    // If logged in, redirect to dashboard
-    if (token) return <Navigate to="/dashboard" replace />;
+    if (token && location.pathname === '/') return <Navigate to="/dashboard" replace />;
     return <LandingPage />;
+  }
+
+  // Public docs — render with minimal nav bar, no sidebar
+  if (location.pathname === '/public-docs') {
+    return <DocsPage />;
   }
 
   return <Navigation />;

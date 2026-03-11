@@ -137,7 +137,7 @@ export default function LandingPage() {
                             <Button
                                 variant="outlined" size="large"
                                 startIcon={<Code />}
-                                onClick={() => navigate('/login')}
+                                onClick={() => navigate('/public-docs')}
                                 sx={{
                                     textTransform: 'none', fontWeight: 600, borderRadius: 2,
                                     px: 4, py: 1.5, fontSize: '1rem',
