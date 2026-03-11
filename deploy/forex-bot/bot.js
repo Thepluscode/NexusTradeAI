@@ -2015,33 +2015,32 @@ async function tradingLoop() {
         const signalsToExecute = signals.slice(0, Math.min(maxNewPositions, MAX_SIGNALS_PER_CYCLE));
 
         for (const signal of signalsToExecute) {
-            // [v4.1] Agentic AI pipeline — multi-agent evaluation before execution
+            // [v5.0] HARD GATE: every trade MUST be approved by the agentic AI pipeline
             const aiResult = await queryAIAdvisor(signal);
-            if (aiResult !== null) {
-                if (!aiResult.approved && aiResult.confidence > 0.6) {
-                    console.log(`[Agent] ${signal.pair} ${signal.direction} REJECTED (conf: ${aiResult.confidence.toFixed(2)}) — ${aiResult.reason}`);
-                    if (aiResult.risk_flags?.length) console.log(`[Agent]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
-                    if (aiResult.lessons_applied?.length) console.log(`[Agent]   Lessons: ${aiResult.lessons_applied.slice(0, 2).join('; ')}`);
-                    // [v4.4] Telegram alert for high-confidence rejections
-                    if (aiResult.confidence > 0.8 || aiResult.source === 'kill_switch') {
-                        telegramAlerts.sendAgentRejection('Forex Bot', signal.pair, signal.direction, aiResult.reason, aiResult.confidence, aiResult.risk_flags).catch(() => {});
-                    }
-                    if (aiResult.source === 'kill_switch') {
-                        telegramAlerts.sendKillSwitchAlert('Forex Bot', aiResult.reason).catch(() => {});
-                    }
-                    continue;
+
+            if (!aiResult.approved) {
+                console.log(`[Agent] ${signal.pair} ${signal.direction} REJECTED (conf: ${(aiResult.confidence || 0).toFixed(2)}, src: ${aiResult.source}) — ${aiResult.reason}`);
+                if (aiResult.risk_flags?.length) console.log(`[Agent]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
+                if (aiResult.lessons_applied?.length) console.log(`[Agent]   Lessons: ${aiResult.lessons_applied.slice(0, 2).join('; ')}`);
+                if (aiResult.confidence > 0.8 || aiResult.source === 'kill_switch') {
+                    telegramAlerts.sendAgentRejection('Forex Bot', signal.pair, signal.direction, aiResult.reason, aiResult.confidence, aiResult.risk_flags).catch(() => {});
                 }
-                const srcTag = aiResult.source === 'cache' ? ' (cached)' : '';
-                const regime = aiResult.market_regime ? ` [${aiResult.market_regime}]` : '';
-                console.log(`[Agent] ${signal.pair} ${signal.direction} APPROVED${srcTag}${regime} (conf: ${(aiResult.confidence || 0).toFixed(2)}, size: ${(aiResult.position_size_multiplier || 1).toFixed(2)}x) — ${aiResult.reason}`);
-                // [v4.4] Telegram alert for agent approvals
-                telegramAlerts.sendAgentApproval('Forex Bot', signal.pair, signal.direction, aiResult.confidence || 0, aiResult.position_size_multiplier || 1, aiResult.market_regime).catch(() => {});
-                signal.agentApproved = aiResult.approved;
-                signal.agentConfidence = aiResult.confidence;
-                signal.agentReason = aiResult.reason;
-                if (aiResult.position_size_multiplier && aiResult.position_size_multiplier !== 1.0) {
-                    signal.agentSizeMultiplier = aiResult.position_size_multiplier;
+                if (aiResult.source === 'kill_switch') {
+                    telegramAlerts.sendKillSwitchAlert('Forex Bot', aiResult.reason).catch(() => {});
                 }
+                continue;
+            }
+
+            // Agent approved
+            const srcTag = aiResult.source === 'cache' ? ' (cached)' : '';
+            const regime = aiResult.market_regime ? ` [${aiResult.market_regime}]` : '';
+            console.log(`[Agent] ${signal.pair} ${signal.direction} APPROVED${srcTag}${regime} (conf: ${(aiResult.confidence || 0).toFixed(2)}, size: ${(aiResult.position_size_multiplier || 1).toFixed(2)}x) — ${aiResult.reason}`);
+            telegramAlerts.sendAgentApproval('Forex Bot', signal.pair, signal.direction, aiResult.confidence || 0, aiResult.position_size_multiplier || 1, aiResult.market_regime).catch(() => {});
+            signal.agentApproved = true;
+            signal.agentConfidence = aiResult.confidence;
+            signal.agentReason = aiResult.reason;
+            if (aiResult.position_size_multiplier && aiResult.position_size_multiplier !== 1.0) {
+                signal.agentSizeMultiplier = aiResult.position_size_multiplier;
             }
             // [v4.6] Adaptive guardrails — pre-trade quality gate
             if (guardrails.isPaused) {
