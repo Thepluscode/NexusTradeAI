@@ -767,10 +767,70 @@ function buildStockTradeTags(signal = {}, strategy, tier) {
     };
 }
 
+// ===== SMOOTH INTERPOLATION UTILITIES (v5.1) =====
+// Replace hard cliff-edge thresholds with smooth sigmoid/ramp scoring.
+// Each function maps an indicator value to a 0.0–1.0 quality multiplier.
+
+/**
+ * Sigmoid ramp: smoothly transitions from `low` quality to `high` quality
+ * around `center` with given `width` (steepness).
+ * At center: returns midpoint. At center ± 2*width: nearly at limits.
+ */
+function sigmoidRamp(value, center, width, low = 0.0, high = 1.0) {
+    const x = (value - center) / Math.max(width, 0.001);
+    const sig = 1.0 / (1.0 + Math.exp(-x));
+    return low + (high - low) * sig;
+}
+
+/**
+ * Bell curve: peaks at `center`, falls off symmetrically.
+ * Returns 1.0 at center, approaches `floor` at center ± 2*width.
+ */
+function bellScore(value, center, width, floor = 0.5) {
+    const z = (value - center) / Math.max(width, 0.001);
+    return floor + (1.0 - floor) * Math.exp(-0.5 * z * z);
+}
+
+/**
+ * RSI quality: bell-shaped peak at ideal RSI (55), smooth penalty toward extremes.
+ * RSI 55 → 1.0 (ideal), RSI 40/70 → ~0.7, RSI 30/80 → ~0.4
+ */
+function rsiQuality(rsi) {
+    if (rsi == null) return 0.85; // neutral if unknown
+    return bellScore(rsi, 55, 12, 0.3);
+}
+
+/**
+ * Volume quality: sigmoid ramp — low volume penalized, high volume rewarded.
+ * volRatio 1.0 → 0.5, 1.5 → 0.75, 2.0 → 0.9, 3.0+ → ~1.0
+ */
+function volumeQuality(volumeRatio) {
+    if (volumeRatio == null) return 0.7;
+    return sigmoidRamp(volumeRatio, 1.5, 0.6, 0.3, 1.05);
+}
+
+/**
+ * ATR quality: ideal range 0.02–0.05, penalize extremes.
+ * Too low = no movement, too high = erratic.
+ */
+function atrQuality(atrPct) {
+    if (atrPct == null) return 0.9;
+    return bellScore(atrPct, 0.035, 0.025, 0.5);
+}
+
+/**
+ * VWAP quality: above VWAP = good, well above = bonus, below = penalty.
+ * vwapDelta -0.002 → 0.3, 0 → 0.7, +0.003 → 1.0
+ */
+function vwapQuality(current, vwap) {
+    if (!vwap || !current || current <= 0) return 0.85;
+    const delta = (current - vwap) / vwap;
+    return sigmoidRamp(delta, 0.0, 0.002, 0.2, 1.05);
+}
+
 function evaluateStockRegimeSignal({ strategy, percentChange, volumeRatio, rsi, current, vwap, atrPct = null, breakoutPct = 0 }) {
     const normalizedStrategy = strategy || 'momentum';
     let regime = normalizedStrategy === 'openingRangeBreakout' ? 'opening-range' : 'intraday-momentum';
-    let quality = 1;
 
     const numericPercentChange = parseFloat(percentChange ?? '0');
     const numericVolumeRatio = parseFloat(volumeRatio ?? '0');
@@ -780,40 +840,58 @@ function evaluateStockRegimeSignal({ strategy, percentChange, volumeRatio, rsi, 
     const numericBreakoutPct = parseFloat(breakoutPct ?? '0');
     const numericAtrPct = atrPct != null ? parseFloat(atrPct) : null;
 
+    // Hard reject: trend-expansion momentum (14.3% WR historically — not fixable with smooth scoring)
     if (normalizedStrategy === 'openingRangeBreakout') {
         regime = 'opening-range';
-        if (numericBreakoutPct > OPENING_RANGE_BREAKOUT_CONFIG.maxBreakoutPct * 0.85) quality *= 0.82;
-        if (numericVolumeRatio < OPENING_RANGE_BREAKOUT_CONFIG.minBreakoutVolumeRatio + 0.2) quality *= 0.9;
     } else if (numericPercentChange >= MOMENTUM_CONFIG.tier2.threshold || numericVolumeRatio >= 3) {
         regime = 'trend-expansion';
-        // Data: momentum in trend-expansion = 14.3% WR, -$54.76. Block non-ORB entries.
         if (normalizedStrategy === 'momentum') {
             return { tradable: false, regime, quality: 0, reason: 'momentum_blocked_in_trend_expansion' };
         }
     }
 
-    if (numericVwap && numericCurrent > 0) {
-        const vwapDelta = (numericCurrent - numericVwap) / numericVwap;
-        if (vwapDelta < -0.0015) return { tradable: false, regime, quality: 0, reason: 'below_vwap' };
-        if (vwapDelta > 0.0025) quality *= 1.04;
+    // v5.1: Smooth interpolation — multiply quality factors instead of hard if/else
+    let quality = 1.0;
+
+    // ORB-specific adjustments (keep hard logic for breakout overextension)
+    if (normalizedStrategy === 'openingRangeBreakout') {
+        if (numericBreakoutPct > OPENING_RANGE_BREAKOUT_CONFIG.maxBreakoutPct * 0.85) quality *= 0.82;
+        if (numericVolumeRatio < OPENING_RANGE_BREAKOUT_CONFIG.minBreakoutVolumeRatio + 0.2) quality *= 0.9;
     }
 
-    if (numericRsi < 42 || numericRsi > 69) quality *= 0.76;
-    else if (numericRsi >= 47 && numericRsi <= 63) quality *= 1.08;
+    // Smooth VWAP scoring (replaces hard -0.0015 cutoff)
+    const vwapScore = vwapQuality(numericCurrent, numericVwap);
+    quality *= vwapScore;
 
-    if (numericVolumeRatio >= 3.5) quality *= 1.08;
-    else if (numericVolumeRatio < 1.35) quality *= 0.86;
+    // Smooth RSI scoring (replaces hard 42/69 cutoff + 47-63 bonus)
+    quality *= rsiQuality(numericRsi);
 
+    // Smooth volume scoring (replaces hard 1.35/3.5 cutoffs)
+    quality *= volumeQuality(numericVolumeRatio);
+
+    // Smooth ATR scoring (replaces hard 0.02/0.05/0.09 cutoffs)
     if (numericAtrPct != null) {
-        if (numericAtrPct > 0.09) quality *= 0.72;
-        else if (numericAtrPct >= 0.02 && numericAtrPct <= 0.05) quality *= 1.05;
+        quality *= atrQuality(numericAtrPct);
     }
+
+    // Normalize: the product of 4 factors (each 0.3–1.05) can be very low.
+    // Rescale so the median trade gets quality ~0.85, not ~0.5.
+    // Geometric mean of 4 factors: quality^(1/4) then scale back.
+    const factorCount = numericAtrPct != null ? 4 : 3;
+    const geoMean = Math.pow(Math.max(quality, 0.01), 1 / factorCount);
+    quality = geoMean; // Now in 0.3–1.05 range, matching old quality semantics
 
     return {
-        // v5.0: Raised quality gates — data shows 53% of trades hit stop loss, entry quality too loose
-        tradable: quality >= (normalizedStrategy === 'openingRangeBreakout' ? 0.97 : 0.93),
+        tradable: quality >= (normalizedStrategy === 'openingRangeBreakout' ? 0.70 : 0.65),
         regime,
-        quality: parseFloat(quality.toFixed(3))
+        quality: parseFloat(quality.toFixed(3)),
+        // v5.1: Expose component scores for backtest UI
+        components: {
+            rsi: parseFloat(rsiQuality(numericRsi).toFixed(3)),
+            volume: parseFloat(volumeQuality(numericVolumeRatio).toFixed(3)),
+            vwap: parseFloat(vwapScore.toFixed(3)),
+            atr: numericAtrPct != null ? parseFloat(atrQuality(numericAtrPct).toFixed(3)) : null,
+        }
     };
 }
 
@@ -4501,6 +4579,168 @@ app.post('/api/backtest/run', async (req, res) => {
         res.status(500).json({ success: false, error: e.message });
     } finally {
         backtestRunning = false;
+    }
+});
+
+// ===== THRESHOLD ANALYSIS / BACKTEST SIMULATOR (v5.1) =====
+// Reads historical trades from DB, re-scores them with adjustable thresholds,
+// and returns projected win rates for the frontend backtest tool.
+app.post('/api/backtest/threshold-analysis', async (req, res) => {
+    if (!pool) return res.status(503).json({ success: false, error: 'Database not available' });
+
+    try {
+        const {
+            // Adjustable thresholds (current defaults if not provided)
+            rsiMin = 40, rsiMax = 66,
+            volumeRatioMin = 1.8,
+            minSignalScore = 0.75,
+            minQuality = 0.65,
+            adxMin = 20,
+            days = 90,
+            bot = 'stock',
+        } = req.body || {};
+
+        // Fetch closed trades with entry context
+        const result = await pool.query(`
+            SELECT symbol, direction, tier, strategy, regime, status,
+                   entry_price, exit_price, pnl_usd, pnl_pct,
+                   stop_loss, close_reason, entry_time, exit_time,
+                   signal_score, rsi, volume_ratio, momentum_pct,
+                   entry_context
+            FROM trades
+            WHERE status = 'closed' AND bot = $1
+              AND pnl_pct IS NOT NULL AND exit_price IS NOT NULL
+              AND entry_time > NOW() - INTERVAL '1 day' * $2
+            ORDER BY entry_time ASC
+        `, [bot, days]);
+
+        const trades = result.rows;
+        if (trades.length === 0) {
+            return res.json({ success: true, trades: 0, message: 'No closed trades found' });
+        }
+
+        // Re-evaluate each trade against the proposed thresholds
+        const evaluated = trades.map(t => {
+            const ctx = t.entry_context || {};
+            const tradeRsi = parseFloat(t.rsi || ctx.rsi || 0);
+            const tradeVolRatio = parseFloat(t.volume_ratio || ctx.volumeRatio || 0);
+            const tradeScore = parseFloat(t.signal_score || ctx.score || 0);
+            const tradePnl = parseFloat(t.pnl_usd || 0);
+            const tradePnlPct = parseFloat(t.pnl_pct || 0);
+            const tradeAtrPct = parseFloat(ctx.atrPct || 0) || null;
+
+            const isWin = tradePnl > 0;
+
+            // Smooth quality score using the new interpolation functions
+            const rsiScore = rsiQuality(tradeRsi || null);
+            const volScore = volumeQuality(tradeVolRatio || null);
+            const atrScore = tradeAtrPct ? atrQuality(tradeAtrPct) : 0.9;
+            const factorCount = tradeAtrPct ? 3 : 2;
+            const smoothQuality = Math.pow(rsiScore * volScore * atrScore, 1 / factorCount);
+
+            // Apply threshold filters
+            const passesRsi = tradeRsi >= rsiMin && tradeRsi <= rsiMax;
+            const passesVolume = tradeVolRatio >= volumeRatioMin;
+            const passesScore = tradeScore >= minSignalScore || tradeScore === 0; // 0 = no score recorded
+            const passesQuality = smoothQuality >= minQuality;
+
+            const wouldPass = passesRsi && passesVolume && passesScore && passesQuality;
+
+            return {
+                symbol: t.symbol,
+                tier: t.tier,
+                regime: t.regime,
+                closeReason: t.close_reason,
+                pnl: tradePnl,
+                pnlPct: tradePnlPct,
+                isWin,
+                rsi: tradeRsi,
+                volumeRatio: tradeVolRatio,
+                signalScore: tradeScore,
+                smoothQuality: parseFloat(smoothQuality.toFixed(3)),
+                components: {
+                    rsi: parseFloat(rsiScore.toFixed(3)),
+                    volume: parseFloat(volScore.toFixed(3)),
+                    atr: parseFloat(atrScore.toFixed(3)),
+                },
+                passesRsi, passesVolume, passesScore, passesQuality,
+                wouldPass,
+                entryTime: t.entry_time,
+            };
+        });
+
+        // Calculate stats for all trades vs. filtered trades
+        const allTrades = evaluated;
+        const passingTrades = evaluated.filter(t => t.wouldPass);
+        const filteredOut = evaluated.filter(t => !t.wouldPass);
+
+        const calcStats = (arr) => {
+            if (arr.length === 0) return { count: 0, wins: 0, winRate: 0, avgPnl: 0, totalPnl: 0, profitFactor: 0 };
+            const wins = arr.filter(t => t.isWin).length;
+            const totalPnl = arr.reduce((s, t) => s + t.pnl, 0);
+            const grossWin = arr.filter(t => t.pnl > 0).reduce((s, t) => s + t.pnl, 0);
+            const grossLoss = Math.abs(arr.filter(t => t.pnl < 0).reduce((s, t) => s + t.pnl, 0));
+            return {
+                count: arr.length,
+                wins,
+                winRate: parseFloat(((wins / arr.length) * 100).toFixed(1)),
+                avgPnl: parseFloat((totalPnl / arr.length).toFixed(2)),
+                totalPnl: parseFloat(totalPnl.toFixed(2)),
+                profitFactor: grossLoss > 0 ? parseFloat((grossWin / grossLoss).toFixed(2)) : grossWin > 0 ? 999 : 0,
+            };
+        };
+
+        // Sensitivity analysis: vary each threshold and show impact
+        const sensitivity = {};
+        const thresholdRanges = {
+            rsiMin: [30, 35, 38, 40, 42, 45, 48],
+            rsiMax: [60, 63, 66, 68, 70, 72, 75],
+            volumeRatioMin: [1.0, 1.2, 1.5, 1.8, 2.0, 2.2, 2.5],
+            minQuality: [0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80],
+        };
+
+        for (const [param, values] of Object.entries(thresholdRanges)) {
+            sensitivity[param] = values.map(val => {
+                const filtered = allTrades.filter(t => {
+                    if (param === 'rsiMin') return t.rsi >= val && t.rsi <= rsiMax && t.passesVolume && t.passesQuality;
+                    if (param === 'rsiMax') return t.rsi >= rsiMin && t.rsi <= val && t.passesVolume && t.passesQuality;
+                    if (param === 'volumeRatioMin') return t.passesRsi && t.volumeRatio >= val && t.passesQuality;
+                    if (param === 'minQuality') return t.passesRsi && t.passesVolume && t.smoothQuality >= val;
+                    return t.wouldPass;
+                });
+                const stats = calcStats(filtered);
+                return { value: val, ...stats };
+            });
+        }
+
+        // By close reason breakdown
+        const byCloseReason = {};
+        for (const t of allTrades) {
+            const reason = t.closeReason || 'unknown';
+            if (!byCloseReason[reason]) byCloseReason[reason] = { total: 0, wins: 0, totalPnl: 0 };
+            byCloseReason[reason].total++;
+            if (t.isWin) byCloseReason[reason].wins++;
+            byCloseReason[reason].totalPnl += t.pnl;
+        }
+        for (const r of Object.values(byCloseReason)) {
+            r.winRate = r.total > 0 ? parseFloat(((r.wins / r.total) * 100).toFixed(1)) : 0;
+            r.totalPnl = parseFloat(r.totalPnl.toFixed(2));
+        }
+
+        res.json({
+            success: true,
+            thresholds: { rsiMin, rsiMax, volumeRatioMin, minSignalScore, minQuality, adxMin },
+            current: calcStats(allTrades),
+            projected: calcStats(passingTrades),
+            filteredOut: calcStats(filteredOut),
+            sensitivity,
+            byCloseReason,
+            trades: evaluated,
+            timestamp: new Date().toISOString(),
+        });
+    } catch (e) {
+        console.error('[ThresholdAnalysis] Error:', e.message);
+        res.status(500).json({ success: false, error: e.message });
     }
 });
 
