@@ -59,6 +59,10 @@ from agents.backfill import backfill_from_db, backfill_from_json
 from agents.analyst_rankings import analyst_rankings
 from agents.portfolio_agent import portfolio_agent
 
+# Import Public API (v6.0 — monetization layer)
+from public_api_routes import router as public_api_router
+from public_api import key_manager
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -239,6 +243,9 @@ if FASTAPI_AVAILABLE:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Mount Public API router (v6.0 — /api/v1/*)
+    app.include_router(public_api_router)
 
     @app.get("/health")
     def health():
@@ -945,6 +952,8 @@ if FASTAPI_AVAILABLE:
                 await agent_orchestrator.learning_agent.sync_to_db()
                 # Update analyst rankings
                 await analyst_rankings.update_rankings(lookback_days=30)
+                # Reset API key daily counters
+                await key_manager.reset_daily_counters()
                 logger.info(
                     f"[DailyTraining] Done: backfilled {backfill_stats.get('trades_processed', 0)} trades, "
                     f"bandit updated {updated} rewards, "
@@ -974,6 +983,13 @@ if FASTAPI_AVAILABLE:
             )
         except Exception as e:
             logger.error(f"[Startup] DB recovery error (non-fatal): {e}")
+
+        # v6.0: Ensure public API tables exist
+        try:
+            await key_manager._get_pool()
+            logger.info("[Startup] Public API tables ready")
+        except Exception as e:
+            logger.error(f"[Startup] Public API table init error (non-fatal): {e}")
 
         _training_task = asyncio.create_task(_daily_training_loop())
         logger.info("Background daily training loop scheduled (every 6h)")
@@ -1006,5 +1022,9 @@ if __name__ == "__main__":
     print(f"   Bandit Train: POST http://localhost:{port}/agent/bandit/train")
     print(f"   Backfill:     POST http://localhost:{port}/agent/backfill")
     print(f"   Daily Train:  POST http://localhost:{port}/agent/daily-training")
-    print(f"   Pairs:        POST http://localhost:{port}/pairs/analyze\n")
+    print(f"   Pairs:        POST http://localhost:{port}/pairs/analyze")
+    print(f"   ─── Public API (v6.0) ───")
+    print(f"   Evaluate:     POST http://localhost:{port}/api/v1/evaluate")
+    print(f"   Keys:         POST http://localhost:{port}/api/v1/keys")
+    print(f"   Usage:        GET  http://localhost:{port}/api/v1/usage\n")
     uvicorn.run(app, host="0.0.0.0", port=port)

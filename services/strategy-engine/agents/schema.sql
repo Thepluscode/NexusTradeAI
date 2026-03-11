@@ -148,6 +148,42 @@ CREATE INDEX IF NOT EXISTS idx_rewards_outcome ON rewards(outcome_id);
 CREATE INDEX IF NOT EXISTS idx_rewards_regime ON rewards(regime_at_entry, reward_score);
 CREATE INDEX IF NOT EXISTS idx_rewards_score ON rewards(reward_score);
 
+-- 4a. API KEYS — Machine-to-machine auth for public API
+CREATE TABLE IF NOT EXISTS api_keys (
+    id              SERIAL PRIMARY KEY,
+    user_id         INTEGER NOT NULL,
+    name            VARCHAR(100) NOT NULL DEFAULT 'default',
+    key_hash        VARCHAR(64) NOT NULL,          -- SHA-256 hex digest (raw key never stored)
+    prefix          VARCHAR(20) NOT NULL,           -- ntai_live_a1b2c3d4 (display-safe prefix)
+    scopes          JSONB DEFAULT '["evaluate"]',
+    tier            VARCHAR(20) DEFAULT 'free',     -- free, pro, enterprise
+    rate_limit      INTEGER DEFAULT 100,            -- calls per month
+    calls_today     INTEGER DEFAULT 0,
+    calls_month     INTEGER DEFAULT 0,
+    last_used_at    TIMESTAMPTZ,
+    is_active       BOOLEAN DEFAULT TRUE,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    revoked_at      TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
+
+-- 4a-ii. USAGE EVENTS — Per-call audit trail for billing + analytics
+CREATE TABLE IF NOT EXISTS usage_events (
+    id              SERIAL PRIMARY KEY,
+    api_key_id      INTEGER REFERENCES api_keys(id),
+    user_id         INTEGER NOT NULL,
+    endpoint        VARCHAR(100) NOT NULL,
+    symbol          VARCHAR(20),
+    asset_class     VARCHAR(10),
+    latency_ms      DECIMAL(8,2),
+    status          VARCHAR(20) NOT NULL,           -- success, error, rate_limited, invalid_key
+    error_detail    TEXT,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_usage_events_key ON usage_events(api_key_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_events_user_month ON usage_events(user_id, created_at);
+
 -- 4b. SCAN PATTERNS — Persistent pattern tracking (survives redeploys)
 CREATE TABLE IF NOT EXISTS scan_patterns (
     id              SERIAL PRIMARY KEY,
