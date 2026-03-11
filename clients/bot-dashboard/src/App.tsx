@@ -36,6 +36,7 @@ import {
   FiberManualRecord,
   AdminPanelSettings,
   VpnKey,
+  MenuBook,
 } from '@mui/icons-material';
 import darkTheme from './theme';
 import { Toaster } from 'react-hot-toast';
@@ -54,6 +55,7 @@ import ResetPasswordPage from './pages/ResetPasswordPage';
 import AdminPage from './pages/AdminPage';
 import AgentPage from './pages/AgentPage';
 import APIPage from './pages/APIPage';
+import DocsPage from './pages/DocsPage';
 import ProtectedRoute from './components/ProtectedRoute';
 import { useAuth } from './hooks/useAuth';
 
@@ -99,6 +101,7 @@ const NAV_ITEMS = [
   { path: '/trades', label: 'Trade History', icon: <Receipt />, color: '#ec4899' },
   { path: '/agent', label: 'Agent AI', icon: <SmartToy />, color: '#8b5cf6' },
   { path: '/api', label: 'API Access', icon: <VpnKey />, color: '#10b981' },
+  { path: '/docs', label: 'API Docs', icon: <MenuBook />, color: '#f59e0b' },
 ];
 
 function Navigation() {
@@ -567,6 +570,7 @@ function Navigation() {
             <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
             <Route path="/agent" element={<ProtectedRoute><AgentPage /></ProtectedRoute>} />
             <Route path="/api" element={<ProtectedRoute><APIPage /></ProtectedRoute>} />
+            <Route path="/docs" element={<ProtectedRoute><DocsPage /></ProtectedRoute>} />
             <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
