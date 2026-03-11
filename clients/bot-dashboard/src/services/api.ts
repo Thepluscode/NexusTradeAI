@@ -688,6 +688,63 @@ class APIClient {
     const response = await this.aiService.get('/agent/portfolio', { timeout: 10000 });
     return response.data;
   }
+
+  // ── Public API Key Management ──────────────────────────────────────────
+
+  private get apiSecret(): string {
+    return import.meta.env.VITE_NEXUS_API_SECRET || '';
+  }
+
+  async getAPIKeys(): Promise<{ keys: Record<string, unknown>[]; total: number }> {
+    try {
+      // Get current user ID from auth
+      const user = JSON.parse(localStorage.getItem('nexus_user') || '{}');
+      const userId = user.id || 1;
+      const response = await this.aiService.get('/api/v1/keys', {
+        params: { user_id: userId },
+        headers: { 'X-API-Secret': this.apiSecret },
+        timeout: 10000,
+      });
+      return response.data;
+    } catch {
+      return { keys: [], total: 0 };
+    }
+  }
+
+  async createAPIKey(name: string, tier: string): Promise<Record<string, unknown>> {
+    const user = JSON.parse(localStorage.getItem('nexus_user') || '{}');
+    const userId = user.id || 1;
+    const response = await this.aiService.post('/api/v1/keys',
+      { user_id: userId, name, tier },
+      { headers: { 'X-API-Secret': this.apiSecret }, timeout: 10000 },
+    );
+    return response.data;
+  }
+
+  async revokeAPIKey(keyId: number): Promise<Record<string, unknown>> {
+    const user = JSON.parse(localStorage.getItem('nexus_user') || '{}');
+    const userId = user.id || 1;
+    const response = await this.aiService.delete(`/api/v1/keys/${keyId}`, {
+      params: { user_id: userId },
+      headers: { 'X-API-Secret': this.apiSecret },
+    });
+    return response.data;
+  }
+
+  async getAPIUsage(): Promise<Record<string, unknown>> {
+    try {
+      const user = JSON.parse(localStorage.getItem('nexus_user') || '{}');
+      const userId = user.id || 1;
+      const response = await this.aiService.get('/api/v1/usage', {
+        params: { user_id: userId },
+        headers: { 'X-API-Secret': this.apiSecret },
+        timeout: 10000,
+      });
+      return response.data;
+    } catch {
+      return { calls_today: 0, calls_month: 0, monthly_limit: 100, active_keys: 0 };
+    }
+  }
 }
 
 export const apiClient = new APIClient();
