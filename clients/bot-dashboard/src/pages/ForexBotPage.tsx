@@ -1,4 +1,5 @@
 import SEO from '@/components/SEO';
+import AgentDecisionsCard from '@/components/AgentDecisionsCard';
 import {
     Box,
     Paper,
@@ -402,6 +403,9 @@ export default function ForexBotPage() {
                     ))}
                 </Box>
             </Paper>
+
+            {/* Agent AI Decisions */}
+            <AgentDecisionsCard assetClass="forex" limit={8} />
 
             {/* Controls */}
             <Paper sx={{ p: 2, mb: 3 }}>

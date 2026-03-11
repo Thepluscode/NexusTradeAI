@@ -1,4 +1,5 @@
 import SEO from '@/components/SEO';
+import AgentDecisionsCard from '@/components/AgentDecisionsCard';
 import {
     Box,
     Paper,
@@ -434,6 +435,9 @@ export default function CryptoBotPage() {
                     ))}
                 </Box>
             </Paper>
+
+            {/* Agent AI Decisions */}
+            <AgentDecisionsCard assetClass="crypto" limit={8} />
 
             {/* Controls */}
             <Paper sx={{ p: 2, mb: 3 }}>

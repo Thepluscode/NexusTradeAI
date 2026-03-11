@@ -27,7 +27,7 @@ from typing import List, Optional, Dict, Any
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI, HTTPException, Request
     from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel
     FASTAPI_AVAILABLE = True
@@ -610,8 +610,12 @@ if FASTAPI_AVAILABLE:
         }
 
     @app.get("/agent/debug-claude")
-    async def agent_debug_claude():
-        """Debug endpoint: test Claude call directly with full error detail."""
+    async def agent_debug_claude(request: Request):
+        """Debug endpoint: test Claude call directly. Requires x-api-secret header."""
+        api_secret = os.environ.get("NEXUS_API_SECRET", "")
+        req_secret = request.headers.get("x-api-secret", "")
+        if api_secret and req_secret != api_secret:
+            return {"error": "Unauthorized", "detail": "Provide x-api-secret header"}
         from agents.claude_client import TRADE_DECISION_TOOL
         import traceback
         client = agent_orchestrator._client

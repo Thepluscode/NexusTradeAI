@@ -1,4 +1,5 @@
 import SEO from '@/components/SEO';
+import AgentDecisionsCard from '@/components/AgentDecisionsCard';
 import {
     Box,
     Paper,
@@ -517,6 +518,9 @@ export default function StockBotPage() {
                     ))}
                 </Box>
             </Paper>
+
+            {/* Agent AI Decisions */}
+            <AgentDecisionsCard assetClass="stock" limit={8} />
 
             {/* Controls */}
             <Paper sx={{
