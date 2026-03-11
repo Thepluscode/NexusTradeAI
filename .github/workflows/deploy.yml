@@ -170,6 +170,32 @@ jobs:
           git commit -m "chore: sync deploy files ($BUNDLE) [skip ci]"
           git push origin main
 
+      # Railway watchPatterns are set to "__ci_managed__" (matches nothing) to
+      # prevent double-deploys from GitHub integration.  We explicitly trigger
+      # redeployment via the GraphQL API after pushing the bundle commit.
+      - name: Trigger Railway redeployments
+        if: steps.check.outputs.changed == 'true'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          PROJECT_ID="41f21f06-b260-4210-8986-6a1eeb2751c3"
+          ENV_ID="71aa0246-7eb1-4309-8976-61a8838b6ab9"
+          # Service IDs: dashboard, stock, forex, crypto, bridge
+          SERVICES="50829ae3 2b939f3a 7c7c3976 baae31c1 a632e893"
+          NAMES="dashboard stock-bot forex-bot crypto-bot strategy-bridge"
+
+          i=0
+          for SVC in $SERVICES; do
+            NAME=$(echo $NAMES | cut -d' ' -f$((i+1)))
+            echo "Triggering redeploy for $NAME ($SVC)..."
+            RESP=$(curl -s -X POST https://backboard.railway.app/graphql/v2 \
+              -H "Authorization: Bearer $RAILWAY_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"query\":\"mutation { serviceInstanceRedeploy(serviceId: \\\"$SVC\\\", environmentId: \\\"$ENV_ID\\\") }\"}")
+            echo "  $NAME: $RESP"
+            i=$((i+1))
+          done
+
   # ── 2. Smoke tests after Railway auto-deploys ─────────────────────────────────
   smoke-test:
     name: Post-deploy smoke tests
