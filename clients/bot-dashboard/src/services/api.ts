@@ -205,6 +205,16 @@ class APIClient {
     }
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async getThresholdAnalysis(thresholds?: Record<string, number>): Promise<any> {
+    try {
+      const response = await this.tradingEngine.post('/api/backtest/threshold-analysis', thresholds || {});
+      return response.data;
+    } catch {
+      return null;
+    }
+  }
+
   async getTrades(params?: { bot?: string; limit?: number; mine?: boolean }): Promise<TradeRecord[]> {
     try {
       const response = await this.tradingEngine.get('/api/trades', { params });

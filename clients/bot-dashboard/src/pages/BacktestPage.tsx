@@ -45,6 +45,7 @@ import {
 } from 'recharts';
 import { apiClient } from '@/services/api';
 import { MetricCard } from '@/components/MetricCard';
+import ThresholdTuner from '@/components/ThresholdTuner';
 import type { BacktestSymbolResult, BacktestTrade, BacktestScanResult, EquityCurvePoint } from '@/types';
 
 function ValidationChecklist({ checks }: { checks: Record<string, boolean> }) {
@@ -332,6 +333,11 @@ export default function BacktestPage() {
                     </Paper>
                 );
             })()}
+
+            {/* Threshold Tuner — interactive backtest tool */}
+            <Divider sx={{ my: 3 }} />
+            <ThresholdTuner />
+            <Divider sx={{ my: 3 }} />
 
             {/* Pairs cache warm-up result */}
             {warmResult && (
