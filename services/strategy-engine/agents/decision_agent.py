@@ -60,12 +60,16 @@ class DecisionAgent:
             return self._rule_based_decision(snapshot)
 
         prompt = self._build_prompt(snapshot, market_analysis, lessons)
-        result = await self.client.call_with_tool(
-            system=DECISION_SYSTEM,
-            user_message=prompt,
-            tool=TRADE_DECISION_TOOL,
-            timeout_seconds=12
-        )
+        try:
+            result = await self.client.call_with_tool(
+                system=DECISION_SYSTEM,
+                user_message=prompt,
+                tool=TRADE_DECISION_TOOL,
+                timeout_seconds=15  # v5.0: increased from 12s for reliability
+            )
+        except Exception as e:
+            logger.error(f"Decision agent Claude call exception: {e}")
+            result = None
 
         if result:
             self.total_decisions += 1
@@ -86,9 +90,11 @@ class DecisionAgent:
             else:
                 self.total_rejections += 1
 
+            logger.info(f"[DecisionAgent] {snapshot.symbol}: {'APPROVED' if decision.approved else 'REJECTED'} (conf: {decision.confidence:.2f}) — {decision.reason}")
             return decision
 
-        # Claude unavailable — fall back to rule-based
+        # Claude returned None — fall back to rule-based (with logging)
+        logger.warning(f"[DecisionAgent] {snapshot.symbol}: Claude returned None — using rule-based fallback")
         return self._rule_based_decision(snapshot)
 
     def _build_prompt(

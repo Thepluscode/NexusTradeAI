@@ -689,19 +689,21 @@ class CryptoTradingEngine {
     // STRATEGY BRIDGE
     // ========================================================================
 
+    // v5.0: Shared bridge URL resolver with Railway-aware fallback
+    _getBridgeUrl() {
+        const raw = process.env.STRATEGY_BRIDGE_URL
+            || process.env.RAILWAY_SERVICE_NEXUS_STRATEGY_BRIDGE_URL
+            || (process.env.RAILWAY_ENVIRONMENT ? 'https://nexus-strategy-bridge-production.up.railway.app' : 'http://localhost:3010');
+        if (raw.startsWith('http')) return raw;
+        if (raw.includes('railway.app')) return `https://${raw}`;
+        return `http://${raw}`;
+    }
+
     // Non-blocking ensemble confirmation from Python strategy bridge.
-    // Returns null if bridge is offline — trade proceeds on local signals alone.
     async queryStrategyBridge(symbol, prices) {
         try {
             if (!prices || prices.length < 30) return null;
-            const bridgeUrl = (() => {
-                const raw = process.env.STRATEGY_BRIDGE_URL
-                    || process.env.RAILWAY_SERVICE_NEXUS_STRATEGY_BRIDGE_URL
-                    || 'localhost:3010';
-                if (raw.startsWith('http')) return raw;
-                if (raw.includes('railway.app')) return `https://${raw}`;
-                return `http://${raw}`;
-            })();
+            const bridgeUrl = this._getBridgeUrl();
             const priceData = prices.map((close, i) => ({
                 timestamp: new Date(Date.now() - (prices.length - 1 - i) * 5 * 60000).toISOString(),
                 open: close, high: close, low: close, close, volume: 0
@@ -720,18 +722,10 @@ class CryptoTradingEngine {
     // AI TRADE ADVISOR
     // ========================================================================
 
-    // [v4.1] Agentic AI — full multi-agent pipeline via strategy bridge
-    // Fail-open: if agent is offline/rate-limited, approve by default
+    // [v5.0] Agentic AI — HARD GATE via strategy bridge
     async queryAIAdvisor(signal) {
         try {
-            const bridgeUrl = (() => {
-                const raw = process.env.STRATEGY_BRIDGE_URL
-                    || process.env.RAILWAY_SERVICE_NEXUS_STRATEGY_BRIDGE_URL
-                    || 'localhost:3010';
-                if (raw.startsWith('http')) return raw;
-                if (raw.includes('railway.app')) return `https://${raw}`;
-                return `http://${raw}`;
-            })();
+            const bridgeUrl = this._getBridgeUrl();
             const payload = {
                 symbol: signal.symbol,
                 direction: 'long',
@@ -746,24 +740,28 @@ class CryptoTradingEngine {
                 score: signal.score || undefined,
                 atr_pct: signal.atrPct || undefined,
             };
+            console.log(`[Agent] Evaluating ${signal.symbol} via ${bridgeUrl}/agent/evaluate`);
             const response = await axios.post(`${bridgeUrl}/agent/evaluate`, payload, { timeout: 15000 });
-            return response.data;
+            const result = response.data;
+            console.log(`[Agent] ${signal.symbol}: ${result.approved ? 'APPROVED' : 'REJECTED'} (source: ${result.source}, conf: ${(result.confidence || 0).toFixed(2)}) — ${result.reason}`);
+            return result;
         } catch (e) {
-            return null;
+            console.error(`[Agent] ${signal.symbol} call FAILED: ${e.message} — BLOCKING trade (hard gate)`);
+            return {
+                approved: false,
+                confidence: 1.0,
+                reason: `Agent unreachable: ${e.message.slice(0, 80)}`,
+                source: 'hard_gate_offline',
+                risk_flags: ['agent_offline'],
+                position_size_multiplier: 0,
+            };
         }
     }
 
     // [v4.1] Report trade outcome for Scan AI learning
     async reportTradeOutcome(position, exitPrice, pnl, pnlPct, exitReason) {
         try {
-            const bridgeUrl = (() => {
-                const raw = process.env.STRATEGY_BRIDGE_URL
-                    || process.env.RAILWAY_SERVICE_NEXUS_STRATEGY_BRIDGE_URL
-                    || 'localhost:3010';
-                if (raw.startsWith('http')) return raw;
-                if (raw.includes('railway.app')) return `https://${raw}`;
-                return `http://${raw}`;
-            })();
+            const bridgeUrl = this._getBridgeUrl();
             const holdMinutes = (Date.now() - (position.entryTime || Date.now())) / 60000;
             const payload = {
                 symbol: position.symbol,

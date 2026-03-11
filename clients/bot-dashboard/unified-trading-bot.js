@@ -1445,12 +1445,13 @@ function calculateVWAP(bars) {
 const BRIDGE_URL = (() => {
     const raw = process.env.STRATEGY_BRIDGE_URL
         || process.env.RAILWAY_SERVICE_NEXUS_STRATEGY_BRIDGE_URL
-        || 'localhost:3010';
-    // Ensure https:// prefix for Railway URLs
+        // v5.0: Railway-aware fallback — on Railway, default to production bridge (was localhost:3010 = unreachable)
+        || (process.env.RAILWAY_ENVIRONMENT ? 'https://nexus-strategy-bridge-production.up.railway.app' : 'http://localhost:3010');
     if (raw.startsWith('http')) return raw;
     if (raw.includes('railway.app')) return `https://${raw}`;
     return `http://${raw}`;
 })();
+console.log(`🤖 Strategy Bridge URL: ${BRIDGE_URL}`);
 
 async function queryStrategyBridge(symbol, bars, assetClass = 'stock') {
     try {
@@ -1475,8 +1476,8 @@ async function queryStrategyBridge(symbol, bars, assetClass = 'stock') {
 }
 
 // ===== AI TRADE ADVISOR =====
-// [v4.0] Agentic AI — Claude-powered trade evaluation via strategy bridge
-// Fail-open: if AI is offline/rate-limited, approve by default
+// [v5.0] Agentic AI — Claude-powered trade evaluation via strategy bridge
+// HARD GATE: every trade MUST be approved by the agent pipeline. No AI = no trade.
 
 async function queryAIAdvisor(signal) {
     try {
@@ -1495,12 +1496,22 @@ async function queryAIAdvisor(signal) {
             atr_pct: signal.atrPct || undefined,
             vwap: signal.vwap ? parseFloat(signal.vwap) : undefined,
         };
-        // [v4.1] Use full agentic pipeline (fallback to basic /ai/evaluate if agent unavailable)
+        console.log(`[Agent] Evaluating ${signal.symbol} via ${BRIDGE_URL}/agent/evaluate`);
         const response = await axios.post(`${BRIDGE_URL}/agent/evaluate`, payload, { timeout: 15000 });
-        return response.data; // { approved, confidence, reason, risk_flags, position_size_multiplier, market_regime, lessons_applied, source }
+        const result = response.data;
+        console.log(`[Agent] ${signal.symbol}: ${result.approved ? 'APPROVED' : 'REJECTED'} (source: ${result.source}, conf: ${(result.confidence || 0).toFixed(2)}) — ${result.reason}`);
+        return result;
     } catch (e) {
-        // Agent offline — fail-open, approve by default
-        return null;
+        // v5.0 HARD GATE: agent offline → BLOCK trade (was fail-open → null → trade proceeds)
+        console.error(`[Agent] ${signal.symbol} call FAILED: ${e.message} — BLOCKING trade (hard gate)`);
+        return {
+            approved: false,
+            confidence: 1.0,
+            reason: `Agent unreachable: ${e.message.slice(0, 80)}`,
+            source: 'hard_gate_offline',
+            risk_flags: ['agent_offline'],
+            position_size_multiplier: 0,
+        };
     }
 }
 
@@ -1877,35 +1888,34 @@ async function scanMomentumBreakouts() {
                 // ORB window gets 2 signals/cycle; otherwise 1 (data: ORB = 59% WR, +$85)
                 const effectiveMaxSignals = isOpeningRangeBreakoutWindow() ? 2 : MAX_SIGNALS_PER_CYCLE;
                 for (const mover of ranked.slice(0, Math.min(available, effectiveMaxSignals))) {
-                    // [v4.1] Agentic AI pipeline — multi-agent evaluation before execution
+                    // [v5.0] HARD GATE: every trade MUST be approved by the agentic AI pipeline
                     const aiResult = await queryAIAdvisor(mover);
-                    if (aiResult !== null) {
-                        if (!aiResult.approved && aiResult.confidence > 0.6) {
-                            console.log(`[Agent] ${mover.symbol} REJECTED (conf: ${aiResult.confidence.toFixed(2)}) — ${aiResult.reason}`);
-                            if (aiResult.risk_flags?.length) console.log(`[Agent]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
-                            if (aiResult.lessons_applied?.length) console.log(`[Agent]   Lessons: ${aiResult.lessons_applied.slice(0, 2).join('; ')}`);
-                            // [v4.4] Telegram alert for high-confidence rejections
-                            if (aiResult.confidence > 0.8 || aiResult.source === 'kill_switch') {
-                                telegramAlerts.sendAgentRejection('Stock Bot', mover.symbol, 'long', aiResult.reason, aiResult.confidence, aiResult.risk_flags).catch(() => {});
-                            }
-                            if (aiResult.source === 'kill_switch') {
-                                telegramAlerts.sendKillSwitchAlert('Stock Bot', aiResult.reason).catch(() => {});
-                            }
-                            continue;
+
+                    // Agent rejection = hard stop (no trade without AI approval)
+                    if (!aiResult.approved) {
+                        console.log(`[Agent] ${mover.symbol} REJECTED (conf: ${(aiResult.confidence || 0).toFixed(2)}, src: ${aiResult.source}) — ${aiResult.reason}`);
+                        if (aiResult.risk_flags?.length) console.log(`[Agent]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
+                        if (aiResult.lessons_applied?.length) console.log(`[Agent]   Lessons: ${aiResult.lessons_applied.slice(0, 2).join('; ')}`);
+                        // Telegram alerts for rejections
+                        if (aiResult.confidence > 0.8 || aiResult.source === 'kill_switch') {
+                            telegramAlerts.sendAgentRejection('Stock Bot', mover.symbol, 'long', aiResult.reason, aiResult.confidence, aiResult.risk_flags).catch(() => {});
                         }
-                        const srcTag = aiResult.source === 'cache' ? ' (cached)' : '';
-                        const regime = aiResult.market_regime ? ` [${aiResult.market_regime}]` : '';
-                        console.log(`[Agent] ${mover.symbol} APPROVED${srcTag}${regime} (conf: ${(aiResult.confidence || 0).toFixed(2)}, size: ${(aiResult.position_size_multiplier || 1).toFixed(2)}x) — ${aiResult.reason}`);
-                        // [v4.4] Telegram alert for agent approvals
-                        telegramAlerts.sendAgentApproval('Stock Bot', mover.symbol, 'long', aiResult.confidence || 0, aiResult.position_size_multiplier || 1, aiResult.market_regime).catch(() => {});
-                        // Store agent decision metadata for learning
-                        mover.agentApproved = aiResult.approved;
-                        mover.agentConfidence = aiResult.confidence;
-                        mover.agentReason = aiResult.reason;
-                        // Apply position size adjustment from agent
-                        if (aiResult.position_size_multiplier && aiResult.position_size_multiplier !== 1.0) {
-                            mover.agentSizeMultiplier = aiResult.position_size_multiplier;
+                        if (aiResult.source === 'kill_switch') {
+                            telegramAlerts.sendKillSwitchAlert('Stock Bot', aiResult.reason).catch(() => {});
                         }
+                        continue;
+                    }
+
+                    // Agent approved — log and store metadata
+                    const srcTag = aiResult.source === 'cache' ? ' (cached)' : '';
+                    const regime = aiResult.market_regime ? ` [${aiResult.market_regime}]` : '';
+                    console.log(`[Agent] ${mover.symbol} APPROVED${srcTag}${regime} (conf: ${(aiResult.confidence || 0).toFixed(2)}, size: ${(aiResult.position_size_multiplier || 1).toFixed(2)}x) — ${aiResult.reason}`);
+                    telegramAlerts.sendAgentApproval('Stock Bot', mover.symbol, 'long', aiResult.confidence || 0, aiResult.position_size_multiplier || 1, aiResult.market_regime).catch(() => {});
+                    mover.agentApproved = true;
+                    mover.agentConfidence = aiResult.confidence;
+                    mover.agentReason = aiResult.reason;
+                    if (aiResult.position_size_multiplier && aiResult.position_size_multiplier !== 1.0) {
+                        mover.agentSizeMultiplier = aiResult.position_size_multiplier;
                     }
                     // [v4.6] Adaptive guardrails — pre-trade quality gate
                     if (guardrails.isPaused) {
@@ -2619,6 +2629,12 @@ app.get('/api/trading/status', async (req, res) => {
                 lossSizeMultiplier: guardrails.lossSizeMultiplier,
                 todayWins: guardrails.totalWinsToday,
                 todayLosses: guardrails.totalLossesToday,
+            },
+            // v5.0: Agent pipeline status
+            agentPipeline: {
+                bridgeUrl: BRIDGE_URL,
+                hardGate: true,
+                note: 'All trades require AI approval since v5.0',
             },
             portfolioValue: equity,
             dailyPnL: equity - lastEquity,
