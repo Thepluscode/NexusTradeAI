@@ -361,6 +361,11 @@ export default function OverviewPage() {
         { refetchInterval: 60000, staleTime: 30000 }
     );
 
+    // API onboarding data (must be before any early returns to satisfy rules-of-hooks)
+    const { data: apiUsage } = useQuery('overviewApiUsage', () => apiClient.getAPIUsage(), {
+        staleTime: 60000, retry: false, enabled: isLoggedIn,
+    });
+
     const totalEquity = (status?.stock?.equity ?? 0) + (status?.forex?.equity ?? 0) + (status?.crypto?.equity ?? 0);
     const totalDailyPnL = (status?.stock?.dailyPnL ?? 0) + (status?.forex?.dailyPnL ?? 0) + (status?.crypto?.dailyPnL ?? 0);
     const runningBots = [status?.stock, status?.forex, status?.crypto].filter(b => b?.isRunning).length;
@@ -412,11 +417,6 @@ export default function OverviewPage() {
             large: false,
         },
     ];
-
-    // API onboarding data
-    const { data: apiUsage } = useQuery('overviewApiUsage', () => apiClient.getAPIUsage(), {
-        staleTime: 60000, retry: false, enabled: isLoggedIn,
-    });
 
     return (
         <>

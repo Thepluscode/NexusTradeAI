@@ -52,22 +52,22 @@ export default function APIPage() {
     const [createdKey, setCreatedKey] = useState<string | null>(null);
     const [showKey, setShowKey] = useState(false);
     const [copied, setCopied] = useState(false);
-    const [snack, setSnack] = useState('');
-
-    // Handle Stripe checkout return
+    // Handle Stripe checkout return — compute initial snack from URL params (no setState in effect)
+    const [snack, setSnack] = useState(() => {
+        const checkout = new URLSearchParams(window.location.search).get('checkout');
+        if (checkout === 'success') return 'Subscription activated! Your API keys are being upgraded.';
+        if (checkout === 'cancelled') return 'Checkout cancelled';
+        return '';
+    });
     useEffect(() => {
-        const params = new URLSearchParams(window.location.search);
-        const checkout = params.get('checkout');
+        const checkout = new URLSearchParams(window.location.search).get('checkout');
+        if (!checkout) return;
         if (checkout === 'success') {
-            setSnack('Subscription activated! Your API keys are being upgraded.');
             qc.invalidateQueries('apiKeys');
             qc.invalidateQueries('apiUsage');
-            window.history.replaceState({}, '', '/api');
-        } else if (checkout === 'cancelled') {
-            setSnack('Checkout cancelled');
-            window.history.replaceState({}, '', '/api');
         }
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+        window.history.replaceState({}, '', '/api');
+    }, [qc]);
 
     // Fetch keys + usage
     const { data: keysData } = useQuery('apiKeys', () => apiClient.getAPIKeys(), {
