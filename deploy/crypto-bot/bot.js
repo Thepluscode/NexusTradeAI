@@ -261,33 +261,35 @@ const CRYPTO_CONFIG = {
     basePositionSizeUSD: 500, // $500 per position (conservative)
     maxPositionSizeUSD: 2000, // Max $2000 per position
 
-    // 3-Tier Momentum Strategy (adapted for crypto)
+    // [v6.1] 3-Tier Strategy — realistic targets for 5-min candles
+    // Old: 15/20/30% targets → 0% win rate (unreachable on 5-min timeframe)
+    // New: 3/5/8% targets with tighter stops → achievable 2:1 R:R
     tiers: {
         tier1: {
             name: 'Standard Crypto',
-            momentumThreshold: 0.003, // 0.3% momentum
-            stopLoss: 0.05,          // 5% stop
-            profitTarget: 0.15,      // 15% target (3:1 R/R)
-            rsiLower: 20,            // Allow deep oversold
-            rsiUpper: 80,            // Allow overbought (FOMO)
+            momentumThreshold: 0.005, // 0.5% momentum (was 0.3% — too noisy)
+            stopLoss: 0.02,          // 2% stop (was 5%)
+            profitTarget: 0.04,      // 4% target (2:1 R/R)
+            rsiLower: 30,            // Tighter RSI (was 20 — too oversold)
+            rsiUpper: 70,            // Tighter RSI (was 80 — too overbought)
             maxPositions: 4
         },
         tier2: {
             name: 'High Momentum',
-            momentumThreshold: 0.012, // 1.2% momentum
-            stopLoss: 0.06,          // 6% stop
-            profitTarget: 0.20,      // 20% target (3.3:1 R/R)
-            rsiLower: 25,
-            rsiUpper: 85,
-            maxPositions: 1
+            momentumThreshold: 0.015, // 1.5% momentum (was 1.2%)
+            stopLoss: 0.03,          // 3% stop (was 6%)
+            profitTarget: 0.06,      // 6% target (2:1 R/R)
+            rsiLower: 35,
+            rsiUpper: 75,
+            maxPositions: 2
         },
         tier3: {
             name: 'Extreme Momentum',
-            momentumThreshold: 0.025, // 2.5% momentum
-            stopLoss: 0.08,          // 8% stop
-            profitTarget: 0.30,      // 30% target (3.75:1 R/R)
-            rsiLower: 30,
-            rsiUpper: 90,
+            momentumThreshold: 0.03,  // 3% momentum (was 2.5%)
+            stopLoss: 0.04,          // 4% stop (was 8%)
+            profitTarget: 0.10,      // 10% target (2.5:1 R/R)
+            rsiLower: 35,
+            rsiUpper: 80,
             maxPositions: 1
         }
     },
@@ -1847,8 +1849,11 @@ class CryptoTradingEngine {
             this.guardrails.consecutiveLosses++;
             this.guardrails.totalLossesToday++;
             if (this.guardrails.consecutiveLosses >= MAX_CONSECUTIVE_LOSSES) {
-                this.guardrails.lanePausedUntil = Date.now() + LOSS_PAUSE_MS;
-                console.log(`🚫 [Guardrail] Crypto lane PAUSED until ${new Date(this.guardrails.lanePausedUntil).toLocaleTimeString()} — ${this.guardrails.consecutiveLosses} consecutive losses`);
+                // [v6.1] Escalating pause: 2h base × (losses / 3), capped at 24h
+                const escalation = Math.min(8, Math.ceil(this.guardrails.consecutiveLosses / MAX_CONSECUTIVE_LOSSES));
+                const pauseMs = LOSS_PAUSE_MS * escalation;
+                this.guardrails.lanePausedUntil = Date.now() + pauseMs;
+                console.log(`🚫 [Guardrail] Crypto lane PAUSED ${escalation * 2}h until ${new Date(this.guardrails.lanePausedUntil).toLocaleTimeString()} — ${this.guardrails.consecutiveLosses} consecutive losses`);
             }
         }
     }

@@ -1061,7 +1061,9 @@ const guardrails = {
             this.consecutiveLosses++;
             this.totalLossesToday++;
             if (this.consecutiveLosses >= MAX_CONSECUTIVE_LOSSES) {
-                this.lanePausedUntil = Date.now() + LOSS_PAUSE_MS;
+                // [v6.1] Escalating pause: 2h base × (losses / 3), capped at 24h
+                const escalation = Math.min(8, Math.ceil(this.consecutiveLosses / MAX_CONSECUTIVE_LOSSES));
+                this.lanePausedUntil = Date.now() + LOSS_PAUSE_MS * escalation;
                 console.log(`🚫 [Guardrail] Stock lane PAUSED until ${new Date(this.lanePausedUntil).toLocaleTimeString()} — ${this.consecutiveLosses} consecutive losses`);
             }
         }
@@ -2437,7 +2439,12 @@ async function executeTrade(signal, strategy) {
             volumeRatio: signal.volumeRatio,
             percentChange: signal.percentChange,
             regimeScore: signal.regimeScore,
-            atrPct: signal.atrPct
+            atrPct: signal.atrPct,
+            // [v6.1] Persist agent metadata — enables learning loop feedback
+            agentApproved: signal.agentApproved || false,
+            agentConfidence: signal.agentConfidence || null,
+            agentReason: signal.agentReason || null,
+            agentSizeMultiplier: signal.agentSizeMultiplier || 1.0,
         });
         savePositions();
 
@@ -2607,9 +2614,11 @@ app.get('/api/trading/status', async (req, res) => {
                 currentPrice: parseFloat(pos.current_price),
                 unrealizedPnL: parseFloat(pos.unrealized_pl),
                 pnl: parseFloat(pos.unrealized_pl),
-                strategy: 'improved-unified',
+                strategy: tracked?.strategy || 'improved-unified',
                 openTime: entryTime,
-                confidence: 0.85
+                confidence: tracked?.agentConfidence || null,
+                agentApproved: tracked?.agentApproved || false,
+                agentReason: tracked?.agentReason || null
             };
         });
 
