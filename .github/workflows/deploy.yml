@@ -170,32 +170,31 @@ jobs:
           git commit -m "chore: sync deploy files ($BUNDLE) [skip ci]"
           git push origin main
 
-      # Railway watchPatterns are set to "__ci_managed__" (matches nothing) to
-      # prevent double-deploys from GitHub integration.  We explicitly trigger
-      # redeployment via the GraphQL API after pushing the bundle commit.
-      # Always trigger redeploy — Railway watchPatterns block auto-deploy,
-      # so every push to main needs an explicit redeploy call.
-      - name: Trigger Railway redeployments
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      # Railway auto-deploy: watchPatterns must be set in Railway dashboard to
+      # watch the actual deploy directories. Update them via GraphQL:
+      #   nexus-dashboard      → ["deploy/dashboard/**"]
+      #   nexus-stock-bot      → ["deploy/stock-bot/**"]
+      #   nexus-forex-bot      → ["deploy/forex-bot/**"]
+      #   nexus-crypto-bot     → ["deploy/crypto-bot/**"]
+      #   nexus-strategy-bridge → ["services/strategy-engine/**"]
+      #
+      # The [skip ci] commit from the sync step triggers Railway's GitHub
+      # integration directly — no manual redeploy needed.
+      # IMPORTANT: For Railway auto-deploy to work, watchPatterns must be set
+      # in Railway dashboard (Settings → Source → Watch Patterns) for each service:
+      #   nexus-dashboard      → deploy/dashboard/**
+      #   nexus-stock-bot      → deploy/stock-bot/**
+      #   nexus-forex-bot      → deploy/forex-bot/**
+      #   nexus-crypto-bot     → deploy/crypto-bot/**
+      #   nexus-strategy-bridge → services/strategy-engine/**
+      #
+      # If watchPatterns is still "__ci_managed__", Railway ignores all pushes.
+      # The [skip ci] in commit messages only affects GitHub Actions, not Railway.
+      - name: Verify deploy files committed
         run: |
-          PROJECT_ID="41f21f06-b260-4210-8986-6a1eeb2751c3"
-          ENV_ID="71aa0246-7eb1-4309-8976-61a8838b6ab9"
-          # Service IDs: dashboard, stock, forex, crypto, bridge
-          SERVICES="50829ae3 2b939f3a 7c7c3976 baae31c1 a632e893"
-          NAMES="dashboard stock-bot forex-bot crypto-bot strategy-bridge"
-
-          i=0
-          for SVC in $SERVICES; do
-            NAME=$(echo $NAMES | cut -d' ' -f$((i+1)))
-            echo "Triggering redeploy for $NAME ($SVC)..."
-            RESP=$(curl -s -X POST https://backboard.railway.app/graphql/v2 \
-              -H "Authorization: Bearer $RAILWAY_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d "{\"query\":\"mutation { serviceInstanceRedeploy(serviceId: \\\"$SVC\\\", environmentId: \\\"$ENV_ID\\\") }\"}")
-            echo "  $NAME: $RESP"
-            i=$((i+1))
-          done
+          echo "Deploy files synced. Railway auto-deploy will trigger if watchPatterns are configured."
+          echo "If services don't redeploy, update watchPatterns in Railway dashboard."
+          ls -la deploy/stock-bot/bot.js deploy/forex-bot/bot.js deploy/crypto-bot/bot.js deploy/dashboard/dist/index.html
 
   # ── 2. Smoke tests after Railway auto-deploys ─────────────────────────────────
   smoke-test:
