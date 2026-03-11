@@ -224,6 +224,9 @@ async function initDb() {
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS regime VARCHAR(50);
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS signal_score DECIMAL(10,3);
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS entry_context JSONB DEFAULT '{}'::jsonb;
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS agent_approved BOOLEAN DEFAULT false;
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS agent_confidence REAL;
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS agent_reason TEXT;
             CREATE INDEX IF NOT EXISTS idx_trades_bot ON trades(bot);
             CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
             CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time);
@@ -544,6 +547,33 @@ function loadPositions() {
 }
 loadPositions();
 
+// [v6.2] Hydrate agent metadata from DB after startup (survives ephemeral filesystem wipes)
+async function hydrateAgentMetadataFromDB() {
+    if (!dbPool) return;
+    try {
+        const dbResult = await dbPool.query(
+            'SELECT id, symbol, agent_approved, agent_confidence, agent_reason FROM trades WHERE bot=$1 AND status=$2',
+            ['stock', 'open']
+        );
+        let hydrated = 0;
+        for (const row of dbResult.rows) {
+            const existing = positions.get(row.symbol);
+            if (existing && !existing.agentConfidence) {
+                existing.agentApproved = row.agent_approved;
+                existing.agentConfidence = row.agent_confidence;
+                existing.agentReason = row.agent_reason;
+                if (!existing.dbTradeId) existing.dbTradeId = row.id;
+                hydrated++;
+            }
+        }
+        if (hydrated > 0) {
+            console.log(`🧠 Hydrated agent metadata for ${hydrated} position(s) from DB`);
+        }
+    } catch (e) {
+        console.warn('Agent metadata hydration skipped:', e.message);
+    }
+}
+
 // Anti-churning protection
 const recentTrades = new Map();
 const stoppedOutSymbols = new Map();
@@ -646,13 +676,15 @@ async function dbTradeOpen(symbol, entryPrice, shares, config, signal, tier, str
         const tags = buildStockTradeTags(signal, strategy, tier);
         const r = await dbPool.query(
             `INSERT INTO trades (bot,symbol,direction,tier,strategy,regime,status,entry_price,quantity,
-             position_size_usd,stop_loss,take_profit,entry_time,signal_score,entry_context,rsi,volume_ratio,momentum_pct)
-             VALUES ('stock',$1,'long',$2,$3,$4,'open',$5,$6,$7,$8,$9,NOW(),$10,$11::jsonb,$12,$13,$14) RETURNING id`,
+             position_size_usd,stop_loss,take_profit,entry_time,signal_score,entry_context,rsi,volume_ratio,momentum_pct,
+             agent_approved,agent_confidence,agent_reason)
+             VALUES ('stock',$1,'long',$2,$3,$4,'open',$5,$6,$7,$8,$9,NOW(),$10,$11::jsonb,$12,$13,$14,$15,$16,$17) RETURNING id`,
             [symbol, tier, tags.strategy, tags.regime, entryPrice, shares, shares * entryPrice,
              config.stopLoss ? entryPrice * (1 - config.stopLoss) : null,
              config.profitTarget ? entryPrice * (1 + config.profitTarget) : null,
              tags.score, JSON.stringify(tags.context),
-             signal.rsi || null, signal.volumeRatio || null, signal.percentChange || null]
+             signal.rsi || null, signal.volumeRatio || null, signal.percentChange || null,
+             signal.agentApproved || false, signal.agentConfidence || null, signal.agentReason || null]
         );
         return r.rows[0]?.id;
     } catch (e) { console.warn('DB open failed:', e.message); return null; }
@@ -3750,13 +3782,15 @@ class UserTradingEngine {
             const tags = buildStockTradeTags(signal, strategy, tier);
             const r = await dbPool.query(
                 `INSERT INTO trades (user_id,bot,symbol,direction,tier,strategy,regime,status,entry_price,quantity,
-                 position_size_usd,stop_loss,take_profit,entry_time,signal_score,entry_context,rsi,volume_ratio,momentum_pct)
-                 VALUES ($1,'stock',$2,'long',$3,$4,$5,'open',$6,$7,$8,$9,$10,NOW(),$11,$12::jsonb,$13,$14,$15) RETURNING id`,
+                 position_size_usd,stop_loss,take_profit,entry_time,signal_score,entry_context,rsi,volume_ratio,momentum_pct,
+                 agent_approved,agent_confidence,agent_reason)
+                 VALUES ($1,'stock',$2,'long',$3,$4,$5,'open',$6,$7,$8,$9,$10,NOW(),$11,$12::jsonb,$13,$14,$15,$16,$17,$18) RETURNING id`,
                 [this.userId, symbol, tier, tags.strategy, tags.regime, entryPrice, shares, shares * entryPrice,
                  config.stopLoss ? entryPrice * (1 - config.stopLoss) : null,
                  config.profitTarget ? entryPrice * (1 + config.profitTarget) : null,
                  tags.score, JSON.stringify(tags.context),
-                 signal.rsi || null, signal.volumeRatio || null, signal.percentChange || null]
+                 signal.rsi || null, signal.volumeRatio || null, signal.percentChange || null,
+                 signal.agentApproved || false, signal.agentConfidence || null, signal.agentReason || null]
             );
             return r.rows[0]?.id;
         } catch (e) { console.warn('DB open failed:', e.message); return null; }
@@ -4837,6 +4871,9 @@ app.listen(PORT, async () => {
     console.log('╚════════════════════════════════════════════════════════════╝\n');
 
     await initDb().catch(e => console.warn('Auth DB init error:', e.message));
+
+    // [v6.2] Hydrate agent metadata from DB (survives Railway ephemeral FS wipes)
+    await hydrateAgentMetadataFromDB().catch(e => console.warn('Agent hydration error:', e.message));
 
     // ── Hydrate perfData from DB so stats survive redeploys ──
     if (dbPool && perfData.totalTrades === 0) {
