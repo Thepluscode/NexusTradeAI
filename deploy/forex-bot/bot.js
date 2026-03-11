@@ -1437,8 +1437,10 @@ async function scanForSignals(heldPositions = positions) {
         }
 
         // [v3.2] ATR-based stops/targets — adapts to each pair's volatility
-        const atrStop   = atrPct > 0 ? atrPct * 1.5 : config.stopLoss;
-        const atrTarget = atrPct > 0 ? atrPct * 3.0 : config.profitTarget;
+        // Data: 1.5x ATR stops too tight for forex (swept by noise). Widened to 2.0x.
+        // Target reduced from 3.0x to 2.0x (1:1 R/R, higher win probability)
+        const atrStop   = atrPct > 0 ? atrPct * 2.0 : config.stopLoss;
+        const atrTarget = atrPct > 0 ? atrPct * 2.0 : config.profitTarget;
 
         // LONG Signal — [v3.9] tighter RSI: must be 40-65 (was rsiMin-10 to rsiMax)
         if (isUptrend && rsi < config.rsiMax && rsi >= 40) {
@@ -1491,6 +1493,11 @@ async function scanForSignals(heldPositions = positions) {
                 });
                 if (!regimeProfile.tradable) continue;
                 const strategy = pullback >= maxPullback * 0.55 ? 'pullbackContinuation' : 'trendContinuation';
+                // Data: pullbackContinuation = 0% WR, -$308 across 5 trades. Block it.
+                if (strategy === 'pullbackContinuation') {
+                    console.log(`[Strategy Block] ${pair} LONG skipped — pullbackContinuation disabled (0% WR)`);
+                    continue;
+                }
                 signals.push({
                     pair, direction: 'long', tier,
                     entry: currentPrice,
@@ -1557,6 +1564,10 @@ async function scanForSignals(heldPositions = positions) {
                 });
                 if (!regimeProfile.tradable) continue;
                 const strategy = pullback >= maxPullback * 0.55 ? 'pullbackContinuation' : 'trendContinuation';
+                if (strategy === 'pullbackContinuation') {
+                    console.log(`[Strategy Block] ${pair} SHORT skipped — pullbackContinuation disabled (0% WR)`);
+                    continue;
+                }
                 signals.push({
                     pair, direction: 'short', tier,
                     entry: currentPrice,
@@ -1581,6 +1592,20 @@ async function scanForSignals(heldPositions = positions) {
 // ===== TRADE EXECUTION =====
 
 async function executeTrade(signal) {
+    // Currency concentration limit — max 2 positions sharing the same currency
+    // Data: all 5 losing trades were JPY pairs (100% correlated)
+    const MAX_CURRENCY_CONCENTRATION = 2;
+    const currencies = signal.pair.split('_'); // e.g. ['CAD', 'JPY']
+    for (const ccy of currencies) {
+        const ccyCount = Array.from(positions.values()).filter(p =>
+            p.pair && p.pair.includes(ccy)
+        ).length;
+        if (ccyCount >= MAX_CURRENCY_CONCENTRATION) {
+            console.log(`[Currency Limit] ${signal.pair} blocked — already ${ccyCount} positions with ${ccy} (max ${MAX_CURRENCY_CONCENTRATION})`);
+            return false;
+        }
+    }
+
     const account = await getAccount();
     if (!account) {
         console.log('❌ Cannot get account info');
@@ -1832,6 +1857,17 @@ async function managePositions() {
 
         // Update trailing stop
         updateTrailingStop(localPos, currentPrice);
+
+        // Explicit stop loss failsafe — in case OANDA server-side stop didn't fire
+        if (localPos.stopLoss) {
+            const hitStop = (localPos.direction === 'long' && currentPrice <= localPos.stopLoss) ||
+                            (localPos.direction === 'short' && currentPrice >= localPos.stopLoss);
+            if (hitStop) {
+                console.log(`🛑 [Stop Loss Failsafe] ${pair} hit local stop (${localPos.stopLoss.toFixed(5)}) — closing`);
+                await closePositionWithReason(pair, 'Stop Loss');
+                continue;
+            }
+        }
 
         const atrExitReason = getForexAtrExitReason(localPos, currentPrice);
         if (atrExitReason) {
