@@ -63,6 +63,9 @@ from agents.portfolio_agent import portfolio_agent
 from public_api_routes import router as public_api_router
 from public_api import key_manager
 
+# Import Stripe Billing (v6.1 — payments)
+from stripe_billing import router as billing_router
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -246,6 +249,9 @@ if FASTAPI_AVAILABLE:
 
     # Mount Public API router (v6.0 — /api/v1/*)
     app.include_router(public_api_router)
+
+    # Mount Stripe Billing router (v6.1 — /api/v1/billing/*)
+    app.include_router(billing_router)
 
     @app.get("/health")
     def health():

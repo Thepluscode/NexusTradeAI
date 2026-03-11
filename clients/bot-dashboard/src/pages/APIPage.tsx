@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import {
     Box, Paper, Typography, Button, TextField, Chip, IconButton,
@@ -54,6 +54,21 @@ export default function APIPage() {
     const [copied, setCopied] = useState(false);
     const [snack, setSnack] = useState('');
 
+    // Handle Stripe checkout return
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const checkout = params.get('checkout');
+        if (checkout === 'success') {
+            setSnack('Subscription activated! Your API keys are being upgraded.');
+            qc.invalidateQueries('apiKeys');
+            qc.invalidateQueries('apiUsage');
+            window.history.replaceState({}, '', '/api');
+        } else if (checkout === 'cancelled') {
+            setSnack('Checkout cancelled');
+            window.history.replaceState({}, '', '/api');
+        }
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
     // Fetch keys + usage
     const { data: keysData } = useQuery('apiKeys', () => apiClient.getAPIKeys(), {
         staleTime: 30000, refetchInterval: 60000,
@@ -91,6 +106,21 @@ export default function APIPage() {
                 qc.invalidateQueries('apiKeys');
                 setSnack('Key revoked');
             },
+        }
+    );
+
+    // Stripe checkout mutation
+    const upgradeMutation = useMutation(
+        (tier: 'pro' | 'enterprise') => apiClient.createCheckout(tier),
+        {
+            onSuccess: (data) => {
+                if (data.checkout_url) {
+                    window.location.href = data.checkout_url;
+                } else {
+                    setSnack('Failed to create checkout session');
+                }
+            },
+            onError: () => setSnack('Billing not configured yet — contact support'),
         }
     );
 
@@ -319,9 +349,10 @@ export default function APIPage() {
                             fullWidth
                             variant={tier.id === 'pro' ? 'contained' : 'outlined'}
                             sx={{ mt: 3, borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
-                            disabled={tier.id === 'free'}
+                            disabled={tier.id === 'free' || upgradeMutation.isLoading}
+                            onClick={() => tier.id !== 'free' && upgradeMutation.mutate(tier.id as 'pro' | 'enterprise')}
                         >
-                            {tier.id === 'free' ? 'Current Plan' : 'Coming Soon'}
+                            {tier.id === 'free' ? 'Current Plan' : upgradeMutation.isLoading ? 'Loading...' : `Subscribe — ${tier.price}`}
                         </Button>
                     </Paper>
                 ))}

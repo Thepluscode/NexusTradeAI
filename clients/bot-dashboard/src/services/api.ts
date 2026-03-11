@@ -745,6 +745,28 @@ class APIClient {
       return { calls_today: 0, calls_month: 0, monthly_limit: 100, active_keys: 0 };
     }
   }
+
+  // ── Stripe Billing ──────────────────────────────────────────────────
+
+  async createCheckout(tier: 'pro' | 'enterprise'): Promise<{ checkout_url: string; session_id: string }> {
+    const user = JSON.parse(localStorage.getItem('nexus_user') || '{}');
+    const userId = user.id || 1;
+    const response = await this.aiService.post('/api/v1/billing/checkout',
+      { user_id: userId, tier, email: user.email },
+      { headers: { 'X-API-Secret': this.apiSecret }, timeout: 15000 },
+    );
+    return response.data;
+  }
+
+  async createBillingPortal(): Promise<{ portal_url: string }> {
+    const user = JSON.parse(localStorage.getItem('nexus_user') || '{}');
+    const userId = user.id || 1;
+    const response = await this.aiService.post('/api/v1/billing/portal',
+      { user_id: userId },
+      { headers: { 'X-API-Secret': this.apiSecret }, timeout: 15000 },
+    );
+    return response.data;
+  }
 }
 
 export const apiClient = new APIClient();

@@ -107,6 +107,10 @@ class PublicAPIKeyManager:
 
                 -- Migrate: widen prefix column if it was created too small
                 ALTER TABLE api_keys ALTER COLUMN prefix TYPE VARCHAR(50);
+
+                -- Migrate: add Stripe columns for billing (v6.1)
+                ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS stripe_customer_id VARCHAR(100);
+                ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS stripe_subscription_id VARCHAR(100);
             """)
         logger.info("Public API tables ensured")
 
