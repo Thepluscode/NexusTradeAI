@@ -184,7 +184,7 @@ async def evaluate_signal(
 
 # ── Key management endpoints (admin-only) ─────────────────────────────
 
-@router.post("/keys", response_model=KeyResponse)
+@router.post("/keys")
 async def create_key(
     req: KeyCreateRequest,
     x_api_secret: str = Header(..., alias="X-API-Secret"),
@@ -192,13 +192,18 @@ async def create_key(
     """Create a new API key for a user. Returns the raw key ONCE."""
     _verify_admin(x_api_secret)
 
-    result = await key_manager.create_key(
-        user_id=req.user_id, name=req.name, tier=req.tier,
-    )
+    try:
+        result = await key_manager.create_key(
+            user_id=req.user_id, name=req.name, tier=req.tier,
+        )
+    except Exception as e:
+        logger.error(f"Key creation error: {e}")
+        raise HTTPException(500, f"Key creation failed: {str(e)}")
+
     if not result:
         raise HTTPException(500, "Failed to create API key (database unavailable)")
 
-    return KeyResponse(**result)
+    return result
 
 
 @router.get("/keys")

@@ -40,14 +40,25 @@ class PublicAPIKeyManager:
         if self._pool is None and self._db_url:
             try:
                 import asyncpg
-                ssl_mode = os.environ.get("PGSSLMODE", "prefer")
+                # Railway DB requires SSL; detect from URL or env
+                needs_ssl = (
+                    "sslmode=require" in (self._db_url or "")
+                    or os.environ.get("PGSSLMODE") == "require"
+                    or os.environ.get("RAILWAY_ENVIRONMENT")  # Railway always needs SSL
+                )
+                # Strip sslmode from URL (asyncpg doesn't parse it)
+                clean_url = self._db_url
+                for param in ["?sslmode=require", "&sslmode=require", "?sslmode=prefer", "&sslmode=prefer"]:
+                    clean_url = clean_url.replace(param, "?" if param.startswith("?") else "")
+                clean_url = clean_url.rstrip("?&")
                 self._pool = await asyncpg.create_pool(
-                    self._db_url,
+                    clean_url,
                     min_size=1,
                     max_size=3,
-                    ssl="require" if ssl_mode == "require" else None,
+                    ssl="require" if needs_ssl else None,
                 )
                 await self._ensure_tables()
+                logger.info("Public API DB pool created")
             except Exception as e:
                 logger.error(f"Public API pool creation failed: {e}")
                 self._pool = None
