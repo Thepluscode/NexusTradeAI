@@ -936,11 +936,17 @@ if FASTAPI_AVAILABLE:
                 rewards = await outcome_store.get_recent_rewards(limit=200)
                 updated = agent_supervisor.batch_update_from_rewards(rewards)
                 await agent_supervisor.sync_to_db()
+                # Sync patterns + lessons to DB (persist across redeploys)
+                await agent_orchestrator.scan_engine.sync_to_db()
+                await agent_orchestrator.learning_agent.sync_to_db()
                 # Update analyst rankings
                 await analyst_rankings.update_rankings(lookback_days=30)
                 logger.info(
                     f"[DailyTraining] Done: backfilled {backfill_stats.get('trades_processed', 0)} trades, "
-                    f"bandit updated {updated} rewards, rankings refreshed"
+                    f"bandit updated {updated} rewards, "
+                    f"{len(agent_orchestrator.scan_engine.patterns)} patterns synced, "
+                    f"{len(agent_orchestrator.learning_agent._recent_lessons)} lessons synced, "
+                    f"rankings refreshed"
                 )
             except Exception as e:
                 logger.error(f"[DailyTraining] Error: {e}")
@@ -949,6 +955,22 @@ if FASTAPI_AVAILABLE:
     @app.on_event("startup")
     async def start_training_loop():
         global _training_task
+
+        # v5.1: Auto-recover learning data from DB on startup (survives redeploys)
+        try:
+            logger.info("[Startup] Recovering learning data from DB...")
+            await agent_orchestrator.learning_agent.load_from_db()
+            await agent_orchestrator.scan_engine.load_from_db()
+            await agent_supervisor.load_from_db()
+            logger.info(
+                f"[Startup] Recovery complete: "
+                f"{len(agent_orchestrator.learning_agent._recent_lessons)} lessons, "
+                f"{len(agent_orchestrator.scan_engine.patterns)} patterns, "
+                f"{len(agent_supervisor._state)} bandit contexts"
+            )
+        except Exception as e:
+            logger.error(f"[Startup] DB recovery error (non-fatal): {e}")
+
         _training_task = asyncio.create_task(_daily_training_loop())
         logger.info("Background daily training loop scheduled (every 6h)")
 

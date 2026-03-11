@@ -269,6 +269,75 @@ class ScanEngine:
         except Exception as e:
             logger.error(f"Failed to load patterns: {e}")
 
+    async def sync_to_db(self):
+        """Persist patterns to PostgreSQL for redeploy survival."""
+        try:
+            from agents.outcome_store import outcome_store
+            pool = await outcome_store._get_pool()
+            if not pool:
+                return
+            async with pool.acquire() as conn:
+                for p in self.patterns.values():
+                    await conn.execute("""
+                        INSERT INTO scan_patterns
+                            (pattern_id, pattern_type, asset_class, description,
+                             occurrences, wins, losses, win_rate, avg_pnl,
+                             avg_r_multiple, confidence, actionable_lesson,
+                             symbols, last_seen, last_updated)
+                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,NOW())
+                        ON CONFLICT (pattern_id) DO UPDATE SET
+                            occurrences=$5, wins=$6, losses=$7, win_rate=$8,
+                            avg_pnl=$9, avg_r_multiple=$10, confidence=$11,
+                            actionable_lesson=$12, symbols=$13::jsonb,
+                            last_seen=$14, last_updated=NOW()
+                    """, p.pattern_id, p.pattern_type,
+                        p.description.split(" in ")[-1] if " in " in p.description else "stock",
+                        p.description, p.occurrences, p.wins, p.losses,
+                        p.win_rate, p.avg_pnl, p.avg_r_multiple, p.confidence,
+                        p.actionable_lesson or "", json.dumps(p.symbols),
+                        p.last_seen or "")
+            logger.info(f"Synced {len(self.patterns)} patterns to DB")
+        except Exception as e:
+            logger.error(f"Pattern DB sync error: {e}")
+
+    async def load_from_db(self):
+        """Load patterns from PostgreSQL (supplements local JSONL)."""
+        try:
+            from agents.outcome_store import outcome_store
+            pool = await outcome_store._get_pool()
+            if not pool:
+                return
+            async with pool.acquire() as conn:
+                rows = await conn.fetch("SELECT * FROM scan_patterns")
+                loaded = 0
+                for row in rows:
+                    pid = row["pattern_id"]
+                    if pid not in self.patterns:
+                        syms = row["symbols"]
+                        if isinstance(syms, str):
+                            syms = json.loads(syms)
+                        self.patterns[pid] = TrackedPattern(
+                            pattern_id=pid,
+                            pattern_type=row["pattern_type"],
+                            description=row["description"] or "",
+                            occurrences=row["occurrences"] or 0,
+                            wins=row["wins"] or 0,
+                            losses=row["losses"] or 0,
+                            win_rate=float(row["win_rate"] or 0),
+                            avg_pnl=float(row["avg_pnl"] or 0),
+                            avg_r_multiple=float(row["avg_r_multiple"] or 0),
+                            confidence=float(row["confidence"] or 0),
+                            actionable_lesson=row["actionable_lesson"],
+                            symbols=syms if isinstance(syms, list) else [],
+                            last_seen=row["last_seen"] or "",
+                        )
+                        loaded += 1
+                if loaded:
+                    logger.info(f"Loaded {loaded} patterns from DB (total: {len(self.patterns)})")
+                    self._save_patterns()
+        except Exception as e:
+            logger.error(f"Pattern DB load error: {e}")
+
     def get_stats(self) -> Dict:
         significant = [p for p in self.patterns.values() if p.is_significant()]
         top_winners = sorted(

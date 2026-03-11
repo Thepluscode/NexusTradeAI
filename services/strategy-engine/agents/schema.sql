@@ -148,6 +148,45 @@ CREATE INDEX IF NOT EXISTS idx_rewards_outcome ON rewards(outcome_id);
 CREATE INDEX IF NOT EXISTS idx_rewards_regime ON rewards(regime_at_entry, reward_score);
 CREATE INDEX IF NOT EXISTS idx_rewards_score ON rewards(reward_score);
 
+-- 4b. SCAN PATTERNS — Persistent pattern tracking (survives redeploys)
+CREATE TABLE IF NOT EXISTS scan_patterns (
+    id              SERIAL PRIMARY KEY,
+    pattern_id      VARCHAR(100) NOT NULL UNIQUE,
+    pattern_type    VARCHAR(50) NOT NULL,
+    asset_class     VARCHAR(10) NOT NULL,
+    description     TEXT,
+    occurrences     INTEGER DEFAULT 0,
+    wins            INTEGER DEFAULT 0,
+    losses          INTEGER DEFAULT 0,
+    win_rate        DECIMAL(6,4),
+    avg_pnl         DECIMAL(8,4),
+    avg_r_multiple  DECIMAL(8,4),
+    confidence      DECIMAL(6,4),
+    actionable_lesson TEXT,
+    symbols         JSONB DEFAULT '[]',
+    last_seen       TIMESTAMPTZ,
+    last_updated    TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_scan_patterns_type ON scan_patterns(pattern_type);
+CREATE INDEX IF NOT EXISTS idx_scan_patterns_asset ON scan_patterns(asset_class);
+
+-- 4c. AGENT LESSONS — Persistent lesson storage (survives redeploys)
+CREATE TABLE IF NOT EXISTS agent_lessons (
+    id              SERIAL PRIMARY KEY,
+    timestamp       TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    symbol          VARCHAR(20) NOT NULL,
+    asset_class     VARCHAR(10) NOT NULL,
+    direction       VARCHAR(10),
+    pnl_pct         DECIMAL(8,4),
+    pattern_type    VARCHAR(50),
+    actionable_lesson TEXT,
+    confidence      DECIMAL(4,3),
+    regime          VARCHAR(50),
+    exit_reason     VARCHAR(100)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_lessons_asset ON agent_lessons(asset_class, timestamp);
+CREATE INDEX IF NOT EXISTS idx_agent_lessons_regime ON agent_lessons(regime);
+
 -- 5. SUPERVISOR BANDIT STATE — Contextual bandit for analyst/strategy selection
 CREATE TABLE IF NOT EXISTS supervisor_state (
     id              SERIAL PRIMARY KEY,

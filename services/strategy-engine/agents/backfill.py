@@ -256,9 +256,22 @@ async def backfill_from_db(
         except Exception:
             pass
 
+        # Sync scan engine and learning agent to DB (v5.1: redeploy persistence)
+        if scan_engine:
+            try:
+                await scan_engine.sync_to_db()
+            except Exception as e:
+                logger.error(f"[Backfill] Scan engine DB sync error: {e}")
+        if learning_agent:
+            try:
+                await learning_agent.sync_to_db()
+            except Exception as e:
+                logger.error(f"[Backfill] Learning agent DB sync error: {e}")
+
         logger.info(
             f"[Backfill] Complete: {stats['trades_processed']}/{stats['trades_found']} trades, "
-            f"{stats['rewards_calculated']} rewards, {stats['bandit_updates']} bandit updates"
+            f"{stats['rewards_calculated']} rewards, {stats['bandit_updates']} bandit updates, "
+            f"{stats['patterns_ingested']} patterns, {stats['lessons_extracted']} lessons"
         )
 
     except Exception as e:

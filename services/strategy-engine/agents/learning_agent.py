@@ -214,6 +214,69 @@ class LearningAgent:
         except Exception as e:
             logger.error(f"Failed to load lessons: {e}")
 
+    async def sync_to_db(self):
+        """Persist recent lessons to PostgreSQL for redeploy survival."""
+        try:
+            from agents.outcome_store import outcome_store
+            pool = await outcome_store._get_pool()
+            if not pool:
+                return
+            async with pool.acquire() as conn:
+                for l in self._recent_lessons:
+                    await conn.execute("""
+                        INSERT INTO agent_lessons
+                            (timestamp, symbol, asset_class, direction, pnl_pct,
+                             pattern_type, actionable_lesson, confidence, regime, exit_reason)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                        ON CONFLICT DO NOTHING
+                    """, l.get("timestamp", ""), l.get("symbol", ""),
+                        l.get("asset_class", "stock"), l.get("direction", ""),
+                        l.get("pnl_pct", 0), l.get("pattern_type", ""),
+                        l.get("actionable_lesson", ""), l.get("confidence_in_lesson", 0),
+                        l.get("regime", ""), l.get("exit_reason", ""))
+            logger.info(f"Synced {len(self._recent_lessons)} lessons to DB")
+        except Exception as e:
+            logger.error(f"Lesson DB sync error: {e}")
+
+    async def load_from_db(self):
+        """Load recent lessons from PostgreSQL (supplements local JSONL)."""
+        try:
+            from agents.outcome_store import outcome_store
+            pool = await outcome_store._get_pool()
+            if not pool:
+                return
+            async with pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT * FROM agent_lessons
+                    ORDER BY timestamp DESC LIMIT 100
+                """)
+                if rows and len(self._recent_lessons) == 0:
+                    for row in reversed(rows):  # oldest first
+                        self._recent_lessons.append({
+                            "timestamp": str(row["timestamp"]),
+                            "symbol": row["symbol"],
+                            "asset_class": row["asset_class"],
+                            "direction": row["direction"],
+                            "pnl_pct": float(row["pnl_pct"] or 0),
+                            "pattern_type": row["pattern_type"],
+                            "actionable_lesson": row["actionable_lesson"],
+                            "confidence_in_lesson": float(row["confidence"] or 0),
+                            "regime": row["regime"],
+                            "exit_reason": row["exit_reason"],
+                        })
+                    self.total_lessons = len(self._recent_lessons)
+                    logger.info(f"Loaded {len(self._recent_lessons)} lessons from DB")
+                    # Save locally too
+                    try:
+                        os.makedirs(os.path.dirname(LESSONS_FILE), exist_ok=True)
+                        with open(LESSONS_FILE, 'w') as f:
+                            for l in self._recent_lessons:
+                                f.write(json.dumps(l) + "\n")
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.error(f"Lesson DB load error: {e}")
+
     def get_stats(self) -> Dict:
         return {
             "total_lessons": self.total_lessons,
