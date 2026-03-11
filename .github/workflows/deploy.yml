@@ -173,8 +173,9 @@ jobs:
       # Railway watchPatterns are set to "__ci_managed__" (matches nothing) to
       # prevent double-deploys from GitHub integration.  We explicitly trigger
       # redeployment via the GraphQL API after pushing the bundle commit.
+      # Always trigger redeploy — Railway watchPatterns block auto-deploy,
+      # so every push to main needs an explicit redeploy call.
       - name: Trigger Railway redeployments
-        if: steps.check.outputs.changed == 'true'
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
