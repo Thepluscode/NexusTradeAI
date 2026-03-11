@@ -584,23 +584,25 @@ function Navigation() {
   );
 }
 
+// ── Redirect authenticated users from landing to dashboard ───────────────────
+function AuthRedirect() {
+  const token = localStorage.getItem('nexus_access_token');
+  if (token) return <Navigate to="/dashboard" replace />;
+  return <LandingPage />;
+}
+
 // ── Route switch: public pages (full-width) vs dashboard (sidebar) ────────────
 function RouterSwitch() {
-  const location = useLocation();
-  const PUBLIC_ROUTES = ['/', '/pricing'];
-
-  if (PUBLIC_ROUTES.includes(location.pathname)) {
-    const token = localStorage.getItem('nexus_access_token');
-    if (token && location.pathname === '/') return <Navigate to="/dashboard" replace />;
-    return <LandingPage />;
-  }
-
-  // Public docs — render with minimal nav bar, no sidebar
-  if (location.pathname === '/public-docs') {
-    return <DocsPage />;
-  }
-
-  return <Navigation />;
+  return (
+    <Routes>
+      {/* Public full-width routes */}
+      <Route path="/" element={<AuthRedirect />} />
+      <Route path="/pricing" element={<LandingPage />} />
+      <Route path="/public-docs" element={<DocsPage />} />
+      {/* Everything else goes through the sidebar navigation */}
+      <Route path="/*" element={<Navigation />} />
+    </Routes>
+  );
 }
 
 function App() {
@@ -616,7 +618,7 @@ function App() {
           display: 'flex',
           flexDirection: 'column',
         }}>
-          <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <BrowserRouter>
             <RouterSwitch />
           </BrowserRouter>
           <Toaster
