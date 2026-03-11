@@ -611,8 +611,9 @@ if FASTAPI_AVAILABLE:
 
     @app.get("/agent/debug-claude")
     async def agent_debug_claude():
-        """Debug endpoint: test Claude call directly and return raw result."""
-        from agents.claude_client import ClaudeClient, TRADE_DECISION_TOOL
+        """Debug endpoint: test Claude call directly with full error detail."""
+        from agents.claude_client import TRADE_DECISION_TOOL
+        import traceback
         client = agent_orchestrator._client
         result = {
             "available": client.available,
@@ -621,18 +622,45 @@ if FASTAPI_AVAILABLE:
             "api_key_prefix": client.api_key[:12] + "..." if client.api_key else "NONE",
         }
         if client.available:
+            # Test 1: Direct synchronous call (bypass async wrapper)
+            try:
+                import anthropic
+                direct_client = anthropic.Anthropic(api_key=client.api_key)
+                response = direct_client.messages.create(
+                    model=client.model,
+                    max_tokens=200,
+                    system="You are a test. Approve the trade.",
+                    messages=[{"role": "user", "content": "TEST: BUY BTCUSD at 68000. Good trade?"}],
+                    tools=[TRADE_DECISION_TOOL],
+                    tool_choice={"type": "tool", "name": TRADE_DECISION_TOOL["name"]}
+                )
+                # Extract tool_use
+                tool_result = None
+                for block in response.content:
+                    if block.type == "tool_use":
+                        tool_result = block.input
+                result["direct_call_success"] = True
+                result["direct_call_result"] = tool_result
+                result["response_stop_reason"] = response.stop_reason
+                result["response_content_types"] = [b.type for b in response.content]
+            except Exception as e:
+                result["direct_call_success"] = False
+                result["direct_call_error"] = str(e)
+                result["direct_call_traceback"] = traceback.format_exc()[-500:]
+
+            # Test 2: Async wrapper (the actual code path)
             try:
                 test_result = await client.call_with_tool(
-                    system="You are a test. Just approve the trade.",
-                    user_message="TEST: BUY BTCUSD at $68000, RSI 55, volume 2x. Is this a good trade?",
+                    system="You are a test. Approve the trade.",
+                    user_message="TEST: BUY BTCUSD at 68000. Good trade?",
                     tool=TRADE_DECISION_TOOL,
                     timeout_seconds=15
                 )
-                result["claude_call_result"] = test_result
-                result["claude_call_success"] = test_result is not None
+                result["async_call_success"] = test_result is not None
+                result["async_call_result"] = test_result
             except Exception as e:
-                result["claude_call_error"] = str(e)
-                result["claude_call_success"] = False
+                result["async_call_success"] = False
+                result["async_call_error"] = str(e)
         return result
 
     @app.post("/agent/kill")
