@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import { SafeResponsiveContainer } from '../components/ChartErrorBoundary';
+import React, { useState, Suspense } from 'react';
 import SEO from '@/components/SEO';
 import { useQuery } from 'react-query';
 import {
@@ -35,18 +34,12 @@ import {
     PlayArrow,
     Bolt,
 } from '@mui/icons-material';
-import {
-    AreaChart,
-    Area,
-    XAxis,
-    YAxis,
-    CartesianGrid,
-    Tooltip as RechartsTooltip,
-} from 'recharts';
 import { apiClient } from '@/services/api';
 import { MetricCard } from '@/components/MetricCard';
-import ThresholdTuner from '@/components/ThresholdTuner';
 import type { BacktestSymbolResult, BacktestTrade, BacktestScanResult, EquityCurvePoint } from '@/types';
+
+// Lazy-load ThresholdTuner (contains Recharts) so it can't crash the page
+const ThresholdTuner = React.lazy(() => import('@/components/ThresholdTuner'));
 
 function ValidationChecklist({ checks }: { checks: Record<string, boolean> }) {
     const labels: Record<string, string> = {
@@ -278,45 +271,30 @@ export default function BacktestPage() {
                                 {finalPnl >= 0 ? '+' : ''}${finalPnl.toFixed(2)} cumulative P&L
                             </Typography>
                         </Box>
-                        <SafeResponsiveContainer height={200} data={equityCurve as EquityCurvePoint[]}>
-                            <AreaChart data={equityCurve as EquityCurvePoint[]} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                                <defs>
-                                    <linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%"  stopColor={curveColor} stopOpacity={0.25} />
-                                        <stop offset="95%" stopColor={curveColor} stopOpacity={0.03} />
-                                    </linearGradient>
-                                </defs>
-                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-                                <XAxis
-                                    dataKey="date"
-                                    tickFormatter={fmtDate}
-                                    tick={{ fontSize: 11, fill: '#9ca3af' }}
-                                    interval="preserveStartEnd"
-                                />
-                                <YAxis
-                                    tickFormatter={(v: number) => `$${v}`}
-                                    tick={{ fontSize: 11, fill: '#9ca3af' }}
-                                    width={52}
-                                />
-                                <RechartsTooltip
-                                    contentStyle={{ background: '#1e293b', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8 }}
-                                    labelFormatter={fmtDate}
-                                    formatter={(value: number, name: string) => [
-                                        `$${value.toFixed(2)}`,
-                                        name === 'cumulative_pnl' ? 'Cumulative P&L' : 'Daily P&L',
-                                    ]}
-                                />
-                                <Area
-                                    type="monotone"
-                                    dataKey="cumulative_pnl"
-                                    stroke={curveColor}
-                                    strokeWidth={2}
-                                    fill="url(#eqGrad)"
-                                    dot={false}
-                                    activeDot={{ r: 4, fill: curveColor }}
-                                />
-                            </AreaChart>
-                        </SafeResponsiveContainer>
+                        {/* SVG sparkline — no Recharts dependency */}
+                        {(() => {
+                            const pts = equityCurve as EquityCurvePoint[];
+                            const vals = pts.map(p => p.cumulative_pnl);
+                            const minV = Math.min(...vals);
+                            const maxV = Math.max(...vals);
+                            const range = maxV - minV || 1;
+                            const W = 800;
+                            const H = 180;
+                            const points = vals.map((v, i) => `${(i / (vals.length - 1)) * W},${H - ((v - minV) / range) * (H - 10) - 5}`).join(' ');
+                            const areaPoints = points + ` ${W},${H} 0,${H}`;
+                            return (
+                                <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={200} style={{ display: 'block' }}>
+                                    <defs>
+                                        <linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor={curveColor} stopOpacity={0.25} />
+                                            <stop offset="95%" stopColor={curveColor} stopOpacity={0.03} />
+                                        </linearGradient>
+                                    </defs>
+                                    <polygon points={areaPoints} fill="url(#eqGrad)" />
+                                    <polyline points={points} fill="none" stroke={curveColor} strokeWidth="2" />
+                                </svg>
+                            );
+                        })()}
                         <Box sx={{ display: 'flex', gap: 3, mt: 1.5, flexWrap: 'wrap' }}>
                             {[
                                 { label: 'Trading days', value: String((equityCurve as EquityCurvePoint[]).length) },
@@ -334,9 +312,11 @@ export default function BacktestPage() {
                 );
             })()}
 
-            {/* Threshold Tuner — interactive backtest tool */}
+            {/* Threshold Tuner — lazy loaded to isolate Recharts crashes */}
             <Divider sx={{ my: 3 }} />
-            <ThresholdTuner />
+            <Suspense fallback={<CircularProgress size={24} />}>
+                <ThresholdTuner />
+            </Suspense>
             <Divider sx={{ my: 3 }} />
 
             {/* Pairs cache warm-up result */}
