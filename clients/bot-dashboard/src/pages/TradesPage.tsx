@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import { ChartErrorBoundary } from '../components/ChartErrorBoundary';
 import SEO from '@/components/SEO';
 import { useQuery } from 'react-query';
 import {
@@ -482,6 +483,7 @@ export default function TradesPage() {
                                     {!strategyChartData.length ? (
                                         <Alert severity="info">No strategy-tagged trades in selected period.</Alert>
                                     ) : (
+                                        <ChartErrorBoundary>
                                         <ResponsiveContainer width="100%" height="100%">
                                             <BarChart data={strategyChartData} margin={{ top: 8, right: 16, left: -12, bottom: 20 }}>
                                                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
@@ -494,6 +496,7 @@ export default function TradesPage() {
                                                 <Bar yAxisId="right" dataKey="winRate" name="Win Rate %" fill="#3b82f6" radius={[4, 4, 0, 0]} />
                                             </BarChart>
                                         </ResponsiveContainer>
+                                        </ChartErrorBoundary>
                                     )}
                                 </Paper>
                             </Grid>
@@ -503,6 +506,7 @@ export default function TradesPage() {
                                     {!regimeChartData.length ? (
                                         <Alert severity="info">No regime-tagged trades in selected period.</Alert>
                                     ) : (
+                                        <ChartErrorBoundary>
                                         <ResponsiveContainer width="100%" height="100%">
                                             <BarChart data={regimeChartData} margin={{ top: 8, right: 16, left: -12, bottom: 20 }}>
                                                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
@@ -515,6 +519,7 @@ export default function TradesPage() {
                                                 <Bar yAxisId="right" dataKey="winRate" name="Win Rate %" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
                                             </BarChart>
                                         </ResponsiveContainer>
+                                        </ChartErrorBoundary>
                                     )}
                                 </Paper>
                             </Grid>

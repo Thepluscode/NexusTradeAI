@@ -37,6 +37,7 @@ import {
     Cell,
 } from 'recharts';
 import { apiClient } from '@/services/api';
+import { ChartErrorBoundary } from './ChartErrorBoundary';
 
 interface ThresholdState {
     rsiMin: number;
@@ -325,6 +326,7 @@ export default function ThresholdTuner() {
                                     <Typography variant="body2" fontWeight={600} sx={{ mb: 1 }}>
                                         {labels[param] || param}
                                     </Typography>
+                                    <ChartErrorBoundary>
                                     <ResponsiveContainer width="100%" height={160}>
                                         <LineChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                                             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
@@ -366,6 +368,7 @@ export default function ThresholdTuner() {
                                             />
                                         </LineChart>
                                     </ResponsiveContainer>
+                                    </ChartErrorBoundary>
                                 </Grid>
                             );
                         })}
@@ -379,6 +382,7 @@ export default function ThresholdTuner() {
                     <Typography variant="h6" fontWeight={600} sx={{ mb: 2 }}>
                         Exit Reason Analysis
                     </Typography>
+                    <ChartErrorBoundary>
                     <ResponsiveContainer width="100%" height={200}>
                         <BarChart data={closeReasonData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
@@ -403,6 +407,7 @@ export default function ThresholdTuner() {
                             </Bar>
                         </BarChart>
                     </ResponsiveContainer>
+                    </ChartErrorBoundary>
                     <TableContainer sx={{ mt: 1 }}>
                         <Table size="small">
                             <TableHead>

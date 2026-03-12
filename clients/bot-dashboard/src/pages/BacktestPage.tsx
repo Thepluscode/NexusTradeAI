@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ChartErrorBoundary } from '../components/ChartErrorBoundary';
 import SEO from '@/components/SEO';
 import { useQuery } from 'react-query';
 import {
@@ -278,6 +279,7 @@ export default function BacktestPage() {
                                 {finalPnl >= 0 ? '+' : ''}${finalPnl.toFixed(2)} cumulative P&L
                             </Typography>
                         </Box>
+                        <ChartErrorBoundary>
                         <ResponsiveContainer width="100%" height={200}>
                             <AreaChart data={equityCurve as EquityCurvePoint[]} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                                 <defs>
@@ -317,6 +319,7 @@ export default function BacktestPage() {
                                 />
                             </AreaChart>
                         </ResponsiveContainer>
+                        </ChartErrorBoundary>
                         <Box sx={{ display: 'flex', gap: 3, mt: 1.5, flexWrap: 'wrap' }}>
                             {[
                                 { label: 'Trading days', value: String((equityCurve as EquityCurvePoint[]).length) },
