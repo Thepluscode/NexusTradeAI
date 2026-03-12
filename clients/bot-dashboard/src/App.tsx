@@ -593,7 +593,7 @@ function RouterSwitch() {
       <Route path="/stock" element={<WithNav><ProtectedRoute><StockBotPage /></ProtectedRoute></WithNav>} />
       <Route path="/forex" element={<WithNav><ProtectedRoute><ForexBotPage /></ProtectedRoute></WithNav>} />
       <Route path="/crypto" element={<WithNav><ProtectedRoute><CryptoBotPage /></ProtectedRoute></WithNav>} />
-      <Route path="/backtest" element={<WithNav><ProtectedRoute><BacktestPage /></ProtectedRoute></WithNav>} />
+      <Route path="/backtest" element={<WithNav><ProtectedRoute><Box sx={{ p: 4 }}><Typography variant="h5" fontWeight={700} sx={{ mb: 1 }}>Backtest</Typography><Typography color="text.secondary">Backtest module is being upgraded. Check back soon.</Typography></Box></ProtectedRoute></WithNav>} />
       <Route path="/trades" element={<WithNav><ProtectedRoute><TradesPage /></ProtectedRoute></WithNav>} />
       <Route path="/settings" element={<WithNav><ProtectedRoute><SettingsPage /></ProtectedRoute></WithNav>} />
       <Route path="/agent" element={<WithNav><ProtectedRoute><AgentPage /></ProtectedRoute></WithNav>} />

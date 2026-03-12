@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { SafeResponsiveContainer } from '../components/ChartErrorBoundary';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import {
   Box, Paper, Typography, Grid, Card, CardContent,
@@ -12,10 +11,6 @@ import {
   TrendingUp, Shield, Speed, Storage,
   CheckCircle, Cancel,
 } from '@mui/icons-material';
-import {
-  BarChart, Bar, XAxis, YAxis,
-  CartesianGrid, Tooltip as RechartsTooltip, Cell,
-} from 'recharts';
 import toast from 'react-hot-toast';
 import { apiClient } from '../services/api';
 import type {
@@ -225,36 +220,35 @@ function BanditChart({ contexts }: { contexts: Record<string, BanditContextSumma
     arm: val.best_arm,
   })).sort((a, b) => b.pulls - a.pulls).slice(0, 12);
 
-  if (data.length === 0) return null;
-
   const armColors: Record<string, string> = {
     conservative: '#3b82f6',
     moderate: '#22c55e',
     aggressive: '#f59e0b',
     skip: '#ef4444',
   };
-
+  if (!data.length) return null;
   return (
-    <SafeResponsiveContainer height={220} data={data}>
-        <BarChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#333" />
-          <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#999' }} angle={-20} textAnchor="end" height={50} />
-          <YAxis tick={{ fontSize: 10, fill: '#999' }} domain={[0, 100]} />
-          <RechartsTooltip
-            contentStyle={{ background: '#1e1e2e', border: '1px solid #333', borderRadius: 8 }}
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            formatter={(value: any, _name: any, entry: any) => [
-              `${value}% (${entry?.payload?.arm || ''}, ${entry?.payload?.pulls || 0} trades)`,
-              'Confidence',
-            ]}
-          />
-          <Bar dataKey="mean" radius={[4, 4, 0, 0]}>
-            {data.map((entry, i) => (
-              <Cell key={i} fill={armColors[entry.arm] || '#8b5cf6'} />
-            ))}
-          </Bar>
-        </BarChart>
-    </SafeResponsiveContainer>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, p: 1 }}>
+      {data.map((d) => (
+        <Box key={d.name} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Typography variant="caption" sx={{ width: 80, flexShrink: 0, color: '#999', fontSize: 10 }}>
+            {d.name}
+          </Typography>
+          <Box sx={{ flex: 1, height: 24, bgcolor: 'rgba(255,255,255,0.05)', borderRadius: 1, overflow: 'hidden' }}>
+            <Box sx={{
+              height: '100%',
+              width: `${d.mean}%`,
+              bgcolor: armColors[d.arm] || '#8b5cf6',
+              borderRadius: 1,
+              transition: 'width 0.3s ease',
+            }} />
+          </Box>
+          <Typography variant="caption" sx={{ width: 60, textAlign: 'right', color: '#ccc', fontSize: 10 }}>
+            {d.mean}% ({d.pulls})
+          </Typography>
+        </Box>
+      ))}
+    </Box>
   );
 }
 

@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { SafeResponsiveContainer } from '../components/ChartErrorBoundary';
+
 import SEO from '@/components/SEO';
 import { useQuery } from 'react-query';
 import {
@@ -28,15 +28,7 @@ import {
     LinearProgress,
 } from '@mui/material';
 import { TrendingUp, TrendingDown, Receipt, Download, Person, Analytics, Inbox } from '@mui/icons-material';
-import {
-    BarChart,
-    Bar,
-    CartesianGrid,
-    XAxis,
-    YAxis,
-    Tooltip as RechartsTooltip,
-    Legend,
-} from 'recharts';
+
 import { apiClient } from '@/services/api';
 import { MetricCard } from '@/components/MetricCard';
 import type {
@@ -482,18 +474,27 @@ export default function TradesPage() {
                                     {!strategyChartData.length ? (
                                         <Alert severity="info">No strategy-tagged trades in selected period.</Alert>
                                     ) : (
-                                        <SafeResponsiveContainer height={280} data={strategyChartData}>
-                                            <BarChart data={strategyChartData} margin={{ top: 8, right: 16, left: -12, bottom: 20 }}>
-                                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                                                <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 12 }} angle={-18} textAnchor="end" height={60} />
-                                                <YAxis yAxisId="left" tick={{ fill: '#94a3b8', fontSize: 12 }} />
-                                                <YAxis yAxisId="right" orientation="right" tick={{ fill: '#94a3b8', fontSize: 12 }} />
-                                                <RechartsTooltip />
-                                                <Legend />
-                                                <Bar yAxisId="left" dataKey="totalPnL" name="Total P&L" fill="#10b981" radius={[4, 4, 0, 0]} />
-                                                <Bar yAxisId="right" dataKey="winRate" name="Win Rate %" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                                            </BarChart>
-                                        </SafeResponsiveContainer>
+                                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, p: 1 }}>
+                                            {strategyChartData.map((d: any) => (
+                                                <Box key={d.name} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                                    <Typography variant="caption" sx={{ width: 100, flexShrink: 0, color: '#94a3b8', fontSize: 11 }}>{d.name}</Typography>
+                                                    <Box sx={{ flex: 1, height: 20, bgcolor: 'rgba(255,255,255,0.05)', borderRadius: 1, overflow: 'hidden', position: 'relative' }}>
+                                                        <Box sx={{
+                                                            height: '100%',
+                                                            width: `${Math.min(Math.abs(d.totalPnL) / Math.max(...strategyChartData.map((x: any) => Math.abs(x.totalPnL)), 1) * 100, 100)}%`,
+                                                            bgcolor: d.totalPnL >= 0 ? '#10b981' : '#ef4444',
+                                                            borderRadius: 1,
+                                                        }} />
+                                                    </Box>
+                                                    <Typography variant="caption" sx={{ width: 70, textAlign: 'right', color: d.totalPnL >= 0 ? '#10b981' : '#ef4444', fontWeight: 600, fontSize: 11 }}>
+                                                        ${d.totalPnL?.toFixed(0)}
+                                                    </Typography>
+                                                    <Typography variant="caption" sx={{ width: 40, textAlign: 'right', color: '#94a3b8', fontSize: 11 }}>
+                                                        {d.winRate?.toFixed(0)}%
+                                                    </Typography>
+                                                </Box>
+                                            ))}
+                                        </Box>
                                     )}
                                 </Paper>
                             </Grid>
@@ -503,18 +504,27 @@ export default function TradesPage() {
                                     {!regimeChartData.length ? (
                                         <Alert severity="info">No regime-tagged trades in selected period.</Alert>
                                     ) : (
-                                        <SafeResponsiveContainer height={280} data={regimeChartData}>
-                                            <BarChart data={regimeChartData} margin={{ top: 8, right: 16, left: -12, bottom: 20 }}>
-                                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                                                <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 12 }} angle={-18} textAnchor="end" height={60} />
-                                                <YAxis yAxisId="left" tick={{ fill: '#94a3b8', fontSize: 12 }} />
-                                                <YAxis yAxisId="right" orientation="right" tick={{ fill: '#94a3b8', fontSize: 12 }} />
-                                                <RechartsTooltip />
-                                                <Legend />
-                                                <Bar yAxisId="left" dataKey="totalPnL" name="Total P&L" fill="#f59e0b" radius={[4, 4, 0, 0]} />
-                                                <Bar yAxisId="right" dataKey="winRate" name="Win Rate %" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
-                                            </BarChart>
-                                        </SafeResponsiveContainer>
+                                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, p: 1 }}>
+                                            {regimeChartData.map((d: any) => (
+                                                <Box key={d.name} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                                    <Typography variant="caption" sx={{ width: 100, flexShrink: 0, color: '#94a3b8', fontSize: 11 }}>{d.name}</Typography>
+                                                    <Box sx={{ flex: 1, height: 20, bgcolor: 'rgba(255,255,255,0.05)', borderRadius: 1, overflow: 'hidden', position: 'relative' }}>
+                                                        <Box sx={{
+                                                            height: '100%',
+                                                            width: `${Math.min(Math.abs(d.totalPnL) / Math.max(...regimeChartData.map((x: any) => Math.abs(x.totalPnL)), 1) * 100, 100)}%`,
+                                                            bgcolor: d.totalPnL >= 0 ? '#f59e0b' : '#ef4444',
+                                                            borderRadius: 1,
+                                                        }} />
+                                                    </Box>
+                                                    <Typography variant="caption" sx={{ width: 70, textAlign: 'right', color: d.totalPnL >= 0 ? '#f59e0b' : '#ef4444', fontWeight: 600, fontSize: 11 }}>
+                                                        ${d.totalPnL?.toFixed(0)}
+                                                    </Typography>
+                                                    <Typography variant="caption" sx={{ width: 40, textAlign: 'right', color: '#94a3b8', fontSize: 11 }}>
+                                                        {d.winRate?.toFixed(0)}%
+                                                    </Typography>
+                                                </Box>
+                                            ))}
+                                        </Box>
                                     )}
                                 </Paper>
                             </Grid>

@@ -1,5 +1,4 @@
 import React from 'react';
-import { SafeResponsiveContainer } from '../components/ChartErrorBoundary';
 import SEO from '@/components/SEO';
 import {
     Box,
@@ -36,14 +35,6 @@ import {
 import axios from 'axios';
 import { SERVICE_URLS, apiClient } from '@/services/api';
 import { useQuery } from 'react-query';
-import {
-    AreaChart,
-    Area,
-    XAxis,
-    YAxis,
-    CartesianGrid,
-    Tooltip as RechartsTooltip,
-} from 'recharts';
 import type { TradeDaySummary } from '@/types';
 import { useNavigate } from 'react-router-dom';
 
@@ -270,51 +261,28 @@ function PnLChart({ days = 30 }: { days?: number }) {
     const isPositive = chartData[chartData.length - 1]?.cumPnL >= 0;
     const color = isPositive ? '#10b981' : '#ef4444';
 
+    const vals = chartData.map((p: {cumPnL: number}) => p.cumPnL);
+    if (vals.length < 2) return null;
+    const minV = Math.min(...vals);
+    const maxV = Math.max(...vals);
+    const range = maxV - minV || 1;
+    const W = 800, H = 180;
+    const svgPoints = vals.map((v: number, i: number) =>
+        `${(i / (vals.length - 1)) * W},${H - ((v - minV) / range) * (H - 10) - 5}`
+    ).join(' ');
+    const areaPoints = svgPoints + ` ${W},${H} 0,${H}`;
+
     return (
-        <SafeResponsiveContainer height={200} data={chartData}>
-            <AreaChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-                <defs>
-                    <linearGradient id="pnlGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor={color} stopOpacity={0.22} />
-                        <stop offset="95%" stopColor={color} stopOpacity={0} />
-                    </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                <XAxis
-                    dataKey="day"
-                    tick={{ fill: '#8b949e', fontSize: 11 }}
-                    axisLine={false}
-                    tickLine={false}
-                    interval="preserveStartEnd"
-                />
-                <YAxis
-                    tick={{ fill: '#8b949e', fontSize: 11 }}
-                    axisLine={false}
-                    tickLine={false}
-                    tickFormatter={(v: number) => `$${v >= 0 ? '+' : ''}${v.toFixed(0)}`}
-                    width={60}
-                />
-                <RechartsTooltip
-                    contentStyle={{
-                        background: 'rgba(13,17,23,0.96)',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        borderRadius: 8,
-                        fontSize: 12,
-                    }}
-                    labelStyle={{ color: '#e6edf3', fontWeight: 600 }}
-                    formatter={(val: number) => [`$${val >= 0 ? '+' : ''}${val.toFixed(2)}`, 'Cumulative P&L']}
-                />
-                <Area
-                    type="monotone"
-                    dataKey="cumPnL"
-                    stroke={color}
-                    strokeWidth={2}
-                    fill="url(#pnlGrad)"
-                    dot={false}
-                    activeDot={{ r: 4, fill: color }}
-                />
-            </AreaChart>
-        </SafeResponsiveContainer>
+        <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={200} style={{ display: 'block' }}>
+            <defs>
+                <linearGradient id="pnlGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={color} stopOpacity={0.22} />
+                    <stop offset="95%" stopColor={color} stopOpacity={0} />
+                </linearGradient>
+            </defs>
+            <polygon points={areaPoints} fill="url(#pnlGrad)" />
+            <polyline points={svgPoints} fill="none" stroke={color} strokeWidth="2" />
+        </svg>
     );
 }
 
