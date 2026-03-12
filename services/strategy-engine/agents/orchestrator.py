@@ -32,6 +32,8 @@ from agents.scan_engine import ScanEngine
 from agents.supervisor_bandit import supervisor
 from agents.analyst_rankings import analyst_rankings
 from agents.portfolio_agent import portfolio_agent
+from agents.sentiment_agent import SentimentAgent
+from agents.autopsy_agent import run_autopsy, save_to_db as save_autopsy_to_db
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +62,7 @@ class AgentOrchestrator:
         self.decision_agent = DecisionAgent(self._client)
         self.learning_agent = LearningAgent(self._client)
         self.scan_engine = ScanEngine()
+        self.sentiment_agent = SentimentAgent()
         self.supervisor = supervisor
 
         # Decision cache (5-min TTL)
@@ -126,6 +129,29 @@ class AgentOrchestrator:
             self._audit(snapshot, decision, time.time() - start)
             return decision
 
+        # Step 4b: Sentiment analysis (5-min cache)
+        sentiment = None
+        try:
+            sentiment = await self.sentiment_agent.analyze(
+                symbol=snapshot.symbol,
+                asset_class=snapshot.asset_class,
+            )
+            # Hard reject on strong negative sentiment
+            if sentiment.sentiment_score < -0.6 and sentiment.bearish_count >= 3:
+                self.total_rejections += 1
+                decision = AgentDecision(
+                    approved=False,
+                    confidence=0.85,
+                    reason=f"Strong negative sentiment (score={sentiment.sentiment_score:.2f}, "
+                           f"{sentiment.bearish_count} bearish signals)",
+                    source="sentiment_agent",
+                    risk_flags=["strong_negative_sentiment"],
+                )
+                self._audit(snapshot, decision, time.time() - start)
+                return decision
+        except Exception as e:
+            logger.error(f"Sentiment agent error (fail-open): {e}")
+
         # Step 5: Adaptive context — get lessons and patterns
         lessons = self.learning_agent.get_applicable_lessons(
             symbol=snapshot.symbol,
@@ -143,14 +169,25 @@ class AgentOrchestrator:
             if p.actionable_lesson and p.actionable_lesson not in lessons:
                 lessons.append(p.actionable_lesson)
 
-        # Step 6: Decision agent
+        # Step 6: Decision agent (with sentiment context)
         decision = await self.decision_agent.evaluate(
             snapshot=snapshot,
             market_analysis=market_analysis,
             lessons=lessons,
+            sentiment=sentiment,
         )
 
-        # Step 6b: Adjust confidence based on analyst track record
+        # Step 6b: Sentiment-based adjustments
+        if sentiment:
+            if sentiment.sentiment_score < -0.3:
+                # Moderately negative sentiment — reduce position size
+                decision.position_size_multiplier *= 0.5
+                decision.risk_flags.append("negative_sentiment")
+            elif sentiment.sentiment_score > 0.5:
+                # Positive sentiment — boost confidence slightly
+                decision.confidence = min(1.0, decision.confidence + 0.1)
+
+        # Step 6c: Adjust confidence based on analyst track record
         agent_score = analyst_rankings.get_agent_score(
             analyst=decision.source or "pipeline",
             asset_class=snapshot.asset_class,
@@ -196,7 +233,7 @@ class AgentOrchestrator:
             logger.error(f"Portfolio risk check error: {e}")
 
         # Enrich decision with bandit metadata
-        decision.agents_consulted = ["market_agent", "decision_agent", "scan_engine", "supervisor_bandit", "portfolio_agent"]
+        decision.agents_consulted = ["market_agent", "sentiment_agent", "decision_agent", "scan_engine", "supervisor_bandit", "portfolio_agent"]
         decision.market_regime = market_analysis.get("regime") if market_analysis else None
         decision.lessons_applied = lessons[:3]
 
@@ -283,6 +320,34 @@ class AgentOrchestrator:
         if lesson:
             logger.info(f"[Learn] {outcome.symbol}: {lesson.get('actionable_lesson', 'no lesson')}")
 
+        # [v7.1] Post-loss autopsy — run 5 parallel analysis agents on losing trades
+        if outcome.pnl_pct is not None and outcome.pnl_pct < 0:
+            try:
+                autopsy_report = await run_autopsy(
+                    outcome=outcome,
+                    claude_client=self._client,
+                    sentiment_agent=self.sentiment_agent,
+                )
+                # Save to DB if pool is available
+                pool = await outcome_store._get_pool()
+                if pool:
+                    await save_autopsy_to_db(autopsy_report, pool)
+
+                # Inject autopsy lesson into learning agent for future decisions
+                if autopsy_report.actionable_lesson:
+                    self.learning_agent.inject_lesson(
+                        symbol=outcome.symbol,
+                        asset_class=outcome.asset_class,
+                        regime=outcome.entry_regime or "",
+                        lesson=f"[AUTOPSY] {autopsy_report.actionable_lesson}",
+                    )
+                    logger.info(
+                        f"[Autopsy] {outcome.symbol}: {autopsy_report.primary_failure_mode} "
+                        f"({autopsy_report.severity}) — {autopsy_report.actionable_lesson}"
+                    )
+            except Exception as e:
+                logger.error(f"Autopsy agent error (non-fatal): {e}")
+
     def _get_cached(self, key: str) -> Optional[AgentDecision]:
         entry = self._cache.get(key)
         if entry and (time.time() - entry["ts"]) < self._cache_ttl:
@@ -334,6 +399,7 @@ class AgentOrchestrator:
             "claude": self._client.get_stats(),
             "kill_switch": self.kill_switch.get_status(),
             "market_agent": self.market_agent.get_stats(),
+            "sentiment_agent": self.sentiment_agent.get_stats(),
             "decision_agent": self.decision_agent.get_stats(),
             "learning_agent": self.learning_agent.get_stats(),
             "scan_engine": self.scan_engine.get_stats(),

@@ -54,10 +54,12 @@ from ai_advisor import ai_advisor
 # Import Agentic AI system (v4.1 — full multi-agent pipeline)
 from agents.orchestrator import orchestrator as agent_orchestrator
 from agents.base import MarketSnapshot, TradeOutcome, AgentDecision
+from agents.sentiment_agent import SentimentAgent
 from agents.supervisor_bandit import supervisor as agent_supervisor
 from agents.backfill import backfill_from_db, backfill_from_json
 from agents.analyst_rankings import analyst_rankings
 from agents.portfolio_agent import portfolio_agent
+from agents.autopsy_agent import get_recent_autopsies, get_failure_mode_patterns
 
 # Import Public API (v6.0 — monetization layer)
 from public_api_routes import router as public_api_router
@@ -693,6 +695,33 @@ if FASTAPI_AVAILABLE:
         return {"status": "resumed"}
 
     # ========================================
+    # SENTIMENT AGENT ENDPOINT
+    # ========================================
+
+    @app.get("/agent/sentiment/{symbol}")
+    async def agent_sentiment(symbol: str, asset_class: str = "stock"):
+        """
+        Test endpoint: fetch and score news sentiment for a symbol.
+        Query param: ?asset_class=stock|forex|crypto (default: stock)
+        """
+        sentiment = await agent_orchestrator.sentiment_agent.analyze(
+            symbol=symbol,
+            asset_class=asset_class,
+        )
+        return {
+            "symbol": symbol,
+            "asset_class": asset_class,
+            "sentiment_score": sentiment.sentiment_score,
+            "sentiment_label": sentiment.sentiment_label,
+            "headline_count": sentiment.headline_count,
+            "top_headlines": sentiment.top_headlines,
+            "bullish_count": sentiment.bullish_count,
+            "bearish_count": sentiment.bearish_count,
+            "cached": sentiment.cached,
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    # ========================================
     # SUPERVISOR BANDIT ENDPOINTS (v4.2)
     # ========================================
 
@@ -935,6 +964,47 @@ if FASTAPI_AVAILABLE:
         }
 
     # ========================================
+    # POST-LOSS AUTOPSY ENDPOINTS (v7.1)
+    # ========================================
+
+    @app.get("/agent/autopsies")
+    async def get_autopsies(limit: int = 20):
+        """Get recent post-loss autopsy reports."""
+        from agents.outcome_store import outcome_store
+        pool = await outcome_store._get_pool()
+        autopsies = await get_recent_autopsies(pool, limit=limit)
+        # Convert datetime objects to strings for JSON serialization
+        for a in autopsies:
+            for k, v in a.items():
+                if hasattr(v, 'isoformat'):
+                    a[k] = v.isoformat()
+        return {
+            "autopsies": autopsies,
+            "total": len(autopsies),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    @app.get("/agent/autopsies/patterns")
+    async def get_autopsy_patterns(since_days: int = 30):
+        """Get aggregate failure mode counts from post-loss autopsies."""
+        from agents.outcome_store import outcome_store
+        pool = await outcome_store._get_pool()
+        patterns = await get_failure_mode_patterns(pool, since_days=since_days)
+        # Convert datetime objects and special types for JSON serialization
+        for p in patterns:
+            for k, v in p.items():
+                if hasattr(v, 'isoformat'):
+                    p[k] = v.isoformat()
+                elif hasattr(v, '__float__'):
+                    p[k] = float(v)
+        return {
+            "patterns": patterns,
+            "since_days": since_days,
+            "total_failure_modes": len(patterns),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    # ========================================
     # BACKGROUND DAILY TRAINING LOOP
     # ========================================
 
@@ -1023,11 +1093,14 @@ if __name__ == "__main__":
     print(f"   Agent Stats:  GET  http://localhost:{port}/agent/stats")
     print(f"   Agent Kill:   POST http://localhost:{port}/agent/kill")
     print(f"   Agent Resume: POST http://localhost:{port}/agent/resume")
+    print(f"   Sentiment:    GET  http://localhost:{port}/agent/sentiment/{{symbol}}")
     print(f"   Bandit Select:POST http://localhost:{port}/agent/bandit/select")
     print(f"   Bandit Stats: GET  http://localhost:{port}/agent/bandit/stats")
     print(f"   Bandit Train: POST http://localhost:{port}/agent/bandit/train")
     print(f"   Backfill:     POST http://localhost:{port}/agent/backfill")
     print(f"   Daily Train:  POST http://localhost:{port}/agent/daily-training")
+    print(f"   Autopsies:    GET  http://localhost:{port}/agent/autopsies")
+    print(f"   Autopsy Ptns: GET  http://localhost:{port}/agent/autopsies/patterns")
     print(f"   Pairs:        POST http://localhost:{port}/pairs/analyze")
     print(f"   ─── Public API (v6.0) ───")
     print(f"   Evaluate:     POST http://localhost:{port}/api/v1/evaluate")

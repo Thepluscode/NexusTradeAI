@@ -120,6 +120,35 @@ LESSON_EXTRACTION_TOOL = {
     }
 }
 
+AUTOPSY_SYNTHESIS_TOOL = {
+    "name": "submit_autopsy_synthesis",
+    "description": "Submit your synthesis of the post-loss autopsy findings. Combine all agent analyses into a final diagnosis.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "primary_failure_mode": {
+                "type": "string",
+                "enum": ["bad_entry_timing", "adverse_news", "stop_too_tight", "regime_mismatch", "bad_luck", "multiple_factors"],
+                "description": "The main reason this trade lost money"
+            },
+            "actionable_lesson": {
+                "type": "string",
+                "description": "One concise sentence the trading system should remember to avoid this loss pattern"
+            },
+            "confidence": {
+                "type": "number",
+                "description": "0.0-1.0 confidence in this diagnosis"
+            },
+            "severity": {
+                "type": "string",
+                "enum": ["minor", "moderate", "severe"],
+                "description": "How serious this failure pattern is"
+            }
+        },
+        "required": ["primary_failure_mode", "actionable_lesson", "confidence", "severity"]
+    }
+}
+
 
 class ClaudeClient:
     """Async Claude API client with structured output via tool_use."""

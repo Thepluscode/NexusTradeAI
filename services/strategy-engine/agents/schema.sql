@@ -252,3 +252,25 @@ CREATE TABLE IF NOT EXISTS analyst_rankings (
     last_updated    TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(analyst_name, asset_class, regime)
 );
+
+-- 7. LOSS AUTOPSIES — Post-loss analysis from the autopsy agent
+CREATE TABLE IF NOT EXISTS loss_autopsies (
+    id                      SERIAL PRIMARY KEY,
+    timestamp               TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    symbol                  VARCHAR(20) NOT NULL,
+    asset_class             VARCHAR(10) NOT NULL,
+    direction               VARCHAR(10) NOT NULL,
+    tier                    VARCHAR(10) NOT NULL,
+    pnl_pct                 DECIMAL(8,4) NOT NULL,
+    exit_reason             VARCHAR(100),
+    -- Autopsy results
+    primary_failure_mode    VARCHAR(50) NOT NULL,  -- bad_entry_timing, adverse_news, stop_too_tight, regime_mismatch, bad_luck, multiple_factors
+    actionable_lesson       TEXT,
+    severity                VARCHAR(20) NOT NULL DEFAULT 'minor',  -- minor, moderate, severe
+    synthesis_confidence    DECIMAL(4,3),
+    findings                JSONB DEFAULT '[]'  -- Array of AutopsyFinding objects
+);
+CREATE INDEX IF NOT EXISTS idx_loss_autopsies_symbol ON loss_autopsies(symbol, timestamp);
+CREATE INDEX IF NOT EXISTS idx_loss_autopsies_failure ON loss_autopsies(primary_failure_mode, timestamp);
+CREATE INDEX IF NOT EXISTS idx_loss_autopsies_severity ON loss_autopsies(severity, timestamp);
+CREATE INDEX IF NOT EXISTS idx_loss_autopsies_asset ON loss_autopsies(asset_class, timestamp);

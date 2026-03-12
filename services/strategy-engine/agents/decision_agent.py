@@ -13,6 +13,10 @@ from typing import Optional, Dict, List
 
 from agents.base import AgentDecision, MarketSnapshot
 from agents.claude_client import ClaudeClient, TRADE_DECISION_TOOL
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agents.sentiment_agent import SentimentResult
 
 logger = logging.getLogger(__name__)
 
@@ -52,14 +56,16 @@ class DecisionAgent:
         snapshot: MarketSnapshot,
         market_analysis: Optional[Dict] = None,
         lessons: Optional[List[str]] = None,
+        sentiment=None,
     ) -> AgentDecision:
         """
         Evaluate a trade signal and return a structured decision.
+        sentiment: optional SentimentResult from SentimentAgent
         """
         if not self.client.available:
             return self._rule_based_decision(snapshot)
 
-        prompt = self._build_prompt(snapshot, market_analysis, lessons)
+        prompt = self._build_prompt(snapshot, market_analysis, lessons, sentiment)
         try:
             result = await self.client.call_with_tool(
                 system=DECISION_SYSTEM,
@@ -102,6 +108,7 @@ class DecisionAgent:
         s: MarketSnapshot,
         market: Optional[Dict],
         lessons: Optional[List[str]],
+        sentiment=None,
     ) -> str:
         lines = [
             f"TRADE SIGNAL: {s.direction.upper()} {s.symbol} ({s.asset_class})",
@@ -132,6 +139,16 @@ class DecisionAgent:
             obs = market.get("key_observations", [])
             if obs:
                 lines.append(f"Observations: {'; '.join(obs[:3])}")
+
+        # Sentiment context
+        if sentiment and sentiment.headline_count > 0:
+            lines.append(f"\nSENTIMENT CONTEXT:")
+            lines.append(f"Score: {sentiment.sentiment_score:+.2f} ({sentiment.sentiment_label})")
+            lines.append(f"Bullish signals: {sentiment.bullish_count} | Bearish signals: {sentiment.bearish_count}")
+            if sentiment.top_headlines:
+                lines.append(f"Top headlines:")
+                for hl in sentiment.top_headlines[:3]:
+                    lines.append(f"  - {hl}")
 
         # Learned lessons
         if lessons:

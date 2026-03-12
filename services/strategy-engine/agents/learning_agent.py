@@ -199,6 +199,20 @@ class LearningAgent:
         if len(self._recent_lessons) > 100:
             self._recent_lessons = self._recent_lessons[-100:]
 
+    def inject_lesson(self, symbol: str, asset_class: str, regime: str, lesson: str):
+        """Inject an external lesson (e.g. from autopsy agent) into the learning store."""
+        lesson_record = {
+            "symbol": symbol,
+            "asset_class": asset_class,
+            "regime": regime,
+            "actionable_lesson": lesson,
+            "pattern_type": "autopsy",
+            "confidence_in_lesson": 0.8,
+            "timestamp": datetime.now().isoformat(),
+        }
+        self._save_lesson(lesson_record)
+        logger.info(f"[LearningAgent] Injected lesson for {symbol}: {lesson[:80]}")
+
     def _load_recent_lessons(self):
         """Load recent lessons from JSONL file on startup."""
         try:
