@@ -1392,11 +1392,11 @@ async function scanForSignals(heldPositions = positions) {
     const signals = [];
     const session = getCurrentSession();
 
-    // [v3.9] Only enter during London or London/NY Overlap — highest-quality setups
-    // Tokyo, Sydney, standalone NY, and off-peak are now blocked for new entries
-    const allowedSessions = ['London', 'London/NY Overlap'];
+    // [v7.1] Allow London, London/NY Overlap, AND New York sessions
+    // Only block Tokyo, Sydney, and off-peak (low liquidity = wide spreads)
+    const allowedSessions = ['London', 'London/NY Overlap', 'New York'];
     if (!allowedSessions.includes(session.name)) {
-        console.log(`⏸️ ${session.name} — restricted to London/Overlap only, skipping new entries`);
+        console.log(`⏸️ ${session.name} — restricted to London/NY sessions only, skipping new entries`);
         return signals;
     }
 
