@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ChartErrorBoundary } from '../components/ChartErrorBoundary';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import {
   Box, Paper, Typography, Grid, Card, CardContent,
@@ -234,26 +235,28 @@ function BanditChart({ contexts }: { contexts: Record<string, BanditContextSumma
   };
 
   return (
-    <ResponsiveContainer width="100%" height={220}>
-      <BarChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#333" />
-        <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#999' }} angle={-20} textAnchor="end" height={50} />
-        <YAxis tick={{ fontSize: 10, fill: '#999' }} domain={[0, 100]} />
-        <RechartsTooltip
-          contentStyle={{ background: '#1e1e2e', border: '1px solid #333', borderRadius: 8 }}
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          formatter={(value: any, _name: any, entry: any) => [
-            `${value}% (${entry?.payload?.arm || ''}, ${entry?.payload?.pulls || 0} trades)`,
-            'Confidence',
-          ]}
-        />
-        <Bar dataKey="mean" radius={[4, 4, 0, 0]}>
-          {data.map((entry, i) => (
-            <Cell key={i} fill={armColors[entry.arm] || '#8b5cf6'} />
-          ))}
-        </Bar>
-      </BarChart>
-    </ResponsiveContainer>
+    <ChartErrorBoundary>
+      <ResponsiveContainer width="100%" height={220}>
+        <BarChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#333" />
+          <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#999' }} angle={-20} textAnchor="end" height={50} />
+          <YAxis tick={{ fontSize: 10, fill: '#999' }} domain={[0, 100]} />
+          <RechartsTooltip
+            contentStyle={{ background: '#1e1e2e', border: '1px solid #333', borderRadius: 8 }}
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            formatter={(value: any, _name: any, entry: any) => [
+              `${value}% (${entry?.payload?.arm || ''}, ${entry?.payload?.pulls || 0} trades)`,
+              'Confidence',
+            ]}
+          />
+          <Bar dataKey="mean" radius={[4, 4, 0, 0]}>
+            {data.map((entry, i) => (
+              <Cell key={i} fill={armColors[entry.arm] || '#8b5cf6'} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </ChartErrorBoundary>
   );
 }
 

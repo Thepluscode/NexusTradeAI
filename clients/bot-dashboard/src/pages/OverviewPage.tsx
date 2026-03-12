@@ -1,4 +1,5 @@
 import React from 'react';
+import { ChartErrorBoundary } from '../components/ChartErrorBoundary';
 import SEO from '@/components/SEO';
 import {
     Box,
@@ -271,6 +272,7 @@ function PnLChart({ days = 30 }: { days?: number }) {
     const color = isPositive ? '#10b981' : '#ef4444';
 
     return (
+        <ChartErrorBoundary>
         <ResponsiveContainer width="100%" height={200}>
             <AreaChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
                 <defs>
@@ -315,6 +317,7 @@ function PnLChart({ days = 30 }: { days?: number }) {
                 />
             </AreaChart>
         </ResponsiveContainer>
+        </ChartErrorBoundary>
     );
 }
 
