@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { QueryClient, QueryClientProvider } from 'react-query';
 import { ThemeProvider, CssBaseline, alpha } from '@mui/material';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
@@ -574,7 +574,7 @@ function AuthRedirect() {
 
 // ── Wrap page in sidebar layout ──────────────────────────────────────────────
 function WithNav({ children }: { children: React.ReactNode }) {
-  return <Navigation>{children}</Navigation>;
+  return <Navigation><PageErrorBoundary>{children}</PageErrorBoundary></Navigation>;
 }
 
 // ── Single flat Routes — no nesting ──────────────────────────────────────────
@@ -604,6 +604,62 @@ function RouterSwitch() {
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );
+}
+
+// ── Global handler: suppress Recharts invariant errors from crashing the page ─
+if (typeof window !== 'undefined') {
+  window.addEventListener('error', (e) => {
+    if (e.error?.message === 'Invariant failed') {
+      e.preventDefault();       // prevent blank page
+      e.stopImmediatePropagation();
+      console.warn('[Suppressed] Recharts Invariant failed — chart skipped');
+    }
+  });
+}
+
+// ── Page-level error boundary — catches any render crash ────────────────────
+class PageErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error: Error) {
+    console.warn('[PageErrorBoundary]', error.message);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <Box sx={{ p: 4, textAlign: 'center' }}>
+          <Typography variant="h6" sx={{ mb: 1 }}>Something went wrong</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            {this.state.error?.message || 'An unexpected error occurred'}
+          </Typography>
+          <button
+            onClick={() => this.setState({ hasError: false, error: null })}
+            style={{
+              padding: '8px 24px',
+              borderRadius: 8,
+              border: '1px solid rgba(255,255,255,0.2)',
+              background: 'rgba(59,130,246,0.15)',
+              color: '#3b82f6',
+              cursor: 'pointer',
+              fontSize: '0.875rem',
+              fontWeight: 600,
+            }}
+          >
+            Try Again
+          </button>
+        </Box>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 function App() {
