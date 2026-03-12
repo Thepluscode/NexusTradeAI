@@ -333,10 +333,17 @@ export default function ThresholdTuner() {
                                                 tick={{ fontSize: 10, fill: '#9ca3af' }}
                                             />
                                             <YAxis
+                                                yAxisId="left"
                                                 tick={{ fontSize: 10, fill: '#9ca3af' }}
                                                 width={36}
                                                 domain={[0, 100]}
                                                 tickFormatter={(v: number) => `${v}%`}
+                                            />
+                                            <YAxis
+                                                yAxisId="right"
+                                                orientation="right"
+                                                tick={{ fontSize: 10, fill: '#9ca3af' }}
+                                                width={36}
                                             />
                                             <RechartsTooltip
                                                 contentStyle={{ background: '#1e293b', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12 }}
@@ -350,6 +357,7 @@ export default function ThresholdTuner() {
                                             <Line
                                                 type="monotone"
                                                 dataKey="winRate"
+                                                yAxisId="left"
                                                 stroke="#10b981"
                                                 strokeWidth={2}
                                                 dot={{ r: 3, fill: '#10b981' }}
