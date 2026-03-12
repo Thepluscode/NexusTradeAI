@@ -1,4 +1,4 @@
-import React, { useState, Suspense } from 'react';
+import { useState } from 'react';
 import SEO from '@/components/SEO';
 import { useQuery } from 'react-query';
 import {
@@ -38,8 +38,6 @@ import { apiClient } from '@/services/api';
 import { MetricCard } from '@/components/MetricCard';
 import type { BacktestSymbolResult, BacktestTrade, BacktestScanResult, EquityCurvePoint } from '@/types';
 
-// Lazy-load ThresholdTuner (contains Recharts) so it can't crash the page
-const ThresholdTuner = React.lazy(() => import('@/components/ThresholdTuner'));
 
 function ValidationChecklist({ checks }: { checks: Record<string, boolean> }) {
     const labels: Record<string, string> = {
@@ -312,11 +310,6 @@ export default function BacktestPage() {
                 );
             })()}
 
-            {/* Threshold Tuner — lazy loaded to isolate Recharts crashes */}
-            <Divider sx={{ my: 3 }} />
-            <Suspense fallback={<CircularProgress size={24} />}>
-                <ThresholdTuner />
-            </Suspense>
             <Divider sx={{ my: 3 }} />
 
             {/* Pairs cache warm-up result */}
