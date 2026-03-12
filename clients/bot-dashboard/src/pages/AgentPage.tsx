@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChartErrorBoundary } from '../components/ChartErrorBoundary';
+import { SafeResponsiveContainer } from '../components/ChartErrorBoundary';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import {
   Box, Paper, Typography, Grid, Card, CardContent,
@@ -13,7 +13,7 @@ import {
   CheckCircle, Cancel,
 } from '@mui/icons-material';
 import {
-  ResponsiveContainer, BarChart, Bar, XAxis, YAxis,
+  BarChart, Bar, XAxis, YAxis,
   CartesianGrid, Tooltip as RechartsTooltip, Cell,
 } from 'recharts';
 import toast from 'react-hot-toast';
@@ -235,8 +235,7 @@ function BanditChart({ contexts }: { contexts: Record<string, BanditContextSumma
   };
 
   return (
-    <ChartErrorBoundary>
-      <ResponsiveContainer width="100%" height={220}>
+    <SafeResponsiveContainer height={220} data={data}>
         <BarChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#333" />
           <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#999' }} angle={-20} textAnchor="end" height={50} />
@@ -255,8 +254,7 @@ function BanditChart({ contexts }: { contexts: Record<string, BanditContextSumma
             ))}
           </Bar>
         </BarChart>
-      </ResponsiveContainer>
-    </ChartErrorBoundary>
+    </SafeResponsiveContainer>
   );
 }
 

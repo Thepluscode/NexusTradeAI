@@ -8,8 +8,8 @@ import {
   CartesianGrid,
   Tooltip,
   Legend,
-  ResponsiveContainer,
 } from 'recharts';
+import { SafeResponsiveContainer } from './ChartErrorBoundary';
 
 interface PerformanceChartProps {
   data: Array<{
@@ -30,7 +30,7 @@ export const PerformanceChart: React.FC<PerformanceChartProps> = ({ data }) => {
     <Card>
       <CardHeader title="Performance" subheader="Real-time P&L and Equity" />
       <CardContent>
-        <ResponsiveContainer width="100%" height={300}>
+        <SafeResponsiveContainer height={300} data={formattedData}>
           <LineChart data={formattedData}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="time" />
@@ -59,7 +59,7 @@ export const PerformanceChart: React.FC<PerformanceChartProps> = ({ data }) => {
               dot={false}
             />
           </LineChart>
-        </ResponsiveContainer>
+        </SafeResponsiveContainer>
       </CardContent>
     </Card>
   );

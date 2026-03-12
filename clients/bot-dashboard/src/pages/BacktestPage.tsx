@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChartErrorBoundary } from '../components/ChartErrorBoundary';
+import { SafeResponsiveContainer } from '../components/ChartErrorBoundary';
 import SEO from '@/components/SEO';
 import { useQuery } from 'react-query';
 import {
@@ -42,7 +42,6 @@ import {
     YAxis,
     CartesianGrid,
     Tooltip as RechartsTooltip,
-    ResponsiveContainer,
 } from 'recharts';
 import { apiClient } from '@/services/api';
 import { MetricCard } from '@/components/MetricCard';
@@ -279,8 +278,7 @@ export default function BacktestPage() {
                                 {finalPnl >= 0 ? '+' : ''}${finalPnl.toFixed(2)} cumulative P&L
                             </Typography>
                         </Box>
-                        <ChartErrorBoundary>
-                        <ResponsiveContainer width="100%" height={200}>
+                        <SafeResponsiveContainer height={200} data={equityCurve as EquityCurvePoint[]}>
                             <AreaChart data={equityCurve as EquityCurvePoint[]} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                                 <defs>
                                     <linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1">
@@ -318,8 +316,7 @@ export default function BacktestPage() {
                                     activeDot={{ r: 4, fill: curveColor }}
                                 />
                             </AreaChart>
-                        </ResponsiveContainer>
-                        </ChartErrorBoundary>
+                        </SafeResponsiveContainer>
                         <Box sx={{ display: 'flex', gap: 3, mt: 1.5, flexWrap: 'wrap' }}>
                             {[
                                 { label: 'Trading days', value: String((equityCurve as EquityCurvePoint[]).length) },

@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { ChartErrorBoundary } from '../components/ChartErrorBoundary';
+import { SafeResponsiveContainer } from '../components/ChartErrorBoundary';
 import SEO from '@/components/SEO';
 import { useQuery } from 'react-query';
 import {
@@ -29,7 +29,6 @@ import {
 } from '@mui/material';
 import { TrendingUp, TrendingDown, Receipt, Download, Person, Analytics, Inbox } from '@mui/icons-material';
 import {
-    ResponsiveContainer,
     BarChart,
     Bar,
     CartesianGrid,
@@ -483,8 +482,7 @@ export default function TradesPage() {
                                     {!strategyChartData.length ? (
                                         <Alert severity="info">No strategy-tagged trades in selected period.</Alert>
                                     ) : (
-                                        <ChartErrorBoundary>
-                                        <ResponsiveContainer width="100%" height="100%">
+                                        <SafeResponsiveContainer height={280} data={strategyChartData}>
                                             <BarChart data={strategyChartData} margin={{ top: 8, right: 16, left: -12, bottom: 20 }}>
                                                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
                                                 <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 12 }} angle={-18} textAnchor="end" height={60} />
@@ -495,8 +493,7 @@ export default function TradesPage() {
                                                 <Bar yAxisId="left" dataKey="totalPnL" name="Total P&L" fill="#10b981" radius={[4, 4, 0, 0]} />
                                                 <Bar yAxisId="right" dataKey="winRate" name="Win Rate %" fill="#3b82f6" radius={[4, 4, 0, 0]} />
                                             </BarChart>
-                                        </ResponsiveContainer>
-                                        </ChartErrorBoundary>
+                                        </SafeResponsiveContainer>
                                     )}
                                 </Paper>
                             </Grid>
@@ -506,8 +503,7 @@ export default function TradesPage() {
                                     {!regimeChartData.length ? (
                                         <Alert severity="info">No regime-tagged trades in selected period.</Alert>
                                     ) : (
-                                        <ChartErrorBoundary>
-                                        <ResponsiveContainer width="100%" height="100%">
+                                        <SafeResponsiveContainer height={280} data={regimeChartData}>
                                             <BarChart data={regimeChartData} margin={{ top: 8, right: 16, left: -12, bottom: 20 }}>
                                                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
                                                 <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 12 }} angle={-18} textAnchor="end" height={60} />
@@ -518,8 +514,7 @@ export default function TradesPage() {
                                                 <Bar yAxisId="left" dataKey="totalPnL" name="Total P&L" fill="#f59e0b" radius={[4, 4, 0, 0]} />
                                                 <Bar yAxisId="right" dataKey="winRate" name="Win Rate %" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
                                             </BarChart>
-                                        </ResponsiveContainer>
-                                        </ChartErrorBoundary>
+                                        </SafeResponsiveContainer>
                                     )}
                                 </Paper>
                             </Grid>

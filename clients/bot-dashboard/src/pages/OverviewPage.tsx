@@ -1,5 +1,5 @@
 import React from 'react';
-import { ChartErrorBoundary } from '../components/ChartErrorBoundary';
+import { SafeResponsiveContainer } from '../components/ChartErrorBoundary';
 import SEO from '@/components/SEO';
 import {
     Box,
@@ -43,7 +43,6 @@ import {
     YAxis,
     CartesianGrid,
     Tooltip as RechartsTooltip,
-    ResponsiveContainer,
 } from 'recharts';
 import type { TradeDaySummary } from '@/types';
 import { useNavigate } from 'react-router-dom';
@@ -272,8 +271,7 @@ function PnLChart({ days = 30 }: { days?: number }) {
     const color = isPositive ? '#10b981' : '#ef4444';
 
     return (
-        <ChartErrorBoundary>
-        <ResponsiveContainer width="100%" height={200}>
+        <SafeResponsiveContainer height={200} data={chartData}>
             <AreaChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
                 <defs>
                     <linearGradient id="pnlGrad" x1="0" y1="0" x2="0" y2="1">
@@ -316,8 +314,7 @@ function PnLChart({ days = 30 }: { days?: number }) {
                     activeDot={{ r: 4, fill: color }}
                 />
             </AreaChart>
-        </ResponsiveContainer>
-        </ChartErrorBoundary>
+        </SafeResponsiveContainer>
     );
 }
 
