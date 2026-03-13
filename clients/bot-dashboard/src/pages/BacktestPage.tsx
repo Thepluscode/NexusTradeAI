@@ -256,7 +256,6 @@ export default function BacktestPage() {
                 const curve = equityCurve as EquityCurvePoint[];
                 const finalPnl = curve[curve.length - 1]?.cumulative_pnl ?? 0;
                 const curveColor = finalPnl >= 0 ? '#10b981' : '#ef4444';
-                const fmtDate = (d: string) => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
                 return (
                     <Paper sx={{ p: 2, mb: 3 }}>
                         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>

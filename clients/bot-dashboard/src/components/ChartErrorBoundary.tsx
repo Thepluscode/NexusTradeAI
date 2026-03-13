@@ -38,7 +38,7 @@ export function SafeResponsiveContainer({
   height = 200,
   data,
 }: {
-  children: React.ReactNode;
+  children: React.ReactElement;
   width?: string | number;
   height?: string | number;
   data?: unknown[] | null;

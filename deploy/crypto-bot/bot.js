@@ -2940,21 +2940,12 @@ app.listen(PORT, async () => {
         } catch (e) { console.warn('⚠️  DB crypto perfData hydration failed:', e.message); }
     }
 
-    if (dbPool) {
-        console.log('ℹ️  Multi-user DB mode detected — default crypto engine bootstrap disabled');
-    }
+    // Restore counters from local state file (if available)
+    engine.loadState();
 
-    // Auto-start only if previously running (persistent state)
-    if (!dbPool) {
-        if (engine.loadState()) {
-            console.log('🔄 Restoring previous running state...');
-            engine.start();
-        } else {
-            console.log('⏸️  Bot was stopped before restart - not auto-starting. POST /api/trading/start to begin.');
-        }
-    } else {
-        console.log('ℹ️  Default crypto engine remains idle in multi-user mode; per-user engines will be restored instead.');
-    }
+    // Auto-start the default crypto engine (matches stock/forex bot behavior)
+    console.log('🚀 Auto-starting default crypto trading engine...');
+    engine.start().catch(e => console.error('❌ Default crypto engine start failed:', e.message));
 
     // ── Auto-restart engines for users who had isRunning=true at last save ──
     async function autoRestartCryptoEngines() {

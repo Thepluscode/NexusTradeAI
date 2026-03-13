@@ -1,11 +1,13 @@
 import { useNavigate } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
+import React from 'react';
 import {
-    Box, Typography, Button, Paper, Chip, Divider, Container, alpha,
+    Box, Typography, Button, Paper, Chip, Divider, Container, alpha, Accordion,
+    AccordionSummary, AccordionDetails, Link,
 } from '@mui/material';
 import {
     Bolt, CheckCircle, Speed, Security, Psychology, TrendingUp,
-    Code, ArrowForward,
+    Code, ArrowForward, ExpandMore, QueryStats, Public, Timer,
 } from '@mui/icons-material';
 
 const BRIDGE_URL = 'https://nexus-strategy-bridge-production.up.railway.app';
@@ -317,6 +319,96 @@ export default function LandingPage() {
                     </Container>
                 </Box>
 
+                {/* ── Trust Signals ───────────────────────────────────── */}
+                <Container maxWidth="lg" sx={{ py: { xs: 6, md: 10 } }}>
+                    <Box sx={{
+                        display: 'grid',
+                        gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' },
+                        gap: 3,
+                    }}>
+                        {[
+                            { icon: <QueryStats sx={{ fontSize: 28 }} />, value: '1,000+', label: 'API Evaluations Served' },
+                            { icon: <Public sx={{ fontSize: 28 }} />, value: '3 Markets', label: 'Stocks, Forex & Crypto' },
+                            { icon: <Timer sx={{ fontSize: 28 }} />, value: '99.9%', label: 'Uptime SLA' },
+                            { icon: <Speed sx={{ fontSize: 28 }} />, value: '<8s', label: 'Avg Response Time' },
+                        ].map(stat => (
+                            <Paper key={stat.label} sx={{
+                                p: 3, textAlign: 'center',
+                                border: '1px solid rgba(255,255,255,0.06)',
+                                bgcolor: 'rgba(255,255,255,0.02)',
+                            }}>
+                                <Box sx={{ color: '#3b82f6', mb: 1.5 }}>{stat.icon}</Box>
+                                <Typography variant="h4" fontWeight={900} sx={{
+                                    mb: 0.5,
+                                    background: 'linear-gradient(135deg, #e6edf3 0%, #8b949e 100%)',
+                                    WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+                                }}>
+                                    {stat.value}
+                                </Typography>
+                                <Typography variant="body2" color="text.secondary">{stat.label}</Typography>
+                            </Paper>
+                        ))}
+                    </Box>
+                </Container>
+
+                {/* ── FAQ ─────────────────────────────────────────────── */}
+                <Box sx={{ bgcolor: 'rgba(255,255,255,0.01)', py: { xs: 6, md: 10 }, borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+                    <Container maxWidth="md">
+                        <Typography variant="h4" fontWeight={800} textAlign="center" sx={{ mb: 1, letterSpacing: '-0.02em' }}>
+                            Frequently Asked Questions
+                        </Typography>
+                        <Typography variant="body1" color="text.secondary" textAlign="center" sx={{ mb: 5 }}>
+                            Everything you need to know before getting started.
+                        </Typography>
+                        {[
+                            {
+                                q: 'What is NexusTradeAI?',
+                                a: 'NexusTradeAI is an AI-powered trade signal evaluator API. You send us a trade signal (symbol, price, direction, indicators) and our multi-agent AI pipeline returns a GO/NO-GO decision with a confidence score, reasoning, and risk flags.',
+                            },
+                            {
+                                q: 'How accurate are the signals?',
+                                a: 'Accuracy depends on market conditions and the quality of your input signals. Our AI evaluates each trade against current market regime, technical factors, and historical patterns. The confidence score (0-1) tells you how sure the model is. We recommend treating it as a second opinion, not a guarantee.',
+                            },
+                            {
+                                q: 'Is it free to use?',
+                                a: 'Yes! The Free tier gives you 100 evaluations per month at no cost, forever. No credit card required. When you need more volume, Pro ($49/mo) offers 5,000 evaluations and Enterprise ($499/mo) is unlimited.',
+                            },
+                            {
+                                q: 'What markets are supported?',
+                                a: 'NexusTradeAI supports stocks, forex, and cryptocurrency — all through a single unified API endpoint. The AI automatically adapts its regime detection and analysis to each market\'s characteristics.',
+                            },
+                            {
+                                q: 'How do I get started?',
+                                a: 'Sign up, create an API key from the dashboard, and make your first POST request to /api/v1/evaluate. We have copy-paste Python and TypeScript SDKs. Most developers are up and running in under 5 minutes.',
+                            },
+                            {
+                                q: 'What are the rate limits?',
+                                a: 'Free tier: 100 evaluations per month. Pro tier: 5,000 evaluations per month with priority queue. Enterprise: unlimited evaluations with dedicated capacity. All tiers share the same AI pipeline quality.',
+                            },
+                        ].map((item, i) => (
+                            <Accordion
+                                key={i}
+                                disableGutters
+                                elevation={0}
+                                sx={{
+                                    bgcolor: 'transparent',
+                                    '&::before': { display: 'none' },
+                                    borderBottom: '1px solid rgba(255,255,255,0.06)',
+                                }}
+                            >
+                                <AccordionSummary expandIcon={<ExpandMore sx={{ color: 'text.secondary' }} />} sx={{ px: 0 }}>
+                                    <Typography variant="subtitle1" fontWeight={600}>{item.q}</Typography>
+                                </AccordionSummary>
+                                <AccordionDetails sx={{ px: 0, pt: 0, pb: 2 }}>
+                                    <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.7 }}>
+                                        {item.a}
+                                    </Typography>
+                                </AccordionDetails>
+                            </Accordion>
+                        ))}
+                    </Container>
+                </Box>
+
                 {/* ── CTA ──────────────────────────────────────────────── */}
                 <Container maxWidth="sm" sx={{ py: { xs: 8, md: 12 }, textAlign: 'center' }}>
                     <Typography variant="h4" fontWeight={800} sx={{ mb: 2, letterSpacing: '-0.02em' }}>
@@ -341,10 +433,77 @@ export default function LandingPage() {
                 </Container>
 
                 {/* ── Footer ───────────────────────────────────────────── */}
-                <Box sx={{ borderTop: '1px solid rgba(255,255,255,0.06)', py: 3, textAlign: 'center' }}>
-                    <Typography variant="caption" color="text.secondary">
-                        NexusTradeAI v6.1 — AI-powered trade signal evaluation
-                    </Typography>
+                <Box sx={{ borderTop: '1px solid rgba(255,255,255,0.06)', py: { xs: 4, md: 5 } }}>
+                    <Container maxWidth="lg">
+                        <Box sx={{
+                            display: 'flex',
+                            flexDirection: { xs: 'column', md: 'row' },
+                            justifyContent: 'space-between',
+                            alignItems: { xs: 'center', md: 'flex-start' },
+                            gap: 3,
+                            mb: 3,
+                        }}>
+                            {/* Brand */}
+                            <Box sx={{ textAlign: { xs: 'center', md: 'left' } }}>
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, justifyContent: { xs: 'center', md: 'flex-start' }, mb: 1 }}>
+                                    <Box sx={{
+                                        width: 28, height: 28, borderRadius: '8px',
+                                        background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)',
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    }}>
+                                        <Bolt sx={{ color: '#fff', fontSize: 16 }} />
+                                    </Box>
+                                    <Typography variant="body2" fontWeight={700}>NexusTradeAI</Typography>
+                                </Box>
+                                <Typography variant="caption" color="text.secondary">
+                                    AI-powered trade signal evaluation
+                                </Typography>
+                            </Box>
+
+                            {/* Links */}
+                            <Box sx={{ display: 'flex', gap: { xs: 3, md: 5 }, flexWrap: 'wrap', justifyContent: 'center' }}>
+                                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                                    <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                        Product
+                                    </Typography>
+                                    <Link href="/public-docs" underline="hover" variant="body2" color="text.secondary" sx={{ '&:hover': { color: '#e6edf3' } }}>
+                                        API Docs
+                                    </Link>
+                                    <Link href="/login" underline="hover" variant="body2" color="text.secondary" sx={{ '&:hover': { color: '#e6edf3' } }}>
+                                        Dashboard
+                                    </Link>
+                                </Box>
+                                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                                    <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                        Legal
+                                    </Typography>
+                                    <Link href="/privacy" underline="hover" variant="body2" color="text.secondary" sx={{ '&:hover': { color: '#e6edf3' } }}>
+                                        Privacy Policy
+                                    </Link>
+                                    <Link href="/terms" underline="hover" variant="body2" color="text.secondary" sx={{ '&:hover': { color: '#e6edf3' } }}>
+                                        Terms of Service
+                                    </Link>
+                                </Box>
+                                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                                    <Typography variant="caption" fontWeight={700} color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                        Support
+                                    </Typography>
+                                    <Link href="mailto:support@nexustradeai.com" underline="hover" variant="body2" color="text.secondary" sx={{ '&:hover': { color: '#e6edf3' } }}>
+                                        Contact Us
+                                    </Link>
+                                    <Link href="https://github.com/NexusTradeAI" underline="hover" variant="body2" color="text.secondary" sx={{ '&:hover': { color: '#e6edf3' } }}>
+                                        GitHub
+                                    </Link>
+                                </Box>
+                            </Box>
+                        </Box>
+
+                        <Divider sx={{ borderColor: 'rgba(255,255,255,0.06)' }} />
+
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'center', mt: 2.5 }}>
+                            {new Date().getFullYear()} NexusTradeAI. All rights reserved. Not financial advice.
+                        </Typography>
+                    </Container>
                 </Box>
             </Box>
         </>
