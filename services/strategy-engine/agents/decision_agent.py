@@ -20,26 +20,28 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DECISION_SYSTEM = """You are a senior quantitative trading analyst at a hedge fund. You evaluate trade signals and provide a structured GO/NO-GO recommendation.
+DECISION_SYSTEM = """You are a quantitative trading analyst evaluating trade signals. Provide a structured GO/NO-GO recommendation using the submit_trade_decision tool.
 
-You are CONSERVATIVE — protecting capital is more important than capturing every opportunity. You reject mediocre setups and only approve trades with clear edge.
+Your job is to APPROVE trades that have a reasonable edge and REJECT only genuinely bad setups. You are NOT ultra-conservative — the bot's risk management (stop losses, position sizing, anti-churning) already protects capital. Your role is to filter out noise, not block everything.
 
-For each trade signal, analyze:
-1. SIGNAL QUALITY — Is momentum/trend strong enough? Is volume confirming?
-2. RISK/REWARD — Are stop and target levels sensible? Is R:R >= 1.5?
-3. MARKET CONTEXT — Any red flags? (overextended RSI, low volume, choppy action)
-4. TIMING — Good entry or chasing? Pullback entry vs. extension entry?
-5. REGIME FIT — Does this trade fit the current market regime?
+Evaluate:
+1. SIGNAL QUALITY — Does the signal have momentum/volume confirmation?
+2. RISK/REWARD — Is R:R >= 1.5? Are stop/target levels sensible?
+3. MARKET CONTEXT — Any red flags? (extreme RSI, very low volume, choppy action)
+4. REGIME FIT — Does this trade fit the current market regime?
 
-Use the submit_trade_decision tool to provide your structured evaluation.
+IMPORTANT — Asset-class-specific thresholds:
+- STOCKS: trend_strength > 0.1 is decent, > 0.3 is strong. Volume ratio > 1.0 confirms.
+- FOREX: trend_strength is raw pip movement (e.g. 0.0005 = 5 pips). Values > 0.0003 are normal. Do NOT reject forex trades for "weak trend" based on stock thresholds. Forex R:R and session timing matter more.
+- CRYPTO: Higher volatility is normal. trend_strength > 0.05 is decent. Volume spikes confirm.
 
-Key rules:
-- If RSI > 75 for longs or RSI < 25 for shorts → flag as overextended
-- If volume_ratio < 1.0 → flag as low conviction move
-- If trend_strength < 0.3 → flag as weak trend
-- If ATR > 3% → flag as high volatility risk
-- approved=true ONLY if you see clear positive expected value
-- position_size_adjustment: reduce for risky setups, increase for ideal setups"""
+Rules:
+- If RSI > 80 for longs or RSI < 20 for shorts → flag as overextended (note: 70-80 is NOT overextended in a trend)
+- If volume_ratio < 0.5 → flag as very low conviction
+- approved=true when you see a reasonable setup with positive expected value
+- approved=false ONLY for clearly bad setups (multiple red flags, terrible R:R, counter-trend in ranging market)
+- position_size_adjustment: 0.5 for marginal, 1.0 for solid, 1.25 for ideal setups
+- When in doubt, APPROVE with reduced size rather than rejecting"""
 
 
 class DecisionAgent:
@@ -162,24 +164,30 @@ class DecisionAgent:
         """Fallback decision when Claude is unavailable."""
         flags = []
 
-        # RSI checks
+        # RSI checks (use wider bands — 70-80 is fine in a trend)
         if s.rsi is not None:
-            if s.direction == "long" and s.rsi > 75:
+            if s.direction == "long" and s.rsi > 80:
                 flags.append("overbought_rsi")
-            elif s.direction == "short" and s.rsi < 25:
+            elif s.direction == "short" and s.rsi < 20:
                 flags.append("oversold_rsi")
 
-        # Volume check
-        if s.volume_ratio is not None and s.volume_ratio < 0.8:
+        # Volume check (only flag very low volume)
+        if s.volume_ratio is not None and s.volume_ratio < 0.5:
             flags.append("low_volume")
 
-        # ATR check
-        if s.atr_pct is not None and s.atr_pct > 3.0:
+        # ATR check (crypto has higher vol, so raise threshold)
+        atr_limit = 5.0 if s.asset_class == "crypto" else 3.0
+        if s.atr_pct is not None and s.atr_pct > atr_limit:
             flags.append("high_volatility")
 
-        # Trend strength
-        if s.trend_strength is not None and s.trend_strength < 0.2:
-            flags.append("weak_trend")
+        # Trend strength — asset-class aware thresholds
+        if s.trend_strength is not None:
+            if s.asset_class == "forex" and s.trend_strength < 0.0001:
+                flags.append("weak_trend")
+            elif s.asset_class == "crypto" and s.trend_strength < 0.02:
+                flags.append("weak_trend")
+            elif s.asset_class == "stock" and s.trend_strength < 0.1:
+                flags.append("weak_trend")
 
         approved = len(flags) <= 1  # allow 1 flag, reject on 2+
         confidence = max(0.3, 1.0 - len(flags) * 0.2)
