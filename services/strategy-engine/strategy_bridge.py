@@ -313,7 +313,7 @@ if FASTAPI_AVAILABLE:
                     strategy="regime_momentum",
                     signal=signal_type_to_string(mom_signal.signal_type),
                     confidence=mom_signal.confidence,
-                    reason=mom_signal.reason or "Regime momentum signal",
+                    reason=getattr(mom_signal, 'reason', None) or "Regime momentum signal",
                     metadata={
                         "regime": str(momentum_strategy.current_regime),
                         "position_multiplier": momentum_strategy.get_position_size_multiplier()
@@ -343,7 +343,7 @@ if FASTAPI_AVAILABLE:
                     strategy="volatility_arbitrage",
                     signal=signal_type_to_string(vol_signal.signal_type),
                     confidence=vol_signal.confidence,
-                    reason=vol_signal.reason or "Volatility signal",
+                    reason=getattr(vol_signal, 'reason', None) or "Volatility signal",
                     metadata={}
                 ))
             else:
@@ -511,7 +511,7 @@ if FASTAPI_AVAILABLE:
     @app.post("/ai/evaluate")
     async def ai_evaluate(req: AIEvaluationRequest):
         """Evaluate a trade signal using Claude AI advisor."""
-        signal_dict = req.dict(exclude_none=True)
+        signal_dict = req.model_dump(exclude_none=True)
         result = await ai_advisor.evaluate(signal_dict)
         return {
             "symbol": req.symbol,
@@ -841,7 +841,7 @@ if FASTAPI_AVAILABLE:
         Backfill trades pushed as JSON from bots.
         Use when bridge DB differs from bot DB.
         """
-        trades = [t.dict() for t in req.trades]
+        trades = [t.model_dump() for t in req.trades]
         stats = await backfill_from_json(trades)
         return {
             **stats,

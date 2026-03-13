@@ -388,8 +388,8 @@ app.post('/api/auth/forgot-password', authRateLimit, async (req, res) => {
              ON CONFLICT (user_id) DO UPDATE SET token=$2, expires_at=$3`,
             [userId, token, expires]
         );
-        // Log token for now (email delivery is future work)
-        console.log(`🔑 Password reset token for ${email}: ${token}`);
+        // Token generated (email delivery is future work)
+        console.log(`🔑 Password reset token generated for ${email}`);
         res.json({ success: true });
     } catch (e) {
         res.json({ success: true }); // never reveal errors
@@ -3606,7 +3606,19 @@ async function fetchBarsWithCache(symbol, cfg, params) {
         timeout: 12000
     });
     const bars = barResponse.data?.bars || null;
-    if (bars) BAR_CACHE.set(cacheKey, { bars, fetchedAt: Date.now() });
+    if (bars) {
+        BAR_CACHE.set(cacheKey, { bars, fetchedAt: Date.now() });
+        // Evict oldest entries when cache exceeds max size to prevent memory leak
+        if (BAR_CACHE.size > 500) {
+            const entriesToDelete = BAR_CACHE.size - 400; // trim down to 400
+            let deleted = 0;
+            for (const [key] of BAR_CACHE) {
+                if (deleted >= entriesToDelete) break;
+                BAR_CACHE.delete(key);
+                deleted++;
+            }
+        }
+    }
     return bars;
 }
 
@@ -4004,6 +4016,11 @@ class UserTradingEngine {
 
     async scanMomentumBreakouts() {
         if (this.perfData.maxDrawdown >= MAX_DRAWDOWN_PCT) return [];
+        // [Guardrail] Check if trading is paused by adaptive guardrails
+        if (guardrails.isPaused) {
+            console.log(`[Engine ${this.userId}][Guardrail] BLOCKED — lane paused until ${new Date(guardrails.lanePausedUntil).toLocaleTimeString()}`);
+            return [];
+        }
         const symbols = popularStocks.getAllSymbols();
         const movers = [];
         const batchSize = 20;
@@ -4021,6 +4038,12 @@ class UserTradingEngine {
                 .sort((a, b) => (b.score || 0) - (a.score || 0));
             const engineMaxSignals = isOpeningRangeBreakoutWindow() ? 2 : MAX_SIGNALS_PER_CYCLE;
             for (const mover of ranked.slice(0, Math.min(available, engineMaxSignals))) {
+                // [Guardrail] Apply loss-adjusted position sizing
+                if (guardrails.lossSizeMultiplier < 1.0) {
+                    mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * guardrails.lossSizeMultiplier;
+                    console.log(`[Engine ${this.userId}][Guardrail] ${mover.symbol} size cut to ${mover.agentSizeMultiplier.toFixed(2)}x (${guardrails.consecutiveLosses} consecutive losses)`);
+                }
+                // TODO: Add full AI advisor call (queryAIAdvisor) matching global scanMomentumBreakouts
                 await this.executeTrade(mover, mover.strategy || 'momentum');
             }
         }

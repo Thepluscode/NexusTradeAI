@@ -1070,10 +1070,15 @@ async function createOrder(instrument, units, stopLoss, takeProfit) {
 }
 
 async function closePosition(instrument) {
-    return await oandaRequest('put', `/v3/accounts/${oandaConfig.accountId}/positions/${instrument}/close`, {
-        longUnits: 'ALL',
-        shortUnits: 'ALL'
-    });
+    // Determine which side to close based on tracked position direction
+    const pos = positions.get(instrument);
+    const body = {};
+    if (pos && pos.direction === 'short') {
+        body.shortUnits = 'ALL';
+    } else {
+        body.longUnits = 'ALL';
+    }
+    return await oandaRequest('put', `/v3/accounts/${oandaConfig.accountId}/positions/${instrument}/close`, body);
 }
 
 // ===== INDICATORS =====
@@ -1620,6 +1625,15 @@ async function executeTrade(signal) {
         }
     }
 
+    // Apply agent size multiplier if set (from AI confidence or adaptive guardrails)
+    if (signal.agentSizeMultiplier && signal.agentSizeMultiplier !== 1.0) {
+        const prevUnits = units;
+        units = signal.direction === 'long'
+            ? Math.floor(Math.abs(units) * signal.agentSizeMultiplier)
+            : -Math.floor(Math.abs(units) * signal.agentSizeMultiplier);
+        console.log(`   [AgentSize] Units adjusted: ${prevUnits} → ${units} (multiplier=${signal.agentSizeMultiplier.toFixed(2)})`);
+    }
+
     console.log(`\n🎯 EXECUTING ${signal.direction.toUpperCase()} ${signal.pair} (${signal.tier})`);
     console.log(`   Entry: ${signal.entry.toFixed(5)}, Stop: ${signal.stopLoss.toFixed(5)}, Target: ${signal.takeProfit.toFixed(5)}`);
     console.log(`   Units: ${units}, Session: ${signal.session}`);
@@ -1757,8 +1771,8 @@ async function closePositionWithReason(pair, reason) {
         // closePosition() deletes the entry from the Map
         simTotalTrades++;
         if (pos) {
-            const isWin = reason.toLowerCase().includes('target') || reason.toLowerCase().includes('profit');
-            const isLoss = reason.toLowerCase().includes('stop');
+            const isWin = (pos.unrealizedPL || 0) > 0;
+            const isLoss = (pos.unrealizedPL || 0) <= 0;
             if (isWin) simWinners++;
             else if (isLoss) simLosers++;
             // Update daily P&L so the circuit breaker has real data
@@ -2693,8 +2707,15 @@ class UserForexEngine {
     }
 
     async closeOandaPosition(instrument) {
-        return await this.oandaReq('put', `/v3/accounts/${this.oandaConfig.accountId}/positions/${instrument}/close`,
-            { longUnits: 'ALL', shortUnits: 'ALL' });
+        // Determine which side to close based on tracked position direction
+        const pos = this.positions.get(instrument);
+        const body = {};
+        if (pos && pos.direction === 'short') {
+            body.shortUnits = 'ALL';
+        } else {
+            body.longUnits = 'ALL';
+        }
+        return await this.oandaReq('put', `/v3/accounts/${this.oandaConfig.accountId}/positions/${instrument}/close`, body);
     }
 
     async dbForexOpen(pair, direction, tier, entry, stopLoss, takeProfit, units, session, signal = {}) {
@@ -2783,8 +2804,10 @@ class UserForexEngine {
             const isLong = (p.long?.units || 0) > 0;
             const position = this.positions.get(instrument);
             if (!position) continue;
-            const unrealizedPL = parseFloat(isLong ? p.long?.unrealizedPL : p.short?.unrealizedPL) || 0;
-            const currentPrice = parseFloat(isLong ? p.long?.averagePrice : p.short?.averagePrice) || position.entry;
+            const units = parseFloat(isLong ? p.long?.units : p.short?.units) || 0;
+            const avgPrice = parseFloat(isLong ? p.long?.averagePrice : p.short?.averagePrice) || position.entry;
+            const unrealizedPL = parseFloat(p.unrealizedPL) || 0;
+            const currentPrice = units !== 0 ? avgPrice + (unrealizedPL / Math.abs(units)) : avgPrice;
             position.unrealizedPL = unrealizedPL;
             position.currentPrice = currentPrice;
             const atrExitReason = getForexAtrExitReason(position, currentPrice);

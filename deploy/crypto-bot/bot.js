@@ -1013,44 +1013,43 @@ class CryptoTradingEngine {
                     pullbackPct: pullbackFromEMA9 * 100,
                     tier: 'pullback'
                 });
-                if (!regimeProfile.tradable) {
-                    continue;
+                if (regimeProfile.tradable) {
+                    const atrRisk = buildAtrRisk(pullbackConfig.stopLoss, pullbackConfig.profitTarget, 1.9);
+                    const pullbackSignal = {
+                        symbol,
+                        tier: 'pullback',
+                        strategy: 'trendPullback',
+                        marketRegime: regimeProfile.regime,
+                        regime: regimeProfile.regime,
+                        regimeQuality: regimeProfile.quality,
+                        price: data.currentPrice,
+                        momentum: momentum * 100,
+                        trendStrength: trendStrength * 100,
+                        pullbackPct: pullbackFromEMA9 * 100,
+                        atrPct,
+                        rsi,
+                        volume24h: data.volume24h,
+                        volumeRatio,
+                        sizingFactor: combinedSizingFactor * pullbackConfig.sizingFactor,
+                        // [v6.2] Stop/target from slippage-adjusted effective entry, not raw price
+                        stopLoss: data.currentPrice * (1 + 0.003) * (1 - atrRisk.stopPct),
+                        takeProfit: data.currentPrice * (1 + 0.003) * (1 + atrRisk.targetPct),
+                        stopLossPercent: atrRisk.stopPct * 100,
+                        profitTargetPercent: atrRisk.targetPct * 100
+                    };
+                    pullbackSignal.score = scoreCryptoSignal({
+                        strategy: pullbackSignal.strategy,
+                        tier: pullbackSignal.tier,
+                        momentum: pullbackSignal.momentum,
+                        trendStrength,
+                        volumeRatio,
+                        rsi,
+                        sizingFactor: pullbackSignal.sizingFactor,
+                        macdBullish
+                    }) * regimeProfile.quality;
+                    pullbackSignal.score = parseFloat(pullbackSignal.score.toFixed(3));
+                    bestSignal = pullbackSignal;
                 }
-                const atrRisk = buildAtrRisk(pullbackConfig.stopLoss, pullbackConfig.profitTarget, 1.9);
-                const pullbackSignal = {
-                    symbol,
-                    tier: 'pullback',
-                    strategy: 'trendPullback',
-                    marketRegime: regimeProfile.regime,
-                    regime: regimeProfile.regime,
-                    regimeQuality: regimeProfile.quality,
-                    price: data.currentPrice,
-                    momentum: momentum * 100,
-                    trendStrength: trendStrength * 100,
-                    pullbackPct: pullbackFromEMA9 * 100,
-                    atrPct,
-                    rsi,
-                    volume24h: data.volume24h,
-                    volumeRatio,
-                    sizingFactor: combinedSizingFactor * pullbackConfig.sizingFactor,
-                    // [v6.2] Stop/target from slippage-adjusted effective entry, not raw price
-                    stopLoss: data.currentPrice * (1 + 0.003) * (1 - atrRisk.stopPct),
-                    takeProfit: data.currentPrice * (1 + 0.003) * (1 + atrRisk.targetPct),
-                    stopLossPercent: atrRisk.stopPct * 100,
-                    profitTargetPercent: atrRisk.targetPct * 100
-                };
-                pullbackSignal.score = scoreCryptoSignal({
-                    strategy: pullbackSignal.strategy,
-                    tier: pullbackSignal.tier,
-                    momentum: pullbackSignal.momentum,
-                    trendStrength,
-                    volumeRatio,
-                    rsi,
-                    sizingFactor: pullbackSignal.sizingFactor,
-                    macdBullish
-                }) * regimeProfile.quality;
-                pullbackSignal.score = parseFloat(pullbackSignal.score.toFixed(3));
-                bestSignal = pullbackSignal;
             }
 
             if (volumeRatio < minMomentumVolumeRatio) {
@@ -1260,12 +1259,17 @@ class CryptoTradingEngine {
             const currentEquity = (this.config.basePositionSizeUSD * 20) + (this.totalProfit - this.totalLoss);
             const riskCapUSD = (currentEquity * RISK_PER_TRADE) / stopPctDecimal;
 
+            // [v4.6] Apply guardrail size multiplier (consecutive-loss protection)
+            const guardrailMultiplier = signal.guardrailSizeMultiplier || 1.0;
+            // [v4.6] Apply agent position_size_multiplier
+            const agentSizeMultiplier = signal.agentPositionSizeMultiplier || 1.0;
+
             const positionSizeUSD = Math.min(
-                this.config.basePositionSizeUSD * sizingMultiplier * signalSizingFactor,
+                this.config.basePositionSizeUSD * sizingMultiplier * signalSizingFactor * guardrailMultiplier * agentSizeMultiplier,
                 this.config.maxPositionSizeUSD,
                 riskCapUSD
             );
-            console.log(`   [Kelly Sizing] WinRate: ${(runningWinRate * 100).toFixed(1)}% → kelly ${sizingMultiplier.toFixed(2)}x · signal ${signalSizingFactor.toFixed(2)}x → $${positionSizeUSD.toFixed(0)} (risk cap $${riskCapUSD.toFixed(0)})`);
+            console.log(`   [Kelly Sizing] WinRate: ${(runningWinRate * 100).toFixed(1)}% → kelly ${sizingMultiplier.toFixed(2)}x · signal ${signalSizingFactor.toFixed(2)}x · guardrail ${guardrailMultiplier.toFixed(2)}x · agent ${agentSizeMultiplier.toFixed(2)}x → $${positionSizeUSD.toFixed(0)} (risk cap $${riskCapUSD.toFixed(0)})`);
 
             // [v3.5] Crypto slippage model — Kraken taker fee is 0.26%; market orders
             // also move the book. Model as 0.30% total execution cost.
@@ -1502,9 +1506,9 @@ class CryptoTradingEngine {
                 console.log(`🧪 PAPER MODE: Simulated SELL order for ${symbol}`);
             }
 
-            // Calculate P/L — apply slippage on exit (taker fee / spread)
-            const CRYPTO_SLIPPAGE = 0.003; // 0.30% taker fee on exit (sell fills below market)
-            const adjustedExitPrice = price * (1 - CRYPTO_SLIPPAGE);
+            // Calculate P/L — slippage already applied at entry (effectiveEntry = price * 1.003)
+            // so no additional exit slippage needed; that was double-counting fees
+            const adjustedExitPrice = price;
             const pnlUSD = (adjustedExitPrice - position.entry) * position.quantity;
             const pnlPercent = ((adjustedExitPrice - position.entry) / position.entry) * 100;
 
@@ -1519,7 +1523,7 @@ class CryptoTradingEngine {
             }
 
             console.log(`✅ Position closed: ${symbol} - ${reason}`);
-            console.log(`   Exit: $${price.toFixed(2)} (adj $${adjustedExitPrice.toFixed(2)} after slippage)`);
+            console.log(`   Exit: $${price.toFixed(2)}`);
             console.log(`   P/L: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}% ($${pnlUSD.toFixed(2)})`);
 
             // Persist close to DB (fire-and-forget)
@@ -1646,6 +1650,7 @@ class CryptoTradingEngine {
                         signal.agentApproved = true;
                         signal.agentConfidence = aiResult.confidence;
                         signal.agentReason = aiResult.reason;
+                        signal.agentPositionSizeMultiplier = aiResult.position_size_multiplier || 1.0;
                         // [v4.6] Adaptive guardrails — pre-trade quality gate
                         if (this.isLanePaused()) {
                             console.log(`[Guardrail] ${signal.symbol} BLOCKED — lane paused until ${new Date(this.guardrails.lanePausedUntil).toLocaleTimeString()}`);
