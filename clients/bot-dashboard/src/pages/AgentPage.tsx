@@ -214,6 +214,7 @@ function BanditContextsTable({ contexts }: { contexts: Record<string, BanditCont
 
 function BanditChart({ contexts }: { contexts: Record<string, BanditContextSummary> }) {
   const data = Object.entries(contexts || {}).map(([key, val]) => ({
+    key,
     name: key.split(':').slice(0, 2).join(' '),
     mean: +(val.best_arm_mean * 100).toFixed(1),
     pulls: val.total_pulls,
@@ -230,7 +231,7 @@ function BanditChart({ contexts }: { contexts: Record<string, BanditContextSumma
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, p: 1 }}>
       {data.map((d) => (
-        <Box key={d.name} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Box key={d.key} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Typography variant="caption" sx={{ width: 80, flexShrink: 0, color: '#999', fontSize: 10 }}>
             {d.name}
           </Typography>
