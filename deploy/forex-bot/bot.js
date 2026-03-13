@@ -1659,7 +1659,11 @@ async function executeTrade(signal) {
             session: signal.session,
             signalScore: signal.score,
             regimeQuality: signal.regimeQuality,
-            atrPct: signal.atrPct
+            atrPct: signal.atrPct,
+            agentApproved: signal.agentApproved || false,
+            agentConfidence: signal.agentConfidence || 0,
+            agentReason: signal.agentReason || '',
+            agentSizeMultiplier: signal.agentSizeMultiplier || 1.0
         });
 
         // Persist trade opening to DB (fire-and-forget)
@@ -1767,6 +1771,21 @@ async function closePositionWithReason(pair, reason) {
     const result = await closePosition(pair);
 
     if (result) {
+        // Extract actual fill data from OANDA response
+        if (pos) {
+            const fillTx = result.longOrderFillTransaction || result.shortOrderFillTransaction;
+            if (fillTx) {
+                const actualPL = parseFloat(fillTx.pl || 0);
+                const actualPrice = parseFloat(fillTx.price || 0);
+                if (actualPL !== 0) {
+                    pos.unrealizedPL = actualPL;
+                }
+                if (actualPrice > 0) {
+                    pos.currentPrice = actualPrice;
+                }
+            }
+        }
+
         // Update sim performance stats — use pos captured BEFORE closePosition() since
         // closePosition() deletes the entry from the Map
         simTotalTrades++;
@@ -1836,7 +1855,7 @@ async function managePositions() {
 
         const isLong = oandaPos.long?.units > 0;
         const units = Math.abs(parseInt(oandaPos.long?.units || oandaPos.short?.units || 0));
-        const entryPrice = parseFloat(isLong ? oandaPos.long?.averagePrice : oandaPos.short?.averagePrice || 0);
+        const entryPrice = parseFloat((isLong ? oandaPos.long?.averagePrice : oandaPos.short?.averagePrice) || 0);
         const unrealizedPL = parseFloat(oandaPos.unrealizedPL || 0);
         // Derive current price from unrealizedPL so trailing stops use real market movement
         const currentPrice = (entryPrice > 0 && units > 0)
@@ -2816,7 +2835,7 @@ class UserForexEngine {
             const units = parseFloat(isLong ? p.long?.units : p.short?.units) || 0;
             const avgPrice = parseFloat(isLong ? p.long?.averagePrice : p.short?.averagePrice) || position.entry;
             const unrealizedPL = parseFloat(p.unrealizedPL) || 0;
-            const currentPrice = units !== 0 ? avgPrice + (unrealizedPL / Math.abs(units)) : avgPrice;
+            const currentPrice = units !== 0 ? avgPrice + (isLong ? 1 : -1) * (unrealizedPL / Math.abs(units)) : avgPrice;
             position.unrealizedPL = unrealizedPL;
             position.currentPrice = currentPrice;
             const atrExitReason = getForexAtrExitReason(position, currentPrice);

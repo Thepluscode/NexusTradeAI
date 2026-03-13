@@ -1321,7 +1321,7 @@ class CryptoTradingEngine {
                 tier: signal.tier,
                 strategy: tags.strategy,
                 regime: tags.regime,
-                entry: signal.price,
+                entry: effectiveEntry,
                 quantity,
                 positionSize: positionSizeUSD,
                 stopLoss: signal.stopLoss,
@@ -2940,6 +2940,36 @@ app.listen(PORT, async () => {
             engine.guardrails.consecutiveLosses = consec;
             console.log(`📊 Hydrated crypto perfData from DB: ${total} trades, ${winners}W/${losers}L, PF ${lossAmt > 0 ? (winAmt / lossAmt).toFixed(2) : 'N/A'}, Win $${winAmt.toFixed(2)}, Loss $${lossAmt.toFixed(2)}`);
         } catch (e) { console.warn('⚠️  DB crypto perfData hydration failed:', e.message); }
+
+        // Hydrate open positions from DB so restarts don't orphan-close them at pnl=0
+        try {
+            const openPositions = await dbPool.query(
+                `SELECT * FROM trades WHERE bot='crypto' AND status='open' AND user_id IS NULL ORDER BY entry_time DESC`
+            );
+            for (const row of openPositions.rows) {
+                if (!engine.positions.has(row.symbol)) {
+                    const currentPrice = await engine.kraken.getPrice(row.symbol).catch(() => null);
+                    if (currentPrice) {
+                        engine.positions.set(row.symbol, {
+                            symbol: row.symbol,
+                            direction: row.direction || 'long',
+                            entry: parseFloat(row.entry_price),
+                            quantity: parseFloat(row.quantity || 0),
+                            stopLoss: parseFloat(row.stop_loss || 0),
+                            takeProfit: parseFloat(row.take_profit || 0),
+                            entryTime: new Date(row.entry_time),
+                            currentPrice: currentPrice,
+                            unrealizedPnL: (currentPrice - parseFloat(row.entry_price)) * parseFloat(row.quantity || 0),
+                            dbTradeId: row.id,
+                            restored: true,
+                        });
+                        console.log(`[HYDRATE] Restored open position: ${row.symbol} @ ${row.entry_price}`);
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('[HYDRATE] Failed to restore positions:', err.message);
+        }
     }
 
     // Auto-start the default crypto engine (matches stock/forex bot behavior)
