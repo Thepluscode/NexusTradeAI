@@ -268,8 +268,8 @@ const CRYPTO_CONFIG = {
         tier1: {
             name: 'Standard Crypto',
             momentumThreshold: 0.005, // 0.5% momentum (was 0.3% — too noisy)
-            stopLoss: 0.035,         // 3.5% stop (was 2% — too tight for crypto 5-min bars + 0.6% slippage)
-            profitTarget: 0.05,      // 5% target (~1.4:1 R/R after slippage)
+            stopLoss: 0.05,          // 5% stop (was 3.5% — still too tight; 1.70:1 R/R after slippage, needs 37% WR)
+            profitTarget: 0.10,      // 10% target (was 5% — wider target lets winners run)
             rsiLower: 30,            // Tighter RSI (was 20 — too oversold)
             rsiUpper: 70,            // Tighter RSI (was 80 — too overbought)
             maxPositions: 4
@@ -277,8 +277,8 @@ const CRYPTO_CONFIG = {
         tier2: {
             name: 'High Momentum',
             momentumThreshold: 0.015, // 1.5% momentum (was 1.2%)
-            stopLoss: 0.045,         // 4.5% stop (was 3% — too tight)
-            profitTarget: 0.07,      // 7% target (~1.6:1 R/R after slippage)
+            stopLoss: 0.06,          // 6% stop (was 4.5% — wider for crypto vol)
+            profitTarget: 0.12,      // 12% target (was 7% — better R/R after slippage)
             rsiLower: 35,
             rsiUpper: 75,
             maxPositions: 2
@@ -318,10 +318,10 @@ const CRYPTO_CONFIG = {
 
     // Trailing Stops — v3.2: tighter stops to capture more profit before reversal
     trailingStops: [
-        { profit: 0.05, stopDistance: 0.03 }, // At +5%, trail by 3% (NEW — protect early gains)
-        { profit: 0.10, stopDistance: 0.06 }, // At +10%, trail by 6% (was 5%)
-        { profit: 0.20, stopDistance: 0.12 }, // At +20%, trail by 12% (was 8%)
-        { profit: 0.30, stopDistance: 0.18 }  // At +30%, trail by 18% (was 12%)
+        { profit: 0.08, stopDistance: 0.04 }, // At +8%, trail by 4% (was +5%/3% — let winners run longer)
+        { profit: 0.12, stopDistance: 0.06 }, // At +12%, trail by 6% (was +10%/6%)
+        { profit: 0.20, stopDistance: 0.10 }, // At +20%, trail by 10% (was 12% — tighter lock-in)
+        { profit: 0.30, stopDistance: 0.15 }  // At +30%, trail by 15% (was 18% — tighter lock-in)
     ],
 
     // Scan Interval (5 min for crypto)
@@ -533,9 +533,9 @@ class KrakenClient {
 const RISK_PER_TRADE = parseFloat(process.env.RISK_PER_TRADE || '0.005');
 const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.72');
 const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.72');
-const MIN_REWARD_RISK = parseFloat(process.env.MIN_REWARD_RISK || '1.95');
+const MIN_REWARD_RISK = parseFloat(process.env.MIN_REWARD_RISK || '1.7');
 const MAX_SIGNALS_PER_CYCLE = parseInt(process.env.MAX_SIGNALS_PER_CYCLE || '1');
-const MAX_CONSECUTIVE_LOSSES = parseInt(process.env.MAX_CONSECUTIVE_LOSSES || '3');
+const MAX_CONSECUTIVE_LOSSES = parseInt(process.env.MAX_CONSECUTIVE_LOSSES || '5');
 const LOSS_PAUSE_MS = parseInt(process.env.LOSS_PAUSE_MS || '7200000');
 const STOP_LOSS_COOLDOWN_MS = parseInt(process.env.STOP_LOSS_COOLDOWN_MS || '2700000');
 
@@ -981,7 +981,7 @@ class CryptoTradingEngine {
                 let stopPct = fallbackStopPct;
                 let targetPct = fallbackTargetPct;
                 if (atrPct && atrPct > 0) {
-                    stopPct = Math.min(Math.max(atrPct * 1.6, fallbackStopPct * 0.85), fallbackStopPct * 1.4);
+                    stopPct = Math.min(Math.max(atrPct * 2.5, fallbackStopPct * 0.85), fallbackStopPct * 1.6);
                     targetPct = Math.max(stopPct * rewardMultiple, fallbackTargetPct * 0.9);
                 }
                 return { stopPct, targetPct };
@@ -1014,7 +1014,7 @@ class CryptoTradingEngine {
                     tier: 'pullback'
                 });
                 if (regimeProfile.tradable) {
-                    const atrRisk = buildAtrRisk(pullbackConfig.stopLoss, pullbackConfig.profitTarget, 1.9);
+                    const atrRisk = buildAtrRisk(pullbackConfig.stopLoss, pullbackConfig.profitTarget, 2.2);
                     const pullbackSignal = {
                         symbol,
                         tier: 'pullback',
@@ -1071,8 +1071,8 @@ class CryptoTradingEngine {
                 // Old: required momentum > threshold (price far above SMA20 = chasing).
                 // New: require price NEAR SMA20 (pulled back to support in uptrend).
                 // momentum = (price - sma20) / sma20; near SMA20 means momentum close to 0.
-                if (momentum > 0.003) continue; // Price >0.3% above SMA20 = already moved, skip
-                if (momentum < -0.01) continue;  // Price >1% below SMA20 = broken support, skip
+                if (momentum > 0.01) continue;  // Price >1% above SMA20 = already moved, skip (was 0.3% — too narrow)
+                if (momentum < -0.02) continue;  // Price >2% below SMA20 = broken support, skip (was 1% — too narrow)
 
                 // Check position limits for this tier
                 const tierPositions = Array.from(this.positions.values())
@@ -1108,7 +1108,7 @@ class CryptoTradingEngine {
                 if (!regimeProfile.tradable) {
                     continue;
                 }
-                const atrRisk = buildAtrRisk(tier.stopLoss, tier.profitTarget, 2.2);
+                const atrRisk = buildAtrRisk(tier.stopLoss, tier.profitTarget, 2.5);
                 const momentumSignal = {
                     symbol,
                     tier: tierName,

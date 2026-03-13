@@ -686,9 +686,9 @@ const MIN_TIME_AFTER_STOP = 2 * 60 * 60 * 1000;  // 2 hours after stop-out
 const RISK_PER_TRADE = parseFloat(process.env.RISK_PER_TRADE || '0.0035');      // 0.35% per trade — forex is worst lane
 const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.74');
 const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.74');
-const MIN_REWARD_RISK = parseFloat(process.env.MIN_REWARD_RISK || '2.1');
+const MIN_REWARD_RISK = parseFloat(process.env.MIN_REWARD_RISK || '1.8');  // [v7.1] lowered from 2.1 — wider ATR stops push some valid signals under 2.1
 const MAX_SIGNALS_PER_CYCLE = parseInt(process.env.MAX_SIGNALS_PER_CYCLE || '1');
-const MAX_CONSECUTIVE_LOSSES = parseInt(process.env.MAX_CONSECUTIVE_LOSSES || '3');
+const MAX_CONSECUTIVE_LOSSES = parseInt(process.env.MAX_CONSECUTIVE_LOSSES || '5');  // [v7.1] forex has more frequent small losses; 3 caused death spiral
 const LOSS_PAUSE_MS = parseInt(process.env.LOSS_PAUSE_MS || '7200000');
 const STOP_LOSS_COOLDOWN_MS = parseInt(process.env.STOP_LOSS_COOLDOWN_MS || '2700000');
 
@@ -753,11 +753,11 @@ const EXIT_CONFIG = {
 
     // Trailing stops (same as stock bot)
     trailingStopLevels: [
-        { gainThreshold: 0.01, lockPercent: 0.50 },  // +1%: lock 50%
-        { gainThreshold: 0.015, lockPercent: 0.65 }, // +1.5%: lock 65%
-        { gainThreshold: 0.02, lockPercent: 0.75 },  // +2%: lock 75%
-        { gainThreshold: 0.03, lockPercent: 0.85 },  // +3%: lock 85%
-        { gainThreshold: 0.04, lockPercent: 0.92 }   // +4%: lock 92%
+        { gainThreshold: 0.015, lockPercent: 0.40 },  // [v7.1] +1.5%: lock 40% (was +1%/50%)
+        { gainThreshold: 0.025, lockPercent: 0.55 },   // +2.5%: lock 55%
+        { gainThreshold: 0.04, lockPercent: 0.70 },    // +4%: lock 70%
+        { gainThreshold: 0.06, lockPercent: 0.85 },    // +6%: lock 85%
+        { gainThreshold: 0.08, lockPercent: 0.92 }     // +8%: lock 92%
     ],
 
     // Momentum reversal
@@ -894,7 +894,7 @@ function evaluateForexRegimeSignal({ tier, trendStrength, pullback, maxPullback,
     else if (session?.name === 'New York') regime = 'new-york-trend';
 
     return {
-        tradable: quality >= 0.92,
+        tradable: quality >= 0.82,  // [v7.1] lowered from 0.92 — was blocking too many valid setups
         regime,
         quality: parseFloat(quality.toFixed(3))
     };
@@ -1448,7 +1448,7 @@ async function scanForSignals(heldPositions = positions) {
         // via pullbackToMA <= 0.0015 in the entry conditions (proximity to SMA20)
 
         // [v3.9] ATR noise cap — skip choppy/volatile pairs where stops get hunted
-        const MAX_ATR_PCT = 0.012; // 1.2% — pairs above this are too noisy for reliable signals
+        const MAX_ATR_PCT = 0.020; // [v7.1] 2.0% — was 1.2%, excluded higher-vol pairs like GBP/JPY
         if (atrPct > MAX_ATR_PCT) {
             console.log(`[ATR Cap] ${pair} skipped — ATR ${(atrPct * 100).toFixed(2)}% > ${(MAX_ATR_PCT * 100).toFixed(1)}% cap (too volatile)`);
             continue;
@@ -1460,13 +1460,13 @@ async function scanForSignals(heldPositions = positions) {
         // [v6.1] ATR-based stops/targets — adapts to each pair's volatility
         // v3.2 had 2.0x ATR for BOTH stop and target (1:1 R:R) → 0% win rate.
         // Fix: 2.5x ATR stop (wider to avoid noise sweep) + 5.0x ATR target (2:1 R:R minimum)
-        const atrStop   = atrPct > 0 ? atrPct * 2.5 : config.stopLoss;
-        const atrTarget = atrPct > 0 ? atrPct * 5.0 : config.profitTarget;
+        const atrStop   = atrPct > 0 ? atrPct * 4.0 : config.stopLoss;   // [v7.1] 4x ATR → ~25-40 pip stops on majors (was 2.5x → 10-15 pips = noise)
+        const atrTarget = atrPct > 0 ? atrPct * 8.0 : config.profitTarget; // [v7.1] 8x ATR target, maintains 2:1 R:R
 
         // LONG Signal — [v7.0] Pullback-to-support entry: 4 key filters only
         // 1) H1 trend up  2) Price near SMA20  3) RSI 35-55  4) MACD histogram > 0
         const pullbackToMA = Math.abs(currentPrice - analysis.sma20) / analysis.sma20;
-        if (h1Trend === 'up' && pullbackToMA <= 0.0015 && rsi >= 35 && rsi <= 55 && macd !== null && macd.histogram > 0) {
+        if (h1Trend === 'up' && pullbackToMA <= 0.005 && rsi >= 35 && rsi <= 55 && macd !== null && macd.histogram > 0) {
             // [v3.3] Strategy Bridge advisory — only block if bridge explicitly signals SHORT with high confidence
             const bridgeLong = await queryStrategyBridge(pair, 'long');
             if (bridgeLong !== null && bridgeLong.direction === 'short' && bridgeLong.confidence > 0.7) {
@@ -1519,7 +1519,7 @@ async function scanForSignals(heldPositions = positions) {
 
         // SHORT Signal — [v7.0] Pullback-to-resistance entry: 4 key filters only
         // 1) H1 trend down  2) Price near SMA20  3) RSI 45-65  4) MACD histogram < 0
-        if (h1Trend === 'down' && pullbackToMA <= 0.0015 && rsi >= 45 && rsi <= 65 && macd !== null && macd.histogram < 0) {
+        if (h1Trend === 'down' && pullbackToMA <= 0.005 && rsi >= 45 && rsi <= 65 && macd !== null && macd.histogram < 0) {
             // [v3.3] Strategy Bridge advisory — only block if bridge explicitly signals LONG with high confidence
             const bridgeShort = await queryStrategyBridge(pair, 'short');
             if (bridgeShort !== null && bridgeShort.direction === 'long' && bridgeShort.confidence > 0.7) {

@@ -1123,10 +1123,10 @@ const EXIT_CONFIG = {
     idealHoldDays: 3,         // Ideal 3-day momentum trades
     stalePositionDays: 10,    // Force close after 10 days
 
-    // Dynamic profit targets based on hold time
+    // Dynamic profit targets based on hold time (v6.0: aligned with tier targets — day-0 was 5% which overrode tier1's 8%)
     profitTargetByDay: {
-        0: 0.05,  // Day 0-1: 5% target — let intraday momentum run before exiting
-        1: 0.05,  // Day 1-2: 5% target
+        0: 0.08,  // Day 0-1: 8% target — match tier1 target, let winners run
+        1: 0.07,  // Day 1-2: 7% target — still strong momentum
         2: 0.06,  // Day 2-3: 6% target — momentum still intact
         3: 0.05,  // Day 3-4: 5% target — start relaxing
         4: 0.04,  // Day 4-5: 4% target
@@ -1135,13 +1135,14 @@ const EXIT_CONFIG = {
         7: 0.01   // Day 7+: ANY profit
     },
 
-    // Aggressive trailing stops (lock more profit) — v3.2: added early lock at +2%
+    // Trailing stops (v6.0: widened — old levels locked profit too early, converting winners to micro-wins)
+    // Realized R:R was ~1:1 instead of configured 2:1 because +2%/+3% locks triggered too aggressively
     trailingStopLevels: [
-        { gainThreshold: 0.02, lockPercent: 0.40 },  // +2%: lock 40% (NEW — protect early gains)
-        { gainThreshold: 0.03, lockPercent: 0.60 },  // +3%: lock 60%
-        { gainThreshold: 0.05, lockPercent: 0.75 },  // +5%: lock 75%
-        { gainThreshold: 0.07, lockPercent: 0.85 },  // +7%: lock 85%
-        { gainThreshold: 0.10, lockPercent: 0.92 }   // +10%: lock 92%
+        { gainThreshold: 0.03, lockPercent: 0.50 },  // +3%: lock 50% — first lock at meaningful gain
+        { gainThreshold: 0.05, lockPercent: 0.65 },  // +5%: lock 65%
+        { gainThreshold: 0.08, lockPercent: 0.80 },  // +8%: lock 80%
+        { gainThreshold: 0.12, lockPercent: 0.90 },  // +12%: lock 90%
+        { gainThreshold: 0.15, lockPercent: 0.95 }   // +15%: lock 95%
     ],
 
     // Momentum reversal thresholds
@@ -1200,7 +1201,7 @@ const OPENING_RANGE_BREAKOUT_CONFIG = {
     maxBreakoutPct: 0.03,
     positionSize: 0.004,
     stopLoss: 0.015,
-    profitTarget: 0.02,
+    profitTarget: 0.03,   // v6.0: raised from 0.02 — R:R goes from 1.33:1 to 2:1 with 1.5% stop
     maxPositions: 2
 };
 
@@ -1236,7 +1237,7 @@ const TRADING_HOURS = {
     marketOpen: { hour: 9, minute: 30 },
     marketClose: { hour: 16, minute: 0 },
     avoidFirstMinutes: 0,
-    avoidLastMinutes: 60  // was 30 — block after 3:00 PM EST (20% WR, late-day reversals)
+    avoidLastMinutes: 30  // v6.0: back to 30 — recapture 2:30-3:00 PM window (stronger than 3-4 PM)
 };
 
 function getESTDate() {
@@ -1762,12 +1763,10 @@ async function shouldExitPosition(position, currentPrice, alpacaPos, overrideAlp
         exitReason = `5+ days old - taking ${unrealizedPL.toFixed(2)}% profit`;
     }
 
-    // 1b. EARLY LOSS CUT — cap losers before they compound
-    // If held 1+ day and still -2%+, the momentum thesis has failed. Cut now.
-    // Intraday momentum doesn't persist — if it's red the next day it's a loser.
-    if (!exitReason && holdDays >= 1 && unrealizedPL <= -2.0) {
-        exitReason = `Cutting loser early (${holdDays.toFixed(1)} days, ${unrealizedPL.toFixed(2)}% — momentum thesis failed)`;
-    }
+    // 1b. EARLY LOSS CUT — removed in v6.0
+    // Old rule: cut at -2% after 1 day. Problem: this tightened the effective stop from
+    // tier stop (4-6%) to 2%, destroying R:R. The tier stop loss already handles risk.
+    // Positions that are -2% after 1 day still have room to recover within the tier stop.
 
     // 2. DYNAMIC PROFIT TARGET (FIX: profitTargetByDay is 0.08 = 8%, unrealizedPL is already 5.09 not 0.0509)
     if (!exitReason) {
