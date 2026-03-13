@@ -22,8 +22,15 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
-import aiohttp
-import feedparser
+try:
+    import aiohttp
+except ImportError:
+    aiohttp = None
+
+try:
+    import feedparser
+except ImportError:
+    feedparser = None
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +148,10 @@ class SentimentAgent:
 
     async def _fetch_headlines(self, symbol: str, asset_class: str) -> list[str]:
         """Fetch headlines from multiple RSS feeds."""
+        if aiohttp is None or feedparser is None:
+            logger.warning("[SentimentAgent] aiohttp or feedparser not installed — returning empty headlines")
+            return []
+
         urls = self._build_feed_urls(symbol, asset_class)
         headlines = []
 
