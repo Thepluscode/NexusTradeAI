@@ -2334,6 +2334,15 @@ app.post('/test-telegram', async (req, res) => {
     }
 });
 
+// ── Guardrail manual reset ───────────────────────────────────────────────────
+app.post('/api/guardrails/reset', (req, res) => {
+    guardrails.consecutiveLosses = 0;
+    guardrails.lanePausedUntil = 0;
+    simConsecutiveLosses = 0;
+    console.log('[GUARDRAILS] Manual reset — consecutive losses cleared');
+    res.json({ success: true, message: 'Guardrails reset' });
+});
+
 // ── Config status (for Settings page) ───────────────────────────────────────
 app.get('/api/config', (req, res) => {
     res.json({
@@ -3151,10 +3160,12 @@ app.listen(PORT, async () => {
                     : lossAmt > 0 ? parseFloat((winAmt / lossAmt).toFixed(2))
                     : winAmt > 0 ? 9.99 : 0;
             }
-            // Consecutive losses from most recent trades
+            // Consecutive losses from TODAY's trades only (not all-time history)
+            // This prevents stale historical loss streaks from permanently pausing the bot
             const recent = await dbPool.query(`
                 SELECT ${cleanPnl} AS pnl FROM trades
                 WHERE bot='forex' AND status='closed' AND ${cleanPnl} IS NOT NULL
+                AND exit_time >= CURRENT_DATE
                 ORDER BY exit_time DESC NULLS LAST LIMIT 50
             `);
             let consec = 0, maxConsec = 0, runConsec = 0;

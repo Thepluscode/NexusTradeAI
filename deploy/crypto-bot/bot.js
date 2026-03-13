@@ -1748,11 +1748,8 @@ class CryptoTradingEngine {
             fs.writeFileSync(this.stateFile, JSON.stringify({
                 running: this.isRunning,
                 demoMode: this.demoMode,
-                totalTrades: this.totalTrades,
-                winningTrades: this.winningTrades,
-                losingTrades: this.losingTrades,
-                totalProfit: this.totalProfit,
-                totalLoss: this.totalLoss,
+                // Trade counters (totalTrades, winningTrades, losingTrades, totalProfit, totalLoss)
+                // are NOT persisted here — DB is the authoritative source.
                 // Persist daily counters so restart doesn't reset anti-churn limits
                 dailyTradeCount: this.dailyTradeCount,
                 dailyLoss: this.dailyLoss,
@@ -1769,12 +1766,8 @@ class CryptoTradingEngine {
             const fs = require('fs');
             if (fs.existsSync(this.stateFile)) {
                 const saved = JSON.parse(fs.readFileSync(this.stateFile, 'utf8'));
-                // Restore performance counters
-                if (saved.totalTrades != null) this.totalTrades = saved.totalTrades;
-                if (saved.winningTrades != null) this.winningTrades = saved.winningTrades;
-                if (saved.losingTrades != null) this.losingTrades = saved.losingTrades;
-                if (saved.totalProfit != null) this.totalProfit = saved.totalProfit;
-                if (saved.totalLoss != null) this.totalLoss = saved.totalLoss;
+                // Trade counters (totalTrades, winningTrades, losingTrades, totalProfit, totalLoss)
+                // are NOT loaded from state file — DB is the authoritative source.
                 // Restore demoMode so a prior credential save survives restart
                 if (saved.demoMode != null) this.demoMode = saved.demoMode;
                 // Restore daily counters only if saved on the same UTC day
@@ -1880,8 +1873,9 @@ class CryptoTradingEngine {
     }
 
     getStatus() {
-        const winRate = this.totalTrades > 0
-            ? (this.winningTrades / this.totalTrades * 100).toFixed(1)
+        const closedTrades = this.winningTrades + this.losingTrades;
+        const winRate = closedTrades > 0
+            ? (this.winningTrades / closedTrades * 100).toFixed(1)
             : 0;
 
         const profitFactor = this.totalLoss > 0
@@ -2899,8 +2893,11 @@ app.listen(PORT, async () => {
     // Connect DB for trade persistence (non-blocking)
     await initTradeDb().catch(e => console.warn('⚠️  Crypto DB init error:', e.message));
 
-    // ── Hydrate performance data from DB so stats survive redeploys ──
-    if (dbPool && engine.totalTrades === 0) {
+    // FIRST: load local state (daily counters, operational state like demoMode)
+    engine.loadState();
+
+    // THEN: DB hydration overwrites trade counters (DB is authoritative)
+    if (dbPool) {
         try {
             const cleanPnl = `CASE WHEN pnl_usd IS NULL OR pnl_usd::text = 'NaN' THEN NULL ELSE pnl_usd END`;
             const dbStats = await dbPool.query(`
@@ -2944,9 +2941,6 @@ app.listen(PORT, async () => {
             console.log(`📊 Hydrated crypto perfData from DB: ${total} trades, ${winners}W/${losers}L, PF ${lossAmt > 0 ? (winAmt / lossAmt).toFixed(2) : 'N/A'}, Win $${winAmt.toFixed(2)}, Loss $${lossAmt.toFixed(2)}`);
         } catch (e) { console.warn('⚠️  DB crypto perfData hydration failed:', e.message); }
     }
-
-    // Restore counters from local state file (if available)
-    engine.loadState();
 
     // Auto-start the default crypto engine (matches stock/forex bot behavior)
     console.log('🚀 Auto-starting default crypto trading engine...');
