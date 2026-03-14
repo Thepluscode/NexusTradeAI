@@ -15,10 +15,16 @@ export default defineConfig({
         entryFileNames: 'assets/index.js',
         chunkFileNames: 'assets/[name]-[hash].js',
         assetFileNames: 'assets/[name][extname]',
-        manualChunks: {
-          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
-          'vendor-mui': ['@mui/material', '@mui/icons-material'],
-          'vendor-query': ['react-query', 'axios'],
+        manualChunks(id) {
+          if (id.includes('node_modules/react-dom') || id.includes('node_modules/react/') || id.includes('node_modules/react-router')) {
+            return 'vendor-react';
+          }
+          if (id.includes('node_modules/@mui')) {
+            return 'vendor-mui';
+          }
+          if (id.includes('node_modules/react-query') || id.includes('node_modules/axios')) {
+            return 'vendor-query';
+          }
         },
       },
     },
