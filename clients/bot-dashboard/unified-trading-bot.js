@@ -3642,8 +3642,22 @@ async function checkEndOfDay() {
 // Module-level shared 45-second bar cache — single set of Alpaca API calls for all users
 const BAR_CACHE = new Map(); // symbol → { bars, fetchedAt }
 const BAR_CACHE_TTL_MS = 45 * 1000;
+const BAR_CACHE_EVICT_MS = 5 * 60 * 1000; // evict entries older than 5 minutes
+let _lastBarCacheCleanup = 0;
+
+function evictStaleBarCache() {
+    const now = Date.now();
+    if (now - _lastBarCacheCleanup < 60_000) return; // run at most once per minute
+    _lastBarCacheCleanup = now;
+    for (const [key, entry] of BAR_CACHE) {
+        if (now - entry.fetchedAt > BAR_CACHE_EVICT_MS) {
+            BAR_CACHE.delete(key);
+        }
+    }
+}
 
 async function fetchBarsWithCache(symbol, cfg, params) {
+    evictStaleBarCache();
     const cacheKey = `${symbol}:${JSON.stringify(params)}`;
     const cached = BAR_CACHE.get(cacheKey);
     if (cached && Date.now() - cached.fetchedAt < BAR_CACHE_TTL_MS) return cached.bars;

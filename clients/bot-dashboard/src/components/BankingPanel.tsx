@@ -228,7 +228,11 @@ export const BankingPanel: React.FC = () => {
             return;
         }
         toast.error(`Connect a live broker account to ${type} funds. Currently in Paper Trading mode.`);
-        type === 'deposit' ? setDepositOpen(false) : setWithdrawOpen(false);
+        if (type === 'deposit') {
+            setDepositOpen(false);
+        } else {
+            setWithdrawOpen(false);
+        }
         setAmount('');
     };
 
