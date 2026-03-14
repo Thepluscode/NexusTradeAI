@@ -19,7 +19,7 @@ import asyncio
 import logging
 from typing import Optional, List
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from public_api import key_manager
@@ -93,6 +93,7 @@ class KeyResponse(BaseModel):
 @router.post("/evaluate", response_model=EvaluateResponse)
 async def evaluate_signal(
     req: EvaluateRequest,
+    response: Response,
     x_api_key: str = Header(..., alias="X-API-Key"),
 ):
     """
@@ -168,6 +169,12 @@ async def evaluate_signal(
         asset_class=req.asset_class, latency_ms=latency_ms,
         status="success",
     ))
+
+    # [v6.3] Rate limit headers — lets clients track usage without hitting 429
+    response.headers["X-RateLimit-Limit"] = str(key_record.get("rate_limit", 0))
+    response.headers["X-RateLimit-Used"] = str(key_record.get("calls_month", 0) + 1)
+    remaining = max(0, key_record.get("rate_limit", 0) - key_record.get("calls_month", 0) - 1)
+    response.headers["X-RateLimit-Remaining"] = str(remaining)
 
     return EvaluateResponse(
         should_enter=decision.approved,

@@ -3125,4 +3125,55 @@ app.listen(PORT, async () => {
     }
 });
 
+// ========================================================================
+// [v6.3] PROCESS ERROR HANDLERS & GRACEFUL SHUTDOWN
+// Without these, any unhandled error crashes the Railway process immediately.
+// ========================================================================
+
+process.on('uncaughtException', (error) => {
+    console.error('💀 [CRYPTO] Uncaught Exception:', error.message);
+    console.error(error.stack);
+    // Don't exit — Railway will restart, but we try to keep running
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('💀 [CRYPTO] Unhandled Rejection:', reason);
+    // Don't exit — log and continue
+});
+
+process.on('SIGTERM', () => {
+    console.log('🛑 [CRYPTO] SIGTERM received — shutting down gracefully');
+    if (engine && engine.isRunning) {
+        engine.isRunning = false;
+    }
+    // Give open HTTP requests 5s to finish, then exit
+    setTimeout(() => process.exit(0), 5000);
+});
+
+process.on('SIGINT', () => {
+    console.log('🛑 [CRYPTO] SIGINT received — shutting down');
+    process.exit(0);
+});
+
+// [v6.3] Memory cleanup — prune unbounded collections every 30 minutes
+setInterval(() => {
+    // Prune priceHistory to last 200 candles per symbol
+    if (engine && engine.priceHistory) {
+        for (const [symbol, prices] of engine.priceHistory) {
+            if (prices.length > 200) {
+                engine.priceHistory.set(symbol, prices.slice(-200));
+            }
+        }
+    }
+    // Prune agent cache — remove entries older than 10 minutes
+    if (engine && engine._agentCache) {
+        const now = Date.now();
+        for (const [symbol, cached] of engine._agentCache) {
+            if (now - cached.timestamp > 10 * 60 * 1000) {
+                engine._agentCache.delete(symbol);
+            }
+        }
+    }
+}, 30 * 60 * 1000);
+
 module.exports = { app, engine, CRYPTO_CONFIG };
