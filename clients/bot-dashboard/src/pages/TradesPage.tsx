@@ -475,13 +475,13 @@ export default function TradesPage() {
                                         <Alert severity="info">No strategy-tagged trades in selected period.</Alert>
                                     ) : (
                                         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, p: 1 }}>
-                                            {strategyChartData.map((d: any) => (
+                                            {strategyChartData.map((d) => (
                                                 <Box key={d.name} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                                                     <Typography variant="caption" sx={{ width: 100, flexShrink: 0, color: '#94a3b8', fontSize: 11 }}>{d.name}</Typography>
                                                     <Box sx={{ flex: 1, height: 20, bgcolor: 'rgba(255,255,255,0.05)', borderRadius: 1, overflow: 'hidden', position: 'relative' }}>
                                                         <Box sx={{
                                                             height: '100%',
-                                                            width: `${Math.min(Math.abs(d.totalPnL) / Math.max(...strategyChartData.map((x: any) => Math.abs(x.totalPnL)), 1) * 100, 100)}%`,
+                                                            width: `${Math.min(Math.abs(d.totalPnL) / Math.max(...strategyChartData.map((x) => Math.abs(x.totalPnL)), 1) * 100, 100)}%`,
                                                             bgcolor: d.totalPnL >= 0 ? '#10b981' : '#ef4444',
                                                             borderRadius: 1,
                                                         }} />
@@ -505,13 +505,13 @@ export default function TradesPage() {
                                         <Alert severity="info">No regime-tagged trades in selected period.</Alert>
                                     ) : (
                                         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, p: 1 }}>
-                                            {regimeChartData.map((d: any) => (
+                                            {regimeChartData.map((d) => (
                                                 <Box key={d.name} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                                                     <Typography variant="caption" sx={{ width: 100, flexShrink: 0, color: '#94a3b8', fontSize: 11 }}>{d.name}</Typography>
                                                     <Box sx={{ flex: 1, height: 20, bgcolor: 'rgba(255,255,255,0.05)', borderRadius: 1, overflow: 'hidden', position: 'relative' }}>
                                                         <Box sx={{
                                                             height: '100%',
-                                                            width: `${Math.min(Math.abs(d.totalPnL) / Math.max(...regimeChartData.map((x: any) => Math.abs(x.totalPnL)), 1) * 100, 100)}%`,
+                                                            width: `${Math.min(Math.abs(d.totalPnL) / Math.max(...regimeChartData.map((x) => Math.abs(x.totalPnL)), 1) * 100, 100)}%`,
                                                             bgcolor: d.totalPnL >= 0 ? '#f59e0b' : '#ef4444',
                                                             borderRadius: 1,
                                                         }} />

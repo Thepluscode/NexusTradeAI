@@ -114,6 +114,22 @@ function WinRateBar({ winRate, total }: { winRate: number; total: number }) {
     );
 }
 
+interface PerformanceStats {
+    totalTrades?: number;
+    winners?: number;
+    winningTrades?: number;
+    losers?: number;
+    losingTrades?: number;
+    totalPnL?: number;
+    totalProfit?: number;
+    totalWinAmount?: number;
+    totalLossAmount?: number;
+    profitFactor?: number;
+    maxDrawdown?: number;
+    totalTradesToday?: number;
+    winRate?: number;
+}
+
 // ── Main component ─────────────────────────────────────────────────────────
 
 export const CompliancePanel: React.FC = () => {
@@ -127,8 +143,7 @@ export const CompliancePanel: React.FC = () => {
         staleTime: 5 * 60 * 1000,
     });
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const stats: Record<string, any> = status?.stats || status?.performance || {};
+    const stats: PerformanceStats = status?.stats || status?.performance || {};
     const totalTrades = stats.totalTrades ?? 0;
     const winners = stats.winners ?? stats.winningTrades ?? 0;
     const losers = stats.losers ?? stats.losingTrades ?? 0;

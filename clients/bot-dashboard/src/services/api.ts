@@ -214,8 +214,7 @@ class APIClient {
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  async getThresholdAnalysis(thresholds?: Record<string, number>): Promise<any> {
+  async getThresholdAnalysis(thresholds?: Record<string, number>): Promise<Record<string, unknown> | null> {
     try {
       const response = await this.tradingEngine.post('/api/backtest/threshold-analysis', thresholds || {});
       return response.data;

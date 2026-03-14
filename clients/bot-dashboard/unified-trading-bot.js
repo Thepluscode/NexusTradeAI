@@ -1842,22 +1842,22 @@ function updateTrailingStop(position, currentPrice, unrealizedPL) {
     let stopUpdated = false;
     const gainDecimal = unrealizedPL / 100;
 
-    // Find the highest applicable trailing stop level
-    for (let i = EXIT_CONFIG.trailingStopLevels.length - 1; i >= 0; i--) {
-        const level = EXIT_CONFIG.trailingStopLevels[i];
+    // Find the highest applicable trailing stop level (iterate forward, keep best match)
+    let bestLevel = null;
+    for (const level of EXIT_CONFIG.trailingStopLevels) {
+        if (gainDecimal >= level.gainThreshold) bestLevel = level;
+    }
 
-        if (gainDecimal >= level.gainThreshold) {
-            // Calculate new stop (lock in X% of gains)
-            const totalGain = currentPrice - position.entry;
-            const lockedGain = totalGain * level.lockPercent;
-            const newStop = position.entry + lockedGain;
+    if (bestLevel) {
+        // Calculate new stop (lock in X% of gains)
+        const totalGain = currentPrice - position.entry;
+        const lockedGain = totalGain * bestLevel.lockPercent;
+        const newStop = position.entry + lockedGain;
 
-            if (newStop > position.stopLoss) {
-                console.log(`🔒 ${position.symbol}: AGGRESSIVE trailing stop raised to $${newStop.toFixed(2)} (locking in ${(level.lockPercent * 100).toFixed(0)}% of +${unrealizedPL.toFixed(2)}% gain)`);
-                position.stopLoss = newStop;
-                stopUpdated = true;
-            }
-            break; // Only apply highest level
+        if (newStop > position.stopLoss) {
+            console.log(`🔒 ${position.symbol}: AGGRESSIVE trailing stop raised to $${newStop.toFixed(2)} (locking in ${(bestLevel.lockPercent * 100).toFixed(0)}% of +${unrealizedPL.toFixed(2)}% gain)`);
+            position.stopLoss = newStop;
+            stopUpdated = true;
         }
     }
 
@@ -4095,7 +4095,35 @@ class UserTradingEngine {
                     mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * guardrails.lossSizeMultiplier;
                     console.log(`[Engine ${this.userId}][Guardrail] ${mover.symbol} size cut to ${mover.agentSizeMultiplier.toFixed(2)}x (${guardrails.consecutiveLosses} consecutive losses)`);
                 }
-                // TODO: Add full AI advisor call (queryAIAdvisor) matching global scanMomentumBreakouts
+                // [v5.0] HARD GATE: every trade MUST be approved by the agentic AI pipeline
+                const aiResult = await queryAIAdvisor(mover);
+
+                // Agent rejection = hard stop (no trade without AI approval)
+                if (!aiResult.approved) {
+                    console.log(`[Engine ${this.userId}][Agent] ${mover.symbol} REJECTED (conf: ${(aiResult.confidence || 0).toFixed(2)}, src: ${aiResult.source}) — ${aiResult.reason}`);
+                    if (aiResult.risk_flags?.length) console.log(`[Engine ${this.userId}][Agent]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
+                    if (aiResult.lessons_applied?.length) console.log(`[Engine ${this.userId}][Agent]   Lessons: ${aiResult.lessons_applied.slice(0, 2).join('; ')}`);
+                    if (aiResult.confidence > 0.8 || aiResult.source === 'kill_switch') {
+                        (this._telegram || telegramAlerts).sendAgentRejection('Stock Bot', mover.symbol, 'long', aiResult.reason, aiResult.confidence, aiResult.risk_flags).catch(() => {});
+                    }
+                    if (aiResult.source === 'kill_switch') {
+                        (this._telegram || telegramAlerts).sendKillSwitchAlert('Stock Bot', aiResult.reason).catch(() => {});
+                    }
+                    continue;
+                }
+
+                // Agent approved — log and store metadata
+                const srcTag = aiResult.source === 'cache' ? ' (cached)' : '';
+                const regime = aiResult.market_regime ? ` [${aiResult.market_regime}]` : '';
+                console.log(`[Engine ${this.userId}][Agent] ${mover.symbol} APPROVED${srcTag}${regime} (conf: ${(aiResult.confidence || 0).toFixed(2)}, size: ${(aiResult.position_size_multiplier || 1).toFixed(2)}x) — ${aiResult.reason}`);
+                (this._telegram || telegramAlerts).sendAgentApproval('Stock Bot', mover.symbol, 'long', aiResult.confidence || 0, aiResult.position_size_multiplier || 1, aiResult.market_regime).catch(() => {});
+                mover.agentApproved = true;
+                mover.agentConfidence = aiResult.confidence;
+                mover.agentReason = aiResult.reason;
+                if (aiResult.position_size_multiplier && aiResult.position_size_multiplier !== 1.0) {
+                    mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * aiResult.position_size_multiplier;
+                }
+
                 await this.executeTrade(mover, mover.strategy || 'momentum');
             }
         }

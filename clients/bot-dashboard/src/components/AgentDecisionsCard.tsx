@@ -15,6 +15,19 @@ import {
 } from '@mui/material';
 import { SmartToy, CheckCircle, Cancel } from '@mui/icons-material';
 import { apiClient } from '@/services/api';
+import type { AgentStats, AgentOrchestratorStats, AgentClaudeStats, AgentKillSwitchStatus } from '@/types';
+
+interface AgentDecision {
+    timestamp: string;
+    symbol: string;
+    asset_class: string;
+    direction: string;
+    approved: boolean;
+    confidence: number;
+    reason: string;
+    source: string;
+    risk_flags: string | string[];
+}
 
 interface Props {
     assetClass?: 'stock' | 'forex' | 'crypto';
@@ -24,7 +37,7 @@ interface Props {
 export default function AgentDecisionsCard({ assetClass, limit = 10 }: Props) {
     const { data: statsData } = useQuery(
         'agentStats',
-        () => apiClient.getAgentStats(),
+        () => apiClient.getAgentStats() as unknown as Promise<AgentStats>,
         { staleTime: 15000, refetchInterval: 30000 }
     );
 
@@ -34,17 +47,15 @@ export default function AgentDecisionsCard({ assetClass, limit = 10 }: Props) {
         { staleTime: 15000, refetchInterval: 30000 }
     );
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const stats: Record<string, any> = statsData || {};
-    const orch = stats.orchestrator || {};
-    const claude = stats.claude || {};
-    const killSwitch = stats.kill_switch || {};
+    const stats: Partial<AgentStats> = statsData || {};
+    const orch: Partial<AgentOrchestratorStats> = stats.orchestrator || {};
+    const claude: Partial<AgentClaudeStats> = stats.claude || {};
+    const killSwitch: Partial<AgentKillSwitchStatus> = stats.kill_switch || {};
 
     // Filter decisions by asset class if specified
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let decisions: any[] = decisionsData?.decisions || [];
+    let decisions: AgentDecision[] = (decisionsData?.decisions || []) as unknown as AgentDecision[];
     if (assetClass) {
-        decisions = decisions.filter((d: { asset_class: string }) => d.asset_class === assetClass);
+        decisions = decisions.filter((d) => d.asset_class === assetClass);
     }
     decisions = decisions.slice(0, limit);
 
@@ -134,11 +145,7 @@ export default function AgentDecisionsCard({ assetClass, limit = 10 }: Props) {
                             </TableRow>
                         </TableHead>
                         <TableBody>
-                            {decisions.map((d: {
-                                timestamp: string; symbol: string; approved: boolean;
-                                confidence: number; reason: string; source: string;
-                                risk_flags: string | string[]; direction: string;
-                            }, idx: number) => {
+                            {decisions.map((d, idx) => {
                                 let flags: string[] = [];
                                 if (typeof d.risk_flags === 'string') {
                                     try { flags = JSON.parse(d.risk_flags || '[]'); } catch { flags = []; }

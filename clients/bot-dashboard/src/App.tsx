@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { lazy, Suspense, useState, useEffect } from 'react';
 import { QueryClient, QueryClientProvider } from 'react-query';
 import { ThemeProvider, CssBaseline, alpha } from '@mui/material';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
@@ -20,6 +20,7 @@ import {
   Avatar,
   Tooltip,
   Chip,
+  CircularProgress,
 } from '@mui/material';
 import {
   Dashboard,
@@ -41,24 +42,31 @@ import {
 import darkTheme from './theme';
 import { Toaster } from 'react-hot-toast';
 
-// Pages
-import OverviewPage from './pages/OverviewPage';
-import StockBotPage from './pages/StockBotPage';
-import ForexBotPage from './pages/ForexBotPage';
-import CryptoBotPage from './pages/CryptoBotPage';
-import BacktestPage from './pages/BacktestPage';
-import TradesPage from './pages/TradesPage';
-import SettingsPage from './pages/SettingsPage';
-import LoginPage from './pages/LoginPage';
-import ForgotPasswordPage from './pages/ForgotPasswordPage';
-import ResetPasswordPage from './pages/ResetPasswordPage';
-import AdminPage from './pages/AdminPage';
-import AgentPage from './pages/AgentPage';
-import APIPage from './pages/APIPage';
-import DocsPage from './pages/DocsPage';
-import LandingPage from './pages/LandingPage';
+// Pages — lazy-loaded for code splitting
+const OverviewPage = lazy(() => import('./pages/OverviewPage'));
+const StockBotPage = lazy(() => import('./pages/StockBotPage'));
+const ForexBotPage = lazy(() => import('./pages/ForexBotPage'));
+const CryptoBotPage = lazy(() => import('./pages/CryptoBotPage'));
+const BacktestPage = lazy(() => import('./pages/BacktestPage'));
+const TradesPage = lazy(() => import('./pages/TradesPage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const LoginPage = lazy(() => import('./pages/LoginPage'));
+const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'));
+const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage'));
+const AdminPage = lazy(() => import('./pages/AdminPage'));
+const AgentPage = lazy(() => import('./pages/AgentPage'));
+const APIPage = lazy(() => import('./pages/APIPage'));
+const DocsPage = lazy(() => import('./pages/DocsPage'));
+const LandingPage = lazy(() => import('./pages/LandingPage'));
 import ProtectedRoute from './components/ProtectedRoute';
 import { useAuth } from './hooks/useAuth';
+
+// Suspense fallback for lazy-loaded pages
+const PageLoader = () => (
+  <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '60vh' }}>
+    <CircularProgress size={40} sx={{ color: '#3b82f6' }} />
+  </Box>
+);
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -574,7 +582,7 @@ function AuthRedirect() {
 
 // ── Wrap page in sidebar layout ──────────────────────────────────────────────
 function WithNav({ children }: { children: React.ReactNode }) {
-  return <Navigation><PageErrorBoundary>{children}</PageErrorBoundary></Navigation>;
+  return <Navigation><PageErrorBoundary><Suspense fallback={<PageLoader />}>{children}</Suspense></PageErrorBoundary></Navigation>;
 }
 
 // ── Single flat Routes — no nesting ──────────────────────────────────────────
@@ -582,12 +590,12 @@ function RouterSwitch() {
   return (
     <Routes>
       {/* Public full-width routes (no sidebar) */}
-      <Route path="/" element={<AuthRedirect />} />
-      <Route path="/pricing" element={<LandingPage />} />
-      <Route path="/public-docs" element={<DocsPage />} />
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-      <Route path="/reset-password" element={<ResetPasswordPage />} />
+      <Route path="/" element={<Suspense fallback={<PageLoader />}><AuthRedirect /></Suspense>} />
+      <Route path="/pricing" element={<Suspense fallback={<PageLoader />}><LandingPage /></Suspense>} />
+      <Route path="/public-docs" element={<Suspense fallback={<PageLoader />}><DocsPage /></Suspense>} />
+      <Route path="/login" element={<Suspense fallback={<PageLoader />}><LoginPage /></Suspense>} />
+      <Route path="/forgot-password" element={<Suspense fallback={<PageLoader />}><ForgotPasswordPage /></Suspense>} />
+      <Route path="/reset-password" element={<Suspense fallback={<PageLoader />}><ResetPasswordPage /></Suspense>} />
       {/* Dashboard routes (with sidebar + auth) */}
       <Route path="/dashboard" element={<WithNav><ProtectedRoute><OverviewPage /></ProtectedRoute></WithNav>} />
       <Route path="/stock" element={<WithNav><ProtectedRoute><StockBotPage /></ProtectedRoute></WithNav>} />

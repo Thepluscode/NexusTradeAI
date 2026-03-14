@@ -13,8 +13,13 @@ export default defineConfig({
     rollupOptions: {
       output: {
         entryFileNames: 'assets/index.js',
-        chunkFileNames: 'assets/[name].js',
+        chunkFileNames: 'assets/[name]-[hash].js',
         assetFileNames: 'assets/[name][extname]',
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+          'vendor-mui': ['@mui/material', '@mui/icons-material'],
+          'vendor-query': ['react-query', 'axios'],
+        },
       },
     },
   },

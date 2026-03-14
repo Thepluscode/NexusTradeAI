@@ -19,9 +19,80 @@ import axios from 'axios';
 import { useQuery } from 'react-query';
 import { SERVICE_URLS } from '@/services/api';
 
+// ── Bot context types ─────────────────────────────────────────────────────
+
+interface BotPerformanceStats {
+    totalTrades?: number;
+    winners?: number;
+    winningTrades?: number;
+    losers?: number;
+    losingTrades?: number;
+    totalPnL?: number;
+    totalProfit?: number;
+    profitFactor?: number;
+    maxDrawdown?: number;
+    totalTradesToday?: number;
+}
+
+interface BotPosition {
+    symbol: string;
+    qty?: number;
+    quantity?: number;
+    avg_entry_price?: number;
+    entryPrice?: number;
+}
+
+interface TierRiskConfig {
+    stopLoss?: number;
+    profitTarget?: number;
+}
+
+interface BotConfigData {
+    risk?: {
+        tier1?: TierRiskConfig;
+        tier2?: TierRiskConfig;
+        tier3?: TierRiskConfig;
+    };
+    trading?: {
+        maxTradesPerDay?: number;
+        maxTradesPerSymbol?: number;
+    };
+}
+
+interface StockBotData {
+    isRunning?: boolean;
+    equity?: number;
+    stats?: BotPerformanceStats;
+    performance?: BotPerformanceStats;
+    positions?: BotPosition[];
+}
+
+interface ForexBotData {
+    isRunning?: boolean;
+    session?: string;
+    stats?: BotPerformanceStats;
+    performance?: BotPerformanceStats;
+    positions?: BotPosition[];
+}
+
+interface CryptoBotData {
+    isRunning?: boolean;
+    mode?: string;
+    stats?: { totalTrades?: number };
+    totalTrades?: number;
+    positions?: BotPosition[];
+}
+
+interface BotContext {
+    stock: StockBotData | null;
+    config: BotConfigData | null;
+    forex: ForexBotData | null;
+    crypto: CryptoBotData | null;
+}
+
 // ── Pull real context from all running bots ────────────────────────────────
 
-async function fetchBotContext() {
+async function fetchBotContext(): Promise<BotContext> {
     const results = await Promise.allSettled([
         axios.get(`${SERVICE_URLS.stockBot}/api/trading/status`, { timeout: 3000 }),
         axios.get(`${SERVICE_URLS.stockBot}/api/config`, { timeout: 3000 }),
@@ -29,18 +100,17 @@ async function fetchBotContext() {
         axios.get(`${SERVICE_URLS.cryptoBot}/api/crypto/status`, { timeout: 3000 }),
     ]);
 
-    const stock = results[0].status === 'fulfilled' ? results[0].value.data?.data || results[0].value.data : null;
-    const config = results[1].status === 'fulfilled' ? results[1].value.data?.data : null;
-    const forex = results[2].status === 'fulfilled' ? results[2].value.data?.data || results[2].value.data : null;
-    const crypto = results[3].status === 'fulfilled' ? results[3].value.data?.data || results[3].value.data : null;
+    const stock: StockBotData | null = results[0].status === 'fulfilled' ? results[0].value.data?.data || results[0].value.data : null;
+    const config: BotConfigData | null = results[1].status === 'fulfilled' ? results[1].value.data?.data : null;
+    const forex: ForexBotData | null = results[2].status === 'fulfilled' ? results[2].value.data?.data || results[2].value.data : null;
+    const crypto: CryptoBotData | null = results[3].status === 'fulfilled' ? results[3].value.data?.data || results[3].value.data : null;
 
     return { stock, config, forex, crypto };
 }
 
 // ── Local AI answering from live bot data ──────────────────────────────────
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function generateResponse(message: string, ctx: Record<string, any>): string {
+function generateResponse(message: string, ctx: BotContext): string {
     const q = message.toLowerCase();
     const stock = ctx?.stock;
     const config = ctx?.config;
@@ -90,8 +160,7 @@ function generateResponse(message: string, ctx: Record<string, any>): string {
         if (positions === 0) {
             return `📭 No open positions right now.\n\nThe bot scans 110+ symbols every 60 seconds for momentum setups. Trades open when a stock meets all entry criteria: momentum threshold, volume ratio, RSI range (30–70), and price above VWAP.`;
         }
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const posDetails = (stock?.positions || []).slice(0, 5).map((p: any) =>
+        const posDetails = (stock?.positions || []).slice(0, 5).map((p: BotPosition) =>
             `• ${p.symbol}: ${p.qty || p.quantity} shares @ $${(p.avg_entry_price || p.entryPrice || 0).toFixed(2)}`
         ).join('\n');
         return `📈 ${positions} Open Position${positions > 1 ? 's' : ''}\n\n${posDetails}`;
@@ -111,8 +180,8 @@ function generateResponse(message: string, ctx: Record<string, any>): string {
         }
         // Forex bot sends stats: {}, not performance: {}
         const fp = forex?.stats || forex?.performance || {};
-        const fxWinRate = fp.totalTrades > 0 && fp.winners != null
-            ? ((fp.winners / fp.totalTrades) * 100).toFixed(1)
+        const fxWinRate = (fp.totalTrades ?? 0) > 0 && fp.winners != null
+            ? ((fp.winners / (fp.totalTrades ?? 1)) * 100).toFixed(1)
             : null;
         return `💱 Forex Bot\n\n` +
             `• Running: ${forex?.isRunning ? 'Yes' : 'No'}\n` +
@@ -218,7 +287,7 @@ export const AIChat: React.FC = () => {
         setInput('');
         setThinking(true);
         setTimeout(() => {
-            const response = generateResponse(text.trim(), ctx ?? {});
+            const response = generateResponse(text.trim(), ctx ?? { stock: null, config: null, forex: null, crypto: null });
             setMessages(prev => [...prev, { role: 'assistant', text: response }]);
             setThinking(false);
         }, 350);

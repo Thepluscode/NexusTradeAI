@@ -1854,10 +1854,12 @@ async function closePositionWithReason(pair, reason) {
         positions.delete(pair);
 
         if (reason.toLowerCase().includes('stop')) {
-            // Dynamic cooldown: small loss (<1%) → 30 min; large loss (>2%) → 2h
+            // Dynamic cooldown: small loss (<1%) → 30 min; medium (1-2%) → 60 min; large (>2%) → 2h
             const lossPct = pos ? Math.abs(pos.unrealizedPL ?? 0) / (parseFloat(pos.entry ?? 1) * Math.abs(pos.units ?? 1)) * 100 : 1;
-            const cooldownMs = lossPct >= 2 ? MIN_TIME_AFTER_STOP : 30 * 60 * 1000;
-            stoppedOutPairs.set(pair, { time: Date.now(), cooldownMs });
+            const cooldownMs = lossPct >= 2 ? MIN_TIME_AFTER_STOP
+                : lossPct >= 1 ? 60 * 60 * 1000
+                : 30 * 60 * 1000;
+            stoppedOutPairs.set(pair, { time: Date.now(), cooldownMs, lossPercent: lossPct });
         }
 
         console.log(`✅ Position ${pair} closed successfully`);
@@ -2803,8 +2805,11 @@ class UserForexEngine {
     }
 
     canTrade(pair, direction) {
-        const stopTime = this.stoppedOutPairs.get(pair);
-        if (stopTime && Date.now() - stopTime < 60 * 60 * 1000) return false;
+        const stopEntry = this.stoppedOutPairs.get(pair);
+        if (stopEntry) {
+            const { time, cooldownMs } = typeof stopEntry === 'object' ? stopEntry : { time: stopEntry, cooldownMs: MIN_TIME_AFTER_STOP };
+            if (Date.now() - time < cooldownMs) return false;
+        }
         if (this.totalTradesToday >= MAX_TRADES_PER_DAY) return false;
         if ((this.tradesPerPair.get(pair) || 0) >= MAX_TRADES_PER_PAIR) return false;
         const recent = this.recentTrades.get(pair) || [];
@@ -2825,7 +2830,14 @@ class UserForexEngine {
             this.dbForexClose(pos.dbTradeId, exitPrice, exitPnl, exitPct, reason).catch(() => {});
         }
         await this.closeOandaPosition(pair);
-        if (reason.toLowerCase().includes('stop')) this.stoppedOutPairs.set(pair, Date.now());
+        if (reason.toLowerCase().includes('stop')) {
+            // Dynamic cooldown: small loss (<1%) → 30 min; medium (1-2%) → 60 min; large (>2%) → 2h
+            const lossPct = pos ? Math.abs(pos.unrealizedPL ?? 0) / (parseFloat(pos.entry ?? 1) * Math.abs(pos.units ?? 1)) * 100 : 1;
+            const cooldownMs = lossPct >= 2 ? MIN_TIME_AFTER_STOP
+                : lossPct >= 1 ? 60 * 60 * 1000
+                : 30 * 60 * 1000;
+            this.stoppedOutPairs.set(pair, { time: Date.now(), cooldownMs, lossPercent: lossPct });
+        }
         this.positions.delete(pair);
         await this.saveState();
         console.log(`✅ [ForexEngine ${this.userId}] Closed ${pair} (${reason})`);

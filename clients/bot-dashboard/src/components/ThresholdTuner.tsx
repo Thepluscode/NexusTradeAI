@@ -38,6 +38,49 @@ import {
 import { apiClient } from '@/services/api';
 import { SafeResponsiveContainer } from './ChartErrorBoundary';
 
+interface ThresholdMetrics {
+    winRate: number;
+    totalPnl: number;
+    profitFactor: number;
+    count: number;
+}
+
+interface ThresholdTrade {
+    wouldPass: boolean;
+    symbol: string;
+    tier: string;
+    rsi: number;
+    volumeRatio: number;
+    smoothQuality: number;
+    pnl: number;
+    pnlPct: number;
+    isWin: boolean;
+    closeReason: string;
+    entryTime: string;
+}
+
+interface SensitivityPoint {
+    value: number;
+    winRate: number;
+    count: number;
+    profitFactor: number;
+}
+
+interface CloseReasonStats {
+    total: number;
+    winRate: number;
+    totalPnl: number;
+}
+
+interface ThresholdAnalysisResult {
+    success: boolean;
+    current: ThresholdMetrics;
+    projected: ThresholdMetrics;
+    sensitivity: Record<string, SensitivityPoint[]>;
+    byCloseReason: Record<string, CloseReasonStats>;
+    trades: ThresholdTrade[];
+}
+
 interface ThresholdState {
     rsiMin: number;
     rsiMax: number;
@@ -58,8 +101,7 @@ const DEFAULTS: ThresholdState = {
     days: 90,
 };
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function StatBox({ label, value, color, suffix = '' }: { label: string; value: any; color?: string; suffix?: string }) {
+function StatBox({ label, value, color, suffix = '' }: { label: string; value: string | number; color?: string; suffix?: string }) {
     return (
         <Box sx={{ textAlign: 'center', px: 1 }}>
             <Typography variant="caption" color="text.secondary" display="block">{label}</Typography>
@@ -74,9 +116,9 @@ export default function ThresholdTuner() {
     const [thresholds, setThresholds] = useState<ThresholdState>(DEFAULTS);
     const [committed, setCommitted] = useState<ThresholdState>(DEFAULTS);
 
-    const { data, isLoading, isError } = useQuery(
+    const { data, isLoading, isError } = useQuery<ThresholdAnalysisResult | null>(
         ['thresholdAnalysis', committed],
-        () => apiClient.getThresholdAnalysis({ ...committed } as Record<string, number>),
+        () => apiClient.getThresholdAnalysis({ ...committed } as Record<string, number>) as Promise<ThresholdAnalysisResult | null>,
         { staleTime: 30 * 1000, retry: 1, keepPreviousData: true }
     );
 
@@ -108,9 +150,9 @@ export default function ThresholdTuner() {
     // Format sensitivity data for charts
     const sensitivityCharts = useMemo(() => {
         if (!sensitivity) return {};
-        const result: Record<string, { value: number; winRate: number; count: number; profitFactor: number }[]> = {};
+        const result: Record<string, SensitivityPoint[]> = {};
         for (const [param, values] of Object.entries(sensitivity)) {
-            result[param] = (values as { value: number; winRate: number; count: number; profitFactor: number }[]).map((v) => ({
+            result[param] = values.map((v) => ({
                 value: v.value,
                 winRate: v.winRate,
                 count: v.count,
@@ -123,7 +165,7 @@ export default function ThresholdTuner() {
     // Close reason bar chart data
     const closeReasonData = useMemo(() => {
         if (!byCloseReason) return [];
-        return Object.entries(byCloseReason as Record<string, { total: number; winRate: number; totalPnl: number }>)
+        return Object.entries(byCloseReason)
             .map(([reason, stats]) => ({
                 reason: reason.replace(/_/g, ' ').replace('orphaned restart', 'orphan'),
                 ...stats,
@@ -480,12 +522,7 @@ export default function ThresholdTuner() {
                                 </TableRow>
                             </TableHead>
                             <TableBody>
-                                {(trades as {
-                                    wouldPass: boolean; symbol: string; tier: string;
-                                    rsi: number; volumeRatio: number; smoothQuality: number;
-                                    pnl: number; pnlPct: number; isWin: boolean; closeReason: string;
-                                    entryTime: string;
-                                }[]).map((t, idx) => (
+                                {trades.map((t, idx) => (
                                     <TableRow
                                         key={idx}
                                         hover
