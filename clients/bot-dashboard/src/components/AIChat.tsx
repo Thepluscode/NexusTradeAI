@@ -16,7 +16,7 @@ import {
     Person,
 } from '@mui/icons-material';
 import axios from 'axios';
-import { useQuery } from 'react-query';
+import { useQuery } from '@tanstack/react-query';
 import { SERVICE_URLS } from '@/services/api';
 
 // ── Bot context types ─────────────────────────────────────────────────────
@@ -272,7 +272,9 @@ export const AIChat: React.FC = () => {
     const [thinking, setThinking] = useState(false);
     const bottomRef = useRef<HTMLDivElement>(null);
 
-    const { data: ctx } = useQuery('aiChatContext', fetchBotContext, {
+    const { data: ctx } = useQuery({
+        queryKey: ['aiChatContext'],
+        queryFn: fetchBotContext,
         refetchInterval: 15000,
         staleTime: 10000,
     });

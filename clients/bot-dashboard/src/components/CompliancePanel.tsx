@@ -28,7 +28,7 @@ import {
     BarChart,
     Timeline,
 } from '@mui/icons-material';
-import { useQuery } from 'react-query';
+import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/services/api';
 
 // ── Data fetching ──────────────────────────────────────────────────────────
@@ -137,9 +137,15 @@ export const CompliancePanel: React.FC = () => {
         data: status,
         isLoading,
         refetch,
-    } = useQuery('tradeJournalStatus', fetchTradingStatus, { refetchInterval: 30000 });
+    } = useQuery({
+        queryKey: ['tradeJournalStatus'],
+        queryFn: fetchTradingStatus,
+        refetchInterval: 30000,
+    });
 
-    const { data: backtest } = useQuery('tradeJournalBacktest', fetchBacktestReport, {
+    const { data: backtest } = useQuery({
+        queryKey: ['tradeJournalBacktest'],
+        queryFn: fetchBacktestReport,
         staleTime: 5 * 60 * 1000,
     });
 

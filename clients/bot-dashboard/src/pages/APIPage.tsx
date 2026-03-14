@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useQuery, useMutation, useQueryClient } from 'react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
     Box, Paper, Typography, Button, TextField, Chip, IconButton,
     Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
@@ -63,17 +63,21 @@ export default function APIPage() {
         const checkout = new URLSearchParams(window.location.search).get('checkout');
         if (!checkout) return;
         if (checkout === 'success') {
-            qc.invalidateQueries('apiKeys');
-            qc.invalidateQueries('apiUsage');
+            qc.invalidateQueries({ queryKey: ['apiKeys'] });
+            qc.invalidateQueries({ queryKey: ['apiUsage'] });
         }
         window.history.replaceState({}, '', '/api');
     }, [qc]);
 
     // Fetch keys + usage
-    const { data: keysData } = useQuery('apiKeys', () => apiClient.getAPIKeys(), {
+    const { data: keysData } = useQuery({
+        queryKey: ['apiKeys'],
+        queryFn: () => apiClient.getAPIKeys(),
         staleTime: 30000, refetchInterval: 60000,
     });
-    const { data: usage } = useQuery('apiUsage', () => apiClient.getAPIUsage(), {
+    const { data: usage } = useQuery({
+        queryKey: ['apiUsage'],
+        queryFn: () => apiClient.getAPIUsage(),
         staleTime: 30000, refetchInterval: 60000,
     });
 
@@ -84,43 +88,38 @@ export default function APIPage() {
         : 0;
 
     // Create key mutation
-    const createMutation = useMutation(
-        () => apiClient.createAPIKey(newKeyName || 'default', newKeyTier),
-        {
-            onSuccess: (data) => {
-                setCreatedKey(data.key as string);
-                setShowKey(true);
-                setNewKeyName('');
-                qc.invalidateQueries('apiKeys');
-                qc.invalidateQueries('apiUsage');
-            },
-            onError: () => setSnack('Failed to create API key'),
-        }
-    );
+    const createMutation = useMutation({
+        mutationFn: () => apiClient.createAPIKey(newKeyName || 'default', newKeyTier),
+        onSuccess: (data) => {
+            setCreatedKey(data.key as string);
+            setShowKey(true);
+            setNewKeyName('');
+            qc.invalidateQueries({ queryKey: ['apiKeys'] });
+            qc.invalidateQueries({ queryKey: ['apiUsage'] });
+        },
+        onError: () => setSnack('Failed to create API key'),
+    });
 
     // Revoke key mutation
-    const revokeMutation = useMutation(
-        (keyId: number) => apiClient.revokeAPIKey(keyId),
-        {
-            onSuccess: () => {
-                qc.invalidateQueries('apiKeys');
-                setSnack('Key revoked');
-            },
-        }
-    );
+    const revokeMutation = useMutation({
+        mutationFn: (keyId: number) => apiClient.revokeAPIKey(keyId),
+        onSuccess: () => {
+            qc.invalidateQueries({ queryKey: ['apiKeys'] });
+            setSnack('Key revoked');
+        },
+    });
 
     // Stripe checkout mutation
-    const upgradeMutation = useMutation(
-        (tier: 'pro' | 'enterprise') => apiClient.createCheckout(tier),
-        {
-            onSuccess: (data) => {
-                if (data.checkout_url) {
-                    window.location.href = data.checkout_url;
-                } else {
-                    setSnack('Failed to create checkout session');
-                }
-            },
-            onError: () => setSnack('Billing not configured yet — contact support'),
+    const upgradeMutation = useMutation({
+        mutationFn: (tier: 'pro' | 'enterprise') => apiClient.createCheckout(tier),
+        onSuccess: (data) => {
+            if (data.checkout_url) {
+                window.location.href = data.checkout_url;
+            } else {
+                setSnack('Failed to create checkout session');
+            }
+        },
+        onError: () => setSnack('Billing not configured yet — contact support'),
         }
     );
 
@@ -349,10 +348,10 @@ export default function APIPage() {
                             fullWidth
                             variant={tier.id === 'pro' ? 'contained' : 'outlined'}
                             sx={{ mt: 3, borderRadius: 2, textTransform: 'none', fontWeight: 600 }}
-                            disabled={tier.id === 'free' || upgradeMutation.isLoading}
+                            disabled={tier.id === 'free' || upgradeMutation.isPending}
                             onClick={() => tier.id !== 'free' && upgradeMutation.mutate(tier.id as 'pro' | 'enterprise')}
                         >
-                            {tier.id === 'free' ? 'Current Plan' : upgradeMutation.isLoading ? 'Loading...' : `Subscribe — ${tier.price}`}
+                            {tier.id === 'free' ? 'Current Plan' : upgradeMutation.isPending ? 'Loading...' : `Subscribe — ${tier.price}`}
                         </Button>
                     </Paper>
                 ))}
@@ -415,7 +414,7 @@ export default function APIPage() {
                     <Button
                         variant="contained"
                         onClick={() => { createMutation.mutate(); setCreateOpen(false); }}
-                        disabled={createMutation.isLoading}
+                        disabled={createMutation.isPending}
                     >
                         Create
                     </Button>

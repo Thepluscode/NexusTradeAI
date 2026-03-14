@@ -1,4 +1,4 @@
-import { useQuery } from 'react-query';
+import { useQuery } from '@tanstack/react-query';
 import {
     Box,
     Paper,
@@ -35,17 +35,17 @@ interface Props {
 }
 
 export default function AgentDecisionsCard({ assetClass, limit = 10 }: Props) {
-    const { data: statsData } = useQuery(
-        'agentStats',
-        () => apiClient.getAgentStats() as unknown as Promise<AgentStats>,
-        { staleTime: 15000, refetchInterval: 30000 }
-    );
+    const { data: statsData } = useQuery({
+        queryKey: ['agentStats'],
+        queryFn: () => apiClient.getAgentStats() as unknown as Promise<AgentStats>,
+        staleTime: 15000, refetchInterval: 30000,
+    });
 
-    const { data: decisionsData, isLoading } = useQuery(
-        ['agentDecisions', limit],
-        () => apiClient.getAgentDecisions(50),
-        { staleTime: 15000, refetchInterval: 30000 }
-    );
+    const { data: decisionsData, isLoading } = useQuery({
+        queryKey: ['agentDecisions', limit],
+        queryFn: () => apiClient.getAgentDecisions(50),
+        staleTime: 15000, refetchInterval: 30000,
+    });
 
     const stats: Partial<AgentStats> = statsData || {};
     const orch: Partial<AgentOrchestratorStats> = stats.orchestrator || {};

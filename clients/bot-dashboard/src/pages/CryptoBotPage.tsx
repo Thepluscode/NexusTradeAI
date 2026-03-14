@@ -25,7 +25,7 @@ import {
     Cancel,
 } from '@mui/icons-material';
 import { apiClient } from '@/services/api';
-import { useQuery, useMutation, useQueryClient } from 'react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { useAuth } from '@/hooks/useAuth';
@@ -93,27 +93,27 @@ export default function CryptoBotPage() {
     const navigate = useNavigate();
     const { user } = useAuth();
 
-    const { data: engineStatus } = useQuery(
-        'cryptoEngineStatus',
-        () => apiClient.getCryptoEngineStatus(),
-        { refetchInterval: 15000, retry: false, enabled: !!user }
-    );
+    const { data: engineStatus } = useQuery({
+        queryKey: ['cryptoEngineStatus'],
+        queryFn: () => apiClient.getCryptoEngineStatus(),
+        refetchInterval: 15000, retry: false, enabled: !!user,
+    });
     const credentialsRequired = engineStatus?.credentialsRequired === true;
 
-    const { data: status, isLoading, error } = useQuery<BotStatus>(
-        'cryptoBotStatus',
-        async () => {
+    const { data: status, isLoading, error } = useQuery<BotStatus>({
+        queryKey: ['cryptoBotStatus'],
+        queryFn: async () => {
             const res = await apiClient.getCryptoStatus();
             return res as unknown as BotStatus;
         },
-        { refetchInterval: 5000 }
-    );
+        refetchInterval: 5000,
+    });
 
     const patchRunningState = (patch: { isRunning?: boolean; isPaused?: boolean }) => {
-        queryClient.setQueryData('cryptoEngineStatus', (old: Record<string, unknown> | undefined) =>
+        queryClient.setQueryData(['cryptoEngineStatus'], (old: Record<string, unknown> | undefined) =>
             old ? { ...old, ...patch } : patch
         );
-        queryClient.setQueryData('cryptoBotStatus', (old: BotStatus | undefined) =>
+        queryClient.setQueryData(['cryptoBotStatus'], (old: BotStatus | undefined) =>
             old ? { ...old, ...patch } : old as unknown as BotStatus
         );
     };
@@ -121,54 +121,47 @@ export default function CryptoBotPage() {
     const isRunning = engineStatus?.isRunning != null ? (engineStatus.isRunning as boolean) : (status?.isRunning ?? false);
     const isPaused = engineStatus?.isPaused != null ? (engineStatus.isPaused as boolean) : (status?.isPaused ?? false);
 
-    const startMutation = useMutation<unknown, Error, void>(
-        () => apiClient.startCryptoEngine(),
-        {
-            onSuccess: () => {
-                patchRunningState({ isRunning: true, isPaused: false });
-                toast.success('Crypto Bot started!');
-                queryClient.invalidateQueries('cryptoBotStatus');
-                queryClient.invalidateQueries('cryptoEngineStatus');
-            },
-            onError: (err) => { toast.error(err?.message || 'Failed to start bot'); },
-        }
-    );
+    const startMutation = useMutation<unknown, Error, void>({
+        mutationFn: () => apiClient.startCryptoEngine(),
+        onSuccess: () => {
+            patchRunningState({ isRunning: true, isPaused: false });
+            toast.success('Crypto Bot started!');
+            queryClient.invalidateQueries({ queryKey: ['cryptoBotStatus'] });
+            queryClient.invalidateQueries({ queryKey: ['cryptoEngineStatus'] });
+        },
+        onError: (err) => { toast.error(err?.message || 'Failed to start bot'); },
+    });
 
-    const stopMutation = useMutation<unknown, Error, void>(
-        () => apiClient.stopCryptoEngine(),
-        {
-            onSuccess: () => {
-                patchRunningState({ isRunning: false, isPaused: false });
-                toast.success('Crypto Bot stopped');
-                queryClient.invalidateQueries('cryptoBotStatus');
-                queryClient.invalidateQueries('cryptoEngineStatus');
-            },
-            onError: (err) => { toast.error(err?.message || 'Failed to stop bot'); },
-        }
-    );
+    const stopMutation = useMutation<unknown, Error, void>({
+        mutationFn: () => apiClient.stopCryptoEngine(),
+        onSuccess: () => {
+            patchRunningState({ isRunning: false, isPaused: false });
+            toast.success('Crypto Bot stopped');
+            queryClient.invalidateQueries({ queryKey: ['cryptoBotStatus'] });
+            queryClient.invalidateQueries({ queryKey: ['cryptoEngineStatus'] });
+        },
+        onError: (err) => { toast.error(err?.message || 'Failed to stop bot'); },
+    });
 
-    const pauseMutation = useMutation<unknown, Error, void>(
-        () => apiClient.pauseCryptoEngine(),
-        {
-            onSuccess: (data) => {
-                const d = data as { isRunning?: boolean; isPaused?: boolean } | null;
-                const newPaused = d?.isPaused ?? !isPaused;
-                patchRunningState({ isRunning: d?.isRunning ?? true, isPaused: newPaused });
-                toast.success(isPaused ? 'Crypto Bot resumed' : 'Crypto Bot paused');
-                queryClient.invalidateQueries('cryptoBotStatus');
-                queryClient.invalidateQueries('cryptoEngineStatus');
-            },
-            onError: (err) => { toast.error(err?.message || 'Failed to pause bot'); },
-        }
-    );
+    const pauseMutation = useMutation<unknown, Error, void>({
+        mutationFn: () => apiClient.pauseCryptoEngine(),
+        onSuccess: (data) => {
+            const d = data as { isRunning?: boolean; isPaused?: boolean } | null;
+            const newPaused = d?.isPaused ?? !isPaused;
+            patchRunningState({ isRunning: d?.isRunning ?? true, isPaused: newPaused });
+            toast.success(isPaused ? 'Crypto Bot resumed' : 'Crypto Bot paused');
+            queryClient.invalidateQueries({ queryKey: ['cryptoBotStatus'] });
+            queryClient.invalidateQueries({ queryKey: ['cryptoEngineStatus'] });
+        },
+        onError: (err) => { toast.error(err?.message || 'Failed to pause bot'); },
+    });
 
-    const closeAllMutation = useMutation<unknown, Error, void>(
-        () => apiClient.closeAllCryptoPositions(),
-    {
+    const closeAllMutation = useMutation<unknown, Error, void>({
+        mutationFn: () => apiClient.closeAllCryptoPositions(),
         onSuccess: () => {
             toast.success('All crypto positions closed');
-            queryClient.invalidateQueries('cryptoBotStatus');
-            queryClient.invalidateQueries('cryptoEngineStatus');
+            queryClient.invalidateQueries({ queryKey: ['cryptoBotStatus'] });
+            queryClient.invalidateQueries({ queryKey: ['cryptoEngineStatus'] });
         },
         onError: (err) => { toast.error(err?.message || 'Failed to close all positions'); },
     });
@@ -196,7 +189,7 @@ export default function CryptoBotPage() {
                 </Alert>
                 <Button
                     variant="contained"
-                    onClick={() => queryClient.invalidateQueries('cryptoBotStatus')}
+                    onClick={() => queryClient.invalidateQueries({ queryKey: ['cryptoBotStatus'] })}
                 >
                     Retry Connection
                 </Button>
@@ -450,7 +443,7 @@ export default function CryptoBotPage() {
                         color="success"
                         startIcon={<PlayArrow />}
                         onClick={() => startMutation.mutate()}
-                        disabled={isRunning || startMutation.isLoading}
+                        disabled={isRunning || startMutation.isPending}
                     >
                         Start
                     </Button>
@@ -459,7 +452,7 @@ export default function CryptoBotPage() {
                         color="warning"
                         startIcon={<Pause />}
                         onClick={() => pauseMutation.mutate()}
-                        disabled={!isRunning || pauseMutation.isLoading}
+                        disabled={!isRunning || pauseMutation.isPending}
                     >
                         {isPaused ? 'Resume' : 'Pause'}
                     </Button>
@@ -468,7 +461,7 @@ export default function CryptoBotPage() {
                         color="error"
                         startIcon={<Stop />}
                         onClick={() => stopMutation.mutate()}
-                        disabled={!isRunning || stopMutation.isLoading}
+                        disabled={!isRunning || stopMutation.isPending}
                     >
                         Stop
                     </Button>
@@ -481,7 +474,7 @@ export default function CryptoBotPage() {
                                 closeAllMutation.mutate();
                             }
                         }}
-                        disabled={!(Array.isArray(engineStatus?.positions) ? engineStatus.positions.length : 0) && !status?.positions?.length || closeAllMutation.isLoading}
+                        disabled={!(Array.isArray(engineStatus?.positions) ? engineStatus.positions.length : 0) && !status?.positions?.length || closeAllMutation.isPending}
                         sx={{ borderStyle: 'dashed' }}
                     >
                         Close All

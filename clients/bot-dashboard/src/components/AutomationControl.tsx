@@ -130,7 +130,7 @@ export const AutomationControl: React.FC = () => {
                             color="error"
                             startIcon={<StopIcon />}
                             onClick={handleStop}
-                            disabled={stopMutation.isLoading}
+                            disabled={stopMutation.isPending}
                         >
                             Stop Automation
                         </Button>
@@ -140,7 +140,7 @@ export const AutomationControl: React.FC = () => {
                             color="success"
                             startIcon={<PlayArrowIcon />}
                             onClick={handleStart}
-                            disabled={startMutation.isLoading}
+                            disabled={startMutation.isPending}
                         >
                             Start Automation
                         </Button>
@@ -152,7 +152,7 @@ export const AutomationControl: React.FC = () => {
                                 checked={status?.realTradingEnabled || false}
                                 onChange={(e) => handleRealTradingToggle(e.target.checked)}
                                 color="error"
-                                disabled={enableRealMutation.isLoading || disableRealMutation.isLoading}
+                                disabled={enableRealMutation.isPending || disableRealMutation.isPending}
                             />
                         }
                         label={

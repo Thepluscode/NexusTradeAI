@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import SEO from '@/components/SEO';
-import { useQuery } from 'react-query';
+import { useQuery } from '@tanstack/react-query';
 import {
     Box,
     Paper,
@@ -75,17 +75,17 @@ function ValidationChecklist({ checks }: { checks: Record<string, boolean> }) {
 }
 
 export default function BacktestPage() {
-    const { data: report, isLoading, isError } = useQuery(
-        'backtestReport',
-        () => apiClient.getBacktestReport(),
-        { staleTime: 60 * 1000, retry: 1, refetchInterval: 30 * 1000 }
-    );
+    const { data: report, isLoading, isError } = useQuery({
+        queryKey: ['backtestReport'],
+        queryFn: () => apiClient.getBacktestReport(),
+        staleTime: 60 * 1000, retry: 1, refetchInterval: 30 * 1000,
+    });
 
-    const { data: equityCurve = [] } = useQuery(
-        'equityCurve',
-        () => apiClient.getEquityCurve(90, 'stock'),
-        { staleTime: 5 * 60 * 1000, refetchInterval: 10 * 60 * 1000 }
-    );
+    const { data: equityCurve = [] } = useQuery({
+        queryKey: ['equityCurve'],
+        queryFn: () => apiClient.getEquityCurve(90, 'stock'),
+        staleTime: 5 * 60 * 1000, refetchInterval: 10 * 60 * 1000,
+    });
 
     const [scanning, setScanning] = useState(false);
     const [scanResult, setScanResult] = useState<BacktestScanResult | null>(null);

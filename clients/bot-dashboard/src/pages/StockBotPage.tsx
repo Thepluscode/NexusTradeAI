@@ -27,7 +27,7 @@ import {
 } from '@mui/icons-material';
 import axios from 'axios';
 import { SERVICE_URLS, apiClient } from '@/services/api';
-import { useQuery, useMutation, useQueryClient } from 'react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { useAuth } from '@/hooks/useAuth';
@@ -93,17 +93,17 @@ export default function StockBotPage() {
     const { user } = useAuth();
 
     // Per-user engine status (JWT-scoped) — shows credential prompt when needed
-    const { data: engineStatus } = useQuery(
-        'stockEngineStatus',
-        () => apiClient.getStockEngineStatus(),
-        { refetchInterval: 15000, retry: false, enabled: !!user }
-    );
+    const { data: engineStatus } = useQuery({
+        queryKey: ['stockEngineStatus'],
+        queryFn: () => apiClient.getStockEngineStatus(),
+        refetchInterval: 15000, retry: false, enabled: !!user,
+    });
     const credentialsRequired = engineStatus?.credentialsRequired === true;
 
     // Fetch bot status
-    const { data: status, isLoading, error } = useQuery<BotStatus>(
-        'stockBotStatus',
-        async () => {
+    const { data: status, isLoading, error } = useQuery<BotStatus>({
+        queryKey: ['stockBotStatus'],
+        queryFn: async () => {
             const res = await axios.get(`${API_BASE}/api/trading/status`);
             // Stock bot wraps response in { success, data: {...} }
             const d = res.data?.data ?? res.data;
@@ -144,16 +144,16 @@ export default function StockBotPage() {
                 guardrails: d?.guardrails ?? undefined,
             } as BotStatus;
         },
-        { refetchInterval: 5000 }
-    );
+        refetchInterval: 5000,
+    });
 
     // Helper: immediately patch BOTH caches so UI reacts instantly
     const patchRunningState = (patch: { isRunning?: boolean; isPaused?: boolean }) => {
-        queryClient.setQueryData('stockEngineStatus', (old: Record<string, unknown> | undefined) =>
+        queryClient.setQueryData(['stockEngineStatus'], (old: Record<string, unknown> | undefined) =>
             old ? { ...old, ...patch } : patch
         );
         // Also patch the global status so the chip + button disabled logic is consistent
-        queryClient.setQueryData('stockBotStatus', (old: BotStatus | undefined) =>
+        queryClient.setQueryData(['stockBotStatus'], (old: BotStatus | undefined) =>
             old ? { ...old, ...patch } : old as unknown as BotStatus
         );
     };
@@ -163,55 +163,50 @@ export default function StockBotPage() {
     const isPaused = engineStatus?.isPaused != null ? (engineStatus.isPaused as boolean) : (status?.isPaused ?? false);
 
     // Control mutations
-    const startMutation = useMutation<unknown, Error, void>(
-        async () => user ? apiClient.startStockEngine() : axios.post(`${API_BASE}/api/trading/start`),
-        {
-            onSuccess: () => {
-                patchRunningState({ isRunning: true, isPaused: false });
-                toast.success('Stock Bot started!');
-                queryClient.invalidateQueries('stockBotStatus');
-                queryClient.invalidateQueries('stockEngineStatus');
-            },
-            onError: (err) => { toast.error(err?.message || 'Failed to start bot'); },
-        }
-    );
+    const startMutation = useMutation<unknown, Error, void>({
+        mutationFn: async () => user ? apiClient.startStockEngine() : axios.post(`${API_BASE}/api/trading/start`),
+        onSuccess: () => {
+            patchRunningState({ isRunning: true, isPaused: false });
+            toast.success('Stock Bot started!');
+            queryClient.invalidateQueries({ queryKey: ['stockBotStatus'] });
+            queryClient.invalidateQueries({ queryKey: ['stockEngineStatus'] });
+        },
+        onError: (err) => { toast.error(err?.message || 'Failed to start bot'); },
+    });
 
-    const stopMutation = useMutation<unknown, Error, void>(
-        async () => user ? apiClient.stopStockEngine() : axios.post(`${API_BASE}/api/trading/stop`),
-        {
-            onSuccess: () => {
-                patchRunningState({ isRunning: false, isPaused: false });
-                toast.success('Stock Bot stopped');
-                queryClient.invalidateQueries('stockBotStatus');
-                queryClient.invalidateQueries('stockEngineStatus');
-            },
-            onError: (err) => { toast.error(err?.message || 'Failed to stop bot'); },
-        }
-    );
+    const stopMutation = useMutation<unknown, Error, void>({
+        mutationFn: async () => user ? apiClient.stopStockEngine() : axios.post(`${API_BASE}/api/trading/stop`),
+        onSuccess: () => {
+            patchRunningState({ isRunning: false, isPaused: false });
+            toast.success('Stock Bot stopped');
+            queryClient.invalidateQueries({ queryKey: ['stockBotStatus'] });
+            queryClient.invalidateQueries({ queryKey: ['stockEngineStatus'] });
+        },
+        onError: (err) => { toast.error(err?.message || 'Failed to stop bot'); },
+    });
 
-    const pauseMutation = useMutation<unknown, Error, void>(
-        async () => user ? apiClient.pauseStockEngine() : axios.post(`${API_BASE}/api/trading/pause`),
-        {
-            onSuccess: (data) => {
-                const d = data as { isRunning?: boolean; isPaused?: boolean } | null;
-                const newPaused = d?.isPaused ?? !isPaused;
-                patchRunningState({ isRunning: d?.isRunning ?? true, isPaused: newPaused });
-                toast.success(isPaused ? 'Stock Bot resumed' : 'Stock Bot paused');
-                queryClient.invalidateQueries('stockBotStatus');
-                queryClient.invalidateQueries('stockEngineStatus');
-            },
-            onError: (err) => { toast.error(err?.message || 'Failed to pause bot'); },
-        }
-    );
+    const pauseMutation = useMutation<unknown, Error, void>({
+        mutationFn: async () => user ? apiClient.pauseStockEngine() : axios.post(`${API_BASE}/api/trading/pause`),
+        onSuccess: (data) => {
+            const d = data as { isRunning?: boolean; isPaused?: boolean } | null;
+            const newPaused = d?.isPaused ?? !isPaused;
+            patchRunningState({ isRunning: d?.isRunning ?? true, isPaused: newPaused });
+            toast.success(isPaused ? 'Stock Bot resumed' : 'Stock Bot paused');
+            queryClient.invalidateQueries({ queryKey: ['stockBotStatus'] });
+            queryClient.invalidateQueries({ queryKey: ['stockEngineStatus'] });
+        },
+        onError: (err) => { toast.error(err?.message || 'Failed to pause bot'); },
+    });
 
-    const closeAllMutation = useMutation<unknown, Error, void>(async () => {
-        if (user) return apiClient.closeAllStockPositions();
-        return axios.post(`${API_BASE}/api/trading/close-all`);
-    }, {
+    const closeAllMutation = useMutation<unknown, Error, void>({
+        mutationFn: async () => {
+            if (user) return apiClient.closeAllStockPositions();
+            return axios.post(`${API_BASE}/api/trading/close-all`);
+        },
         onSuccess: () => {
             toast.success('All stock positions closed');
-            queryClient.invalidateQueries('stockBotStatus');
-            queryClient.invalidateQueries('stockEngineStatus');
+            queryClient.invalidateQueries({ queryKey: ['stockBotStatus'] });
+            queryClient.invalidateQueries({ queryKey: ['stockEngineStatus'] });
         },
         onError: (err) => { toast.error(err?.message || 'Failed to close all positions'); },
     });
@@ -239,7 +234,7 @@ export default function StockBotPage() {
                 </Alert>
                 <Button
                     variant="contained"
-                    onClick={() => queryClient.invalidateQueries('stockBotStatus')}
+                    onClick={() => queryClient.invalidateQueries({ queryKey: ['stockBotStatus'] })}
                 >
                     Retry Connection
                 </Button>
@@ -551,7 +546,7 @@ export default function StockBotPage() {
                         color="success"
                         startIcon={<PlayArrow />}
                         onClick={() => startMutation.mutate()}
-                        disabled={isRunning || startMutation.isLoading}
+                        disabled={isRunning || startMutation.isPending}
                         size="medium"
                     >
                         Start
@@ -561,7 +556,7 @@ export default function StockBotPage() {
                         color="warning"
                         startIcon={<Pause />}
                         onClick={() => pauseMutation.mutate()}
-                        disabled={!isRunning || pauseMutation.isLoading}
+                        disabled={!isRunning || pauseMutation.isPending}
                     >
                         {isPaused ? 'Resume' : 'Pause'}
                     </Button>
@@ -570,7 +565,7 @@ export default function StockBotPage() {
                         color="error"
                         startIcon={<Stop />}
                         onClick={() => stopMutation.mutate()}
-                        disabled={!isRunning || stopMutation.isLoading}
+                        disabled={!isRunning || stopMutation.isPending}
                     >
                         Stop
                     </Button>
@@ -584,7 +579,7 @@ export default function StockBotPage() {
                                 closeAllMutation.mutate();
                             }
                         }}
-                        disabled={!(Array.isArray(engineStatus?.positions) ? engineStatus.positions.length : 0) && !status?.positions?.length || closeAllMutation.isLoading}
+                        disabled={!(Array.isArray(engineStatus?.positions) ? engineStatus.positions.length : 0) && !status?.positions?.length || closeAllMutation.isPending}
                         sx={{ borderStyle: 'dashed', opacity: 0.75, '&:hover': { opacity: 1 } }}
                     >
                         Close All

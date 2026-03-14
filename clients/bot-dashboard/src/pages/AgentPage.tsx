@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from 'react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Box, Paper, Typography, Grid, Card, CardContent,
   Button, Chip, Alert, Skeleton, Divider,
@@ -354,39 +354,35 @@ export default function AgentPage() {
   const queryClient = useQueryClient();
   const [backfillRunning, setBackfillRunning] = useState(false);
 
-  const { data: stats, isLoading } = useQuery<AgentStats>(
-    'agentStats',
-    () => apiClient.getAgentStats() as unknown as Promise<AgentStats>,
-    { refetchInterval: 15000, staleTime: 10000 }
-  );
+  const { data: stats, isLoading } = useQuery<AgentStats>({
+    queryKey: ['agentStats'],
+    queryFn: () => apiClient.getAgentStats() as unknown as Promise<AgentStats>,
+    refetchInterval: 15000, staleTime: 10000,
+  });
 
-  const { data: decisionsData } = useQuery(
-    'agentDecisions',
-    () => apiClient.getAgentDecisions(30),
-    { refetchInterval: 30000, staleTime: 20000 }
-  );
+  const { data: decisionsData } = useQuery({
+    queryKey: ['agentDecisions'],
+    queryFn: () => apiClient.getAgentDecisions(30),
+    refetchInterval: 30000, staleTime: 20000,
+  });
 
-  const { data: portfolioData } = useQuery(
-    'portfolioRisk',
-    () => apiClient.getPortfolioRisk(),
-    { refetchInterval: 30000, staleTime: 20000 }
-  );
+  const { data: portfolioData } = useQuery({
+    queryKey: ['portfolioRisk'],
+    queryFn: () => apiClient.getPortfolioRisk(),
+    refetchInterval: 30000, staleTime: 20000,
+  });
 
-  const killMutation = useMutation(
-    () => apiClient.agentKill('Manual kill from dashboard'),
-    {
-      onSuccess: () => { toast.success('Agent killed'); queryClient.invalidateQueries('agentStats'); },
-      onError: (e: Error) => { toast.error(e.message); },
-    }
-  );
+  const killMutation = useMutation({
+    mutationFn: () => apiClient.agentKill('Manual kill from dashboard'),
+    onSuccess: () => { toast.success('Agent killed'); queryClient.invalidateQueries({ queryKey: ['agentStats'] }); },
+    onError: (e: Error) => { toast.error(e.message); },
+  });
 
-  const resumeMutation = useMutation(
-    () => apiClient.agentResume(),
-    {
-      onSuccess: () => { toast.success('Agent resumed'); queryClient.invalidateQueries('agentStats'); },
-      onError: (e: Error) => { toast.error(e.message); },
-    }
-  );
+  const resumeMutation = useMutation({
+    mutationFn: () => apiClient.agentResume(),
+    onSuccess: () => { toast.success('Agent resumed'); queryClient.invalidateQueries({ queryKey: ['agentStats'] }); },
+    onError: (e: Error) => { toast.error(e.message); },
+  });
 
   const handleBackfill = async () => {
     setBackfillRunning(true);
@@ -394,7 +390,7 @@ export default function AgentPage() {
       const result = await apiClient.agentBackfill(500, 90);
       const processed = (result as Record<string, number>).trades_processed || 0;
       toast.success(`Backfill complete: ${processed} trades processed`);
-      queryClient.invalidateQueries('agentStats');
+      queryClient.invalidateQueries({ queryKey: ['agentStats'] });
     } catch (e) {
       toast.error((e as Error).message);
     }
@@ -405,7 +401,7 @@ export default function AgentPage() {
     try {
       await apiClient.agentDailyTraining();
       toast.success('Training complete');
-      queryClient.invalidateQueries('agentStats');
+      queryClient.invalidateQueries({ queryKey: ['agentStats'] });
     } catch (e) {
       toast.error((e as Error).message);
     }
@@ -532,8 +528,8 @@ export default function AgentPage() {
               killSwitch={killSwitch}
               onKill={() => killMutation.mutate()}
               onResume={() => resumeMutation.mutate()}
-              isKilling={killMutation.isLoading}
-              isResuming={resumeMutation.isLoading}
+              isKilling={killMutation.isPending}
+              isResuming={resumeMutation.isPending}
             />
           )}
 

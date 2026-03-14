@@ -35,7 +35,7 @@ import {
     OpenInNew,
 } from '@mui/icons-material';
 import axios from 'axios';
-import { useQuery } from 'react-query';
+import { useQuery } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { SERVICE_URLS } from '@/services/api';
 
@@ -197,17 +197,29 @@ export const BankingPanel: React.FC = () => {
         data: stockAcct,
         isLoading: stockLoading,
         refetch: refetchStock,
-    } = useQuery('bankingStockAcct', fetchStockAccount, { refetchInterval: 15000 });
+    } = useQuery({
+        queryKey: ['bankingStockAcct'],
+        queryFn: fetchStockAccount,
+        refetchInterval: 15000,
+    });
 
     const {
         data: forexAcct,
         refetch: refetchForex,
-    } = useQuery('bankingForexAcct', fetchForexAccount, { refetchInterval: 15000 });
+    } = useQuery({
+        queryKey: ['bankingForexAcct'],
+        queryFn: fetchForexAccount,
+        refetchInterval: 15000,
+    });
 
     const {
         data: cryptoAcct,
         refetch: refetchCrypto,
-    } = useQuery('bankingCryptoAcct', fetchCryptoAccount, { refetchInterval: 15000 });
+    } = useQuery({
+        queryKey: ['bankingCryptoAcct'],
+        queryFn: fetchCryptoAccount,
+        refetchInterval: 15000,
+    });
 
     const refetchAll = () => { refetchStock(); refetchForex(); refetchCrypto(); };
 

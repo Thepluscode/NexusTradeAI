@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import SEO from '@/components/SEO';
-import { useQuery, useMutation, useQueryClient } from 'react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
     Box,
     Paper,
@@ -628,14 +628,17 @@ function FundManagement({ config }: { config: import('@/types').BotConfig | null
         }
     }, [config?.riskLimits, config?.riskLimits?.maxDailyLoss, config?.riskLimits?.maxDrawdown, config?.riskLimits?.maxTradesPerDay]);
 
-    const { data: balances, isLoading: balLoading } = useQuery('allBalances', fetchAllBalances, {
+    const { data: balances, isLoading: balLoading } = useQuery({
+        queryKey: ['allBalances'],
+        queryFn: fetchAllBalances,
         refetchInterval: 15000,
     });
 
-    const { mutate: applyLimits, isLoading: savingLimits } = useMutation(saveRiskLimits, {
+    const { mutate: applyLimits, isPending: savingLimits } = useMutation({
+        mutationFn: saveRiskLimits,
         onSuccess: () => {
             toast.success('Risk limits updated');
-            void queryClient.invalidateQueries('botConfig');
+            void queryClient.invalidateQueries({ queryKey: ['botConfig'] });
         },
         onError: () => { toast.error('Failed — is the Stock Bot running?'); },
     });
@@ -957,7 +960,9 @@ export default function SettingsPage() {
     const [smsTo, setSmsTo] = useState('');
     const [smsEnabled, setSmsEnabled] = useState(false);
 
-    const { data: config, isLoading } = useQuery('botConfig', fetchConfig, {
+    const { data: config, isLoading } = useQuery({
+        queryKey: ['botConfig'],
+        queryFn: fetchConfig,
         refetchInterval: 30000,
         retry: 1,
     });
@@ -988,28 +993,31 @@ export default function SettingsPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [!!config]);
 
-    const { mutate: saveRisk, isLoading: savingRisk } = useMutation(updateRisk, {
+    const { mutate: saveRisk, isPending: savingRisk } = useMutation({
+        mutationFn: updateRisk,
         onSuccess: () => {
             toast.success('Risk parameters updated');
-            void queryClient.invalidateQueries('botConfig');
+            void queryClient.invalidateQueries({ queryKey: ['botConfig'] });
         },
         onError: () => { toast.error('Failed to update — is the Stock Bot running?'); },
     });
 
     const [confirmLive, setConfirmLive] = useState(false);
 
-    const { mutate: switchMode, isLoading: switchingMode } = useMutation(setTradingMode, {
+    const { mutate: switchMode, isPending: switchingMode } = useMutation({
+        mutationFn: setTradingMode,
         onSuccess: (_, mode) => {
             toast.success(`Switched to ${mode === 'live' ? 'Live' : 'Paper'} trading`);
             setConfirmLive(false);
-            void queryClient.invalidateQueries('botConfig');
+            void queryClient.invalidateQueries({ queryKey: ['botConfig'] });
         },
         onError: () => { toast.error('Failed to switch mode — is the Stock Bot running?'); },
     });
 
-    const { mutate: saveCreds, isLoading: savingCreds, variables: savingFor } = useMutation<
+    const { mutate: saveCreds, isPending: savingCreds, variables: savingFor } = useMutation<
         import('@/types').SaveCredentialsResult, Error, import('@/types').SaveCredentialsPayload
-    >(saveCredentials, {
+    >({
+        mutationFn: saveCredentials,
         onSuccess: (data, vars) => {
             if (vars.broker === 'crypto') {
                 if (data?.demoMode === false) toast.success('Kraken connected — live trading enabled');
@@ -1022,7 +1030,7 @@ export default function SettingsPage() {
             if (data?.engineStarted) {
                 toast.success('Your personal trading engine is now active', { duration: 4000 });
             }
-            void queryClient.invalidateQueries('botConfig');
+            void queryClient.invalidateQueries({ queryKey: ['botConfig'] });
         },
         onError: (_err, vars) => {
             const botName = vars.broker === 'crypto' ? 'Crypto Bot' : vars.broker === 'oanda' ? 'Forex Bot' : 'Stock Bot';

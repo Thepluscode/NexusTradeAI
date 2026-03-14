@@ -1,5 +1,5 @@
 import React, { lazy, Suspense, useState, useEffect } from 'react';
-import { QueryClient, QueryClientProvider } from 'react-query';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider, CssBaseline, alpha } from '@mui/material';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { HelmetProvider } from 'react-helmet-async';

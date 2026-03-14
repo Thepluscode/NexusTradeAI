@@ -9,16 +9,16 @@ import {
 import { AdminPanelSettings, Person, CheckCircle, Cancel, Build } from '@mui/icons-material';
 import { apiClient } from '@/services/api';
 import { useAuth } from '@/hooks/useAuth';
-import { useQuery } from 'react-query';
+import { useQuery } from '@tanstack/react-query';
 
 export default function AdminPage() {
     const { user } = useAuth();
 
-    const { data: users = [], isLoading, error } = useQuery(
-        'adminUsers',
-        () => apiClient.getAdminUsers(),
-        { refetchInterval: 15000, retry: false }
-    );
+    const { data: users = [], isLoading, error } = useQuery({
+        queryKey: ['adminUsers'],
+        queryFn: () => apiClient.getAdminUsers(),
+        refetchInterval: 15000, retry: false,
+    });
 
     const [fixBot, setFixBot] = useState('all');
     const [fixSymbols, setFixSymbols] = useState('');

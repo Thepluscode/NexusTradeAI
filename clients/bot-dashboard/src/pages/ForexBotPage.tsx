@@ -24,7 +24,7 @@ import {
     Cancel,
 } from '@mui/icons-material';
 import { apiClient } from '@/services/api';
-import { useQuery, useMutation, useQueryClient } from 'react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { useAuth } from '@/hooks/useAuth';
@@ -87,27 +87,27 @@ export default function ForexBotPage() {
     const navigate = useNavigate();
     const { user } = useAuth();
 
-    const { data: engineStatus } = useQuery(
-        'forexEngineStatus',
-        () => apiClient.getForexEngineStatus(),
-        { refetchInterval: 15000, retry: false, enabled: !!user }
-    );
+    const { data: engineStatus } = useQuery({
+        queryKey: ['forexEngineStatus'],
+        queryFn: () => apiClient.getForexEngineStatus(),
+        refetchInterval: 15000, retry: false, enabled: !!user,
+    });
     const credentialsRequired = engineStatus?.credentialsRequired === true;
 
-    const { data: status, isLoading, error } = useQuery<BotStatus>(
-        'forexBotStatus',
-        async () => {
+    const { data: status, isLoading, error } = useQuery<BotStatus>({
+        queryKey: ['forexBotStatus'],
+        queryFn: async () => {
             const res = await apiClient.getForexStatus();
             return res as unknown as BotStatus;
         },
-        { refetchInterval: 5000 }
-    );
+        refetchInterval: 5000,
+    });
 
     const patchRunningState = (patch: { isRunning?: boolean; isPaused?: boolean }) => {
-        queryClient.setQueryData('forexEngineStatus', (old: Record<string, unknown> | undefined) =>
+        queryClient.setQueryData(['forexEngineStatus'], (old: Record<string, unknown> | undefined) =>
             old ? { ...old, ...patch } : patch
         );
-        queryClient.setQueryData('forexBotStatus', (old: BotStatus | undefined) =>
+        queryClient.setQueryData(['forexBotStatus'], (old: BotStatus | undefined) =>
             old ? { ...old, ...patch } : old as unknown as BotStatus
         );
     };
@@ -115,54 +115,47 @@ export default function ForexBotPage() {
     const isRunning = engineStatus?.isRunning != null ? (engineStatus.isRunning as boolean) : (status?.isRunning ?? false);
     const isPaused = engineStatus?.isPaused != null ? (engineStatus.isPaused as boolean) : (status?.isPaused ?? false);
 
-    const startMutation = useMutation<unknown, Error, void>(
-        () => user ? apiClient.startForexEngine() : apiClient.startForexTrading(),
-        {
-            onSuccess: () => {
-                patchRunningState({ isRunning: true, isPaused: false });
-                toast.success('Forex Bot started!');
-                queryClient.invalidateQueries('forexBotStatus');
-                queryClient.invalidateQueries('forexEngineStatus');
-            },
-            onError: (err) => { toast.error(err?.message || 'Failed to start bot'); },
-        }
-    );
+    const startMutation = useMutation<unknown, Error, void>({
+        mutationFn: () => user ? apiClient.startForexEngine() : apiClient.startForexTrading(),
+        onSuccess: () => {
+            patchRunningState({ isRunning: true, isPaused: false });
+            toast.success('Forex Bot started!');
+            queryClient.invalidateQueries({ queryKey: ['forexBotStatus'] });
+            queryClient.invalidateQueries({ queryKey: ['forexEngineStatus'] });
+        },
+        onError: (err) => { toast.error(err?.message || 'Failed to start bot'); },
+    });
 
-    const stopMutation = useMutation<unknown, Error, void>(
-        () => user ? apiClient.stopForexEngine() : apiClient.stopForexTrading(),
-        {
-            onSuccess: () => {
-                patchRunningState({ isRunning: false, isPaused: false });
-                toast.success('Forex Bot stopped');
-                queryClient.invalidateQueries('forexBotStatus');
-                queryClient.invalidateQueries('forexEngineStatus');
-            },
-            onError: (err) => { toast.error(err?.message || 'Failed to stop bot'); },
-        }
-    );
+    const stopMutation = useMutation<unknown, Error, void>({
+        mutationFn: () => user ? apiClient.stopForexEngine() : apiClient.stopForexTrading(),
+        onSuccess: () => {
+            patchRunningState({ isRunning: false, isPaused: false });
+            toast.success('Forex Bot stopped');
+            queryClient.invalidateQueries({ queryKey: ['forexBotStatus'] });
+            queryClient.invalidateQueries({ queryKey: ['forexEngineStatus'] });
+        },
+        onError: (err) => { toast.error(err?.message || 'Failed to stop bot'); },
+    });
 
-    const pauseMutation = useMutation<unknown, Error, void>(
-        () => apiClient.pauseForexEngine(),
-        {
-            onSuccess: (data) => {
-                const d = data as { isRunning?: boolean; isPaused?: boolean } | null;
-                const newPaused = d?.isPaused ?? !isPaused;
-                patchRunningState({ isRunning: d?.isRunning ?? true, isPaused: newPaused });
-                toast.success(isPaused ? 'Forex Bot resumed' : 'Forex Bot paused');
-                queryClient.invalidateQueries('forexBotStatus');
-                queryClient.invalidateQueries('forexEngineStatus');
-            },
-            onError: (err) => { toast.error(err?.message || 'Failed to pause bot'); },
-        }
-    );
+    const pauseMutation = useMutation<unknown, Error, void>({
+        mutationFn: () => apiClient.pauseForexEngine(),
+        onSuccess: (data) => {
+            const d = data as { isRunning?: boolean; isPaused?: boolean } | null;
+            const newPaused = d?.isPaused ?? !isPaused;
+            patchRunningState({ isRunning: d?.isRunning ?? true, isPaused: newPaused });
+            toast.success(isPaused ? 'Forex Bot resumed' : 'Forex Bot paused');
+            queryClient.invalidateQueries({ queryKey: ['forexBotStatus'] });
+            queryClient.invalidateQueries({ queryKey: ['forexEngineStatus'] });
+        },
+        onError: (err) => { toast.error(err?.message || 'Failed to pause bot'); },
+    });
 
-    const closeAllMutation = useMutation<unknown, Error, void>(
-        () => apiClient.closeAllForexPositions(),
-    {
+    const closeAllMutation = useMutation<unknown, Error, void>({
+        mutationFn: () => apiClient.closeAllForexPositions(),
         onSuccess: () => {
             toast.success('All forex positions closed');
-            queryClient.invalidateQueries('forexBotStatus');
-            queryClient.invalidateQueries('forexEngineStatus');
+            queryClient.invalidateQueries({ queryKey: ['forexBotStatus'] });
+            queryClient.invalidateQueries({ queryKey: ['forexEngineStatus'] });
         },
         onError: (err) => { toast.error(err?.message || 'Failed to close all positions'); },
     });
@@ -190,7 +183,7 @@ export default function ForexBotPage() {
                 </Alert>
                 <Button
                     variant="contained"
-                    onClick={() => queryClient.invalidateQueries('forexBotStatus')}
+                    onClick={() => queryClient.invalidateQueries({ queryKey: ['forexBotStatus'] })}
                 >
                     Retry Connection
                 </Button>
@@ -418,7 +411,7 @@ export default function ForexBotPage() {
                         color="success"
                         startIcon={<PlayArrow />}
                         onClick={() => startMutation.mutate()}
-                        disabled={isRunning || startMutation.isLoading}
+                        disabled={isRunning || startMutation.isPending}
                     >
                         Start
                     </Button>
@@ -427,7 +420,7 @@ export default function ForexBotPage() {
                         color="warning"
                         startIcon={<Pause />}
                         onClick={() => pauseMutation.mutate()}
-                        disabled={!isRunning || pauseMutation.isLoading}
+                        disabled={!isRunning || pauseMutation.isPending}
                     >
                         {isPaused ? 'Resume' : 'Pause'}
                     </Button>
@@ -436,7 +429,7 @@ export default function ForexBotPage() {
                         color="error"
                         startIcon={<Stop />}
                         onClick={() => stopMutation.mutate()}
-                        disabled={!isRunning || stopMutation.isLoading}
+                        disabled={!isRunning || stopMutation.isPending}
                     >
                         Stop
                     </Button>
@@ -449,7 +442,7 @@ export default function ForexBotPage() {
                                 closeAllMutation.mutate();
                             }
                         }}
-                        disabled={!(Array.isArray(engineStatus?.positions) ? engineStatus.positions.length : 0) && !status?.positions?.length || closeAllMutation.isLoading}
+                        disabled={!(Array.isArray(engineStatus?.positions) ? engineStatus.positions.length : 0) && !status?.positions?.length || closeAllMutation.isPending}
                         sx={{ borderStyle: 'dashed' }}
                     >
                         Close All

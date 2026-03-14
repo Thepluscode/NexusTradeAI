@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 
 import SEO from '@/components/SEO';
-import { useQuery } from 'react-query';
+import { useQuery } from '@tanstack/react-query';
 import {
     Box,
     Paper,
@@ -99,23 +99,23 @@ export default function TradesPage() {
     const [myTrades, setMyTrades] = useState(() => !!localStorage.getItem('nexus_access_token'));
     const isLoggedIn = !!localStorage.getItem('nexus_access_token');
 
-    const { data: trades = [], isLoading: tradesLoading } = useQuery(
-        ['trades', botFilter, myTrades],
-        () => apiClient.getTrades({ bot: botFilter === 'all' ? undefined : botFilter, limit: 200, mine: myTrades }),
-        { staleTime: 30 * 1000, refetchInterval: 60 * 1000 }
-    );
+    const { data: trades = [], isLoading: tradesLoading } = useQuery({
+        queryKey: ['trades', botFilter, myTrades],
+        queryFn: () => apiClient.getTrades({ bot: botFilter === 'all' ? undefined : botFilter, limit: 200, mine: myTrades }),
+        staleTime: 30 * 1000, refetchInterval: 60 * 1000,
+    });
 
-    const { data: summary, isLoading: summaryLoading } = useQuery(
-        ['tradesSummary', days, myTrades],
-        () => apiClient.getTradesSummary(days, myTrades),
-        { staleTime: 60 * 1000, refetchInterval: 120 * 1000 }
-    );
+    const { data: summary, isLoading: summaryLoading } = useQuery({
+        queryKey: ['tradesSummary', days, myTrades],
+        queryFn: () => apiClient.getTradesSummary(days, myTrades),
+        staleTime: 60 * 1000, refetchInterval: 120 * 1000,
+    });
 
-    const { data: analytics, isLoading: analyticsLoading } = useQuery(
-        ['tradeAnalytics', days, myTrades],
-        () => apiClient.getTradeAnalytics(days, myTrades),
-        { staleTime: 120 * 1000, refetchInterval: 5 * 60 * 1000, enabled: tab === 1 }
-    );
+    const { data: analytics, isLoading: analyticsLoading } = useQuery({
+        queryKey: ['tradeAnalytics', days, myTrades],
+        queryFn: () => apiClient.getTradeAnalytics(days, myTrades),
+        staleTime: 120 * 1000, refetchInterval: 5 * 60 * 1000, enabled: tab === 1,
+    });
 
     const totals = summary?.totals ?? [];
     const allTotal = totals.reduce<TradeBotTotal & { total_all_trades?: string; open_trades?: string }>((acc, t) => {

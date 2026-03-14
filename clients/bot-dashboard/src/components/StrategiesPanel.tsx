@@ -17,7 +17,7 @@ import {
     FiberManualRecord,
 } from '@mui/icons-material';
 import axios from 'axios';
-import { useQuery } from 'react-query';
+import { useQuery } from '@tanstack/react-query';
 import { SERVICE_URLS } from '@/services/api';
 
 // ── Data fetching ──────────────────────────────────────────────────────────
@@ -176,7 +176,9 @@ function BotCard({
 // ── Main component ─────────────────────────────────────────────────────────
 
 export const StrategiesPanel: React.FC = () => {
-    const { data, isLoading } = useQuery('strategiesPanel', fetchAllBotStats, {
+    const { data, isLoading } = useQuery({
+        queryKey: ['strategiesPanel'],
+        queryFn: fetchAllBotStats,
         refetchInterval: 15000,
     });
 

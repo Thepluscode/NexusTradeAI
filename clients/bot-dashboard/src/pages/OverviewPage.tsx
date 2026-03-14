@@ -34,7 +34,7 @@ import {
 } from '@mui/icons-material';
 import axios from 'axios';
 import { SERVICE_URLS, apiClient } from '@/services/api';
-import { useQuery } from 'react-query';
+import { useQuery } from '@tanstack/react-query';
 import type { TradeDaySummary } from '@/types';
 import { useNavigate } from 'react-router-dom';
 
@@ -226,11 +226,11 @@ function BotStatItem({ label, value, color, icon }: { label: string; value: stri
 
 // ── P&L Equity Curve ────────────────────────────────────────────────────────
 function PnLChart({ days = 30 }: { days?: number }) {
-    const { data: summary, isLoading } = useQuery(
-        ['overviewPnL', days],
-        () => apiClient.getTradesSummary(days),
-        { staleTime: 60 * 1000, refetchInterval: 120 * 1000 }
-    );
+    const { data: summary, isLoading } = useQuery({
+        queryKey: ['overviewPnL', days],
+        queryFn: () => apiClient.getTradesSummary(days),
+        staleTime: 60 * 1000, refetchInterval: 120 * 1000,
+    });
 
     if (isLoading) {
         return <Skeleton variant="rectangular" height={200} sx={{ borderRadius: 2 }} />;
@@ -290,21 +290,21 @@ export default function OverviewPage() {
     const navigate = useNavigate();
     const [lastUpdated, setLastUpdated] = React.useState<Date | null>(null);
 
-    const { data: status, isLoading } = useQuery<AllBotsStatus>(
-        'allBotsStatus',
-        async () => {
+    const { data: status, isLoading } = useQuery<AllBotsStatus>({
+        queryKey: ['allBotsStatus'],
+        queryFn: async () => {
             const [stock, forex, crypto] = await Promise.all(BOTS.map(fetchBotStatus));
             setLastUpdated(new Date());
             return { stock, forex, crypto };
         },
-        { refetchInterval: 10000 }
-    );
+        refetchInterval: 10000,
+    });
 
     // Per-user engine statuses — only fetch when logged in
     const isLoggedIn = !!localStorage.getItem('nexus_access_token');
-    const { data: userEngines } = useQuery(
-        'overviewEngineStatus',
-        async () => {
+    const { data: userEngines } = useQuery({
+        queryKey: ['overviewEngineStatus'],
+        queryFn: async () => {
             const [stock, forex, crypto] = await Promise.all([
                 apiClient.getStockEngineStatus(),
                 apiClient.getForexEngineStatus(),
@@ -312,12 +312,12 @@ export default function OverviewPage() {
             ]);
             return { stock, forex, crypto } as Record<string, Record<string, unknown>>;
         },
-        { enabled: isLoggedIn, refetchInterval: 15000, retry: false }
-    );
+        enabled: isLoggedIn, refetchInterval: 15000, retry: false,
+    });
 
-    const { data: bridgeHealth } = useQuery(
-        'bridgeHealth',
-        async () => {
+    const { data: bridgeHealth } = useQuery({
+        queryKey: ['bridgeHealth'],
+        queryFn: async () => {
             try {
                 const res = await axios.get(`${SERVICE_URLS.aiService}/health`, { timeout: 4000 });
                 return res.data as {
@@ -326,11 +326,13 @@ export default function OverviewPage() {
                 };
             } catch { return null; }
         },
-        { refetchInterval: 60000, staleTime: 30000 }
-    );
+        refetchInterval: 60000, staleTime: 30000,
+    });
 
     // API onboarding data (must be before any early returns to satisfy rules-of-hooks)
-    const { data: apiUsage } = useQuery('overviewApiUsage', () => apiClient.getAPIUsage(), {
+    const { data: apiUsage } = useQuery({
+        queryKey: ['overviewApiUsage'],
+        queryFn: () => apiClient.getAPIUsage(),
         staleTime: 60000, retry: false, enabled: isLoggedIn,
     });
 

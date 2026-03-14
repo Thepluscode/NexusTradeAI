@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from 'react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/services/api';
 import type { AutomationStatus } from '@/types';
 
@@ -6,14 +6,12 @@ import type { AutomationStatus } from '@/types';
  * Hook for automation status
  */
 export function useAutomationStatus() {
-    return useQuery<AutomationStatus, Error>(
-        'automationStatus',
-        () => apiClient.getAutomationStatus(),
-        {
-            refetchInterval: 10000,
-            staleTime: 5000,
-        }
-    );
+    return useQuery<AutomationStatus, Error>({
+        queryKey: ['automationStatus'],
+        queryFn: () => apiClient.getAutomationStatus(),
+        refetchInterval: 10000,
+        staleTime: 5000,
+    });
 }
 
 /**
@@ -22,14 +20,12 @@ export function useAutomationStatus() {
 export function useStartAutomation() {
     const queryClient = useQueryClient();
 
-    return useMutation<AutomationStatus, Error, { symbols?: string[]; maxDailyLoss?: number } | undefined>(
-        (config) => apiClient.startAutomation(config),
-        {
-            onSuccess: () => {
-                queryClient.invalidateQueries('automationStatus');
-            },
-        }
-    );
+    return useMutation<AutomationStatus, Error, { symbols?: string[]; maxDailyLoss?: number } | undefined>({
+        mutationFn: (config) => apiClient.startAutomation(config),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['automationStatus'] });
+        },
+    });
 }
 
 /**
@@ -38,14 +34,12 @@ export function useStartAutomation() {
 export function useStopAutomation() {
     const queryClient = useQueryClient();
 
-    return useMutation<void, Error>(
-        () => apiClient.stopAutomation(),
-        {
-            onSuccess: () => {
-                queryClient.invalidateQueries('automationStatus');
-            },
-        }
-    );
+    return useMutation<void, Error>({
+        mutationFn: () => apiClient.stopAutomation(),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['automationStatus'] });
+        },
+    });
 }
 
 /**
@@ -54,14 +48,12 @@ export function useStopAutomation() {
 export function useEnableRealTrading() {
     const queryClient = useQueryClient();
 
-    return useMutation<{ realTradingEnabled: boolean; confirmation: string }, Error>(
-        () => apiClient.enableRealTrading(),
-        {
-            onSuccess: () => {
-                queryClient.invalidateQueries('automationStatus');
-            },
-        }
-    );
+    return useMutation<{ realTradingEnabled: boolean; confirmation: string }, Error>({
+        mutationFn: () => apiClient.enableRealTrading(),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['automationStatus'] });
+        },
+    });
 }
 
 /**
@@ -70,12 +62,10 @@ export function useEnableRealTrading() {
 export function useDisableRealTrading() {
     const queryClient = useQueryClient();
 
-    return useMutation<{ realTradingEnabled: boolean; confirmation: string }, Error>(
-        () => apiClient.disableRealTrading(),
-        {
-            onSuccess: () => {
-                queryClient.invalidateQueries('automationStatus');
-            },
-        }
-    );
+    return useMutation<{ realTradingEnabled: boolean; confirmation: string }, Error>({
+        mutationFn: () => apiClient.disableRealTrading(),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['automationStatus'] });
+        },
+    });
 }

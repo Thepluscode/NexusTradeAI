@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo } from 'react';
-import { useQuery } from 'react-query';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import {
     Box,
     Paper,
@@ -116,11 +116,11 @@ export default function ThresholdTuner() {
     const [thresholds, setThresholds] = useState<ThresholdState>(DEFAULTS);
     const [committed, setCommitted] = useState<ThresholdState>(DEFAULTS);
 
-    const { data, isLoading, isError } = useQuery<ThresholdAnalysisResult | null>(
-        ['thresholdAnalysis', committed],
-        () => apiClient.getThresholdAnalysis({ ...committed } as Record<string, number>) as Promise<ThresholdAnalysisResult | null>,
-        { staleTime: 30 * 1000, retry: 1, keepPreviousData: true }
-    );
+    const { data, isLoading, isError } = useQuery<ThresholdAnalysisResult | null>({
+        queryKey: ['thresholdAnalysis', committed],
+        queryFn: () => apiClient.getThresholdAnalysis({ ...committed } as Record<string, number>) as Promise<ThresholdAnalysisResult | null>,
+        staleTime: 30 * 1000, retry: 1, placeholderData: keepPreviousData,
+    });
 
     const handleChange = useCallback((key: keyof ThresholdState) => (_: unknown, val: number | number[]) => {
         setThresholds(prev => ({ ...prev, [key]: val as number }));
