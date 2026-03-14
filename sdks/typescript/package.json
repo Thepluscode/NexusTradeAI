@@ -1,7 +1,7 @@
 {
   "name": "nexustrade-ai",
   "version": "0.1.0",
-  "description": "TypeScript SDK for the NexusTradeAI trade signal evaluation API",
+  "description": "TypeScript SDK for the NexusTradeAI trade signal evaluation API — one call to get AI GO/NO-GO decisions with confidence scores and risk flags",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": ["dist"],
@@ -9,8 +9,21 @@
     "build": "tsc",
     "prepublishOnly": "npm run build"
   },
-  "keywords": ["trading", "ai", "api", "signals", "stock", "forex", "crypto"],
+  "keywords": ["trading", "ai", "api", "signals", "stock", "forex", "crypto", "trade-evaluation", "risk-management", "algorithmic-trading"],
   "license": "MIT",
+  "author": "NexusTradeAI",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NexusTradeAI/nexustrade-ai.git",
+    "directory": "sdks/typescript"
+  },
+  "homepage": "https://nexus-dashboard-production-e6e6.up.railway.app",
+  "bugs": {
+    "url": "https://github.com/NexusTradeAI/nexustrade-ai/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "devDependencies": {
     "typescript": "^5.3.0"
   }

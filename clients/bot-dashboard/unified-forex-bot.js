@@ -1221,8 +1221,25 @@ console.log(`🤖 Strategy Bridge URL: ${BRIDGE_URL}`);
 // ===== AI TRADE ADVISOR =====
 // [v5.0] Agentic AI — Claude-powered trade evaluation via strategy bridge
 // HARD GATE: every trade MUST be approved by the agent pipeline
+// [v6.3] Agent decision cache — avoids redundant Claude API calls when the same
+// pair appears in consecutive scan cycles with similar conditions.
+const _forexAgentCache = new Map(); // key: pair, value: { result, price, timestamp }
+const _FOREX_AGENT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const _FOREX_AGENT_CACHE_PRICE_DRIFT = 0.003; // 0.3% price change invalidates (forex is tighter)
 
 async function queryAIAdvisor(signal) {
+    // Check cache first
+    const cached = _forexAgentCache.get(signal.pair);
+    if (cached && cached.price > 0) {
+        const age = Date.now() - cached.timestamp;
+        const priceDrift = Math.abs(signal.entry - cached.price) / cached.price;
+        if (age < _FOREX_AGENT_CACHE_TTL_MS && priceDrift < _FOREX_AGENT_CACHE_PRICE_DRIFT) {
+            console.log(`[Agent] ${signal.pair}: using cached decision (${(age / 1000).toFixed(0)}s old, drift ${(priceDrift * 100).toFixed(3)}%)`);
+            return { ...cached.result, source: 'cache' };
+        }
+        _forexAgentCache.delete(signal.pair);
+    }
+
     try {
         const payload = {
             symbol: signal.pair,
@@ -1246,6 +1263,14 @@ async function queryAIAdvisor(signal) {
         const response = await axios.post(`${BRIDGE_URL}/agent/evaluate`, payload, { timeout: 15000 });
         const result = response.data;
         console.log(`[Agent] ${signal.pair}: ${result.approved ? 'APPROVED' : 'REJECTED'} (source: ${result.source}, conf: ${(result.confidence || 0).toFixed(2)}) — ${result.reason}`);
+
+        // Cache the result
+        _forexAgentCache.set(signal.pair, {
+            result,
+            price: signal.entry,
+            timestamp: Date.now(),
+        });
+
         return result;
     } catch (e) {
         console.error(`[Agent] ${signal.pair} call FAILED: ${e.message} — BLOCKING trade (hard gate)`);
@@ -2076,17 +2101,20 @@ async function tradingLoop() {
     }
 }
 
-// Reset daily counters at midnight UTC
+// [v6.3] Reset daily counters when UTC date boundary crosses — works on restart at any time
+let _lastForexResetDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+
 function resetDailyCounters() {
-    const now = new Date();
-    if (now.getUTCHours() === 0 && now.getUTCMinutes() < 5) {
+    const today = new Date().toISOString().slice(0, 10);
+    if (today !== _lastForexResetDate) {
         totalTradesToday = 0;
         tradesPerPair.clear();
         stoppedOutPairs.clear();
         simDailyPnL = 0;
         lastEquity = null; // reset daily baseline for LIVE mode too
         guardrails.resetDaily();
-        console.log('🔄 Daily counters reset');
+        _lastForexResetDate = today;
+        console.log('🔄 Daily counters reset (new UTC date)');
     }
 }
 
@@ -2593,7 +2621,7 @@ class UserForexEngine {
         this.totalTradesToday = 0;
         this.botRunning = false;
         this.botPaused = false;
-        this.lastResetDate = new Date().toUTCDate ? new Date().toUTCString().slice(0, 16) : new Date().toDateString();
+        this.lastResetDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
         this.simEquity = 100000;
         this.simDailyPnL = 0;
         this.simTotalTrades = 0;
@@ -2901,6 +2929,17 @@ class UserForexEngine {
 
     async tradingLoop() {
         if (!this.botRunning || this.botPaused) return;
+        // [v6.3] Daily counter reset — check date boundary each loop iteration
+        const today = new Date().toISOString().slice(0, 10);
+        if (today !== this.lastResetDate) {
+            this.totalTradesToday = 0;
+            this.tradesPerPair.clear();
+            this.stoppedOutPairs.clear();
+            this.simDailyPnL = 0;
+            this.guardrails.resetDaily();
+            this.lastResetDate = today;
+            console.log(`🔄 [ForexEngine ${this.userId}] Daily counters reset`);
+        }
         if (!isMarketOpen()) return;
         await this.managePositions();
         // Reuse module-level scanForSignals but with this engine's oandaConfig

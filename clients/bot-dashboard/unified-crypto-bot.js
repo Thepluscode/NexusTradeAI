@@ -725,7 +725,26 @@ class CryptoTradingEngine {
     // ========================================================================
 
     // [v5.0] Agentic AI — HARD GATE via strategy bridge
+    // [v6.3] Agent decision cache — avoids redundant Claude API calls when the same
+    // symbol appears in consecutive scan cycles with similar market conditions.
+    // Cache TTL: 5 minutes. If price moves >1% from cached evaluation, cache is invalidated.
+    _agentCache = new Map(); // key: symbol, value: { result, price, timestamp }
+    _AGENT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+    _AGENT_CACHE_PRICE_DRIFT = 0.01; // 1% price change invalidates cache
+
     async queryAIAdvisor(signal) {
+        // Check cache first
+        const cached = this._agentCache.get(signal.symbol);
+        if (cached && cached.price > 0) {
+            const age = Date.now() - cached.timestamp;
+            const priceDrift = Math.abs(signal.price - cached.price) / cached.price;
+            if (age < this._AGENT_CACHE_TTL_MS && priceDrift < this._AGENT_CACHE_PRICE_DRIFT) {
+                console.log(`[Agent] ${signal.symbol}: using cached decision (${(age / 1000).toFixed(0)}s old, drift ${(priceDrift * 100).toFixed(2)}%)`);
+                return { ...cached.result, source: 'cache' };
+            }
+            this._agentCache.delete(signal.symbol);
+        }
+
         try {
             const bridgeUrl = this._getBridgeUrl();
             const payload = {
@@ -746,6 +765,14 @@ class CryptoTradingEngine {
             const response = await axios.post(`${bridgeUrl}/agent/evaluate`, payload, { timeout: 15000 });
             const result = response.data;
             console.log(`[Agent] ${signal.symbol}: ${result.approved ? 'APPROVED' : 'REJECTED'} (source: ${result.source}, conf: ${(result.confidence || 0).toFixed(2)}) — ${result.reason}`);
+
+            // Cache the result
+            this._agentCache.set(signal.symbol, {
+                result,
+                price: signal.price,
+                timestamp: Date.now(),
+            });
+
             return result;
         } catch (e) {
             console.error(`[Agent] ${signal.symbol} call FAILED: ${e.message} — BLOCKING trade (hard gate)`);
@@ -764,13 +791,14 @@ class CryptoTradingEngine {
     async reportTradeOutcome(position, exitPrice, pnl, pnlPct, exitReason) {
         try {
             const bridgeUrl = this._getBridgeUrl();
-            const holdMinutes = (Date.now() - (position.entryTime || Date.now())) / 60000;
+            const openTs = position.openTime?.getTime?.() ?? position.entryTime?.getTime?.() ?? Date.now();
+            const holdMinutes = (Date.now() - openTs) / 60000;
             const payload = {
                 symbol: position.symbol,
                 asset_class: 'crypto',
                 direction: 'long',
                 tier: position.tier || 'tier1',
-                entry_price: position.entryPrice || position.price,
+                entry_price: position.entry || position.entryPrice || position.price,
                 exit_price: exitPrice,
                 pnl: pnl,
                 pnl_pct: pnlPct * 100,
@@ -1331,6 +1359,7 @@ class CryptoTradingEngine {
                 momentum: signal.momentum,
                 rsi: signal.rsi,
                 atrPct: signal.atrPct,
+                stopLossPercent: signal.stopLossPercent,
                 regimeQuality: signal.regimeQuality,
                 signalScore: signal.score,
                 currentPrice: signal.price,
@@ -1344,7 +1373,7 @@ class CryptoTradingEngine {
             const openTrade = this._dbOpen ? this._dbOpen.bind(this) : dbCryptoOpen;
             openTrade(signal.symbol, signal.tier, signal.price, signal.stopLoss, signal.takeProfit, quantity, positionSizeUSD, signal)
                 .then(id => { const p = this.positions.get(signal.symbol); if (p) p.dbTradeId = id; })
-                .catch(() => {});
+                .catch(e => console.warn(`⚠️  DB trade open failed: ${e.message}`));
 
             // Update tracking
             this.dailyTradeCount++;
@@ -1425,10 +1454,16 @@ class CryptoTradingEngine {
                 continue;
             }
 
-            if (position.atrPct) {
-                const atrAdversePct = position.atrPct * 2.4 * 100;
+            // [v6.3] ATR Adverse Exit — use configured stop loss, NOT raw 5-min ATR.
+            // Old formula: atrPct * 2.4 * 100 → with 5-min ATR of ~0.2%, this was 0.48% (10x tighter than stop).
+            // Now: only trigger if the position's configured stop % is available; otherwise skip.
+            // The regular stop-loss check below already handles risk — this is a belt-and-suspenders
+            // check that uses ATR-scaled threshold at 80% of the configured stop to exit slightly early
+            // if the move is ATR-confirmed adverse (high-conviction adverse move).
+            if (position.atrPct && position.stopLossPercent) {
+                const atrAdversePct = position.stopLossPercent * 0.8; // 80% of configured stop
                 if (pnlPercent <= -atrAdversePct) {
-                    console.log(`📉 ${symbol}: ATR ADVERSE EXIT at $${currentPrice.toFixed(2)} (${pnlPercent.toFixed(2)}%)`);
+                    console.log(`📉 ${symbol}: ATR ADVERSE EXIT at $${currentPrice.toFixed(2)} (${pnlPercent.toFixed(2)}% vs threshold -${atrAdversePct.toFixed(2)}%)`);
                     await this.closePosition(symbol, currentPrice, 'ATR Adverse Exit');
                     continue;
                 }
@@ -1528,7 +1563,7 @@ class CryptoTradingEngine {
 
             // Persist close to DB (fire-and-forget)
             const closeTrade = this._dbClose ? this._dbClose.bind(this) : dbCryptoClose;
-            closeTrade(position.dbTradeId, adjustedExitPrice, pnlUSD, pnlPercent, reason).catch(() => {});
+            closeTrade(position.dbTradeId, adjustedExitPrice, pnlUSD, pnlPercent, reason).catch(e => console.warn(`⚠️  DB trade close failed: ${e.message}`));
 
             // [v4.1] Report to Agentic AI learning loop — Scan AI pattern tracking
             this.reportTradeOutcome(position, adjustedExitPrice, pnlUSD, pnlPercent / 100, reason).catch(() => {});
@@ -2726,16 +2761,22 @@ async function getOrCreateCryptoEngine(userId) {
                      FROM trades WHERE bot='crypto' AND status='open' AND user_id=$1`, [userId]
                 );
                 for (const row of dbOpen.rows) {
+                    const ep = parseFloat(row.entry_price || '0');
+                    const sl = parseFloat(row.stop_loss || '0');
+                    const qty = parseFloat(row.quantity || '0');
                     userEngine.positions.set(row.symbol, {
                         dbTradeId: row.id,
                         symbol: row.symbol,
-                        entry: parseFloat(row.entry_price || '0'),
-                        quantity: parseFloat(row.quantity || '0'),
-                        positionSize: parseFloat(row.quantity || '0') * parseFloat(row.entry_price || '0'),
-                        stopLoss: parseFloat(row.stop_loss || '0'),
+                        entry: ep,
+                        quantity: qty,
+                        positionSize: qty * ep,
+                        stopLoss: sl,
                         takeProfit: parseFloat(row.take_profit || '0'),
-                        entryTime: row.entry_time,
-                        tier: 'restored'
+                        stopLossPercent: ep > 0 ? ((ep - sl) / ep) * 100 : 5,
+                        openTime: row.entry_time ? new Date(row.entry_time) : new Date(),
+                        entryTime: row.entry_time ? new Date(row.entry_time) : new Date(),
+                        tier: 'restored',
+                        restored: true,
                     });
                 }
                 if (userEngine.positions.size > 0)
@@ -2950,16 +2991,32 @@ app.listen(PORT, async () => {
                 if (!engine.positions.has(row.symbol)) {
                     const currentPrice = await engine.kraken.getPrice(row.symbol).catch(() => null);
                     if (currentPrice) {
+                        const entryP = parseFloat(row.entry_price);
+                        const qty = parseFloat(row.quantity || 0);
+                        const sl = parseFloat(row.stop_loss || 0);
+                        const tp = parseFloat(row.take_profit || 0);
+                        const stopPct = entryP > 0 ? ((entryP - sl) / entryP) * 100 : 5;
                         engine.positions.set(row.symbol, {
                             symbol: row.symbol,
                             direction: row.direction || 'long',
-                            entry: parseFloat(row.entry_price),
-                            quantity: parseFloat(row.quantity || 0),
-                            stopLoss: parseFloat(row.stop_loss || 0),
-                            takeProfit: parseFloat(row.take_profit || 0),
+                            tier: row.tier || 'tier1',
+                            strategy: row.strategy || 'momentum',
+                            regime: row.regime || 'unknown',
+                            entry: entryP,
+                            quantity: qty,
+                            positionSize: entryP * qty,
+                            stopLoss: sl,
+                            takeProfit: tp,
+                            stopLossPercent: stopPct,
+                            openTime: new Date(row.entry_time),
                             entryTime: new Date(row.entry_time),
+                            rsi: row.rsi ? parseFloat(row.rsi) : null,
+                            momentum: row.momentum_pct ? parseFloat(row.momentum_pct) : null,
+                            regimeQuality: row.regime_quality ? parseFloat(row.regime_quality) : null,
+                            signalScore: row.signal_score ? parseFloat(row.signal_score) : null,
                             currentPrice: currentPrice,
-                            unrealizedPnL: (currentPrice - parseFloat(row.entry_price)) * parseFloat(row.quantity || 0),
+                            unrealizedPnL: (currentPrice - entryP) * qty,
+                            unrealizedPnLPct: entryP > 0 ? ((currentPrice - entryP) / entryP) * 100 : 0,
                             dbTradeId: row.id,
                             restored: true,
                         });

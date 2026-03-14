@@ -133,7 +133,8 @@ class LearningAgent:
         if o.entry_volume_ratio is not None: lines.append(f"Entry volume: {o.entry_volume_ratio}x")
         if o.entry_atr_pct is not None: lines.append(f"Entry ATR: {o.entry_atr_pct}%")
         if o.agent_approved is not None:
-            lines.append(f"Agent decision at entry: {'APPROVED' if o.agent_approved else 'REJECTED'} (conf: {o.agent_confidence:.2f})")
+            conf_str = f"{o.agent_confidence:.2f}" if o.agent_confidence is not None else "N/A"
+            lines.append(f"Agent decision at entry: {'APPROVED' if o.agent_approved else 'REJECTED'} (conf: {conf_str})")
             if o.agent_reason: lines.append(f"Agent reason: {o.agent_reason}")
         return "\n".join(lines)
 

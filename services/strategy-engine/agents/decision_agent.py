@@ -82,8 +82,8 @@ class DecisionAgent:
         if result:
             self.total_decisions += 1
             decision = AgentDecision(
-                approved=result.get("approved", True),
-                confidence=max(0.0, min(1.0, result.get("confidence", 0.5))),
+                approved=result.get("approved", False),  # Default REJECT if field missing
+                confidence=max(0.0, min(1.0, result.get("confidence", 0.3))),  # Low default — require explicit confidence
                 reason=str(result.get("reason", ""))[:200],
                 risk_flags=result.get("risk_flags", [])[:5],
                 position_size_multiplier=result.get("position_size_adjustment", 1.0),

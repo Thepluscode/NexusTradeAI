@@ -188,6 +188,9 @@ class SupervisorBandit:
         if arm not in ARM_NAMES:
             logger.warning(f"Unknown arm '{arm}', skipping update")
             return
+        if not isinstance(reward_score, (int, float)) or not math.isfinite(reward_score):
+            logger.warning(f"Invalid reward_score={reward_score} for arm '{arm}', skipping")
+            return
 
         ctx = _make_context_key(regime, asset_class, tier)
         arms = self._get_arms(ctx)
