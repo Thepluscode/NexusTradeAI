@@ -1591,8 +1591,24 @@ async function queryStrategyBridge(symbol, bars, assetClass = 'stock') {
 // ===== AI TRADE ADVISOR =====
 // [v5.0] Agentic AI — Claude-powered trade evaluation via strategy bridge
 // HARD GATE: every trade MUST be approved by the agent pipeline. No AI = no trade.
+// [v6.3] Agent decision cache — avoids redundant Claude API calls for same symbol
+const _stockAgentCache = new Map();
+const _STOCK_AGENT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const _STOCK_AGENT_CACHE_PRICE_DRIFT = 0.01; // 1% price change invalidates
 
 async function queryAIAdvisor(signal) {
+    // Check cache first
+    const cached = _stockAgentCache.get(signal.symbol);
+    if (cached && cached.price > 0) {
+        const age = Date.now() - cached.timestamp;
+        const priceDrift = Math.abs(signal.price - cached.price) / cached.price;
+        if (age < _STOCK_AGENT_CACHE_TTL_MS && priceDrift < _STOCK_AGENT_CACHE_PRICE_DRIFT) {
+            console.log(`[Agent] ${signal.symbol}: using cached decision (${(age / 1000).toFixed(0)}s old, drift ${(priceDrift * 100).toFixed(2)}%)`);
+            return { ...cached.result, source: 'cache' };
+        }
+        _stockAgentCache.delete(signal.symbol);
+    }
+
     try {
         const payload = {
             symbol: signal.symbol,
@@ -1613,6 +1629,14 @@ async function queryAIAdvisor(signal) {
         const response = await axios.post(`${BRIDGE_URL}/agent/evaluate`, payload, { timeout: 15000 });
         const result = response.data;
         console.log(`[Agent] ${signal.symbol}: ${result.approved ? 'APPROVED' : 'REJECTED'} (source: ${result.source}, conf: ${(result.confidence || 0).toFixed(2)}) — ${result.reason}`);
+
+        // Cache the result
+        _stockAgentCache.set(signal.symbol, {
+            result,
+            price: signal.price,
+            timestamp: Date.now(),
+        });
+
         return result;
     } catch (e) {
         // v5.0 HARD GATE: agent offline → BLOCK trade (was fail-open → null → trade proceeds)
@@ -1631,16 +1655,19 @@ async function queryAIAdvisor(signal) {
 // [v4.1] Report trade outcome to learning agent for Scan AI pattern tracking
 async function reportTradeOutcome(position, exitPrice, pnl, pnlPct, exitReason) {
     try {
+        const entryPrice = position.entry || position.entryPrice;
         const rMultiple = position.atrStop
-            ? pnl / Math.abs(position.entryPrice - position.atrStop)
+            ? pnl / Math.abs(entryPrice - position.atrStop)
             : pnlPct / (position.config?.stopLoss || 0.07);
-        const holdMinutes = (Date.now() - (position.entryTime || Date.now())) / 60000;
+        const entryTs = position.entryTime instanceof Date ? position.entryTime.getTime()
+            : typeof position.entryTime === 'number' ? position.entryTime : Date.now();
+        const holdMinutes = (Date.now() - entryTs) / 60000;
         const payload = {
             symbol: position.symbol,
             asset_class: 'stock',
             direction: 'long',
             tier: position.tier || 'tier1',
-            entry_price: position.entryPrice,
+            entry_price: entryPrice,
             exit_price: exitPrice,
             pnl: pnl,
             pnl_pct: pnlPct * 100,
@@ -2456,14 +2483,14 @@ async function executeTrade(signal, strategy) {
         positions.set(signal.symbol, {
             symbol: signal.symbol,
             shares,
-            entry: signal.price,
+            entry: effectiveEntry,                // [v6.3] Use slippage-adjusted entry, matches stop/target calc
             stopLoss: parseFloat(stopPrice),
             target: parseFloat(targetPrice),
             strategy,
             regime: signal.regime,
             tier,
             config,
-            entryTime,                          // FIX: stored as Date object
+            entryTime,
             entryVolume: signal.entryVolume,
             rsi: signal.rsi,
             vwap: signal.vwap,
@@ -3987,16 +4014,20 @@ class UserTradingEngine {
             });
             const entryTime = new Date();
             this.positions.set(signal.symbol, {
-                symbol: signal.symbol, shares, entry: signal.price,
+                symbol: signal.symbol, shares, entry: effectiveEntry,  // [v6.3] slippage-adjusted
                 stopLoss: parseFloat(stopPrice), target: parseFloat(targetPrice),
                 strategy, regime: signal.regime, tier, config, entryTime, entryVolume: signal.entryVolume,
                 rsi: signal.rsi, vwap: signal.vwap, volumeRatio: signal.volumeRatio,
                 percentChange: signal.percentChange, signalScore: signal.score,
-                regimeScore: signal.regimeScore, atrPct: signal.atrPct
+                regimeScore: signal.regimeScore, atrPct: signal.atrPct,
+                agentApproved: signal.agentApproved || false,
+                agentConfidence: signal.agentConfidence || null,
+                agentReason: signal.agentReason || null,
+                agentSizeMultiplier: signal.agentSizeMultiplier || 1.0,
             });
-            this.dbTradeOpen(signal.symbol, signal.price, shares, config, signal, tier, strategy)
+            this.dbTradeOpen(signal.symbol, effectiveEntry, shares, config, signal, tier, strategy)
                 .then(id => { const p = this.positions.get(signal.symbol); if (p) p.dbTradeId = id; })
-                .catch(() => {});
+                .catch(e => console.warn(`⚠️  DB trade open failed: ${e.message}`));
             const tradeRecord = { time: Date.now(), side: 'buy', price: signal.price, shares, tier };
             const recent = this.recentTrades.get(signal.symbol) || [];
             recent.push(tradeRecord);
