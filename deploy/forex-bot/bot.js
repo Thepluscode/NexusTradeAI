@@ -1016,6 +1016,7 @@ async function oandaRequest(method, endpoint, data = null) {
         const config = {
             method,
             url: `${oandaConfig.baseURL}${endpoint}`,
+            timeout: 15000, // [v6.3] 15s timeout — prevents hanging on OANDA outages
             headers: {
                 'Authorization': `Bearer ${oandaConfig.accessToken}`,
                 'Content-Type': 'application/json'
@@ -3326,5 +3327,40 @@ app.listen(PORT, async () => {
 
     console.log(`\n✅ Forex bot started - scanning every 5 minutes\n`);
 });
+
+// ========================================================================
+// [v6.3] PROCESS ERROR HANDLERS & GRACEFUL SHUTDOWN
+// Without these, any unhandled error crashes the Railway process immediately.
+// ========================================================================
+
+process.on('uncaughtException', (error) => {
+    console.error('💀 [FOREX] Uncaught Exception:', error.message);
+    console.error(error.stack);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('💀 [FOREX] Unhandled Rejection:', reason);
+});
+
+process.on('SIGTERM', () => {
+    console.log('🛑 [FOREX] SIGTERM received — shutting down gracefully');
+    // Give open HTTP requests 5s to finish, then exit
+    setTimeout(() => process.exit(0), 5000);
+});
+
+process.on('SIGINT', () => {
+    console.log('🛑 [FOREX] SIGINT received — shutting down');
+    process.exit(0);
+});
+
+// [v6.3] Memory cleanup — prune agent cache every 30 minutes
+setInterval(() => {
+    const now = Date.now();
+    for (const [pair, cached] of _forexAgentCache) {
+        if (now - cached.timestamp > 10 * 60 * 1000) {
+            _forexAgentCache.delete(pair);
+        }
+    }
+}, 30 * 60 * 1000);
 
 module.exports = { app, positions, FOREX_PAIRS, MOMENTUM_CONFIG };
