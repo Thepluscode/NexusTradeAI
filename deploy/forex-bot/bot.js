@@ -1317,7 +1317,7 @@ async function reportForexTradeOutcome(position, exitPrice, pnl, pnlPct, exitRea
         await axios.post(`${BRIDGE_URL}/agent/trade-outcome`, payload, { timeout: 5000 });
         console.log(`[Learn] ${position.pair} outcome reported: ${pnl > 0 ? 'WIN' : 'LOSS'} ${(pnlPct * 100).toFixed(2)}%`);
     } catch (e) {
-        // Non-blocking
+        console.warn('reportForexTradeOutcome failed:', e.message);
     }
 }
 
@@ -1366,7 +1366,7 @@ function updateTrailingStop(position, currentPrice) {
                 : newStop < position.stopLoss;
 
             if (shouldUpdate) {
-                console.log(`🔒 ${position.instrument}: Trailing stop raised to ${newStop.toFixed(5)} (locking ${(level.lockPercent * 100).toFixed(0)}% of +${(gainPct * 100).toFixed(2)}%)`);
+                console.log(`🔒 ${position.pair}: Trailing stop raised to ${newStop.toFixed(5)} (locking ${(level.lockPercent * 100).toFixed(0)}% of +${(gainPct * 100).toFixed(2)}%)`);
                 position.stopLoss = newStop;
                 return true;
             }
@@ -1380,7 +1380,7 @@ function updateTrailingStop(position, currentPrice) {
 
 async function analyzePair(pair) {
     const candles = await getCandles(pair, 'M15', 100);
-    if (candles.length < 50) return null;
+    if (!candles || candles.length < 50) return null;
 
     const currentPrice = parseFloat(candles[candles.length - 1].mid.c);
     const sma10 = calculateSMA(candles, 10);
@@ -1703,6 +1703,7 @@ async function executeTrade(signal) {
 
         const trades = recentTrades.get(signal.pair) || [];
         trades.push({ time: Date.now(), side: signal.direction });
+        if (trades.length > 10) trades.shift();
         recentTrades.set(signal.pair, trades);
 
         // Update long/short counters and persist immediately so a crash between
@@ -1854,10 +1855,12 @@ async function closePositionWithReason(pair, reason) {
         positions.delete(pair);
 
         if (reason.toLowerCase().includes('stop')) {
-            // Dynamic cooldown: small loss (<1%) → 30 min; large loss (>2%) → 2h
+            // Dynamic cooldown: small loss (<1%) → 30 min; medium (1-2%) → 60 min; large (>2%) → 2h
             const lossPct = pos ? Math.abs(pos.unrealizedPL ?? 0) / (parseFloat(pos.entry ?? 1) * Math.abs(pos.units ?? 1)) * 100 : 1;
-            const cooldownMs = lossPct >= 2 ? MIN_TIME_AFTER_STOP : 30 * 60 * 1000;
-            stoppedOutPairs.set(pair, { time: Date.now(), cooldownMs });
+            const cooldownMs = lossPct >= 2 ? MIN_TIME_AFTER_STOP
+                : lossPct >= 1 ? 60 * 60 * 1000
+                : 30 * 60 * 1000;
+            stoppedOutPairs.set(pair, { time: Date.now(), cooldownMs, lossPercent: lossPct });
         }
 
         console.log(`✅ Position ${pair} closed successfully`);
@@ -2227,7 +2230,7 @@ app.get('/api/forex/status', async (req, res) => {
                 ? unrealizedPL / (entryPrice * units)
                 : 0;
             return {
-                symbol: pos.instrument,
+                symbol: pos.pair,
                 qty: units,
                 side: isLong ? 'long' : 'short',
                 entryPrice,
@@ -2803,8 +2806,11 @@ class UserForexEngine {
     }
 
     canTrade(pair, direction) {
-        const stopTime = this.stoppedOutPairs.get(pair);
-        if (stopTime && Date.now() - stopTime < 60 * 60 * 1000) return false;
+        const stopEntry = this.stoppedOutPairs.get(pair);
+        if (stopEntry) {
+            const { time, cooldownMs } = typeof stopEntry === 'object' ? stopEntry : { time: stopEntry, cooldownMs: MIN_TIME_AFTER_STOP };
+            if (Date.now() - time < cooldownMs) return false;
+        }
         if (this.totalTradesToday >= MAX_TRADES_PER_DAY) return false;
         if ((this.tradesPerPair.get(pair) || 0) >= MAX_TRADES_PER_PAIR) return false;
         const recent = this.recentTrades.get(pair) || [];
@@ -2825,7 +2831,14 @@ class UserForexEngine {
             this.dbForexClose(pos.dbTradeId, exitPrice, exitPnl, exitPct, reason).catch(() => {});
         }
         await this.closeOandaPosition(pair);
-        if (reason.toLowerCase().includes('stop')) this.stoppedOutPairs.set(pair, Date.now());
+        if (reason.toLowerCase().includes('stop')) {
+            // Dynamic cooldown: small loss (<1%) → 30 min; medium (1-2%) → 60 min; large (>2%) → 2h
+            const lossPct = pos ? Math.abs(pos.unrealizedPL ?? 0) / (parseFloat(pos.entry ?? 1) * Math.abs(pos.units ?? 1)) * 100 : 1;
+            const cooldownMs = lossPct >= 2 ? MIN_TIME_AFTER_STOP
+                : lossPct >= 1 ? 60 * 60 * 1000
+                : 30 * 60 * 1000;
+            this.stoppedOutPairs.set(pair, { time: Date.now(), cooldownMs, lossPercent: lossPct });
+        }
         this.positions.delete(pair);
         await this.saveState();
         console.log(`✅ [ForexEngine ${this.userId}] Closed ${pair} (${reason})`);
@@ -2919,6 +2932,7 @@ class UserForexEngine {
             this.tradesPerPair.set(signal.pair, (this.tradesPerPair.get(signal.pair) || 0) + 1);
             const trades = this.recentTrades.get(signal.pair) || [];
             trades.push({ time: Date.now(), side: signal.direction });
+            if (trades.length > 10) trades.shift();
             this.recentTrades.set(signal.pair, trades);
             await this.saveState();
             (this._telegram || telegramAlerts).sendForexEntry(signal.pair, signal.direction, signal.entry, signal.stopLoss, signal.takeProfit, units, signal.tier).catch(() => {});

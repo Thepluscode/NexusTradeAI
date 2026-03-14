@@ -342,6 +342,9 @@ app.post('/api/auth/register', authRateLimit, async (req, res) => {
             'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id, email, name, role',
             [email.toLowerCase().trim(), hash, name || null]
         );
+        if (!result.rows || result.rows.length === 0) {
+            return res.status(500).json({ success: false, error: 'Registration failed' });
+        }
         const user = result.rows[0];
         const tokens = signTokens(user.id, user.email);
         await dbPool.query('UPDATE users SET refresh_token=$1, last_login=NOW() WHERE id=$2', [tokens.refreshToken, user.id]);
@@ -359,6 +362,9 @@ app.post('/api/auth/login', authRateLimit, async (req, res) => {
     if (!email || !password) return res.status(400).json({ success: false, error: 'Email and password required' });
     try {
         const result = await dbPool.query('SELECT * FROM users WHERE email=$1', [email.toLowerCase().trim()]);
+        if (!result.rows || result.rows.length === 0) {
+            return res.status(401).json({ success: false, error: 'Invalid email or password' });
+        }
         const user = result.rows[0];
         if (!user || !(await bcrypt.compare(password, user.password_hash))) {
             return res.status(401).json({ success: false, error: 'Invalid email or password' });
@@ -1453,6 +1459,8 @@ function calculateADX(bars, period = 14) {
         smoothPlusDM = smoothPlusDM - smoothPlusDM / period + plusDM[i];
         smoothMinusDM = smoothMinusDM - smoothMinusDM / period + minusDM[i];
 
+        if (smoothTR === 0) return null; // Guard against division by zero
+
         const plusDI = (smoothPlusDM / smoothTR) * 100;
         const minusDI = (smoothMinusDM / smoothTR) * 100;
         const diSum = plusDI + minusDI;
@@ -1834,22 +1842,22 @@ function updateTrailingStop(position, currentPrice, unrealizedPL) {
     let stopUpdated = false;
     const gainDecimal = unrealizedPL / 100;
 
-    // Find the highest applicable trailing stop level
-    for (let i = EXIT_CONFIG.trailingStopLevels.length - 1; i >= 0; i--) {
-        const level = EXIT_CONFIG.trailingStopLevels[i];
+    // Find the highest applicable trailing stop level (iterate forward, keep best match)
+    let bestLevel = null;
+    for (const level of EXIT_CONFIG.trailingStopLevels) {
+        if (gainDecimal >= level.gainThreshold) bestLevel = level;
+    }
 
-        if (gainDecimal >= level.gainThreshold) {
-            // Calculate new stop (lock in X% of gains)
-            const totalGain = currentPrice - position.entry;
-            const lockedGain = totalGain * level.lockPercent;
-            const newStop = position.entry + lockedGain;
+    if (bestLevel) {
+        // Calculate new stop (lock in X% of gains)
+        const totalGain = currentPrice - position.entry;
+        const lockedGain = totalGain * bestLevel.lockPercent;
+        const newStop = position.entry + lockedGain;
 
-            if (newStop > position.stopLoss) {
-                console.log(`🔒 ${position.symbol}: AGGRESSIVE trailing stop raised to $${newStop.toFixed(2)} (locking in ${(level.lockPercent * 100).toFixed(0)}% of +${unrealizedPL.toFixed(2)}% gain)`);
-                position.stopLoss = newStop;
-                stopUpdated = true;
-            }
-            break; // Only apply highest level
+        if (newStop > position.stopLoss) {
+            console.log(`🔒 ${position.symbol}: AGGRESSIVE trailing stop raised to $${newStop.toFixed(2)} (locking in ${(bestLevel.lockPercent * 100).toFixed(0)}% of +${unrealizedPL.toFixed(2)}% gain)`);
+            position.stopLoss = newStop;
+            stopUpdated = true;
         }
     }
 
@@ -2433,16 +2441,18 @@ async function executeTrade(signal, strategy) {
             kellyMultiplier = Math.max(0.5, Math.min(2.0, safeMultiplier));
         }
 
+        // Validate price BEFORE any arithmetic that depends on it
+        if (!signal.price || signal.price <= 0) {
+            console.log(`⚠️  [SKIP] ${signal.symbol}: invalid price ${signal.price}`);
+            return null;
+        }
+
         // [v3.5] Slippage model — market orders typically fill ~0.05% above ask for stocks
         // Adjusts effective entry price so stop/target calculations are realistic
         const STOCK_SLIPPAGE = 0.0005; // 0.05% — conservative estimate for liquid stocks
         const effectiveEntry = signal.price * (1 + STOCK_SLIPPAGE);
 
         const positionSize = equity * config.positionSize * kellyMultiplier;
-        if (!signal.price || signal.price <= 0) {
-            console.log(`⚠️  [SKIP] ${signal.symbol}: invalid price ${signal.price}`);
-            return null;
-        }
         let shares = Math.floor(positionSize / effectiveEntry);
 
         // [v4.7] Cap shares by RISK_PER_TRADE — max dollar risk per trade = equity * RISK_PER_TRADE
@@ -2465,19 +2475,46 @@ async function executeTrade(signal, strategy) {
         if (signal.atrStop) console.log(`   [ATR Stops] Using volatility-adapted: Stop $${stopPrice}, Target $${targetPrice}`);
         if (kellyMultiplier !== 1.0) console.log(`   [Kelly] Size multiplier: ${kellyMultiplier.toFixed(2)}x (winRate:${perfData.winRate.toFixed(1)}% pf:${perfData.profitFactor.toFixed(2)})`);
 
-        const orderUrl = `${alpacaConfig.baseURL}/v2/orders`;
-        const orderResponse = await axios.post(orderUrl, {
-            symbol: signal.symbol,
-            qty: shares,
+        // [v7.0] Update anti-churning state BEFORE API call to prevent race-condition duplicates.
+        // If the order succeeds but the response fails (network timeout, etc.), we already
+        // consumed the trade slot. On API failure we roll back below.
+        totalTradesToday++;
+        tradesPerSymbol.set(signal.symbol, (tradesPerSymbol.get(signal.symbol) || 0) + 1);
+        const tradeRecord = {
+            time: Date.now(),
             side: 'buy',
-            type: 'market',
-            time_in_force: 'day'
-        }, {
-            headers: {
-                'APCA-API-KEY-ID': alpacaConfig.apiKey,
-                'APCA-API-SECRET-KEY': alpacaConfig.secretKey
-            }
-        });
+            price: signal.price,
+            shares,
+            tier
+        };
+        const recent = recentTrades.get(signal.symbol) || [];
+        recent.push(tradeRecord);
+        if (recent.length > 10) recent.shift();
+        recentTrades.set(signal.symbol, recent);
+
+        let orderResponse;
+        const orderUrl = `${alpacaConfig.baseURL}/v2/orders`;
+        try {
+            orderResponse = await axios.post(orderUrl, {
+                symbol: signal.symbol,
+                qty: shares,
+                side: 'buy',
+                type: 'market',
+                time_in_force: 'day'
+            }, {
+                headers: {
+                    'APCA-API-KEY-ID': alpacaConfig.apiKey,
+                    'APCA-API-SECRET-KEY': alpacaConfig.secretKey
+                }
+            });
+        } catch (orderError) {
+            // Rollback anti-churning state on API failure
+            totalTradesToday = Math.max(0, totalTradesToday - 1);
+            tradesPerSymbol.set(signal.symbol, Math.max(0, (tradesPerSymbol.get(signal.symbol) || 1) - 1));
+            recent.pop();
+            console.error(`❌ Order API failed for ${signal.symbol} (anti-churning rolled back):`, orderError.message);
+            return null;
+        }
 
         const entryTime = new Date();
         positions.set(signal.symbol, {
@@ -2509,22 +2546,7 @@ async function executeTrade(signal, strategy) {
         // Persist trade opening to DB (fire-and-forget)
         dbTradeOpen(signal.symbol, signal.price, shares, config, signal, tier, strategy)
             .then(id => { const p = positions.get(signal.symbol); if (p) p.dbTradeId = id; })
-            .catch(() => {});
-
-        const tradeRecord = {
-            time: Date.now(),
-            side: 'buy',
-            price: signal.price,
-            shares,
-            tier
-        };
-        const recent = recentTrades.get(signal.symbol) || [];
-        recent.push(tradeRecord);
-        if (recent.length > 10) recent.shift();
-        recentTrades.set(signal.symbol, recent);
-
-        tradesPerSymbol.set(signal.symbol, (tradesPerSymbol.get(signal.symbol) || 0) + 1);
-        totalTradesToday++;
+            .catch(e => console.warn('⚠️  DB operation failed:', e?.message || String(e)));
 
         console.log(`\n✅ TRADE ENTRY: ${signal.symbol} [${tier.toUpperCase()}]`);
         console.log(`   Price: $${signal.price} | Shares: ${shares} | Size: $${(shares * signal.price).toFixed(0)}`);
@@ -2585,9 +2607,9 @@ async function closePosition(symbol, qty, reason = 'Manual') {
             const closeMetrics = resolveClosedTradeMetrics(position, qty, adjustedExitPrice);
             if (closeMetrics) {
                 recordTradeClose(symbol, closeMetrics.entryPrice, closeMetrics.exitPrice, closeMetrics.shares, reason);
-                dbTradeClose(position?.dbTradeId, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct, reason).catch(() => {});
+                dbTradeClose(position?.dbTradeId, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct, reason).catch(e => console.warn('⚠️  DB operation failed:', e?.message || String(e)));
                 // [v4.1] Report to Agentic AI learning loop — Scan AI pattern tracking
-                reportTradeOutcome(position, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct / 100, reason).catch(() => {});
+                reportTradeOutcome(position, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct / 100, reason).catch(e => console.warn('⚠️  DB operation failed:', e?.message || String(e)));
                     // [v4.6] Feed outcome into adaptive guardrails
                     guardrails.recordOutcome(closeMetrics.pnlUsd > 0);
             } else {
@@ -3620,8 +3642,22 @@ async function checkEndOfDay() {
 // Module-level shared 45-second bar cache — single set of Alpaca API calls for all users
 const BAR_CACHE = new Map(); // symbol → { bars, fetchedAt }
 const BAR_CACHE_TTL_MS = 45 * 1000;
+const BAR_CACHE_EVICT_MS = 5 * 60 * 1000; // evict entries older than 5 minutes
+let _lastBarCacheCleanup = 0;
+
+function evictStaleBarCache() {
+    const now = Date.now();
+    if (now - _lastBarCacheCleanup < 60_000) return; // run at most once per minute
+    _lastBarCacheCleanup = now;
+    for (const [key, entry] of BAR_CACHE) {
+        if (now - entry.fetchedAt > BAR_CACHE_EVICT_MS) {
+            BAR_CACHE.delete(key);
+        }
+    }
+}
 
 async function fetchBarsWithCache(symbol, cfg, params) {
+    evictStaleBarCache();
     const cacheKey = `${symbol}:${JSON.stringify(params)}`;
     const cached = BAR_CACHE.get(cacheKey);
     if (cached && Date.now() - cached.fetchedAt < BAR_CACHE_TTL_MS) return cached.bars;
@@ -3921,7 +3957,7 @@ class UserTradingEngine {
             const closeMetrics = resolveClosedTradeMetrics(position, qty, adjustedExitPrice);
             if (closeMetrics) {
                 this.recordTradeClose(symbol, closeMetrics.entryPrice, closeMetrics.exitPrice, closeMetrics.shares, reason);
-                this.dbTradeClose(position?.dbTradeId, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct, reason).catch(() => {});
+                this.dbTradeClose(position?.dbTradeId, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct, reason).catch(e => console.warn('⚠️  DB operation failed:', e?.message || String(e)));
             } else {
                 console.warn(`⚠️ [Engine ${this.userId}] Skipping DB close write for ${symbol}: unresolved close metrics`);
             }
@@ -4073,7 +4109,35 @@ class UserTradingEngine {
                     mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * guardrails.lossSizeMultiplier;
                     console.log(`[Engine ${this.userId}][Guardrail] ${mover.symbol} size cut to ${mover.agentSizeMultiplier.toFixed(2)}x (${guardrails.consecutiveLosses} consecutive losses)`);
                 }
-                // TODO: Add full AI advisor call (queryAIAdvisor) matching global scanMomentumBreakouts
+                // [v5.0] HARD GATE: every trade MUST be approved by the agentic AI pipeline
+                const aiResult = await queryAIAdvisor(mover);
+
+                // Agent rejection = hard stop (no trade without AI approval)
+                if (!aiResult.approved) {
+                    console.log(`[Engine ${this.userId}][Agent] ${mover.symbol} REJECTED (conf: ${(aiResult.confidence || 0).toFixed(2)}, src: ${aiResult.source}) — ${aiResult.reason}`);
+                    if (aiResult.risk_flags?.length) console.log(`[Engine ${this.userId}][Agent]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
+                    if (aiResult.lessons_applied?.length) console.log(`[Engine ${this.userId}][Agent]   Lessons: ${aiResult.lessons_applied.slice(0, 2).join('; ')}`);
+                    if (aiResult.confidence > 0.8 || aiResult.source === 'kill_switch') {
+                        (this._telegram || telegramAlerts).sendAgentRejection('Stock Bot', mover.symbol, 'long', aiResult.reason, aiResult.confidence, aiResult.risk_flags).catch(() => {});
+                    }
+                    if (aiResult.source === 'kill_switch') {
+                        (this._telegram || telegramAlerts).sendKillSwitchAlert('Stock Bot', aiResult.reason).catch(() => {});
+                    }
+                    continue;
+                }
+
+                // Agent approved — log and store metadata
+                const srcTag = aiResult.source === 'cache' ? ' (cached)' : '';
+                const regime = aiResult.market_regime ? ` [${aiResult.market_regime}]` : '';
+                console.log(`[Engine ${this.userId}][Agent] ${mover.symbol} APPROVED${srcTag}${regime} (conf: ${(aiResult.confidence || 0).toFixed(2)}, size: ${(aiResult.position_size_multiplier || 1).toFixed(2)}x) — ${aiResult.reason}`);
+                (this._telegram || telegramAlerts).sendAgentApproval('Stock Bot', mover.symbol, 'long', aiResult.confidence || 0, aiResult.position_size_multiplier || 1, aiResult.market_regime).catch(() => {});
+                mover.agentApproved = true;
+                mover.agentConfidence = aiResult.confidence;
+                mover.agentReason = aiResult.reason;
+                if (aiResult.position_size_multiplier && aiResult.position_size_multiplier !== 1.0) {
+                    mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * aiResult.position_size_multiplier;
+                }
+
                 await this.executeTrade(mover, mover.strategy || 'momentum');
             }
         }
