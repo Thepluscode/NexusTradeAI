@@ -139,9 +139,12 @@ export default function AgentDecisionsCard({ assetClass, limit = 10 }: Props) {
                                 confidence: number; reason: string; source: string;
                                 risk_flags: string | string[]; direction: string;
                             }, idx: number) => {
-                                const flags = typeof d.risk_flags === 'string'
-                                    ? JSON.parse(d.risk_flags || '[]')
-                                    : d.risk_flags || [];
+                                let flags: string[] = [];
+                                if (typeof d.risk_flags === 'string') {
+                                    try { flags = JSON.parse(d.risk_flags || '[]'); } catch { flags = []; }
+                                } else {
+                                    flags = d.risk_flags || [];
+                                }
                                 return (
                                     <TableRow key={idx} hover sx={{ opacity: d.approved ? 1 : 0.7 }}>
                                         <TableCell sx={{ py: 0.5, whiteSpace: 'nowrap' }}>

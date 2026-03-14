@@ -33,6 +33,15 @@ export const SERVICE_URLS = {
   aiService:  import.meta.env.VITE_AI_SERVICE_URL  || 'https://nexus-strategy-bridge-production.up.railway.app',
 };
 
+// ── Safe localStorage helpers ────────────────────────────────────────────────
+function safeParseUser(): { id?: string; email?: string } {
+  try {
+    return JSON.parse(localStorage.getItem('nexus_user') || '{}');
+  } catch {
+    return {};
+  }
+}
+
 // ── Auth token helpers ────────────────────────────────────────────────────────
 function getAccessToken() { return localStorage.getItem('nexus_access_token'); }
 function getRefreshToken() { return localStorage.getItem('nexus_refresh_token'); }
@@ -698,7 +707,7 @@ class APIClient {
   async getAPIKeys(): Promise<{ keys: Record<string, unknown>[]; total: number }> {
     try {
       // Get current user ID from auth
-      const user = JSON.parse(localStorage.getItem('nexus_user') || '{}');
+      const user = safeParseUser();
       const userId = user.id || 1;
       const response = await this.aiService.get('/api/v1/keys', {
         params: { user_id: userId },
@@ -712,7 +721,7 @@ class APIClient {
   }
 
   async createAPIKey(name: string, tier: string): Promise<Record<string, unknown>> {
-    const user = JSON.parse(localStorage.getItem('nexus_user') || '{}');
+    const user = safeParseUser();
     const userId = user.id || 1;
     const response = await this.aiService.post('/api/v1/keys',
       { user_id: userId, name, tier },
@@ -722,7 +731,7 @@ class APIClient {
   }
 
   async revokeAPIKey(keyId: number): Promise<Record<string, unknown>> {
-    const user = JSON.parse(localStorage.getItem('nexus_user') || '{}');
+    const user = safeParseUser();
     const userId = user.id || 1;
     const response = await this.aiService.delete(`/api/v1/keys/${keyId}`, {
       params: { user_id: userId },
@@ -733,7 +742,7 @@ class APIClient {
 
   async getAPIUsage(): Promise<Record<string, unknown>> {
     try {
-      const user = JSON.parse(localStorage.getItem('nexus_user') || '{}');
+      const user = safeParseUser();
       const userId = user.id || 1;
       const response = await this.aiService.get('/api/v1/usage', {
         params: { user_id: userId },
@@ -749,7 +758,7 @@ class APIClient {
   // ── Stripe Billing ──────────────────────────────────────────────────
 
   async createCheckout(tier: 'pro' | 'enterprise'): Promise<{ checkout_url: string; session_id: string }> {
-    const user = JSON.parse(localStorage.getItem('nexus_user') || '{}');
+    const user = safeParseUser();
     const userId = user.id || 1;
     const response = await this.aiService.post('/api/v1/billing/checkout',
       { user_id: userId, tier, email: user.email },
@@ -759,7 +768,7 @@ class APIClient {
   }
 
   async createBillingPortal(): Promise<{ portal_url: string }> {
-    const user = JSON.parse(localStorage.getItem('nexus_user') || '{}');
+    const user = safeParseUser();
     const userId = user.id || 1;
     const response = await this.aiService.post('/api/v1/billing/portal',
       { user_id: userId },

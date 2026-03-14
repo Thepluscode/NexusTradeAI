@@ -342,6 +342,9 @@ app.post('/api/auth/register', authRateLimit, async (req, res) => {
             'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id, email, name, role',
             [email.toLowerCase().trim(), hash, name || null]
         );
+        if (!result.rows || result.rows.length === 0) {
+            return res.status(500).json({ success: false, error: 'Registration failed' });
+        }
         const user = result.rows[0];
         const tokens = signTokens(user.id, user.email);
         await dbPool.query('UPDATE users SET refresh_token=$1, last_login=NOW() WHERE id=$2', [tokens.refreshToken, user.id]);
@@ -359,6 +362,9 @@ app.post('/api/auth/login', authRateLimit, async (req, res) => {
     if (!email || !password) return res.status(400).json({ success: false, error: 'Email and password required' });
     try {
         const result = await dbPool.query('SELECT * FROM users WHERE email=$1', [email.toLowerCase().trim()]);
+        if (!result.rows || result.rows.length === 0) {
+            return res.status(401).json({ success: false, error: 'Invalid email or password' });
+        }
         const user = result.rows[0];
         if (!user || !(await bcrypt.compare(password, user.password_hash))) {
             return res.status(401).json({ success: false, error: 'Invalid email or password' });
@@ -1453,6 +1459,8 @@ function calculateADX(bars, period = 14) {
         smoothPlusDM = smoothPlusDM - smoothPlusDM / period + plusDM[i];
         smoothMinusDM = smoothMinusDM - smoothMinusDM / period + minusDM[i];
 
+        if (smoothTR === 0) return null; // Guard against division by zero
+
         const plusDI = (smoothPlusDM / smoothTR) * 100;
         const minusDI = (smoothMinusDM / smoothTR) * 100;
         const diSum = plusDI + minusDI;
@@ -2433,16 +2441,18 @@ async function executeTrade(signal, strategy) {
             kellyMultiplier = Math.max(0.5, Math.min(2.0, safeMultiplier));
         }
 
+        // Validate price BEFORE any arithmetic that depends on it
+        if (!signal.price || signal.price <= 0) {
+            console.log(`⚠️  [SKIP] ${signal.symbol}: invalid price ${signal.price}`);
+            return null;
+        }
+
         // [v3.5] Slippage model — market orders typically fill ~0.05% above ask for stocks
         // Adjusts effective entry price so stop/target calculations are realistic
         const STOCK_SLIPPAGE = 0.0005; // 0.05% — conservative estimate for liquid stocks
         const effectiveEntry = signal.price * (1 + STOCK_SLIPPAGE);
 
         const positionSize = equity * config.positionSize * kellyMultiplier;
-        if (!signal.price || signal.price <= 0) {
-            console.log(`⚠️  [SKIP] ${signal.symbol}: invalid price ${signal.price}`);
-            return null;
-        }
         let shares = Math.floor(positionSize / effectiveEntry);
 
         // [v4.7] Cap shares by RISK_PER_TRADE — max dollar risk per trade = equity * RISK_PER_TRADE
@@ -2465,19 +2475,46 @@ async function executeTrade(signal, strategy) {
         if (signal.atrStop) console.log(`   [ATR Stops] Using volatility-adapted: Stop $${stopPrice}, Target $${targetPrice}`);
         if (kellyMultiplier !== 1.0) console.log(`   [Kelly] Size multiplier: ${kellyMultiplier.toFixed(2)}x (winRate:${perfData.winRate.toFixed(1)}% pf:${perfData.profitFactor.toFixed(2)})`);
 
-        const orderUrl = `${alpacaConfig.baseURL}/v2/orders`;
-        const orderResponse = await axios.post(orderUrl, {
-            symbol: signal.symbol,
-            qty: shares,
+        // [v7.0] Update anti-churning state BEFORE API call to prevent race-condition duplicates.
+        // If the order succeeds but the response fails (network timeout, etc.), we already
+        // consumed the trade slot. On API failure we roll back below.
+        totalTradesToday++;
+        tradesPerSymbol.set(signal.symbol, (tradesPerSymbol.get(signal.symbol) || 0) + 1);
+        const tradeRecord = {
+            time: Date.now(),
             side: 'buy',
-            type: 'market',
-            time_in_force: 'day'
-        }, {
-            headers: {
-                'APCA-API-KEY-ID': alpacaConfig.apiKey,
-                'APCA-API-SECRET-KEY': alpacaConfig.secretKey
-            }
-        });
+            price: signal.price,
+            shares,
+            tier
+        };
+        const recent = recentTrades.get(signal.symbol) || [];
+        recent.push(tradeRecord);
+        if (recent.length > 10) recent.shift();
+        recentTrades.set(signal.symbol, recent);
+
+        let orderResponse;
+        const orderUrl = `${alpacaConfig.baseURL}/v2/orders`;
+        try {
+            orderResponse = await axios.post(orderUrl, {
+                symbol: signal.symbol,
+                qty: shares,
+                side: 'buy',
+                type: 'market',
+                time_in_force: 'day'
+            }, {
+                headers: {
+                    'APCA-API-KEY-ID': alpacaConfig.apiKey,
+                    'APCA-API-SECRET-KEY': alpacaConfig.secretKey
+                }
+            });
+        } catch (orderError) {
+            // Rollback anti-churning state on API failure
+            totalTradesToday = Math.max(0, totalTradesToday - 1);
+            tradesPerSymbol.set(signal.symbol, Math.max(0, (tradesPerSymbol.get(signal.symbol) || 1) - 1));
+            recent.pop();
+            console.error(`❌ Order API failed for ${signal.symbol} (anti-churning rolled back):`, orderError.message);
+            return null;
+        }
 
         const entryTime = new Date();
         positions.set(signal.symbol, {
@@ -2509,22 +2546,7 @@ async function executeTrade(signal, strategy) {
         // Persist trade opening to DB (fire-and-forget)
         dbTradeOpen(signal.symbol, signal.price, shares, config, signal, tier, strategy)
             .then(id => { const p = positions.get(signal.symbol); if (p) p.dbTradeId = id; })
-            .catch(() => {});
-
-        const tradeRecord = {
-            time: Date.now(),
-            side: 'buy',
-            price: signal.price,
-            shares,
-            tier
-        };
-        const recent = recentTrades.get(signal.symbol) || [];
-        recent.push(tradeRecord);
-        if (recent.length > 10) recent.shift();
-        recentTrades.set(signal.symbol, recent);
-
-        tradesPerSymbol.set(signal.symbol, (tradesPerSymbol.get(signal.symbol) || 0) + 1);
-        totalTradesToday++;
+            .catch(e => console.warn('⚠️  DB operation failed:', e?.message || String(e)));
 
         console.log(`\n✅ TRADE ENTRY: ${signal.symbol} [${tier.toUpperCase()}]`);
         console.log(`   Price: $${signal.price} | Shares: ${shares} | Size: $${(shares * signal.price).toFixed(0)}`);
@@ -2585,9 +2607,9 @@ async function closePosition(symbol, qty, reason = 'Manual') {
             const closeMetrics = resolveClosedTradeMetrics(position, qty, adjustedExitPrice);
             if (closeMetrics) {
                 recordTradeClose(symbol, closeMetrics.entryPrice, closeMetrics.exitPrice, closeMetrics.shares, reason);
-                dbTradeClose(position?.dbTradeId, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct, reason).catch(() => {});
+                dbTradeClose(position?.dbTradeId, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct, reason).catch(e => console.warn('⚠️  DB operation failed:', e?.message || String(e)));
                 // [v4.1] Report to Agentic AI learning loop — Scan AI pattern tracking
-                reportTradeOutcome(position, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct / 100, reason).catch(() => {});
+                reportTradeOutcome(position, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct / 100, reason).catch(e => console.warn('⚠️  DB operation failed:', e?.message || String(e)));
                     // [v4.6] Feed outcome into adaptive guardrails
                     guardrails.recordOutcome(closeMetrics.pnlUsd > 0);
             } else {
@@ -3921,7 +3943,7 @@ class UserTradingEngine {
             const closeMetrics = resolveClosedTradeMetrics(position, qty, adjustedExitPrice);
             if (closeMetrics) {
                 this.recordTradeClose(symbol, closeMetrics.entryPrice, closeMetrics.exitPrice, closeMetrics.shares, reason);
-                this.dbTradeClose(position?.dbTradeId, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct, reason).catch(() => {});
+                this.dbTradeClose(position?.dbTradeId, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct, reason).catch(e => console.warn('⚠️  DB operation failed:', e?.message || String(e)));
             } else {
                 console.warn(`⚠️ [Engine ${this.userId}] Skipping DB close write for ${symbol}: unresolved close metrics`);
             }
