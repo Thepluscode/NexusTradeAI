@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react-oxc';
+import react from '@vitejs/plugin-react';
 import path from 'path';
 
 export default defineConfig({
@@ -31,7 +31,7 @@ export default defineConfig({
           if (id.includes('node_modules/@mui')) {
             return 'vendor-mui-core';
           }
-          if (id.includes('node_modules/react-query') || id.includes('node_modules/axios')) {
+          if (id.includes('node_modules/@tanstack/react-query') || id.includes('node_modules/react-query') || id.includes('node_modules/axios')) {
             return 'vendor-query';
           }
         },
