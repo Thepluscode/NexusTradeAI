@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
+import react from '@vitejs/plugin-react-oxc';
 import path from 'path';
 
 export default defineConfig({
@@ -10,7 +10,7 @@ export default defineConfig({
     },
   },
   build: {
-    rollupOptions: {
+    rolldownOptions: {
       output: {
         entryFileNames: 'assets/index.js',
         chunkFileNames: 'assets/[name]-[hash].js',
@@ -19,8 +19,17 @@ export default defineConfig({
           if (id.includes('node_modules/react-dom') || id.includes('node_modules/react/') || id.includes('node_modules/react-router')) {
             return 'vendor-react';
           }
+          if (id.includes('node_modules/@mui/icons-material')) {
+            return 'vendor-mui-icons';
+          }
+          if (id.includes('node_modules/@mui/system') || id.includes('node_modules/@mui/styled-engine')) {
+            return 'vendor-mui-system';
+          }
+          if (id.includes('node_modules/@mui/lab')) {
+            return 'vendor-mui-lab';
+          }
           if (id.includes('node_modules/@mui')) {
-            return 'vendor-mui';
+            return 'vendor-mui-core';
           }
           if (id.includes('node_modules/react-query') || id.includes('node_modules/axios')) {
             return 'vendor-query';
