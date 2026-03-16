@@ -1507,6 +1507,47 @@ function calculateMACD(bars, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9)
     };
 }
 
+// [Phase 1] Order Flow Imbalance — approximates buy/sell pressure from OHLCV bars
+// Returns -1 to +1: positive = buy pressure dominant, negative = sell pressure dominant
+function calculateOrderFlowImbalance(bars, lookback = 20) {
+    const recent = bars.slice(-lookback);
+    let buyVolume = 0, sellVolume = 0;
+    for (const bar of recent) {
+        const close = parseFloat(bar.c);
+        const open = parseFloat(bar.o);
+        const volume = parseFloat(bar.v) || 0;
+        if (close >= open) {
+            buyVolume += volume;
+        } else {
+            sellVolume += volume;
+        }
+    }
+    const total = buyVolume + sellVolume;
+    if (total === 0) return 0;
+    return (buyVolume - sellVolume) / total; // -1 to +1
+}
+
+// [Phase 1] Displacement Candle Detection — checks if recent bars show strong directional conviction
+// Large body (>70% of range) with range exceeding 1.5x ATR signals institutional commitment
+function isDisplacementCandle(bars, atr, lookback = 3) {
+    if (!bars || bars.length < lookback || !atr || atr <= 0) return false;
+    const recent = bars.slice(-lookback);
+    for (const bar of recent) {
+        const open = parseFloat(bar.o);
+        const high = parseFloat(bar.h);
+        const low = parseFloat(bar.l);
+        const close = parseFloat(bar.c);
+        const body = Math.abs(close - open);
+        const range = high - low;
+        if (range <= 0) continue;
+        // Body must be >70% of range (small wicks) and range must exceed 1.5x ATR
+        if (body / range > 0.7 && range > 1.5 * atr) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // [v3.4] Bullish RSI divergence — price makes a lower low but RSI makes a higher low
 // Signals exhaustion of selling pressure and probable reversal — strong entry confirmation
 function detectRSIBullishDivergence(bars, lookback = 20) {
@@ -2083,6 +2124,11 @@ async function scanMomentumBreakouts() {
                         console.log(`[Guardrail] ${mover.symbol} BLOCKED — R:R ${rewardRisk.toFixed(2)} < ${MIN_REWARD_RISK}`);
                         continue;
                     }
+                    // [Phase 1] Order flow confirmation — skip if flow opposes trade direction
+                    if (mover.orderFlowImbalance !== undefined && mover.orderFlowImbalance < 0.1) {
+                        console.log(`[FILTER] ${mover.symbol}: Order flow imbalance too weak (${mover.orderFlowImbalance.toFixed(2)}), skipping`);
+                        continue;
+                    }
                     // Apply loss-adjusted position sizing
                     if (guardrails.lossSizeMultiplier < 1.0) {
                         mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * guardrails.lossSizeMultiplier;
@@ -2281,6 +2327,10 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
             // If R:R too low, fall through to tier config defaults (atrStop stays null)
         }
 
+        // [Phase 1] Signal quality filters — order flow imbalance and displacement candle
+        const orderFlowImbalance = calculateOrderFlowImbalance(bars, 20);
+        const hasDisplacement = isDisplacementCandle(bars, atr, 3);
+
         if (momentumAllowed) {
             // Tier assignment with fallback: start at the highest qualifying tier,
             // fall back to lower tiers if secondary filters (volume ratio, RSI) fail.
@@ -2329,7 +2379,11 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                                 atrPct
                             });
                             if (regimeProfile.tradable) {
-                                const score = tierMultiplier * parseFloat(percentChange) * parseFloat(volumeRatio.toFixed(2)) * rsiBonus * regimeProfile.quality;
+                                let score = tierMultiplier * parseFloat(percentChange) * parseFloat(volumeRatio.toFixed(2)) * rsiBonus * regimeProfile.quality;
+                                // Displacement candle bonus
+                                if (hasDisplacement) {
+                                    score *= 1.15; // 15% score bonus for displacement confirmation
+                                }
 
                                 candidates.push({
                                     symbol,
@@ -2348,7 +2402,9 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                                     entryVolume: volumeToday,
                                     atrStop,    // [v3.2] ATR-based stop price (null if not applicable)
                                     atrTarget,  // [v3.2] ATR-based target price (null if not applicable)
-                                    atrPct
+                                    atrPct,
+                                    orderFlowImbalance,
+                                    hasDisplacement
                                 });
                             }
                         }
@@ -2365,7 +2421,11 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                             atrPct
                         });
                         if (regimeProfile.tradable) {
-                            const score = tierMultiplier * parseFloat(percentChange) * parseFloat(volumeRatio.toFixed(2)) * rsiBonus * regimeProfile.quality;
+                            let score = tierMultiplier * parseFloat(percentChange) * parseFloat(volumeRatio.toFixed(2)) * rsiBonus * regimeProfile.quality;
+                            // Displacement candle bonus
+                            if (hasDisplacement) {
+                                score *= 1.15; // 15% score bonus for displacement confirmation
+                            }
 
                             candidates.push({
                                 symbol,
@@ -2384,7 +2444,9 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                                 entryVolume: volumeToday,
                                 atrStop,
                                 atrTarget,
-                                atrPct
+                                atrPct,
+                                orderFlowImbalance,
+                                hasDisplacement
                             });
                         }
                     }
