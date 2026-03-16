@@ -599,6 +599,217 @@ const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const PERF_FILE = path.join(DATA_DIR, 'performance.json');
 const RISK_CONFIG_FILE = path.join(DATA_DIR, 'risk-config.json');
+
+// ── [Improvement 1] Evaluation Persistence ────────────────────────────────
+const EVAL_FILE = path.join(__dirname, 'data', 'stock-evaluations.json');
+
+function loadEvaluations() {
+    try {
+        if (fs.existsSync(EVAL_FILE)) {
+            const data = JSON.parse(fs.readFileSync(EVAL_FILE, 'utf8'));
+            console.log(`[Persistence] Loaded ${data.length} historical stock evaluations`);
+            return data;
+        }
+    } catch (e) {
+        console.error('[Persistence] Failed to load evaluations:', e.message);
+    }
+    return [];
+}
+
+function saveEvaluations(evals) {
+    try {
+        const dir = path.dirname(EVAL_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        // Keep last 500 evaluations
+        const trimmed = evals.slice(-500);
+        fs.writeFileSync(EVAL_FILE, JSON.stringify(trimmed, null, 2));
+    } catch (e) {
+        console.error('[Persistence] Failed to save evaluations:', e.message);
+    }
+}
+
+// Initialize from disk immediately
+globalThis._tradeEvaluations = loadEvaluations();
+
+// ── [Improvement 2] Weight Auto-Learning ─────────────────────────────────
+const WEIGHTS_FILE = path.join(__dirname, 'data', 'stock-weights.json');
+const DEFAULT_WEIGHTS = { momentum: 0.25, orderFlow: 0.20, displacement: 0.15, volumeProfile: 0.15, fvg: 0.10, volumeRatio: 0.15 };
+
+function loadWeights() {
+    try {
+        if (fs.existsSync(WEIGHTS_FILE)) {
+            const data = JSON.parse(fs.readFileSync(WEIGHTS_FILE, 'utf8'));
+            if (data.weights && typeof data.weights === 'object') {
+                console.log(`[AutoLearn] Loaded optimized weights:`, JSON.stringify(data.weights));
+                return data.weights;
+            }
+        }
+    } catch (e) {
+        console.error('[AutoLearn] Failed to load weights:', e.message);
+    }
+    return { ...DEFAULT_WEIGHTS };
+}
+
+function saveWeights(weights, meta) {
+    try {
+        const dir = path.dirname(WEIGHTS_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(WEIGHTS_FILE, JSON.stringify({ weights, ...meta, updatedAt: new Date().toISOString() }, null, 2));
+        console.log(`[AutoLearn] Saved optimized weights:`, JSON.stringify(weights));
+    } catch (e) {
+        console.error('[AutoLearn] Failed to save weights:', e.message);
+    }
+}
+
+function optimizeCommitteeWeights() {
+    const evals = globalThis._tradeEvaluations || [];
+    if (evals.length < 30) {
+        console.log(`[AutoLearn] Need ${30 - evals.length} more trades for weight optimization (have ${evals.length})`);
+        return null;
+    }
+
+    const signalKeys = ['momentum', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'volumeRatio'];
+    const edges = {};
+
+    for (const key of signalKeys) {
+        // Split trades into "signal present/strong" vs "signal absent/weak"
+        const withSignal = evals.filter(e => {
+            const comp = e.signals?.components || {};
+            if (key === 'displacement' || key === 'fvg') return (comp[key] || 0) >= 0.5;
+            return (comp[key] || 0) > 0.3;
+        });
+        const withoutSignal = evals.filter(e => {
+            const comp = e.signals?.components || {};
+            if (key === 'displacement' || key === 'fvg') return (comp[key] || 0) < 0.5;
+            return (comp[key] || 0) <= 0.3;
+        });
+
+        const avgWith = withSignal.length > 0 ? withSignal.reduce((s, e) => s + (e.pnlPct || 0), 0) / withSignal.length : 0;
+        const avgWithout = withoutSignal.length > 0 ? withoutSignal.reduce((s, e) => s + (e.pnlPct || 0), 0) / withoutSignal.length : 0;
+
+        // Edge = how much better trades are when this signal is strong
+        edges[key] = Math.max(0, avgWith - avgWithout);
+    }
+
+    // Normalize edges to weights (minimum 0.05, maximum 0.40)
+    const MIN_WEIGHT = 0.05;
+    const MAX_WEIGHT = 0.40;
+    const totalEdge = Object.values(edges).reduce((s, e) => s + e, 0);
+
+    if (totalEdge <= 0) {
+        console.log('[AutoLearn] No positive edges detected, keeping default weights');
+        return null;
+    }
+
+    const rawWeights = {};
+    for (const key of signalKeys) {
+        rawWeights[key] = Math.max(MIN_WEIGHT, Math.min(MAX_WEIGHT, edges[key] / totalEdge));
+    }
+
+    // Renormalize to sum to 1.0
+    const sum = Object.values(rawWeights).reduce((s, w) => s + w, 0);
+    const optimizedWeights = {};
+    for (const key of signalKeys) {
+        optimizedWeights[key] = parseFloat((rawWeights[key] / sum).toFixed(3));
+    }
+
+    // Ensure sum is exactly 1.0 (fix rounding)
+    const finalSum = Object.values(optimizedWeights).reduce((s, w) => s + w, 0);
+    if (Math.abs(finalSum - 1.0) > 0.001) {
+        optimizedWeights.momentum += parseFloat((1.0 - finalSum).toFixed(3));
+    }
+
+    console.log(`[AutoLearn] Optimized weights from ${evals.length} trades:`, JSON.stringify(optimizedWeights));
+    console.log(`[AutoLearn] Signal edges:`, JSON.stringify(edges));
+
+    saveWeights(optimizedWeights, { edges, tradeCount: evals.length, signalKeys });
+    return optimizedWeights;
+}
+
+let committeeWeights = loadWeights();
+
+// ── [Improvement 3] Transaction Cost Filter ───────────────────────────────
+const TRANSACTION_COSTS = {
+    spreadPct: 0.0005,    // 0.05% estimated spread (stocks)
+    slippagePct: 0.0003,  // 0.03% estimated slippage
+    commissionPct: 0.0000 // $0 commission (Alpaca)
+};
+const TOTAL_ROUND_TRIP_COST = 2 * (TRANSACTION_COSTS.spreadPct + TRANSACTION_COSTS.slippagePct + TRANSACTION_COSTS.commissionPct);
+
+function isPositiveEV(committeeConfidence) {
+    const evals = globalThis._tradeEvaluations || [];
+    if (evals.length < 10) return true; // Not enough data, allow trading
+
+    const recent = evals.slice(-50);
+    const wins = recent.filter(e => e.pnl > 0);
+    const losses = recent.filter(e => e.pnl <= 0);
+
+    const avgWinPct = wins.length > 0 ? wins.reduce((s, e) => s + Math.abs(e.pnlPct || 0), 0) / wins.length : 0.02;
+    const avgLossPct = losses.length > 0 ? losses.reduce((s, e) => s + Math.abs(e.pnlPct || 0), 0) / losses.length : 0.02;
+
+    // Expected value = (confidence × avgWin) - ((1 - confidence) × avgLoss) - roundTripCosts
+    const ev = (committeeConfidence * avgWinPct) - ((1 - committeeConfidence) * avgLossPct) - TOTAL_ROUND_TRIP_COST;
+
+    if (ev <= 0) {
+        console.log(`[CostFilter] REJECTED: EV=${(ev * 100).toFixed(3)}% (conf=${committeeConfidence.toFixed(3)}, avgWin=${(avgWinPct * 100).toFixed(2)}%, avgLoss=${(avgLossPct * 100).toFixed(2)}%, costs=${(TOTAL_ROUND_TRIP_COST * 100).toFixed(3)}%)`);
+        return false;
+    }
+    return true;
+}
+
+// ── [Improvement 4] Signal Decay Detection ───────────────────────────────
+function detectSignalDecay() {
+    const evals = globalThis._tradeEvaluations || [];
+    if (evals.length < 20) return null;
+
+    const recent = evals.slice(-20);
+    const signalKeys = ['momentum', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'volumeRatio'];
+    const decayWarnings = [];
+
+    for (const key of signalKeys) {
+        const withSignal = recent.filter(e => {
+            const comp = e.signals?.components || {};
+            if (key === 'displacement' || key === 'fvg') return (comp[key] || 0) >= 0.5;
+            return (comp[key] || 0) > 0.3;
+        });
+
+        if (withSignal.length >= 5) {
+            const winRate = withSignal.filter(e => e.pnl > 0).length / withSignal.length;
+            if (winRate < 0.35) {
+                decayWarnings.push({ signal: key, winRate, trades: withSignal.length });
+                // Auto-reduce this signal's weight by 40%
+                if (committeeWeights[key]) {
+                    const reduced = committeeWeights[key] * 0.6;
+                    const minWeight = 0.03;
+                    committeeWeights[key] = Math.max(minWeight, reduced);
+                    console.log(`[DecayDetect] ⚠️ ${key} signal decaying (winRate=${(winRate * 100).toFixed(1)}% over ${withSignal.length} trades) — weight reduced to ${committeeWeights[key].toFixed(3)}`);
+                }
+            }
+        }
+    }
+
+    // Renormalize weights after decay adjustments
+    if (decayWarnings.length > 0) {
+        const sum = Object.values(committeeWeights).reduce((s, w) => s + w, 0);
+        for (const key of signalKeys) {
+            committeeWeights[key] = parseFloat((committeeWeights[key] / sum).toFixed(3));
+        }
+        // Fix rounding
+        const finalSum = Object.values(committeeWeights).reduce((s, w) => s + w, 0);
+        if (Math.abs(finalSum - 1.0) > 0.001) {
+            committeeWeights.momentum += parseFloat((1.0 - finalSum).toFixed(3));
+        }
+        saveWeights(committeeWeights, { decayWarnings, updatedAt: new Date().toISOString() });
+    }
+
+    // Global pause check: if overall win rate < 30% on last 20 trades
+    const overallWinRate = recent.filter(e => e.pnl > 0).length / recent.length;
+    if (overallWinRate < 0.30) {
+        console.log(`[DecayDetect] 🚨 CRITICAL: Overall win rate ${(overallWinRate * 100).toFixed(1)}% — consider pausing bot`);
+    }
+
+    return decayWarnings.length > 0 ? decayWarnings : null;
+}
 let perfData = {
     totalTrades: 0,
     winningTrades: 0,
@@ -1700,24 +1911,24 @@ function computeCommitteeScore(signal) {
     let confirmations = 0;
     let totalWeight = 0;
 
-    // 1. Momentum strength (weight: 0.25)
+    // 1. Momentum strength (weight: dynamic via committeeWeights)
     const momentumScore = Math.min(parseFloat(signal.percentChange || 0) / 10, 1.0);
-    confirmations += momentumScore * 0.25;
-    totalWeight += 0.25;
+    confirmations += momentumScore * committeeWeights.momentum;
+    totalWeight += committeeWeights.momentum;
 
-    // 2. Order flow confirmation (weight: 0.20)
+    // 2. Order flow confirmation (weight: dynamic via committeeWeights)
     const flowScore = signal.orderFlowImbalance !== undefined
         ? Math.max(0, signal.orderFlowImbalance) // 0 to 1 for longs
         : 0.5; // neutral if unavailable
-    confirmations += flowScore * 0.20;
-    totalWeight += 0.20;
+    confirmations += flowScore * committeeWeights.orderFlow;
+    totalWeight += committeeWeights.orderFlow;
 
-    // 3. Displacement candle (weight: 0.15)
+    // 3. Displacement candle (weight: dynamic via committeeWeights)
     const displacementScore = signal.hasDisplacement ? 1.0 : 0.0;
-    confirmations += displacementScore * 0.15;
-    totalWeight += 0.15;
+    confirmations += displacementScore * committeeWeights.displacement;
+    totalWeight += committeeWeights.displacement;
 
-    // 4. Volume Profile position (weight: 0.15)
+    // 4. Volume Profile position (weight: dynamic via committeeWeights)
     let vpScore = 0.5; // neutral default
     if (signal.volumeProfile) {
         const price = parseFloat(signal.price);
@@ -1729,18 +1940,18 @@ function computeCommitteeScore(signal) {
             vpScore = Math.max(0, 1.0 - positionInRange); // 1.0 at VAL, 0.0 at VAH
         }
     }
-    confirmations += vpScore * 0.15;
-    totalWeight += 0.15;
+    confirmations += vpScore * committeeWeights.volumeProfile;
+    totalWeight += committeeWeights.volumeProfile;
 
-    // 5. FVG confirmation (weight: 0.10)
+    // 5. FVG confirmation (weight: dynamic via committeeWeights)
     const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0.0;
-    confirmations += fvgScore * 0.10;
-    totalWeight += 0.10;
+    confirmations += fvgScore * committeeWeights.fvg;
+    totalWeight += committeeWeights.fvg;
 
-    // 6. Volume ratio (weight: 0.15)
+    // 6. Volume ratio (weight: dynamic via committeeWeights)
     const volRatioScore = Math.min(parseFloat(signal.volumeRatio || 1) / 3, 1.0);
-    confirmations += volRatioScore * 0.15;
-    totalWeight += 0.15;
+    confirmations += volRatioScore * committeeWeights.volumeRatio;
+    totalWeight += committeeWeights.volumeRatio;
 
     const confidence = totalWeight > 0 ? confirmations / totalWeight : 0;
 
@@ -2474,6 +2685,10 @@ async function scanMomentumBreakouts() {
                         console.log(`[Committee] ${mover.symbol}: Confidence ${committee.confidence} < 0.45 threshold — ${JSON.stringify(committee.components)}`);
                         continue;
                     }
+                    // [Improvement 3] Transaction cost filter — reject negative EV trades
+                    if (!isPositiveEV(committee.confidence)) {
+                        continue; // Skip this trade — negative expected value after costs
+                    }
                     console.log(`[Committee] ${mover.symbol}: APPROVED conf:${committee.confidence} — momentum:${committee.components.momentum} flow:${committee.components.orderFlow} displacement:${committee.components.displacement} VP:${committee.components.volumeProfile} FVG:${committee.components.fvg}`);
                     mover.committeeConfidence = committee.confidence;
                     mover.committeeComponents = committee.components;
@@ -3144,11 +3359,8 @@ async function closePosition(symbol, qty, reason = 'Manual') {
 
             if (!globalThis._tradeEvaluations) globalThis._tradeEvaluations = [];
             globalThis._tradeEvaluations.push(outcome);
-
-            // Keep last 200 evaluations in memory
-            if (globalThis._tradeEvaluations.length > 200) {
-                globalThis._tradeEvaluations = globalThis._tradeEvaluations.slice(-200);
-            }
+            // [Improvement 1] Persist to disk (saveEvaluations keeps last 500)
+            saveEvaluations(globalThis._tradeEvaluations);
 
             const winLoss = evalPnl > 0 ? 'WIN' : 'LOSS';
             console.log(`[Evaluation] ${outcome.symbol} ${winLoss} ${evalPnlPct > 0 ? '+' : ''}${(evalPnlPct * 100).toFixed(2)}% — committee:${snapshot.committeeConfidence} flow:${snapshot.orderFlowImbalance?.toFixed?.(2) || '?'} displacement:${snapshot.hasDisplacement} regime:${snapshot.marketRegime}`);
@@ -3209,6 +3421,19 @@ app.get('/api/trading/evaluations', (req, res) => {
             avgLoss: losses.length > 0 ? parseFloat((losses.reduce((s, e) => s + (e.pnlPct || 0), 0) / losses.length * 100).toFixed(3)) : 0,
             signalEffectiveness,
             recentTrades: evals.slice(-10)
+        }
+    });
+});
+
+// [Improvement 2] Committee weights endpoint
+app.get('/api/trading/weights', (req, res) => {
+    res.json({
+        success: true,
+        data: {
+            weights: committeeWeights,
+            defaults: DEFAULT_WEIGHTS,
+            tradeCount: (globalThis._tradeEvaluations || []).length,
+            lastOptimized: 'check weights file'
         }
     });
 });
@@ -5884,6 +6109,26 @@ app.listen(PORT, async () => {
             telegramAlerts.sendHeartbeatAlert('Stock Bot', silentMinutes).catch(() => {});
         }
     }, 30 * 60 * 1000);
+
+    // [Improvement 2] Run weight optimization every 4 hours
+    setInterval(() => {
+        const newWeights = optimizeCommitteeWeights();
+        if (newWeights) {
+            committeeWeights = newWeights;
+            console.log('[AutoLearn] Committee weights updated');
+        }
+    }, 4 * 60 * 60 * 1000);
+
+    // [Improvement 4] Run signal decay detection every 2 hours
+    setInterval(() => {
+        detectSignalDecay();
+    }, 2 * 60 * 60 * 1000);
+
+    // [Improvement 2] Initial optimization run after 10s (bot fully initialized)
+    setTimeout(() => {
+        const newWeights = optimizeCommitteeWeights();
+        if (newWeights) committeeWeights = newWeights;
+    }, 10000);
 });
 
 // ===== GRACEFUL SHUTDOWN =====

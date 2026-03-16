@@ -3,11 +3,235 @@ const cors = require('cors');
 const axios = require('axios');
 const crypto = require('crypto');
 const path = require('path');
+const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
 const { createUserCredentialStore } = require('./userCredentialStore');
 require('dotenv').config();
+
+// ============================================================================
+// [Improvement 1] EVALUATION PERSISTENCE
+// ============================================================================
+const EVAL_FILE = path.join(__dirname, 'data', 'crypto-evaluations.json');
+
+function loadCryptoEvaluations() {
+    try {
+        if (fs.existsSync(EVAL_FILE)) {
+            const data = JSON.parse(fs.readFileSync(EVAL_FILE, 'utf8'));
+            console.log(`[Persistence] Loaded ${data.length} historical crypto evaluations`);
+            return data;
+        }
+    } catch (e) {
+        console.error('[Persistence] Failed to load crypto evaluations:', e.message);
+    }
+    return [];
+}
+
+function saveCryptoEvaluations(evals) {
+    try {
+        const dir = path.dirname(EVAL_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        const trimmed = evals.slice(-500);
+        fs.writeFileSync(EVAL_FILE, JSON.stringify(trimmed, null, 2));
+    } catch (e) {
+        console.error('[Persistence] Failed to save crypto evaluations:', e.message);
+    }
+}
+
+// Initialize evaluations from disk so they survive restarts
+globalThis._cryptoTradeEvaluations = loadCryptoEvaluations();
+
+// ============================================================================
+// [Improvement 2] WEIGHT AUTO-LEARNING
+// ============================================================================
+const WEIGHTS_FILE = path.join(__dirname, 'data', 'crypto-weights.json');
+const DEFAULT_CRYPTO_WEIGHTS = { momentum: 0.25, orderFlow: 0.20, displacement: 0.15, volumeProfile: 0.15, fvg: 0.10, volumeRatio: 0.15 };
+
+function loadCryptoWeights() {
+    try {
+        if (fs.existsSync(WEIGHTS_FILE)) {
+            const data = JSON.parse(fs.readFileSync(WEIGHTS_FILE, 'utf8'));
+            if (data.weights && typeof data.weights === 'object') {
+                console.log(`[AutoLearn] Loaded optimized crypto weights:`, JSON.stringify(data.weights));
+                return data.weights;
+            }
+        }
+    } catch (e) {
+        console.error('[AutoLearn] Failed to load crypto weights:', e.message);
+    }
+    return { ...DEFAULT_CRYPTO_WEIGHTS };
+}
+
+function saveCryptoWeights(weights, meta) {
+    try {
+        const dir = path.dirname(WEIGHTS_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(WEIGHTS_FILE, JSON.stringify({ weights, ...meta, updatedAt: new Date().toISOString() }, null, 2));
+        console.log(`[AutoLearn] Saved optimized crypto weights:`, JSON.stringify(weights));
+    } catch (e) {
+        console.error('[AutoLearn] Failed to save crypto weights:', e.message);
+    }
+}
+
+function optimizeCryptoWeights() {
+    const evals = globalThis._cryptoTradeEvaluations || [];
+    if (evals.length < 30) {
+        console.log(`[AutoLearn] Need ${30 - evals.length} more crypto trades for weight optimization (have ${evals.length})`);
+        return null;
+    }
+
+    const signalKeys = ['momentum', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'volumeRatio'];
+    const edges = {};
+
+    for (const key of signalKeys) {
+        const withSignal = evals.filter(e => {
+            const comp = e.signals?.components || {};
+            if (key === 'displacement' || key === 'fvg') return (comp[key] || 0) >= 0.5;
+            return (comp[key] || 0) > 0.3;
+        });
+        const withoutSignal = evals.filter(e => {
+            const comp = e.signals?.components || {};
+            if (key === 'displacement' || key === 'fvg') return (comp[key] || 0) < 0.5;
+            return (comp[key] || 0) <= 0.3;
+        });
+
+        const avgWith = withSignal.length > 0 ? withSignal.reduce((s, e) => s + (e.pnlPct || 0), 0) / withSignal.length : 0;
+        const avgWithout = withoutSignal.length > 0 ? withoutSignal.reduce((s, e) => s + (e.pnlPct || 0), 0) / withoutSignal.length : 0;
+        edges[key] = Math.max(0, avgWith - avgWithout);
+    }
+
+    const MIN_WEIGHT = 0.05;
+    const MAX_WEIGHT = 0.40;
+    const totalEdge = Object.values(edges).reduce((s, e) => s + e, 0);
+
+    if (totalEdge <= 0) {
+        console.log('[AutoLearn] No positive edges for crypto, keeping default weights');
+        return null;
+    }
+
+    const rawWeights = {};
+    for (const key of signalKeys) {
+        rawWeights[key] = Math.max(MIN_WEIGHT, Math.min(MAX_WEIGHT, edges[key] / totalEdge));
+    }
+
+    const sum = Object.values(rawWeights).reduce((s, w) => s + w, 0);
+    const optimizedWeights = {};
+    for (const key of signalKeys) {
+        optimizedWeights[key] = parseFloat((rawWeights[key] / sum).toFixed(3));
+    }
+
+    const finalSum = Object.values(optimizedWeights).reduce((s, w) => s + w, 0);
+    if (Math.abs(finalSum - 1.0) > 0.001) {
+        optimizedWeights.momentum += parseFloat((1.0 - finalSum).toFixed(3));
+    }
+
+    console.log(`[AutoLearn] Optimized crypto weights from ${evals.length} trades:`, JSON.stringify(optimizedWeights));
+    saveCryptoWeights(optimizedWeights, { edges, tradeCount: evals.length });
+    return optimizedWeights;
+}
+
+// Live weights variable — updated by auto-learning
+let cryptoCommitteeWeights = loadCryptoWeights();
+
+// ============================================================================
+// [Improvement 3] TRANSACTION COST FILTER
+// ============================================================================
+const CRYPTO_COSTS = {
+    makerFeePct: 0.001,   // 0.10% maker fee (Kraken)
+    takerFeePct: 0.001,   // 0.10% taker fee
+    slippagePct: 0.0005   // 0.05% estimated slippage
+};
+const CRYPTO_ROUND_TRIP_COST = 2 * (CRYPTO_COSTS.takerFeePct + CRYPTO_COSTS.slippagePct);
+
+function isCryptoPositiveEV(committeeConfidence) {
+    const evals = globalThis._cryptoTradeEvaluations || [];
+    if (evals.length < 10) return true;
+
+    const recent = evals.slice(-50);
+    const wins = recent.filter(e => e.pnl > 0);
+    const losses = recent.filter(e => e.pnl <= 0);
+
+    const avgWinPct = wins.length > 0 ? wins.reduce((s, e) => s + Math.abs(e.pnlPct || 0), 0) / wins.length : 0.02;
+    const avgLossPct = losses.length > 0 ? losses.reduce((s, e) => s + Math.abs(e.pnlPct || 0), 0) / losses.length : 0.02;
+
+    const ev = (committeeConfidence * avgWinPct) - ((1 - committeeConfidence) * avgLossPct) - CRYPTO_ROUND_TRIP_COST;
+
+    if (ev <= 0) {
+        console.log(`[CostFilter] REJECTED: EV=${(ev * 100).toFixed(3)}% (conf=${committeeConfidence.toFixed(3)}, costs=${(CRYPTO_ROUND_TRIP_COST * 100).toFixed(2)}%)`);
+        return false;
+    }
+    return true;
+}
+
+// ============================================================================
+// [Improvement 4] SIGNAL DECAY DETECTION
+// ============================================================================
+function detectCryptoSignalDecay() {
+    const evals = globalThis._cryptoTradeEvaluations || [];
+    if (evals.length < 20) return null;
+
+    const recent = evals.slice(-20);
+    const signalKeys = ['momentum', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'volumeRatio'];
+    const decayWarnings = [];
+
+    for (const key of signalKeys) {
+        const withSignal = recent.filter(e => {
+            const comp = e.signals?.components || {};
+            if (key === 'displacement' || key === 'fvg') return (comp[key] || 0) >= 0.5;
+            return (comp[key] || 0) > 0.3;
+        });
+
+        if (withSignal.length >= 5) {
+            const winRate = withSignal.filter(e => e.pnl > 0).length / withSignal.length;
+            if (winRate < 0.35) {
+                decayWarnings.push({ signal: key, winRate, trades: withSignal.length });
+                if (cryptoCommitteeWeights[key]) {
+                    const reduced = cryptoCommitteeWeights[key] * 0.6;
+                    cryptoCommitteeWeights[key] = Math.max(0.03, reduced);
+                    console.log(`[DecayDetect] ⚠️ Crypto ${key} decaying (winRate=${(winRate * 100).toFixed(1)}%) — weight reduced to ${cryptoCommitteeWeights[key].toFixed(3)}`);
+                }
+            }
+        }
+    }
+
+    if (decayWarnings.length > 0) {
+        const sum = Object.values(cryptoCommitteeWeights).reduce((s, w) => s + w, 0);
+        for (const key of signalKeys) {
+            cryptoCommitteeWeights[key] = parseFloat((cryptoCommitteeWeights[key] / sum).toFixed(3));
+        }
+        const finalSum = Object.values(cryptoCommitteeWeights).reduce((s, w) => s + w, 0);
+        if (Math.abs(finalSum - 1.0) > 0.001) {
+            cryptoCommitteeWeights.momentum += parseFloat((1.0 - finalSum).toFixed(3));
+        }
+        saveCryptoWeights(cryptoCommitteeWeights, { decayWarnings, updatedAt: new Date().toISOString() });
+    }
+
+    const overallWinRate = recent.filter(e => e.pnl > 0).length / recent.length;
+    if (overallWinRate < 0.30) {
+        console.log(`[DecayDetect] 🚨 CRITICAL: Crypto overall win rate ${(overallWinRate * 100).toFixed(1)}% — consider pausing`);
+    }
+
+    return decayWarnings.length > 0 ? decayWarnings : null;
+}
+
+// Periodic weight optimization (every 4 hours)
+setInterval(() => {
+    const newWeights = optimizeCryptoWeights();
+    if (newWeights) {
+        cryptoCommitteeWeights = newWeights;
+        console.log('[AutoLearn] Crypto committee weights updated');
+    }
+}, 4 * 60 * 60 * 1000);
+
+// Initial optimization attempt after 10 seconds (in case data already exists)
+setTimeout(() => {
+    const newWeights = optimizeCryptoWeights();
+    if (newWeights) cryptoCommitteeWeights = newWeights;
+}, 10000);
+
+// Periodic decay detection (every 2 hours)
+setInterval(() => { detectCryptoSignalDecay(); }, 2 * 60 * 60 * 1000);
 
 // [Phase 3.5] Cross-bot portfolio risk URLs (for co-located or Railway deployment)
 const STOCK_BOT_URL = process.env.STOCK_BOT_URL || 'http://localhost:3002';
@@ -587,24 +811,24 @@ function computeCryptoCommitteeScore(signal) {
     let confirmations = 0;
     let totalWeight = 0;
 
-    // 1. Momentum strength (weight: 0.25)
+    // 1. Momentum strength (weight: cryptoCommitteeWeights.momentum)
     const momentumScore = Math.min(Math.abs(parseFloat(signal.momentum || 0)) / 5, 1.0);
-    confirmations += momentumScore * 0.25;
-    totalWeight += 0.25;
+    confirmations += momentumScore * cryptoCommitteeWeights.momentum;
+    totalWeight += cryptoCommitteeWeights.momentum;
 
-    // 2. Order flow confirmation (weight: 0.20)
+    // 2. Order flow confirmation (weight: cryptoCommitteeWeights.orderFlow)
     const flowScore = signal.orderFlowImbalance !== undefined
         ? Math.max(0, signal.orderFlowImbalance) // 0 to 1 for longs
         : 0.5; // neutral if unavailable
-    confirmations += flowScore * 0.20;
-    totalWeight += 0.20;
+    confirmations += flowScore * cryptoCommitteeWeights.orderFlow;
+    totalWeight += cryptoCommitteeWeights.orderFlow;
 
-    // 3. Displacement candle (weight: 0.15)
+    // 3. Displacement candle (weight: cryptoCommitteeWeights.displacement)
     const displacementScore = signal.hasDisplacement ? 1.0 : 0.0;
-    confirmations += displacementScore * 0.15;
-    totalWeight += 0.15;
+    confirmations += displacementScore * cryptoCommitteeWeights.displacement;
+    totalWeight += cryptoCommitteeWeights.displacement;
 
-    // 4. Volume Profile position (weight: 0.15)
+    // 4. Volume Profile position (weight: cryptoCommitteeWeights.volumeProfile)
     let vpScore = 0.5; // neutral default
     if (signal.volumeProfileData) {
         const price = parseFloat(signal.price);
@@ -616,18 +840,18 @@ function computeCryptoCommitteeScore(signal) {
             vpScore = Math.max(0, 1.0 - positionInRange); // 1.0 at VAL, 0.0 at VAH
         }
     }
-    confirmations += vpScore * 0.15;
-    totalWeight += 0.15;
+    confirmations += vpScore * cryptoCommitteeWeights.volumeProfile;
+    totalWeight += cryptoCommitteeWeights.volumeProfile;
 
-    // 5. FVG confirmation (weight: 0.10)
+    // 5. FVG confirmation (weight: cryptoCommitteeWeights.fvg)
     const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0.0;
-    confirmations += fvgScore * 0.10;
-    totalWeight += 0.10;
+    confirmations += fvgScore * cryptoCommitteeWeights.fvg;
+    totalWeight += cryptoCommitteeWeights.fvg;
 
-    // 6. Volume ratio (weight: 0.15)
+    // 6. Volume ratio (weight: cryptoCommitteeWeights.volumeRatio)
     const volRatioScore = Math.min(parseFloat(signal.volumeRatio || 1) / 3, 1.0);
-    confirmations += volRatioScore * 0.15;
-    totalWeight += 0.15;
+    confirmations += volRatioScore * cryptoCommitteeWeights.volumeRatio;
+    totalWeight += cryptoCommitteeWeights.volumeRatio;
 
     const confidence = totalWeight > 0 ? confirmations / totalWeight : 0;
 
@@ -2037,9 +2261,7 @@ class CryptoTradingEngine {
 
                 if (!globalThis._cryptoTradeEvaluations) globalThis._cryptoTradeEvaluations = [];
                 globalThis._cryptoTradeEvaluations.push(outcome);
-                if (globalThis._cryptoTradeEvaluations.length > 200) {
-                    globalThis._cryptoTradeEvaluations = globalThis._cryptoTradeEvaluations.slice(-200);
-                }
+                saveCryptoEvaluations(globalThis._cryptoTradeEvaluations);
 
                 const winLoss = pnlUSD > 0 ? 'WIN' : 'LOSS';
                 console.log(`[Evaluation] ${outcome.symbol} ${winLoss} ${(outcome.pnlPct * 100).toFixed(2)}% — committee:${snapshot.committeeConfidence} flow:${snapshot.orderFlowImbalance?.toFixed?.(2) || '?'} regime:${snapshot.marketRegime}`);
@@ -2215,6 +2437,10 @@ class CryptoTradingEngine {
                             continue;
                         }
                         console.log(`[Committee] ${signal.symbol}: APPROVED conf:${committee.confidence} — momentum:${committee.components.momentum} flow:${committee.components.orderFlow} displacement:${committee.components.displacement} VP:${committee.components.volumeProfile} FVG:${committee.components.fvg}`);
+                        // [Improvement 3] Transaction cost filter — reject if EV is negative after fees/slippage
+                        if (!isCryptoPositiveEV(committee.confidence)) {
+                            continue;
+                        }
                         signal.committeeConfidence = committee.confidence;
                         signal.committeeComponents = committee.components;
                         if (this.getLossSizeMultiplier() < 1.0) {
@@ -3511,6 +3737,19 @@ app.get('/api/crypto/alpha-signal', (req, res) => {
             activePositions: engine.positions.size,
             sampleSize: recent.length,
             recommendation: edge > 0.6 ? 'increase_allocation' : edge < 0.4 ? 'decrease_allocation' : 'maintain'
+        }
+    });
+});
+
+// [Improvement 2] Current committee weights endpoint
+app.get('/api/crypto/weights', (req, res) => {
+    res.json({
+        success: true,
+        data: {
+            weights: cryptoCommitteeWeights,
+            defaults: DEFAULT_CRYPTO_WEIGHTS,
+            tradeCount: (globalThis._cryptoTradeEvaluations || []).length,
+            lastOptimized: 'check weights file'
         }
     });
 });
