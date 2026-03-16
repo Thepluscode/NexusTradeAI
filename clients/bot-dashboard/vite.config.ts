@@ -19,17 +19,8 @@ export default defineConfig({
           if (id.includes('node_modules/react-dom') || id.includes('node_modules/react/') || id.includes('node_modules/react-router')) {
             return 'vendor-react';
           }
-          if (id.includes('node_modules/@mui/icons-material')) {
-            return 'vendor-mui-icons';
-          }
-          if (id.includes('node_modules/@mui/system') || id.includes('node_modules/@mui/styled-engine')) {
-            return 'vendor-mui-system';
-          }
-          if (id.includes('node_modules/@mui/lab')) {
-            return 'vendor-mui-lab';
-          }
           if (id.includes('node_modules/@mui')) {
-            return 'vendor-mui-core';
+            return 'vendor-mui';
           }
           if (id.includes('node_modules/@tanstack/react-query') || id.includes('node_modules/react-query') || id.includes('node_modules/axios')) {
             return 'vendor-query';
