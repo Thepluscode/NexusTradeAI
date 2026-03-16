@@ -1182,6 +1182,51 @@ function calculateBollingerBands(candles, period = 20, numStdDev = 2) {
     return { upper: sma + numStdDev * std, middle: sma, lower: sma - numStdDev * std };
 }
 
+// [Phase 1] Order Flow Imbalance — approximates buy/sell pressure from OHLCV candles
+// Uses candle body/range ratio as conviction proxy (volume unavailable in forex)
+function calculateOrderFlowImbalance(candles, lookback = 20) {
+    const recent = candles.slice(-lookback);
+    let buyPressure = 0, sellPressure = 0;
+    for (const candle of recent) {
+        const open = parseFloat(candle.mid.o);
+        const high = parseFloat(candle.mid.h);
+        const low = parseFloat(candle.mid.l);
+        const close = parseFloat(candle.mid.c);
+        const body = Math.abs(close - open);
+        const range = high - low;
+        if (range <= 0) continue;
+        // Weight by body/range ratio (conviction strength)
+        const conviction = body / range;
+        if (close >= open) {
+            buyPressure += conviction;
+        } else {
+            sellPressure += conviction;
+        }
+    }
+    const total = buyPressure + sellPressure;
+    if (total === 0) return 0;
+    return (buyPressure - sellPressure) / total; // -1 to +1
+}
+
+// [Phase 1] Displacement Candle Detection — large-body, high-range candles signal institutional intent
+function isDisplacementCandle(candles, atr, lookback = 3) {
+    if (!candles || candles.length < lookback || !atr || atr <= 0) return false;
+    const recent = candles.slice(-lookback);
+    for (const candle of recent) {
+        const open = parseFloat(candle.mid.o);
+        const high = parseFloat(candle.mid.h);
+        const low = parseFloat(candle.mid.l);
+        const close = parseFloat(candle.mid.c);
+        const body = Math.abs(close - open);
+        const range = high - low;
+        if (range <= 0) continue;
+        if (body / range > 0.7 && range > 1.5 * atr) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // [v3.2] H1 Trend Filter — only trade M15 signals that align with H1 direction
 async function getH1Trend(pair) {
     try {
@@ -1411,11 +1456,16 @@ async function analyzePair(pair) {
     // [v3.4] MACD(12,26,9) confirmation — momentum must be accelerating in signal direction
     const macd = calculateMACDForex(candles);
 
+    // [Phase 1] Order flow imbalance and displacement candle detection
+    const orderFlowImbalance = calculateOrderFlowImbalance(candles, 20);
+    const hasDisplacement = isDisplacementCandle(candles, atr, 3);
+
     return {
         pair, currentPrice, sma10, sma20, sma50, rsi, atr,
         atrPct, bb, macd, pullback,
         isUptrend, isDowntrend, trendStrength,
-        lastCandleBullish, lastCandleBearish
+        lastCandleBullish, lastCandleBearish,
+        orderFlowImbalance, hasDisplacement
     };
 }
 
@@ -1502,6 +1552,11 @@ async function scanForSignals(heldPositions = positions) {
                 if (bridgeLong !== null) {
                     console.log(`[Bridge] ${pair} LONG advisory: ${bridgeLong.direction} conf:${(bridgeLong.confidence || 0).toFixed(2)}`);
                 }
+                // [Phase 1] Order flow must confirm buying pressure for longs
+                if (analysis.orderFlowImbalance < 0.05) {
+                    console.log(`[Order Flow] ${pair} LONG skipped — imbalance ${analysis.orderFlowImbalance.toFixed(3)} < 0.05 (no buy pressure)`);
+                    continue;
+                }
                 const score = scoreForexSignal({
                     tier,
                     trendStrength,
@@ -1533,11 +1588,13 @@ async function scanForSignals(heldPositions = positions) {
                     stopLoss:   currentPrice * (1 - atrStop),
                     takeProfit: currentPrice * (1 + atrTarget),
                     rsi, trendStrength, atrPct, h1Trend, pullback,
-                    score: parseFloat((score * regimeProfile.quality).toFixed(3)),
+                    score: parseFloat((score * regimeProfile.quality * (analysis.hasDisplacement ? 1.15 : 1.0)).toFixed(3)),
                     strategy,
                     regime: regimeProfile.regime,
                     regimeQuality: regimeProfile.quality,
                     macdHistogram: macd ? macd.histogram : null,
+                    orderFlowImbalance: analysis.orderFlowImbalance,
+                    hasDisplacement: analysis.hasDisplacement,
                     session: session.name
                 });
             }
@@ -1553,6 +1610,11 @@ async function scanForSignals(heldPositions = positions) {
             } else {
                 if (bridgeShort !== null) {
                     console.log(`[Bridge] ${pair} SHORT advisory: ${bridgeShort.direction} conf:${(bridgeShort.confidence || 0).toFixed(2)}`);
+                }
+                // [Phase 1] Order flow must confirm selling pressure for shorts
+                if (analysis.orderFlowImbalance > -0.05) {
+                    console.log(`[Order Flow] ${pair} SHORT skipped — imbalance ${analysis.orderFlowImbalance.toFixed(3)} > -0.05 (no sell pressure)`);
+                    continue;
                 }
                 const score = scoreForexSignal({
                     tier,
@@ -1584,11 +1646,13 @@ async function scanForSignals(heldPositions = positions) {
                     stopLoss:   currentPrice * (1 + atrStop),
                     takeProfit: currentPrice * (1 - atrTarget),
                     rsi, trendStrength, atrPct, h1Trend, pullback,
-                    score: parseFloat((score * regimeProfile.quality).toFixed(3)),
+                    score: parseFloat((score * regimeProfile.quality * (analysis.hasDisplacement ? 1.15 : 1.0)).toFixed(3)),
                     strategy,
                     regime: regimeProfile.regime,
                     regimeQuality: regimeProfile.quality,
                     macdHistogram: macd ? macd.histogram : null,
+                    orderFlowImbalance: analysis.orderFlowImbalance,
+                    hasDisplacement: analysis.hasDisplacement,
                     session: session.name
                 });
             }
