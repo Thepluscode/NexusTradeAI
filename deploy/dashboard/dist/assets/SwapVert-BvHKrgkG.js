@@ -1,1 +1,0 @@
-import{Tt as e,d as t}from"./Box-BCns6wJi.js";var n=t((0,e().jsx)(`path`,{d:`M16 17.01V10h-2v7.01h-3L15 21l4-3.99zM9 3 5 6.99h3V14h2V6.99h3z`}),`SwapVert`);export{n as t};

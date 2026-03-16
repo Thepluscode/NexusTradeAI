@@ -1,1 +1,0 @@
-import{Tt as e,d as t}from"./Box-BCns6wJi.js";var n=t((0,e().jsx)(`path`,{d:`M6 6h12v12H6z`}),`Stop`);export{n as t};
