@@ -755,20 +755,21 @@ const EXIT_CONFIG = {
         5: 0.005   // Day 5+: 0.5%
     },
 
-    // Trailing stops (same as stock bot)
+    // [v7.2] Trailing stops — relaxed to let forex winners run
+    // Previous levels locked too early (+1.5%/40%), cutting winners before reaching 4% target
     trailingStopLevels: [
-        { gainThreshold: 0.015, lockPercent: 0.40 },  // [v7.1] +1.5%: lock 40% (was +1%/50%)
-        { gainThreshold: 0.025, lockPercent: 0.55 },   // +2.5%: lock 55%
-        { gainThreshold: 0.04, lockPercent: 0.70 },    // +4%: lock 70%
-        { gainThreshold: 0.06, lockPercent: 0.85 },    // +6%: lock 85%
-        { gainThreshold: 0.08, lockPercent: 0.92 }     // +8%: lock 92%
+        { gainThreshold: 0.02, lockPercent: 0.30 },   // +2.0%: lock 30% (was +1.5%/40%)
+        { gainThreshold: 0.03, lockPercent: 0.45 },    // +3.0%: lock 45% (was +2.5%/55%)
+        { gainThreshold: 0.04, lockPercent: 0.60 },    // +4.0%: lock 60% (was +4%/70%)
+        { gainThreshold: 0.06, lockPercent: 0.80 },    // +6.0%: lock 80%
+        { gainThreshold: 0.08, lockPercent: 0.90 }     // +8.0%: lock 90%
     ],
 
     // Momentum reversal
     momentumReversal: {
         rsiOverbought: 72,
         rsiOversold: 28,
-        atrMultipleExit: 2.5  // Exit if price moves 2.5x ATR against
+        atrMultipleExit: 5.0  // [v7.2] Widened from 2.5 — was triggering at 7-15 pips (normal M15 noise)
     }
 };
 
@@ -2066,10 +2067,11 @@ async function executeTrade(signal) {
     const sessionMultiplier = signal.session === 'London/NY Overlap' ? 1.15 : 1.0;
     const positionValue = balance * config.positionSize * sessionMultiplier;
 
-    // [v3.9] Calculate units — reduced multiplier from 10000→7000 (smaller lots = smaller losses)
+    // [v7.2] Calculate units — positionValue / entry gives notional base-currency units
+    // Previous 7000x multiplier produced millions of units, causing OANDA order rejections
     let units = signal.direction === 'long'
-        ? Math.floor(positionValue / effectiveEntry * 7000)
-        : -Math.floor(positionValue / effectiveEntry * 7000);
+        ? Math.floor(positionValue / effectiveEntry)
+        : -Math.floor(positionValue / effectiveEntry);
 
     // [v4.7] Cap units via RISK_PER_TRADE — never risk more than 0.35% of equity per trade
     const stopDistPct = Math.abs(signal.entry - signal.stopLoss) / signal.entry;
@@ -2173,7 +2175,12 @@ async function executeTrade(signal) {
         return true;
     }
 
-    console.log(`❌ ORDER FAILED: ${signal.pair}`);
+    console.log(`❌ ORDER FAILED: ${signal.pair} (units=${units})`);
+    // [v7.2] Track failed orders to prevent infinite retry loops on same pair
+    const failedTrades = recentTrades.get(signal.pair) || [];
+    failedTrades.push({ time: Date.now(), side: signal.direction, failed: true });
+    if (failedTrades.length > 10) failedTrades.shift();
+    recentTrades.set(signal.pair, failedTrades);
     return false;
 }
 
