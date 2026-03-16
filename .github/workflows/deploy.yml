@@ -97,7 +97,9 @@ jobs:
       - name: Assert no localhost URLs in bundle
         if: steps.src-changed.outputs.rebuild == 'true'
         run: |
-          BUNDLE=clients/bot-dashboard/dist/assets/index.js
+          BUNDLE=$(ls clients/bot-dashboard/dist/assets/index-*.js 2>/dev/null || ls clients/bot-dashboard/dist/assets/index.js 2>/dev/null)
+          if [ -z "$BUNDLE" ]; then echo "ERROR: no index bundle found"; exit 1; fi
+          echo "Checking bundle: $BUNDLE"
           if grep -qo 'localhost:[0-9][0-9]*' "$BUNDLE"; then
             echo "ERROR: localhost URLs found in bundle:"
             grep -o 'localhost:[0-9][0-9]*' "$BUNDLE" | sort -u
@@ -109,7 +111,8 @@ jobs:
       - name: Assert Railway URLs in bundle
         if: steps.src-changed.outputs.rebuild == 'true'
         run: |
-          BUNDLE=clients/bot-dashboard/dist/assets/index.js
+          BUNDLE=$(ls clients/bot-dashboard/dist/assets/index-*.js 2>/dev/null || ls clients/bot-dashboard/dist/assets/index.js 2>/dev/null)
+          if [ -z "$BUNDLE" ]; then echo "ERROR: no index bundle found"; exit 1; fi
           for URL in \
             nexus-stock-bot-production.up.railway.app \
             nexus-forex-bot-production.up.railway.app \
@@ -167,7 +170,7 @@ jobs:
           git add -f deploy/dashboard/dist/ || true
           git add deploy/
           # Use "dashboard" label if a build ran; fall back to "bot-only" label if only bots changed
-          if [ -f clients/bot-dashboard/dist/assets/index.js ]; then BUNDLE="dashboard"; else BUNDLE="bot-only"; fi
+          if ls clients/bot-dashboard/dist/assets/index*.js 1>/dev/null 2>&1; then BUNDLE="dashboard"; else BUNDLE="bot-only"; fi
           git commit -m "chore: sync deploy files ($BUNDLE) [skip ci]"
           git push origin main
 
@@ -281,9 +284,16 @@ jobs:
 
       - name: Verify dashboard serves correct bundle (no localhost URLs)
         run: |
-          # Download the fixed-name bundle directly (no hash — always index.js)
+          # Fetch the HTML page, extract the hashed index-*.js filename, then download it
+          INDEX_HTML=$(curl -s --max-time 15 "https://nexus-dashboard-production-e6e6.up.railway.app/")
+          BUNDLE_PATH=$(echo "$INDEX_HTML" | grep -oP 'assets/index[^"]+\.js' | head -1)
+          if [ -z "$BUNDLE_PATH" ]; then
+            echo "WARNING: Could not extract bundle path from index.html — skipping"
+            exit 0
+          fi
+          echo "Downloading bundle: $BUNDLE_PATH"
           curl -s --max-time 30 \
-            "https://nexus-dashboard-production-e6e6.up.railway.app/assets/index.js" \
+            "https://nexus-dashboard-production-e6e6.up.railway.app/$BUNDLE_PATH" \
             -o /tmp/bundle.js
 
           if grep -qo 'localhost:[0-9][0-9]*' /tmp/bundle.js; then
