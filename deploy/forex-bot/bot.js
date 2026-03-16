@@ -215,6 +215,10 @@ const { getTelegramAlertService } = require('./infrastructure/notifications/tele
 const app = express();
 const PORT = process.env.PORT || process.env.FOREX_PORT || 3005;
 
+// [Phase 3.5] Cross-bot portfolio risk URLs (for co-located or Railway deployment)
+const STOCK_BOT_URL = process.env.STOCK_BOT_URL || 'http://localhost:3002';
+const CRYPTO_BOT_URL = process.env.CRYPTO_BOT_URL || 'http://localhost:3006';
+
 app.use(cors());
 app.use(express.json());
 
@@ -1742,6 +1746,36 @@ async function analyzePair(pair) {
     };
 }
 
+// [Phase 3.5] Portfolio Risk Engine — cross-bot position correlation and exposure check
+// Queries other bots to prevent correlated exposure across the portfolio
+async function checkPortfolioRisk() {
+    const risks = { totalPositions: 0, warnings: [] };
+
+    // Count local positions
+    risks.totalPositions += positions.size;
+
+    // Query stock bot positions
+    try {
+        const stockRes = await axios.get(`${STOCK_BOT_URL}/api/trading/status`, { timeout: 2000 });
+        const stockPositions = stockRes.data?.data?.positions || stockRes.data?.positions || [];
+        risks.totalPositions += stockPositions.length;
+    } catch { /* stock bot offline — non-blocking */ }
+
+    // Query crypto bot positions
+    try {
+        const cryptoRes = await axios.get(`${CRYPTO_BOT_URL}/api/crypto/status`, { timeout: 2000 });
+        const cryptoPositions = cryptoRes.data?.data?.positions || cryptoRes.data?.positions || [];
+        risks.totalPositions += cryptoPositions.length;
+    } catch { /* crypto bot offline — non-blocking */ }
+
+    // Portfolio-wide limits
+    if (risks.totalPositions >= 12) {
+        risks.warnings.push(`Portfolio: ${risks.totalPositions} positions (limit: 12)`);
+    }
+
+    return risks;
+}
+
 async function scanForSignals(heldPositions = positions) {
     const signals = [];
     const session = getCurrentSession();
@@ -1774,6 +1808,16 @@ async function scanForSignals(heldPositions = positions) {
         .map(r => r.value.analysis);
     const forexRegime = detectForexRegime(validAnalyses);
     console.log(`[Regime] Forex: ${forexRegime.adjustments.label} (avg ATR: ${forexRegime.avgAtrPct || '?'}%) — size:×${forexRegime.adjustments.positionSizeMultiplier} maxPos:${forexRegime.adjustments.maxPositions}`);
+
+    // [Phase 3.5] Portfolio-level risk check (cross-bot)
+    const portfolioRisk = await checkPortfolioRisk();
+    if (portfolioRisk.totalPositions >= 12) {
+        console.log(`[Portfolio Risk] ${portfolioRisk.totalPositions} total positions — portfolio limit reached`);
+        return signals;
+    }
+    if (portfolioRisk.warnings.length > 0) {
+        console.log(`[Portfolio Risk] ${portfolioRisk.warnings.join('; ')}`);
+    }
 
     for (const result of pairResults) {
         if (result.status === 'rejected' || !result.value.analysis) continue;
@@ -2075,7 +2119,19 @@ async function executeTrade(signal) {
             agentApproved: signal.agentApproved || false,
             agentConfidence: signal.agentConfidence || 0,
             agentReason: signal.agentReason || '',
-            agentSizeMultiplier: signal.agentSizeMultiplier || 1.0
+            agentSizeMultiplier: signal.agentSizeMultiplier || 1.0,
+            // [Phase 4] Signal snapshot for trade evaluation loop
+            signalSnapshot: {
+                orderFlowImbalance: signal.orderFlowImbalance || 0,
+                hasDisplacement: signal.hasDisplacement || false,
+                volumeProfile: signal.volumeProfile || null,
+                fvgCount: signal.fvgCount || 0,
+                committeeConfidence: signal.committeeConfidence || 0,
+                committeeComponents: signal.committeeComponents || {},
+                marketRegime: signal.marketRegime || 'medium',
+                score: signal.score || 0,
+                timestamp: Date.now()
+            }
         });
 
         // Persist trade opening to DB (fire-and-forget)
@@ -2236,6 +2292,47 @@ async function closePositionWithReason(pair, reason) {
             reportForexTradeOutcome(pos, exitPrice, exitPnl, exitPct / 100, reason).catch(() => {});
             // [v4.6] Record outcome into adaptive guardrails
             guardrails.recordOutcome(exitPnl > 0);
+        }
+
+        // [Phase 4] Trade evaluation — log signal effectiveness for weight optimization
+        if (pos && pos.signalSnapshot) {
+            const snapshot = pos.signalSnapshot;
+            const evalExitPrice = pos.currentPrice || pos.entry || 0;
+            const evalPnl = pos.unrealizedPL ?? 0;
+            const evalEntry = pos.entry ?? 0;
+            const evalPnlPct = evalEntry > 0 ? evalPnl / (evalEntry * Math.abs(pos.units ?? 1)) : 0;
+            const outcome = {
+                symbol: pos.instrument || pair,
+                direction: pos.direction || 'long',
+                entryPrice: pos.entry,
+                exitPrice: evalExitPrice,
+                pnl: evalPnl,
+                pnlPct: evalPnlPct,
+                holdTimeMs: Date.now() - (snapshot.timestamp || pos.entryTime?.getTime?.() || Date.now()),
+                signals: {
+                    orderFlow: snapshot.orderFlowImbalance,
+                    displacement: snapshot.hasDisplacement,
+                    vpPosition: snapshot.volumeProfile,
+                    fvgCount: snapshot.fvgCount,
+                    committeeConfidence: snapshot.committeeConfidence,
+                    components: snapshot.committeeComponents,
+                    regime: snapshot.marketRegime,
+                    score: snapshot.score
+                },
+                exitReason: reason || 'unknown',
+                timestamp: Date.now()
+            };
+
+            if (!globalThis._forexTradeEvaluations) globalThis._forexTradeEvaluations = [];
+            globalThis._forexTradeEvaluations.push(outcome);
+
+            // Keep last 200 evaluations in memory
+            if (globalThis._forexTradeEvaluations.length > 200) {
+                globalThis._forexTradeEvaluations = globalThis._forexTradeEvaluations.slice(-200);
+            }
+
+            const winLoss = evalPnl > 0 ? 'WIN' : 'LOSS';
+            console.log(`[Evaluation] ${outcome.symbol} ${winLoss} ${evalPnlPct > 0 ? '+' : ''}${(evalPnlPct * 100).toFixed(2)}% — committee:${snapshot.committeeConfidence} flow:${snapshot.orderFlowImbalance?.toFixed?.(2) || '?'} displacement:${snapshot.hasDisplacement} regime:${snapshot.marketRegime}`);
         }
 
         positions.delete(pair);
@@ -2520,6 +2617,16 @@ function resetDailyCounters() {
 
 // ===== API ROUTES =====
 
+// [Phase 3.5] Portfolio-level risk status endpoint (cross-bot)
+app.get('/api/portfolio/risk', async (req, res) => {
+    try {
+        const risk = await checkPortfolioRisk();
+        res.json({ success: true, data: risk });
+    } catch (error) {
+        res.json({ success: true, data: { totalPositions: positions.size, warnings: ['Cross-bot check failed'] } });
+    }
+});
+
 app.get('/health', (req, res) => {
     const memoryReport = memoryManager.getReport();
     res.json({
@@ -2531,6 +2638,56 @@ app.get('/health', (req, res) => {
             usagePercent: (memoryReport.heap.used / memoryReport.heap.limit * 100).toFixed(1)
         },
         uptime: process.uptime()
+    });
+});
+
+// [Phase 4] Forex trade evaluation summary endpoint
+app.get('/api/forex/evaluations', (req, res) => {
+    const evals = globalThis._forexTradeEvaluations || [];
+    if (evals.length === 0) {
+        return res.json({ success: true, data: { totalTrades: 0, message: 'No evaluations yet' } });
+    }
+
+    const wins = evals.filter(e => e.pnl > 0);
+    const losses = evals.filter(e => e.pnl <= 0);
+
+    // Signal effectiveness: average P&L when signal was present vs absent
+    const signalEffectiveness = {};
+    const signals = ['orderFlow', 'displacement', 'fvgCount'];
+    for (const sig of signals) {
+        const withSignal = evals.filter(e => {
+            if (sig === 'orderFlow') return (e.signals.orderFlow || 0) > 0.1;
+            if (sig === 'displacement') return e.signals.displacement === true;
+            if (sig === 'fvgCount') return (e.signals.fvgCount || 0) > 0;
+            return false;
+        });
+        const withoutSignal = evals.filter(e => {
+            if (sig === 'orderFlow') return (e.signals.orderFlow || 0) <= 0.1;
+            if (sig === 'displacement') return e.signals.displacement !== true;
+            if (sig === 'fvgCount') return (e.signals.fvgCount || 0) === 0;
+            return false;
+        });
+
+        const avgPnlWith = withSignal.length > 0 ? withSignal.reduce((s, e) => s + (e.pnlPct || 0), 0) / withSignal.length : 0;
+        const avgPnlWithout = withoutSignal.length > 0 ? withoutSignal.reduce((s, e) => s + (e.pnlPct || 0), 0) / withoutSignal.length : 0;
+
+        signalEffectiveness[sig] = {
+            withSignal: { count: withSignal.length, avgPnlPct: parseFloat((avgPnlWith * 100).toFixed(3)) },
+            withoutSignal: { count: withoutSignal.length, avgPnlPct: parseFloat((avgPnlWithout * 100).toFixed(3)) },
+            edge: parseFloat(((avgPnlWith - avgPnlWithout) * 100).toFixed(3))
+        };
+    }
+
+    res.json({
+        success: true,
+        data: {
+            totalTrades: evals.length,
+            winRate: parseFloat((wins.length / evals.length * 100).toFixed(1)),
+            avgWin: wins.length > 0 ? parseFloat((wins.reduce((s, e) => s + (e.pnlPct || 0), 0) / wins.length * 100).toFixed(3)) : 0,
+            avgLoss: losses.length > 0 ? parseFloat((losses.reduce((s, e) => s + (e.pnlPct || 0), 0) / losses.length * 100).toFixed(3)) : 0,
+            signalEffectiveness,
+            recentTrades: evals.slice(-10)
+        }
     });
 });
 

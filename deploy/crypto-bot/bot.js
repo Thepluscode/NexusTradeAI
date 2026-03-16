@@ -9,6 +9,10 @@ const rateLimit = require('express-rate-limit');
 const { createUserCredentialStore } = require('./userCredentialStore');
 require('dotenv').config();
 
+// [Phase 3.5] Cross-bot portfolio risk URLs (for co-located or Railway deployment)
+const STOCK_BOT_URL = process.env.STOCK_BOT_URL || 'http://localhost:3002';
+const FOREX_BOT_URL = process.env.FOREX_BOT_URL || 'http://localhost:3005';
+
 // Telegram alerts
 const { getTelegramAlertService } = require('./infrastructure/notifications/telegram-alerts');
 const telegramAlerts = getTelegramAlertService();
@@ -381,6 +385,325 @@ function isRealTradingEnabled() {
 }
 
 // ============================================================================
+// [Phase 1] ORDER FLOW + DISPLACEMENT — institutional pressure detection
+// ============================================================================
+
+// [Phase 1] Order Flow Imbalance — approximates buy/sell pressure from OHLCV klines
+// Kline format: [time, open, high, low, close, volume] (Kraken-compatible arrays)
+// Returns -1 to +1: positive = buy pressure dominant, negative = sell pressure dominant
+function calculateOrderFlowImbalance(klines, lookback = 20) {
+    if (!klines || klines.length === 0) return 0;
+    const recent = klines.slice(-lookback);
+    let buyVolume = 0, sellVolume = 0;
+    for (const k of recent) {
+        const open = parseFloat(k[1]);
+        const close = parseFloat(k[4]);
+        const volume = parseFloat(k[5]) || 0;
+        if (close >= open) {
+            buyVolume += volume;
+        } else {
+            sellVolume += volume;
+        }
+    }
+    const total = buyVolume + sellVolume;
+    if (total === 0) return 0;
+    return (buyVolume - sellVolume) / total; // -1 to +1
+}
+
+// [Phase 1] Displacement Candle Detection — checks if recent klines show strong directional conviction
+// Large body (>70% of range) with range exceeding 1.5x ATR signals institutional commitment
+// Kline format: [time, open, high, low, close, volume]
+function isDisplacementCandle(klines, atr, lookback = 3) {
+    if (!klines || klines.length < lookback || !atr || atr <= 0) return false;
+    const recent = klines.slice(-lookback);
+    for (const k of recent) {
+        const open = parseFloat(k[1]);
+        const high = parseFloat(k[2]);
+        const low = parseFloat(k[3]);
+        const close = parseFloat(k[4]);
+        const body = Math.abs(close - open);
+        const range = high - low;
+        if (range <= 0) continue;
+        // Body must be >70% of range (small wicks) and range must exceed 1.5x ATR
+        if (body / range > 0.7 && range > 1.5 * atr) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// ============================================================================
+// [Phase 2] VOLUME PROFILE + FAIR VALUE GAP — market structure analysis
+// ============================================================================
+
+// [Phase 2] Volume Profile — calculates VAH, VAL, POC from OHLCV klines
+// VAH = Value Area High, VAL = Value Area Low, POC = Point of Control (highest volume price)
+// Value Area contains 70% of total volume, centered around POC
+// Kline format: [time, open, high, low, close, volume]
+function calculateVolumeProfile(klines, numBuckets = 50) {
+    if (!klines || klines.length < 20) return null;
+
+    // Find price range
+    let minPrice = Infinity, maxPrice = -Infinity;
+    for (const k of klines) {
+        const high = parseFloat(k[2]);
+        const low = parseFloat(k[3]);
+        if (low < minPrice) minPrice = low;
+        if (high > maxPrice) maxPrice = high;
+    }
+
+    const priceRange = maxPrice - minPrice;
+    if (priceRange <= 0) return null;
+    const bucketSize = priceRange / numBuckets;
+
+    // Build volume-at-price histogram
+    const volumeByBucket = new Array(numBuckets).fill(0);
+    let totalVolume = 0;
+
+    for (const k of klines) {
+        const high = parseFloat(k[2]);
+        const low = parseFloat(k[3]);
+        const volume = parseFloat(k[5]) || 0;
+
+        // Distribute volume across the bar's price range
+        const barLowBucket = Math.max(0, Math.floor((low - minPrice) / bucketSize));
+        const barHighBucket = Math.min(numBuckets - 1, Math.floor((high - minPrice) / bucketSize));
+        const bucketsInBar = barHighBucket - barLowBucket + 1;
+        const volumePerBucket = bucketsInBar > 0 ? volume / bucketsInBar : 0;
+
+        for (let i = barLowBucket; i <= barHighBucket; i++) {
+            volumeByBucket[i] += volumePerBucket;
+        }
+        totalVolume += volume;
+    }
+
+    if (totalVolume === 0) return null;
+
+    // Find POC (bucket with highest volume)
+    let pocBucket = 0;
+    for (let i = 1; i < numBuckets; i++) {
+        if (volumeByBucket[i] > volumeByBucket[pocBucket]) pocBucket = i;
+    }
+    const poc = minPrice + (pocBucket + 0.5) * bucketSize;
+
+    // Calculate Value Area (70% of volume centered on POC)
+    const targetVolume = totalVolume * 0.70;
+    let vaVolume = volumeByBucket[pocBucket];
+    let vaLowBucket = pocBucket;
+    let vaHighBucket = pocBucket;
+
+    while (vaVolume < targetVolume && (vaLowBucket > 0 || vaHighBucket < numBuckets - 1)) {
+        const belowVol = vaLowBucket > 0 ? volumeByBucket[vaLowBucket - 1] : 0;
+        const aboveVol = vaHighBucket < numBuckets - 1 ? volumeByBucket[vaHighBucket + 1] : 0;
+
+        if (belowVol >= aboveVol && vaLowBucket > 0) {
+            vaLowBucket--;
+            vaVolume += volumeByBucket[vaLowBucket];
+        } else if (vaHighBucket < numBuckets - 1) {
+            vaHighBucket++;
+            vaVolume += volumeByBucket[vaHighBucket];
+        } else if (vaLowBucket > 0) {
+            vaLowBucket--;
+            vaVolume += volumeByBucket[vaLowBucket];
+        } else {
+            break;
+        }
+    }
+
+    const vah = minPrice + (vaHighBucket + 1) * bucketSize;
+    const val = minPrice + vaLowBucket * bucketSize;
+
+    // Identify low-volume nodes (buckets with volume < 30% of POC volume)
+    const pocVolume = volumeByBucket[pocBucket];
+    const lowVolumeNodes = [];
+    for (let i = 0; i < numBuckets; i++) {
+        if (volumeByBucket[i] < pocVolume * 0.30) {
+            lowVolumeNodes.push({
+                priceLow: minPrice + i * bucketSize,
+                priceHigh: minPrice + (i + 1) * bucketSize,
+                priceMid: minPrice + (i + 0.5) * bucketSize,
+                volumeRatio: pocVolume > 0 ? volumeByBucket[i] / pocVolume : 0
+            });
+        }
+    }
+
+    return { vah, val, poc, lowVolumeNodes, bucketSize };
+}
+
+// [Phase 2] Fair Value Gap Detection — identifies price gaps left by fast-moving candles
+// Bullish FVG: gap between candle[i-1].high and candle[i+1].low (price moved up too fast)
+// Bearish FVG: gap between candle[i-1].low and candle[i+1].high (price moved down too fast)
+// Kline format: [time, open, high, low, close, volume]
+function detectFairValueGaps(klines, lookback = 20) {
+    if (!klines || klines.length < 3) return { bullish: [], bearish: [] };
+
+    const recent = klines.slice(-lookback);
+    const bullishGaps = [];
+    const bearishGaps = [];
+
+    for (let i = 1; i < recent.length - 1; i++) {
+        const prev = recent[i - 1];
+        const curr = recent[i];
+        const next = recent[i + 1];
+
+        const prevHigh = parseFloat(prev[2]);
+        const prevLow = parseFloat(prev[3]);
+        const nextHigh = parseFloat(next[2]);
+        const nextLow = parseFloat(next[3]);
+        const currClose = parseFloat(curr[4]);
+        const currOpen = parseFloat(curr[1]);
+
+        // Bullish FVG: gap between prev candle's high and next candle's low
+        if (nextLow > prevHigh && currClose > currOpen) {
+            bullishGaps.push({
+                gapLow: prevHigh,
+                gapHigh: nextLow,
+                gapMid: (prevHigh + nextLow) / 2,
+                gapSize: nextLow - prevHigh
+            });
+        }
+
+        // Bearish FVG: gap between prev candle's low and next candle's high
+        if (nextHigh < prevLow && currClose < currOpen) {
+            bearishGaps.push({
+                gapLow: nextHigh,
+                gapHigh: prevLow,
+                gapMid: (nextHigh + prevLow) / 2,
+                gapSize: prevLow - nextHigh
+            });
+        }
+    }
+
+    return { bullish: bullishGaps, bearish: bearishGaps };
+}
+
+// ============================================================================
+// [Phase 3] COMMITTEE AGGREGATOR + REGIME — unified confidence & market conditions
+// ============================================================================
+
+// [Phase 3] Committee Aggregator for Crypto — combines multiple signal confirmations
+// 6 weighted components; minimum threshold: 0.45 confidence required to trade
+function computeCryptoCommitteeScore(signal) {
+    let confirmations = 0;
+    let totalWeight = 0;
+
+    // 1. Momentum strength (weight: 0.25)
+    const momentumScore = Math.min(Math.abs(parseFloat(signal.momentum || 0)) / 5, 1.0);
+    confirmations += momentumScore * 0.25;
+    totalWeight += 0.25;
+
+    // 2. Order flow confirmation (weight: 0.20)
+    const flowScore = signal.orderFlowImbalance !== undefined
+        ? Math.max(0, signal.orderFlowImbalance) // 0 to 1 for longs
+        : 0.5; // neutral if unavailable
+    confirmations += flowScore * 0.20;
+    totalWeight += 0.20;
+
+    // 3. Displacement candle (weight: 0.15)
+    const displacementScore = signal.hasDisplacement ? 1.0 : 0.0;
+    confirmations += displacementScore * 0.15;
+    totalWeight += 0.15;
+
+    // 4. Volume Profile position (weight: 0.15)
+    let vpScore = 0.5; // neutral default
+    if (signal.volumeProfileData) {
+        const price = parseFloat(signal.price);
+        const { vah, val } = signal.volumeProfileData;
+        const range = vah - val;
+        if (range > 0) {
+            // Score higher when closer to VAL (buying at discount)
+            const positionInRange = (price - val) / range;
+            vpScore = Math.max(0, 1.0 - positionInRange); // 1.0 at VAL, 0.0 at VAH
+        }
+    }
+    confirmations += vpScore * 0.15;
+    totalWeight += 0.15;
+
+    // 5. FVG confirmation (weight: 0.10)
+    const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0.0;
+    confirmations += fvgScore * 0.10;
+    totalWeight += 0.10;
+
+    // 6. Volume ratio (weight: 0.15)
+    const volRatioScore = Math.min(parseFloat(signal.volumeRatio || 1) / 3, 1.0);
+    confirmations += volRatioScore * 0.15;
+    totalWeight += 0.15;
+
+    const confidence = totalWeight > 0 ? confirmations / totalWeight : 0;
+
+    return {
+        confidence: parseFloat(confidence.toFixed(3)),
+        components: {
+            momentum: parseFloat(momentumScore.toFixed(3)),
+            orderFlow: parseFloat(flowScore.toFixed(3)),
+            displacement: displacementScore,
+            volumeProfile: parseFloat(vpScore.toFixed(3)),
+            fvg: fvgScore,
+            volumeRatio: parseFloat(volRatioScore.toFixed(3))
+        }
+    };
+}
+
+// [Phase 3] Crypto Regime Detection — classifies market conditions from kline volatility
+// Crypto is more volatile than stocks/forex, so thresholds are higher:
+// Low: ATR < 0.5%, Medium: 0.5-1.5%, High: > 1.5%
+const CRYPTO_REGIME_ADJUSTMENTS = {
+    low: {
+        label: 'Low Volatility',
+        positionSizeMultiplier: 1.2,    // Can size up in calm crypto markets
+        scoreThresholdMultiplier: 0.9,  // Slightly lower bar (fewer signals)
+        maxPositions: 5
+    },
+    medium: {
+        label: 'Normal',
+        positionSizeMultiplier: 1.0,    // Default sizing
+        scoreThresholdMultiplier: 1.0,  // Default thresholds
+        maxPositions: 4
+    },
+    high: {
+        label: 'High Volatility',
+        positionSizeMultiplier: 0.5,    // Aggressively reduce size in volatile crypto
+        scoreThresholdMultiplier: 1.3,  // Raise the bar significantly (only best signals)
+        maxPositions: 2
+    }
+};
+
+function detectCryptoRegime(klines) {
+    if (!klines || klines.length < 20) return { regime: 'medium', adjustments: CRYPTO_REGIME_ADJUSTMENTS.medium };
+
+    // Calculate realized volatility from last 20 klines
+    const recent = klines.slice(-20);
+    let sumTR = 0;
+    for (let i = 1; i < recent.length; i++) {
+        const high = parseFloat(recent[i][2]);
+        const low = parseFloat(recent[i][3]);
+        const prevClose = parseFloat(recent[i - 1][4]);
+        const tr = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+        sumTR += tr;
+    }
+    const avgTR = sumTR / (recent.length - 1);
+    const lastClose = parseFloat(recent[recent.length - 1][4]);
+    const atrPct = lastClose > 0 ? avgTR / lastClose : 0;
+
+    // Crypto-specific thresholds (higher than stocks/forex due to inherent volatility)
+    // Low: < 0.5% ATR, Medium: 0.5-1.5%, High: > 1.5%
+    let regime;
+    if (atrPct < 0.005) {
+        regime = 'low';
+    } else if (atrPct > 0.015) {
+        regime = 'high';
+    } else {
+        regime = 'medium';
+    }
+
+    return {
+        regime,
+        adjustments: CRYPTO_REGIME_ADJUSTMENTS[regime],
+        atrPct: parseFloat(atrPct.toFixed(6))
+    };
+}
+
+// ============================================================================
 // KRAKEN API CLIENT  (replaces Binance — US-friendly, no geo-block)
 // ============================================================================
 
@@ -542,6 +865,34 @@ const STOP_LOSS_COOLDOWN_MS = parseInt(process.env.STOP_LOSS_COOLDOWN_MS || '270
 // ============================================================================
 // CRYPTO TRADING ENGINE
 // ============================================================================
+
+// [Phase 3.5] Portfolio Risk Engine — cross-bot position correlation and exposure check
+// Queries other bots to prevent correlated exposure across the portfolio
+// Standalone function — accepts position count from the calling engine instance
+async function checkPortfolioRisk(localPositionCount) {
+    const risks = { totalPositions: localPositionCount || 0, warnings: [] };
+
+    // Query stock bot positions
+    try {
+        const stockRes = await axios.get(`${STOCK_BOT_URL}/api/trading/status`, { timeout: 2000 });
+        const stockPositions = stockRes.data?.data?.positions || stockRes.data?.positions || [];
+        risks.totalPositions += stockPositions.length;
+    } catch { /* stock bot offline — non-blocking */ }
+
+    // Query forex bot positions
+    try {
+        const forexRes = await axios.get(`${FOREX_BOT_URL}/api/forex/status`, { timeout: 2000 });
+        const forexPositions = forexRes.data?.data?.positions || forexRes.data?.positions || [];
+        risks.totalPositions += forexPositions.length;
+    } catch { /* forex bot offline — non-blocking */ }
+
+    // Portfolio-wide limits
+    if (risks.totalPositions >= 12) {
+        risks.warnings.push(`Portfolio: ${risks.totalPositions} positions (limit: 12)`);
+    }
+
+    return risks;
+}
 
 class CryptoTradingEngine {
     constructor(config) {
@@ -1000,6 +1351,14 @@ class CryptoTradingEngine {
             // Combined sizing factor for this symbol
             const combinedSizingFactor = btcSizingFactor * macdSizingFactor;
 
+            // [Phase 1] Signal quality filters — order flow imbalance and displacement candle
+            const orderFlowImbalance = calculateOrderFlowImbalance(data.klines, 20);
+            const hasDisplacement = isDisplacementCandle(data.klines, data.atr, 3);
+
+            // [Phase 2] Volume Profile and Fair Value Gap analysis
+            const volumeProfile = calculateVolumeProfile(data.klines, 50);
+            const fvg = detectFairValueGaps(data.klines, 20);
+
             // Momentum calculation
             const momentum = (data.currentPrice - sma20) / sma20;
             const trendStrength = sma20 > 0 ? Math.abs(ema9 - sma20) / sma20 : 0;
@@ -1063,9 +1422,14 @@ class CryptoTradingEngine {
                         stopLoss: data.currentPrice * (1 + 0.003) * (1 - atrRisk.stopPct),
                         takeProfit: data.currentPrice * (1 + 0.003) * (1 + atrRisk.targetPct),
                         stopLossPercent: atrRisk.stopPct * 100,
-                        profitTargetPercent: atrRisk.targetPct * 100
+                        profitTargetPercent: atrRisk.targetPct * 100,
+                        // [Phase 1/2] Attach analysis data for committee scoring
+                        orderFlowImbalance,
+                        hasDisplacement,
+                        volumeProfileData: volumeProfile ? { vah: volumeProfile.vah, val: volumeProfile.val, poc: volumeProfile.poc } : null,
+                        fvgCount: fvg.bullish.length + fvg.bearish.length
                     };
-                    pullbackSignal.score = scoreCryptoSignal({
+                    let pullbackScore = scoreCryptoSignal({
                         strategy: pullbackSignal.strategy,
                         tier: pullbackSignal.tier,
                         momentum: pullbackSignal.momentum,
@@ -1075,7 +1439,36 @@ class CryptoTradingEngine {
                         sizingFactor: pullbackSignal.sizingFactor,
                         macdBullish
                     }) * regimeProfile.quality;
-                    pullbackSignal.score = parseFloat(pullbackSignal.score.toFixed(3));
+
+                    // [Phase 1] Displacement candle bonus
+                    if (hasDisplacement) {
+                        pullbackScore *= 1.15; // 15% score bonus for displacement confirmation
+                    }
+
+                    // [Phase 2] Volume Profile bonus — price near VAL (value) gets a boost
+                    if (volumeProfile) {
+                        const distToVAL = Math.abs(data.currentPrice - volumeProfile.val) / data.currentPrice;
+                        const distToVAH = Math.abs(data.currentPrice - volumeProfile.vah) / data.currentPrice;
+                        if (distToVAL < 0.01) {
+                            pullbackScore *= 1.10; // 10% bonus: buying near value area low
+                        } else if (distToVAH < 0.005) {
+                            pullbackScore *= 0.90; // 10% penalty: buying near value area high
+                        }
+                    }
+
+                    // [Phase 2] FVG confirmation bonus — bullish FVG at low-volume node
+                    if (fvg.bullish.length > 0 && volumeProfile && volumeProfile.lowVolumeNodes.length > 0) {
+                        const hasConfirmedFVG = fvg.bullish.some(gap =>
+                            volumeProfile.lowVolumeNodes.some(node =>
+                                gap.gapMid >= node.priceLow && gap.gapMid <= node.priceHigh
+                            )
+                        );
+                        if (hasConfirmedFVG) {
+                            pullbackScore *= 1.12; // 12% bonus: FVG at low-volume node
+                        }
+                    }
+
+                    pullbackSignal.score = parseFloat(pullbackScore.toFixed(3));
                     bestSignal = pullbackSignal;
                 }
             }
@@ -1157,9 +1550,14 @@ class CryptoTradingEngine {
                     stopLoss: data.currentPrice * (1 + 0.003) * (1 - atrRisk.stopPct),
                     takeProfit: data.currentPrice * (1 + 0.003) * (1 + atrRisk.targetPct),
                     stopLossPercent: atrRisk.stopPct * 100,
-                    profitTargetPercent: atrRisk.targetPct * 100
+                    profitTargetPercent: atrRisk.targetPct * 100,
+                    // [Phase 1/2] Attach analysis data for committee scoring
+                    orderFlowImbalance,
+                    hasDisplacement,
+                    volumeProfileData: volumeProfile ? { vah: volumeProfile.vah, val: volumeProfile.val, poc: volumeProfile.poc } : null,
+                    fvgCount: fvg.bullish.length + fvg.bearish.length
                 };
-                momentumSignal.score = scoreCryptoSignal({
+                let momentumScore = scoreCryptoSignal({
                     strategy: momentumSignal.strategy,
                     tier: momentumSignal.tier,
                     momentum: momentumSignal.momentum,
@@ -1169,7 +1567,36 @@ class CryptoTradingEngine {
                     sizingFactor: momentumSignal.sizingFactor,
                     macdBullish
                 }) * regimeProfile.quality;
-                momentumSignal.score = parseFloat(momentumSignal.score.toFixed(3));
+
+                // [Phase 1] Displacement candle bonus
+                if (hasDisplacement) {
+                    momentumScore *= 1.15; // 15% score bonus for displacement confirmation
+                }
+
+                // [Phase 2] Volume Profile bonus — price near VAL (value) gets a boost
+                if (volumeProfile) {
+                    const distToVAL = Math.abs(data.currentPrice - volumeProfile.val) / data.currentPrice;
+                    const distToVAH = Math.abs(data.currentPrice - volumeProfile.vah) / data.currentPrice;
+                    if (distToVAL < 0.01) {
+                        momentumScore *= 1.10; // 10% bonus: buying near value area low
+                    } else if (distToVAH < 0.005) {
+                        momentumScore *= 0.90; // 10% penalty: buying near value area high
+                    }
+                }
+
+                // [Phase 2] FVG confirmation bonus — bullish FVG at low-volume node
+                if (fvg.bullish.length > 0 && volumeProfile && volumeProfile.lowVolumeNodes.length > 0) {
+                    const hasConfirmedFVG = fvg.bullish.some(gap =>
+                        volumeProfile.lowVolumeNodes.some(node =>
+                            gap.gapMid >= node.priceLow && gap.gapMid <= node.priceHigh
+                        )
+                    );
+                    if (hasConfirmedFVG) {
+                        momentumScore *= 1.12; // 12% bonus: FVG at low-volume node
+                    }
+                }
+
+                momentumSignal.score = parseFloat(momentumScore.toFixed(3));
 
                 console.log(`✨ ${symbol} (${tierName}): Momentum ${(momentum * 100).toFixed(2)}%, RSI ${rsi.toFixed(1)}, Vol $${(data.volume24h / 1000000).toFixed(1)}M`);
                 if (!bestSignal || momentumSignal.score >= bestSignal.score) {
@@ -1650,6 +2077,22 @@ class CryptoTradingEngine {
                     await this.managePositions();
                 }
 
+                // [Phase 3] Detect crypto regime from BTC klines — refreshes every scan cycle
+                const btcKlines = await this.kraken.getKlines('XBTUSD', '5m', 100).catch(() => null);
+                const cryptoRegime = detectCryptoRegime(btcKlines);
+                if (cryptoRegime.regime !== 'medium') {
+                    console.log(`[Regime] Crypto market: ${cryptoRegime.adjustments.label} (ATR%: ${(cryptoRegime.atrPct * 100).toFixed(3)}%, size: x${cryptoRegime.adjustments.positionSizeMultiplier}, threshold: x${cryptoRegime.adjustments.scoreThresholdMultiplier})`);
+                }
+
+                // [Phase 3.5] Portfolio-level risk check (cross-bot)
+                const portfolioRisk = await checkPortfolioRisk(this.positions.size);
+                if (portfolioRisk.totalPositions >= 12) {
+                    console.log(`[Portfolio Risk] ${portfolioRisk.totalPositions} total positions across all bots — portfolio limit reached, skipping new entries`);
+                } else {
+                if (portfolioRisk.warnings.length > 0) {
+                    console.log(`[Portfolio Risk] ${portfolioRisk.warnings.join('; ')}`);
+                }
+
                 // Scan for new opportunities
                 if (this.positions.size < this.config.maxTotalPositions) {
                     console.log(`\n🔍 Scanning ${this.activeSymbols.length || this.config.symbols.length} crypto pairs...`);
@@ -1707,13 +2150,45 @@ class CryptoTradingEngine {
                             console.log(`[Guardrail] ${signal.symbol} BLOCKED — R:R ${rewardRisk.toFixed(2)} < ${MIN_REWARD_RISK}`);
                             continue;
                         }
+                        // [Phase 3] Regime-adjusted score threshold — high vol raises the bar, low vol lowers it
+                        const regimeScoreThreshold = MIN_SIGNAL_SCORE * cryptoRegime.adjustments.scoreThresholdMultiplier;
+                        if ((signal.score || 0) < regimeScoreThreshold && regimeScoreThreshold !== MIN_SIGNAL_SCORE) {
+                            console.log(`[Regime] ${signal.symbol} BLOCKED — score ${(signal.score || 0).toFixed(2)} < ${regimeScoreThreshold.toFixed(2)} (regime: ${cryptoRegime.adjustments.label})`);
+                            continue;
+                        }
+                        // [Phase 1] Order flow confirmation — skip if flow opposes trade direction
+                        if (signal.orderFlowImbalance !== undefined && signal.orderFlowImbalance < 0.1) {
+                            console.log(`[FILTER] ${signal.symbol}: Order flow imbalance too weak (${signal.orderFlowImbalance.toFixed(2)}), skipping`);
+                            continue;
+                        }
+                        // [Phase 3] Committee aggregator — unified confidence from all signal sources
+                        const committee = computeCryptoCommitteeScore(signal);
+                        if (committee.confidence < 0.45) {
+                            console.log(`[Committee] ${signal.symbol}: Confidence ${committee.confidence} < 0.45 threshold — ${JSON.stringify(committee.components)}`);
+                            continue;
+                        }
+                        console.log(`[Committee] ${signal.symbol}: APPROVED conf:${committee.confidence} — momentum:${committee.components.momentum} flow:${committee.components.orderFlow} displacement:${committee.components.displacement} VP:${committee.components.volumeProfile} FVG:${committee.components.fvg}`);
+                        signal.committeeConfidence = committee.confidence;
+                        signal.committeeComponents = committee.components;
                         if (this.getLossSizeMultiplier() < 1.0) {
                             signal.guardrailSizeMultiplier = this.getLossSizeMultiplier();
                             console.log(`[Guardrail] ${signal.symbol} size cut to ${signal.guardrailSizeMultiplier.toFixed(2)}x (${this.guardrails.consecutiveLosses} consecutive losses)`);
                         }
+                        // [Phase 3] Apply crypto regime adjustments — size scaling
+                        signal.agentPositionSizeMultiplier = (signal.agentPositionSizeMultiplier || 1.0) * cryptoRegime.adjustments.positionSizeMultiplier;
+                        signal.marketRegime = cryptoRegime.regime;
+                        if (cryptoRegime.regime !== 'medium') {
+                            console.log(`[Regime] ${signal.symbol} size adjusted to x${signal.agentPositionSizeMultiplier.toFixed(2)} (${cryptoRegime.adjustments.label})`);
+                        }
+                        // [Phase 3] Regime-based position cap
+                        if (this.positions.size >= cryptoRegime.adjustments.maxPositions) {
+                            console.log(`[Regime] ${signal.symbol} BLOCKED — max positions for ${cryptoRegime.adjustments.label} regime (${this.positions.size}/${cryptoRegime.adjustments.maxPositions})`);
+                            continue;
+                        }
                         await this.executeTrade(signal);
                     }
                 }
+                } // end portfolio risk else block
 
                 console.log(`${'='.repeat(60)}\n`);
 
@@ -2272,6 +2747,16 @@ app.get('/api/auth/me', requireJwt, async (req, res) => {
 // ── End Auth Endpoints ────────────────────────────────────────────────────────
 
 const engine = new CryptoTradingEngine(CRYPTO_CONFIG);
+
+// [Phase 3.5] Portfolio-level risk status endpoint (cross-bot)
+app.get('/api/portfolio/risk', async (req, res) => {
+    try {
+        const risk = await checkPortfolioRisk(engine.positions.size);
+        res.json({ success: true, data: risk });
+    } catch (error) {
+        res.json({ success: true, data: { totalPositions: engine.positions.size, warnings: ['Cross-bot check failed'] } });
+    }
+});
 
 // Health check
 app.get('/health', (req, res) => {
