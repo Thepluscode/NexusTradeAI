@@ -341,6 +341,26 @@ class APIClient {
     }
   }
 
+  // ── Evaluations (signal intelligence) ─────────────────────────────────────
+
+  async getStockEvaluations() {
+    try {
+      const response = await this.tradingEngine.get('/api/evaluations');
+      return response.data?.data || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async getForexEvaluations() {
+    try {
+      const response = await this.forexService.get('/api/evaluations');
+      return response.data?.data || null;
+    } catch {
+      return null;
+    }
+  }
+
   // ── Forex Bot (port 3005) ─────────────────────────────────────────────────
 
   async getForexStatus(): Promise<Record<string, unknown>> {

@@ -40,6 +40,10 @@ const { getTelegramAlertService } = require('./infrastructure/notifications/tele
 const app = express();
 const PORT = process.env.PORT || process.env.TRADING_PORT || 3002;
 
+// [Phase 3.5] Cross-bot portfolio risk URLs (for co-located or Railway deployment)
+const FOREX_BOT_URL = process.env.FOREX_BOT_URL || 'http://localhost:3005';
+const CRYPTO_BOT_URL = process.env.CRYPTO_BOT_URL || 'http://localhost:3006';
+
 app.use(cors());
 app.use(express.json());
 
@@ -2284,6 +2288,44 @@ async function managePositions() {
     }
 }
 
+// [Phase 3.5] Portfolio Risk Engine — cross-bot position correlation and exposure check
+// Queries other bots to prevent correlated exposure across the portfolio
+async function checkPortfolioRisk() {
+    const risks = { totalPositions: 0, totalExposure: 0, warnings: [] };
+
+    // Count local positions
+    risks.totalPositions += positions.size;
+
+    // Query forex bot positions
+    try {
+        const forexRes = await axios.get(`${FOREX_BOT_URL}/api/forex/status`, { timeout: 2000 });
+        const forexPositions = forexRes.data?.data?.positions || forexRes.data?.positions || [];
+        risks.totalPositions += forexPositions.length;
+
+        // Check USD exposure — if forex is heavily long USD pairs, stock bot should be cautious
+        const usdLongs = forexPositions.filter(p =>
+            (p.symbol || '').includes('USD') && p.side === 'long'
+        ).length;
+        if (usdLongs >= 3) {
+            risks.warnings.push('Heavy USD long exposure in forex bot');
+        }
+    } catch { /* forex bot offline — non-blocking */ }
+
+    // Query crypto bot positions
+    try {
+        const cryptoRes = await axios.get(`${CRYPTO_BOT_URL}/api/crypto/status`, { timeout: 2000 });
+        const cryptoPositions = cryptoRes.data?.data?.positions || cryptoRes.data?.positions || [];
+        risks.totalPositions += cryptoPositions.length;
+    } catch { /* crypto bot offline — non-blocking */ }
+
+    // Portfolio-wide limits
+    if (risks.totalPositions >= 12) {
+        risks.warnings.push(`Portfolio has ${risks.totalPositions} positions across all bots (limit: 12)`);
+    }
+
+    return risks;
+}
+
 async function scanMomentumBreakouts() {
     try {
         // Drawdown circuit breaker — block new entries if drawdown limit exceeded
@@ -2319,6 +2361,16 @@ async function scanMomentumBreakouts() {
             }
         }
         const regime = globalThis._marketRegime || { regime: 'medium', adjustments: REGIME_ADJUSTMENTS.medium };
+
+        // [Phase 3.5] Portfolio-level risk check (cross-bot)
+        const portfolioRisk = await checkPortfolioRisk();
+        if (portfolioRisk.totalPositions >= 12) {
+            console.log(`[Portfolio Risk] ${portfolioRisk.totalPositions} total positions across all bots — at portfolio limit, skipping new entries`);
+            return [];
+        }
+        if (portfolioRisk.warnings.length > 0) {
+            console.log(`[Portfolio Risk] Warnings: ${portfolioRisk.warnings.join('; ')}`);
+        }
 
         const symbols = popularStocks.getAllSymbols();
         console.log(`\n🔍 Momentum Scan: Checking ${symbols.length} stocks... [Regime: ${regime.adjustments.label}]`);
@@ -2959,6 +3011,18 @@ async function executeTrade(signal, strategy) {
             agentConfidence: signal.agentConfidence || null,
             agentReason: signal.agentReason || null,
             agentSizeMultiplier: signal.agentSizeMultiplier || 1.0,
+            // [Phase 4] Signal snapshot for trade evaluation loop
+            signalSnapshot: {
+                orderFlowImbalance: signal.orderFlowImbalance || 0,
+                hasDisplacement: signal.hasDisplacement || false,
+                volumeProfile: signal.volumeProfile || null,
+                fvgCount: signal.fvgCount || 0,
+                committeeConfidence: signal.committeeConfidence || 0,
+                committeeComponents: signal.committeeComponents || {},
+                marketRegime: signal.marketRegime || 'medium',
+                score: signal.score || 0,
+                timestamp: Date.now()
+            }
         });
         savePositions();
 
@@ -3050,6 +3114,46 @@ async function closePosition(symbol, qty, reason = 'Manual') {
             console.log(`⏸  ${symbol} in stop-loss cooldown for 1 hour`);
         }
 
+        // [Phase 4] Trade evaluation — log signal effectiveness for weight optimization
+        if (position && position.signalSnapshot) {
+            const snapshot = position.signalSnapshot;
+            const evalExitPrice = currentPrice || 0;
+            const evalPnl = currentPrice ? (currentPrice - position.entry) * parseFloat(qty) : 0;
+            const evalPnlPct = (currentPrice && position.entry) ? (currentPrice - position.entry) / position.entry : 0;
+            const outcome = {
+                symbol: position.symbol,
+                direction: 'long',
+                entryPrice: position.entry,
+                exitPrice: evalExitPrice,
+                pnl: evalPnl,
+                pnlPct: evalPnlPct,
+                holdTimeMs: Date.now() - (snapshot.timestamp || position.entryTime?.getTime?.() || Date.now()),
+                signals: {
+                    orderFlow: snapshot.orderFlowImbalance,
+                    displacement: snapshot.hasDisplacement,
+                    vpPosition: snapshot.volumeProfile,
+                    fvgCount: snapshot.fvgCount,
+                    committeeConfidence: snapshot.committeeConfidence,
+                    components: snapshot.committeeComponents,
+                    regime: snapshot.marketRegime,
+                    score: snapshot.score
+                },
+                exitReason: reason || 'unknown',
+                timestamp: Date.now()
+            };
+
+            if (!globalThis._tradeEvaluations) globalThis._tradeEvaluations = [];
+            globalThis._tradeEvaluations.push(outcome);
+
+            // Keep last 200 evaluations in memory
+            if (globalThis._tradeEvaluations.length > 200) {
+                globalThis._tradeEvaluations = globalThis._tradeEvaluations.slice(-200);
+            }
+
+            const winLoss = evalPnl > 0 ? 'WIN' : 'LOSS';
+            console.log(`[Evaluation] ${outcome.symbol} ${winLoss} ${evalPnlPct > 0 ? '+' : ''}${(evalPnlPct * 100).toFixed(2)}% — committee:${snapshot.committeeConfidence} flow:${snapshot.orderFlowImbalance?.toFixed?.(2) || '?'} displacement:${snapshot.hasDisplacement} regime:${snapshot.marketRegime}`);
+        }
+
         positions.delete(symbol);
         savePositions();
         savePerfData();
@@ -3058,6 +3162,56 @@ async function closePosition(symbol, qty, reason = 'Manual') {
         console.error(`❌ Error closing ${symbol}:`, error.message);
     }
 }
+
+// [Phase 4] Trade evaluation summary endpoint
+app.get('/api/trading/evaluations', (req, res) => {
+    const evals = globalThis._tradeEvaluations || [];
+    if (evals.length === 0) {
+        return res.json({ success: true, data: { totalTrades: 0, message: 'No evaluations yet' } });
+    }
+
+    const wins = evals.filter(e => e.pnl > 0);
+    const losses = evals.filter(e => e.pnl <= 0);
+
+    // Signal effectiveness: average P&L when signal was present vs absent
+    const signalEffectiveness = {};
+    const signals = ['orderFlow', 'displacement', 'fvgCount'];
+    for (const sig of signals) {
+        const withSignal = evals.filter(e => {
+            if (sig === 'orderFlow') return (e.signals.orderFlow || 0) > 0.1;
+            if (sig === 'displacement') return e.signals.displacement === true;
+            if (sig === 'fvgCount') return (e.signals.fvgCount || 0) > 0;
+            return false;
+        });
+        const withoutSignal = evals.filter(e => {
+            if (sig === 'orderFlow') return (e.signals.orderFlow || 0) <= 0.1;
+            if (sig === 'displacement') return e.signals.displacement !== true;
+            if (sig === 'fvgCount') return (e.signals.fvgCount || 0) === 0;
+            return false;
+        });
+
+        const avgPnlWith = withSignal.length > 0 ? withSignal.reduce((s, e) => s + (e.pnlPct || 0), 0) / withSignal.length : 0;
+        const avgPnlWithout = withoutSignal.length > 0 ? withoutSignal.reduce((s, e) => s + (e.pnlPct || 0), 0) / withoutSignal.length : 0;
+
+        signalEffectiveness[sig] = {
+            withSignal: { count: withSignal.length, avgPnlPct: parseFloat((avgPnlWith * 100).toFixed(3)) },
+            withoutSignal: { count: withoutSignal.length, avgPnlPct: parseFloat((avgPnlWithout * 100).toFixed(3)) },
+            edge: parseFloat(((avgPnlWith - avgPnlWithout) * 100).toFixed(3))
+        };
+    }
+
+    res.json({
+        success: true,
+        data: {
+            totalTrades: evals.length,
+            winRate: parseFloat((wins.length / evals.length * 100).toFixed(1)),
+            avgWin: wins.length > 0 ? parseFloat((wins.reduce((s, e) => s + (e.pnlPct || 0), 0) / wins.length * 100).toFixed(3)) : 0,
+            avgLoss: losses.length > 0 ? parseFloat((losses.reduce((s, e) => s + (e.pnlPct || 0), 0) / losses.length * 100).toFixed(3)) : 0,
+            signalEffectiveness,
+            recentTrades: evals.slice(-10)
+        }
+    });
+});
 
 // API Routes (same as before)
 app.get('/api/trading/status', async (req, res) => {
@@ -3406,6 +3560,16 @@ app.get('/api/accounts/summary', async (req, res) => {
         });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// [Phase 3.5] Portfolio-level risk status endpoint (cross-bot)
+app.get('/api/portfolio/risk', async (req, res) => {
+    try {
+        const risk = await checkPortfolioRisk();
+        res.json({ success: true, data: risk });
+    } catch (error) {
+        res.json({ success: true, data: { totalPositions: positions.size, warnings: ['Cross-bot check failed'] } });
     }
 });
 
