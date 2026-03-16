@@ -451,7 +451,7 @@ export default function ForexBotPage() {
                                         sx={{ mr: 1 }}
                                     />
                                     <Typography variant="caption" color="text.secondary">
-                                        ({data.withSignal.count} trades with, {data.withoutSignal.count} without)
+                                        ({data?.withSignal?.count ?? 0} trades with, {data?.withoutSignal?.count ?? 0} without)
                                     </Typography>
                                 </Box>
                             ))}
