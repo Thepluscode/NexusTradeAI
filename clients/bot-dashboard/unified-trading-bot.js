@@ -5557,6 +5557,90 @@ app.post('/api/bridge/warmup', async (req, res) => {
     res.json({ success: true, ...results });
 });
 
+// [Alpha] Portfolio allocation signal — exposes bot's current edge for capital allocation
+app.get('/api/trading/alpha-signal', (req, res) => {
+    const evals = globalThis._tradeEvaluations || [];
+    const recent = evals.slice(-20); // last 20 trades
+
+    if (recent.length < 3) {
+        return res.json({ success: true, data: { edge: 0.5, confidence: 0, sampleSize: recent.length, message: 'Insufficient data' } });
+    }
+
+    const winRate = recent.filter(e => e.pnl > 0).length / recent.length;
+    const avgPnl = recent.reduce((s, e) => s + (e.pnlPct || 0), 0) / recent.length;
+    const avgCommittee = recent.reduce((s, e) => s + (e.signals?.committeeConfidence || 0), 0) / recent.length;
+
+    // Edge score 0-1: combines win rate, average P&L direction, and signal confidence
+    const edge = Math.max(0, Math.min(1,
+        (winRate * 0.4) +
+        (Math.min(1, Math.max(0, avgPnl * 10 + 0.5)) * 0.3) +
+        (avgCommittee * 0.3)
+    ));
+
+    const regime = globalThis._marketRegime || { regime: 'medium' };
+
+    res.json({
+        success: true,
+        data: {
+            bot: 'stock',
+            edge: parseFloat(edge.toFixed(3)),
+            winRate: parseFloat((winRate * 100).toFixed(1)),
+            avgPnlPct: parseFloat((avgPnl * 100).toFixed(3)),
+            avgCommitteeConfidence: parseFloat(avgCommittee.toFixed(3)),
+            regime: regime.regime,
+            activePositions: positions.size,
+            sampleSize: recent.length,
+            recommendation: edge > 0.6 ? 'increase_allocation' : edge < 0.4 ? 'decrease_allocation' : 'maintain'
+        }
+    });
+});
+
+// [Alpha] Combined portfolio allocation signal — aggregates edge from all bots
+app.get('/api/portfolio/alpha', async (req, res) => {
+    const signals = [];
+
+    // Local stock bot edge
+    try {
+        const stockEvals = globalThis._tradeEvaluations || [];
+        const recent = stockEvals.slice(-20);
+        if (recent.length >= 3) {
+            const winRate = recent.filter(e => e.pnl > 0).length / recent.length;
+            const avgPnl = recent.reduce((s, e) => s + (e.pnlPct || 0), 0) / recent.length;
+            signals.push({ bot: 'stock', edge: winRate * 0.5 + Math.min(1, avgPnl * 10 + 0.5) * 0.5, sampleSize: recent.length });
+        }
+    } catch {}
+
+    // Query forex bot
+    try {
+        const forexRes = await axios.get((process.env.FOREX_BOT_URL || 'http://localhost:3005') + '/api/forex/alpha-signal', { timeout: 2000 });
+        if (forexRes.data?.data) signals.push({ bot: 'forex', ...forexRes.data.data });
+    } catch {}
+
+    // Query crypto bot
+    try {
+        const cryptoRes = await axios.get((process.env.CRYPTO_BOT_URL || 'http://localhost:3006') + '/api/crypto/alpha-signal', { timeout: 2000 });
+        if (cryptoRes.data?.data) signals.push({ bot: 'crypto', ...cryptoRes.data.data });
+    } catch {}
+
+    // Calculate recommended allocation weights
+    const totalEdge = signals.reduce((s, sig) => s + (sig.edge || 0.5), 0);
+    const allocations = signals.map(sig => ({
+        bot: sig.bot,
+        edge: sig.edge || 0.5,
+        allocationPct: totalEdge > 0 ? parseFloat(((sig.edge || 0.5) / totalEdge * 100).toFixed(1)) : 33.3,
+        recommendation: sig.recommendation || 'maintain'
+    }));
+
+    res.json({
+        success: true,
+        data: {
+            allocations,
+            totalEdge: parseFloat(totalEdge.toFixed(3)),
+            timestamp: Date.now()
+        }
+    });
+});
+
 app.listen(PORT, async () => {
     console.log('\n╔════════════════════════════════════════════════════════════╗');
     console.log('║     🚀 IMPROVED UNIFIED TRADING BOT - STARTED             ║');

@@ -1792,6 +1792,18 @@ class CryptoTradingEngine {
                 currentPrice: signal.price,
                 unrealizedPnL: 0,
                 unrealizedPnLPct: 0,
+                // [Phase 4] Signal snapshot for trade evaluation
+                signalSnapshot: {
+                    orderFlowImbalance: signal.orderFlowImbalance || 0,
+                    hasDisplacement: signal.hasDisplacement || false,
+                    volumeProfile: signal.volumeProfile || null,
+                    fvgCount: signal.fvgCount || 0,
+                    committeeConfidence: signal.committeeConfidence || 0,
+                    committeeComponents: signal.committeeComponents || {},
+                    marketRegime: signal.marketRegime || 'medium',
+                    score: signal.score || 0,
+                    timestamp: Date.now()
+                },
             };
 
             this.positions.set(signal.symbol, position);
@@ -1997,6 +2009,41 @@ class CryptoTradingEngine {
 
             // [v4.6] Record outcome for adaptive guardrails
             this.recordGuardrailOutcome(pnlUSD > 0);
+
+            // [Phase 4] Trade evaluation — log signal effectiveness
+            const snapshot = position.signalSnapshot;
+            if (snapshot) {
+                const outcome = {
+                    symbol: symbol,
+                    direction: 'long',
+                    entryPrice: position.entry,
+                    exitPrice: adjustedExitPrice,
+                    pnl: pnlUSD,
+                    pnlPct: position.entry > 0 ? (adjustedExitPrice - position.entry) / position.entry : 0,
+                    holdTimeMs: Date.now() - (snapshot.timestamp || Date.now()),
+                    signals: {
+                        orderFlow: snapshot.orderFlowImbalance,
+                        displacement: snapshot.hasDisplacement,
+                        vpPosition: snapshot.volumeProfile,
+                        fvgCount: snapshot.fvgCount,
+                        committeeConfidence: snapshot.committeeConfidence,
+                        components: snapshot.committeeComponents,
+                        regime: snapshot.marketRegime,
+                        score: snapshot.score
+                    },
+                    exitReason: reason || 'unknown',
+                    timestamp: Date.now()
+                };
+
+                if (!globalThis._cryptoTradeEvaluations) globalThis._cryptoTradeEvaluations = [];
+                globalThis._cryptoTradeEvaluations.push(outcome);
+                if (globalThis._cryptoTradeEvaluations.length > 200) {
+                    globalThis._cryptoTradeEvaluations = globalThis._cryptoTradeEvaluations.slice(-200);
+                }
+
+                const winLoss = pnlUSD > 0 ? 'WIN' : 'LOSS';
+                console.log(`[Evaluation] ${outcome.symbol} ${winLoss} ${(outcome.pnlPct * 100).toFixed(2)}% — committee:${snapshot.committeeConfidence} flow:${snapshot.orderFlowImbalance?.toFixed?.(2) || '?'} regime:${snapshot.marketRegime}`);
+            }
 
             // Remove position
             this.positions.delete(symbol);
@@ -3384,6 +3431,88 @@ app.post('/api/crypto/close-all', async (req, res) => {
         } catch (err) { skipped.push({ symbol, error: err.message }); }
     }
     res.json({ success: true, closed, skipped });
+});
+
+// [Phase 4] Trade evaluation summary endpoint
+app.get('/api/crypto/evaluations', (req, res) => {
+    const evals = globalThis._cryptoTradeEvaluations || [];
+    if (evals.length === 0) {
+        return res.json({ success: true, data: { totalTrades: 0, message: 'No evaluations yet' } });
+    }
+
+    const wins = evals.filter(e => e.pnl > 0);
+    const losses = evals.filter(e => e.pnl <= 0);
+
+    const signalEffectiveness = {};
+    const signals = ['orderFlow', 'displacement', 'fvgCount'];
+    for (const sig of signals) {
+        const withSignal = evals.filter(e => {
+            if (sig === 'orderFlow') return (e.signals.orderFlow || 0) > 0.1;
+            if (sig === 'displacement') return e.signals.displacement === true;
+            if (sig === 'fvgCount') return (e.signals.fvgCount || 0) > 0;
+            return false;
+        });
+        const withoutSignal = evals.filter(e => {
+            if (sig === 'orderFlow') return (e.signals.orderFlow || 0) <= 0.1;
+            if (sig === 'displacement') return e.signals.displacement !== true;
+            if (sig === 'fvgCount') return (e.signals.fvgCount || 0) === 0;
+            return false;
+        });
+        const avgWith = withSignal.length > 0 ? withSignal.reduce((s, e) => s + (e.pnlPct || 0), 0) / withSignal.length : 0;
+        const avgWithout = withoutSignal.length > 0 ? withoutSignal.reduce((s, e) => s + (e.pnlPct || 0), 0) / withoutSignal.length : 0;
+        signalEffectiveness[sig] = {
+            withSignal: { count: withSignal.length, avgPnlPct: parseFloat((avgWith * 100).toFixed(3)) },
+            withoutSignal: { count: withoutSignal.length, avgPnlPct: parseFloat((avgWithout * 100).toFixed(3)) },
+            edge: parseFloat(((avgWith - avgWithout) * 100).toFixed(3))
+        };
+    }
+
+    res.json({
+        success: true,
+        data: {
+            totalTrades: evals.length,
+            winRate: parseFloat((wins.length / evals.length * 100).toFixed(1)),
+            avgWin: wins.length > 0 ? parseFloat((wins.reduce((s, e) => s + (e.pnlPct || 0), 0) / wins.length * 100).toFixed(3)) : 0,
+            avgLoss: losses.length > 0 ? parseFloat((losses.reduce((s, e) => s + (e.pnlPct || 0), 0) / losses.length * 100).toFixed(3)) : 0,
+            signalEffectiveness,
+            recentTrades: evals.slice(-10)
+        }
+    });
+});
+
+// [Alpha] Portfolio allocation signal — exposes bot's current edge for capital allocation
+app.get('/api/crypto/alpha-signal', (req, res) => {
+    const evals = globalThis._cryptoTradeEvaluations || [];
+    const recent = evals.slice(-20);
+
+    if (recent.length < 3) {
+        return res.json({ success: true, data: { edge: 0.5, confidence: 0, sampleSize: recent.length, message: 'Insufficient data' } });
+    }
+
+    const winRate = recent.filter(e => e.pnl > 0).length / recent.length;
+    const avgPnl = recent.reduce((s, e) => s + (e.pnlPct || 0), 0) / recent.length;
+    const avgCommittee = recent.reduce((s, e) => s + (e.signals?.committeeConfidence || 0), 0) / recent.length;
+
+    const edge = Math.max(0, Math.min(1,
+        (winRate * 0.4) +
+        (Math.min(1, Math.max(0, avgPnl * 10 + 0.5)) * 0.3) +
+        (avgCommittee * 0.3)
+    ));
+
+    res.json({
+        success: true,
+        data: {
+            bot: 'crypto',
+            edge: parseFloat(edge.toFixed(3)),
+            winRate: parseFloat((winRate * 100).toFixed(1)),
+            avgPnlPct: parseFloat((avgPnl * 100).toFixed(3)),
+            avgCommitteeConfidence: parseFloat(avgCommittee.toFixed(3)),
+            regime: 'medium',
+            activePositions: engine.positions.size,
+            sampleSize: recent.length,
+            recommendation: edge > 0.6 ? 'increase_allocation' : edge < 0.4 ? 'decrease_allocation' : 'maintain'
+        }
+    });
 });
 
 // ============================================================================

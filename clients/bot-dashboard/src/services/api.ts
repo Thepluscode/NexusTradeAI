@@ -361,6 +361,15 @@ class APIClient {
     }
   }
 
+  async getCryptoEvaluations() {
+    try {
+      const response = await this.cryptoService.get('/api/evaluations');
+      return response.data?.data || null;
+    } catch {
+      return null;
+    }
+  }
+
   // ── Forex Bot (port 3005) ─────────────────────────────────────────────────
 
   async getForexStatus(): Promise<Record<string, unknown>> {

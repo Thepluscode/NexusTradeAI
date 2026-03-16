@@ -3651,6 +3651,41 @@ app.post('/api/forex/close-all', async (req, res) => {
     res.json({ success: true, closed, skipped });
 });
 
+// [Alpha] Portfolio allocation signal — exposes bot's current edge for capital allocation
+app.get('/api/forex/alpha-signal', (req, res) => {
+    const evals = globalThis._forexTradeEvaluations || [];
+    const recent = evals.slice(-20);
+
+    if (recent.length < 3) {
+        return res.json({ success: true, data: { edge: 0.5, confidence: 0, sampleSize: recent.length, message: 'Insufficient data' } });
+    }
+
+    const winRate = recent.filter(e => e.pnl > 0).length / recent.length;
+    const avgPnl = recent.reduce((s, e) => s + (e.pnlPct || 0), 0) / recent.length;
+    const avgCommittee = recent.reduce((s, e) => s + (e.signals?.committeeConfidence || 0), 0) / recent.length;
+
+    const edge = Math.max(0, Math.min(1,
+        (winRate * 0.4) +
+        (Math.min(1, Math.max(0, avgPnl * 10 + 0.5)) * 0.3) +
+        (avgCommittee * 0.3)
+    ));
+
+    res.json({
+        success: true,
+        data: {
+            bot: 'forex',
+            edge: parseFloat(edge.toFixed(3)),
+            winRate: parseFloat((winRate * 100).toFixed(1)),
+            avgPnlPct: parseFloat((avgPnl * 100).toFixed(3)),
+            avgCommitteeConfidence: parseFloat(avgCommittee.toFixed(3)),
+            regime: 'medium', // forex regime not cached in globalThis yet
+            activePositions: positions.size,
+            sampleSize: recent.length,
+            recommendation: edge > 0.6 ? 'increase_allocation' : edge < 0.4 ? 'decrease_allocation' : 'maintain'
+        }
+    });
+});
+
 // ===== START =====
 
 app.listen(PORT, async () => {

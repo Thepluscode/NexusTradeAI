@@ -109,6 +109,13 @@ export default function CryptoBotPage() {
         refetchInterval: 5000,
     });
 
+    // Signal intelligence evaluations
+    const { data: evaluations } = useQuery({
+        queryKey: ['cryptoEvaluations'],
+        queryFn: () => apiClient.getCryptoEvaluations(),
+        refetchInterval: 30000,
+    });
+
     const patchRunningState = (patch: { isRunning?: boolean; isPaused?: boolean }) => {
         queryClient.setQueryData(['cryptoEngineStatus'], (old: Record<string, unknown> | undefined) =>
             old ? { ...old, ...patch } : patch
@@ -431,6 +438,59 @@ export default function CryptoBotPage() {
 
             {/* Agent AI Decisions */}
             <AgentDecisionsCard assetClass="crypto" limit={8} />
+
+            {/* Signal Intelligence */}
+            <Card sx={{ mb: 3 }}>
+                <CardContent>
+                    <Typography variant="h6" gutterBottom>Signal Intelligence</Typography>
+                    <Grid container spacing={2}>
+                        {evaluations && (
+                            <>
+                                <Grid item xs={3}>
+                                    <Typography variant="body2" color="text.secondary">Trades Evaluated</Typography>
+                                    <Typography variant="h5">{evaluations.totalTrades}</Typography>
+                                </Grid>
+                                <Grid item xs={3}>
+                                    <Typography variant="body2" color="text.secondary">Win Rate</Typography>
+                                    <Typography variant="h5">{evaluations.winRate}%</Typography>
+                                </Grid>
+                                <Grid item xs={3}>
+                                    <Typography variant="body2" color="text.secondary">Avg Win</Typography>
+                                    <Typography variant="h5" color="success.main">+{evaluations.avgWin}%</Typography>
+                                </Grid>
+                                <Grid item xs={3}>
+                                    <Typography variant="body2" color="text.secondary">Avg Loss</Typography>
+                                    <Typography variant="h5" color="error.main">{evaluations.avgLoss}%</Typography>
+                                </Grid>
+                            </>
+                        )}
+                        {!evaluations && (
+                            <Grid item xs={12}>
+                                <Typography variant="body2" color="text.secondary">Collecting trade data...</Typography>
+                            </Grid>
+                        )}
+                    </Grid>
+                    {evaluations?.signalEffectiveness && (
+                        <Box sx={{ mt: 2 }}>
+                            <Typography variant="subtitle2" gutterBottom>Signal Effectiveness</Typography>
+                            {Object.entries(evaluations.signalEffectiveness).map(([signal, data]: [string, any]) => (
+                                <Box key={signal} sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
+                                    <Typography variant="body2" sx={{ width: 120 }}>{signal}</Typography>
+                                    <Chip
+                                        label={`${data.edge > 0 ? '+' : ''}${data.edge}%`}
+                                        size="small"
+                                        color={data.edge > 0 ? 'success' : 'error'}
+                                        sx={{ mr: 1 }}
+                                    />
+                                    <Typography variant="caption" color="text.secondary">
+                                        ({data.withSignal.count} trades with, {data.withoutSignal.count} without)
+                                    </Typography>
+                                </Box>
+                            ))}
+                        </Box>
+                    )}
+                </CardContent>
+            </Card>
 
             {/* Controls */}
             <Paper sx={{ p: 2, mb: 3 }}>
