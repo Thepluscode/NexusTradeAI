@@ -1362,6 +1362,80 @@ function detectFairValueGaps(candles, lookback = 20) {
     return { bullish: bullishGaps, bearish: bearishGaps };
 }
 
+// [Phase 3] Committee Aggregator for Forex — combines multiple signal confirmations
+// Direction-aware: flow scoring is relative to trade direction
+function computeForexCommitteeScore(signal) {
+    let confirmations = 0;
+    let totalWeight = 0;
+    const isLong = signal.direction === 'long';
+
+    // 1. Trend alignment — H1 trend matching signal direction (weight: 0.25)
+    const trendScore = (isLong && signal.h1Trend === 'up') || (!isLong && signal.h1Trend === 'down') ? 1.0 : 0.0;
+    confirmations += trendScore * 0.25;
+    totalWeight += 0.25;
+
+    // 2. Order flow confirmation — direction-aware (weight: 0.20)
+    let flowScore = 0.5;
+    if (signal.orderFlowImbalance !== undefined) {
+        flowScore = isLong
+            ? Math.max(0, Math.min(1, signal.orderFlowImbalance + 0.5)) // positive flow favors longs
+            : Math.max(0, Math.min(1, -signal.orderFlowImbalance + 0.5)); // negative flow favors shorts
+    }
+    confirmations += flowScore * 0.20;
+    totalWeight += 0.20;
+
+    // 3. Displacement candle (weight: 0.15)
+    const displacementScore = signal.hasDisplacement ? 1.0 : 0.0;
+    confirmations += displacementScore * 0.15;
+    totalWeight += 0.15;
+
+    // 4. Volume Profile position — direction-aware (weight: 0.15)
+    let vpScore = 0.5;
+    if (signal.volumeProfile) {
+        const price = signal.entry;
+        const { vah, val } = signal.volumeProfile;
+        const range = vah - val;
+        if (range > 0) {
+            const positionInRange = (price - val) / range;
+            // Longs want to buy near VAL (low), shorts want to sell near VAH (high)
+            vpScore = isLong
+                ? Math.max(0, 1.0 - positionInRange)
+                : Math.max(0, positionInRange);
+        }
+    }
+    confirmations += vpScore * 0.15;
+    totalWeight += 0.15;
+
+    // 5. FVG confirmation (weight: 0.10)
+    const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0.0;
+    confirmations += fvgScore * 0.10;
+    totalWeight += 0.10;
+
+    // 6. MACD momentum (weight: 0.15)
+    let macdScore = 0.5;
+    if (signal.macdHistogram !== null && signal.macdHistogram !== undefined) {
+        macdScore = isLong
+            ? Math.min(1, Math.max(0, signal.macdHistogram * 10000 + 0.5))
+            : Math.min(1, Math.max(0, -signal.macdHistogram * 10000 + 0.5));
+    }
+    confirmations += macdScore * 0.15;
+    totalWeight += 0.15;
+
+    const confidence = totalWeight > 0 ? confirmations / totalWeight : 0;
+
+    return {
+        confidence: parseFloat(confidence.toFixed(3)),
+        components: {
+            trend: trendScore,
+            orderFlow: parseFloat(flowScore.toFixed(3)),
+            displacement: displacementScore,
+            volumeProfile: parseFloat(vpScore.toFixed(3)),
+            fvg: fvgScore,
+            macd: parseFloat(macdScore.toFixed(3))
+        }
+    };
+}
+
 // [v3.2] H1 Trend Filter — only trade M15 signals that align with H1 direction
 async function getH1Trend(pair) {
     try {
@@ -1384,6 +1458,65 @@ async function getH1Trend(pair) {
         console.warn(`[H1 Trend] ${pair}: ${e.message}`);
         return 'neutral';
     }
+}
+
+// [Phase 3] Forex Regime Detection — classifies market conditions from aggregate pair volatility
+// Forex regimes: low-vol (range/consolidation), normal (trending), high-vol (news/crisis)
+const FOREX_REGIME_ADJUSTMENTS = {
+    low: {
+        label: 'Low Volatility',
+        positionSizeMultiplier: 1.1,
+        scoreThresholdMultiplier: 0.9,
+        maxPositions: 5
+    },
+    medium: {
+        label: 'Normal',
+        positionSizeMultiplier: 1.0,
+        scoreThresholdMultiplier: 1.0,
+        maxPositions: 4
+    },
+    high: {
+        label: 'High Volatility',
+        positionSizeMultiplier: 0.5,
+        scoreThresholdMultiplier: 1.3,
+        maxPositions: 2
+    }
+};
+
+function detectForexRegime(analyses) {
+    if (!analyses || analyses.length === 0) {
+        return { regime: 'medium', adjustments: FOREX_REGIME_ADJUSTMENTS.medium };
+    }
+
+    // Average ATR% across all analyzed pairs
+    const atrValues = analyses
+        .filter(a => a && a.atrPct > 0)
+        .map(a => a.atrPct);
+
+    if (atrValues.length === 0) {
+        return { regime: 'medium', adjustments: FOREX_REGIME_ADJUSTMENTS.medium };
+    }
+
+    const avgAtrPct = atrValues.reduce((sum, v) => sum + v, 0) / atrValues.length;
+
+    // Forex ATR% thresholds (M15 bars):
+    // Low: < 0.15% (consolidation/Asian session spillover)
+    // Medium: 0.15-0.40% (normal London/NY trading)
+    // High: > 0.40% (news events, risk-off moves)
+    let regime;
+    if (avgAtrPct < 0.0015) {
+        regime = 'low';
+    } else if (avgAtrPct > 0.004) {
+        regime = 'high';
+    } else {
+        regime = 'medium';
+    }
+
+    return {
+        regime,
+        avgAtrPct: parseFloat((avgAtrPct * 100).toFixed(3)),
+        adjustments: FOREX_REGIME_ADJUSTMENTS[regime]
+    };
 }
 
 // ===== STRATEGY BRIDGE =====
@@ -1635,6 +1768,13 @@ async function scanForSignals(heldPositions = positions) {
         })
     );
 
+    // [Phase 3] Detect forex regime from aggregate pair volatility
+    const validAnalyses = pairResults
+        .filter(r => r.status === 'fulfilled' && r.value.analysis)
+        .map(r => r.value.analysis);
+    const forexRegime = detectForexRegime(validAnalyses);
+    console.log(`[Regime] Forex: ${forexRegime.adjustments.label} (avg ATR: ${forexRegime.avgAtrPct || '?'}%) — size:×${forexRegime.adjustments.positionSizeMultiplier} maxPos:${forexRegime.adjustments.maxPositions}`);
+
     for (const result of pairResults) {
         if (result.status === 'rejected' || !result.value.analysis) continue;
 
@@ -1653,6 +1793,8 @@ async function scanForSignals(heldPositions = positions) {
 
         const config = MOMENTUM_CONFIG[tier];
         const maxPullback = FOREX_PULLBACK_CONFIG[tier] || FOREX_PULLBACK_CONFIG.tier1;
+        // [Phase 3] Regime-based total position cap
+        if (positions.size >= forexRegime.adjustments.maxPositions) continue;
         const tierPositions = Array.from(positions.values()).filter(p => p.tier === tier).length;
         if (tierPositions >= config.maxPositions) continue;
         if (pullback > maxPullback) {
@@ -1749,6 +1891,7 @@ async function scanForSignals(heldPositions = positions) {
                     strategy,
                     regime: regimeProfile.regime,
                     regimeQuality: regimeProfile.quality,
+                    marketRegime: forexRegime.regime,
                     macdHistogram: macd ? macd.histogram : null,
                     orderFlowImbalance: analysis.orderFlowImbalance,
                     hasDisplacement: analysis.hasDisplacement,
@@ -1826,6 +1969,7 @@ async function scanForSignals(heldPositions = positions) {
                     strategy,
                     regime: regimeProfile.regime,
                     regimeQuality: regimeProfile.quality,
+                    marketRegime: forexRegime.regime,
                     macdHistogram: macd ? macd.histogram : null,
                     orderFlowImbalance: analysis.orderFlowImbalance,
                     hasDisplacement: analysis.hasDisplacement,
@@ -2340,6 +2484,16 @@ async function tradingLoop() {
                 signal.agentSizeMultiplier = (signal.agentSizeMultiplier || 1.0) * guardrails.lossSizeMultiplier;
                 console.log(`[Guardrail] ${signal.pair} size cut to ${signal.agentSizeMultiplier.toFixed(2)}x (${guardrails.consecutiveLosses} consecutive losses)`);
             }
+            // [Phase 3] Committee aggregator — final quality gate
+            const committee = computeForexCommitteeScore(signal);
+            if (committee.confidence < 0.45) {
+                console.log(`[Committee] ${signal.pair} ${signal.direction}: Confidence ${committee.confidence} < 0.45 — ${JSON.stringify(committee.components)}`);
+                continue;
+            }
+            console.log(`[Committee] ${signal.pair} ${signal.direction}: APPROVED conf:${committee.confidence} — trend:${committee.components.trend} flow:${committee.components.orderFlow} disp:${committee.components.displacement} VP:${committee.components.volumeProfile}`);
+
+            signal.committeeConfidence = committee.confidence;
+            signal.committeeComponents = committee.components;
             await executeTrade(signal);
         }
     } catch (err) {

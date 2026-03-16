@@ -1689,6 +1689,129 @@ function detectFairValueGaps(bars, lookback = 20) {
     return { bullish: bullishGaps, bearish: bearishGaps };
 }
 
+// [Phase 3] Committee Aggregator — combines multiple signal confirmations into unified confidence
+// Each signal source contributes independently; more confirmations = higher confidence
+// Minimum threshold: 0.45 confidence required to trade (prevents marginal entries)
+function computeCommitteeScore(signal) {
+    let confirmations = 0;
+    let totalWeight = 0;
+
+    // 1. Momentum strength (weight: 0.25)
+    const momentumScore = Math.min(parseFloat(signal.percentChange || 0) / 10, 1.0);
+    confirmations += momentumScore * 0.25;
+    totalWeight += 0.25;
+
+    // 2. Order flow confirmation (weight: 0.20)
+    const flowScore = signal.orderFlowImbalance !== undefined
+        ? Math.max(0, signal.orderFlowImbalance) // 0 to 1 for longs
+        : 0.5; // neutral if unavailable
+    confirmations += flowScore * 0.20;
+    totalWeight += 0.20;
+
+    // 3. Displacement candle (weight: 0.15)
+    const displacementScore = signal.hasDisplacement ? 1.0 : 0.0;
+    confirmations += displacementScore * 0.15;
+    totalWeight += 0.15;
+
+    // 4. Volume Profile position (weight: 0.15)
+    let vpScore = 0.5; // neutral default
+    if (signal.volumeProfile) {
+        const price = parseFloat(signal.price);
+        const { vah, val, poc } = signal.volumeProfile;
+        const range = vah - val;
+        if (range > 0) {
+            // Score higher when closer to VAL (buying at discount)
+            const positionInRange = (price - val) / range;
+            vpScore = Math.max(0, 1.0 - positionInRange); // 1.0 at VAL, 0.0 at VAH
+        }
+    }
+    confirmations += vpScore * 0.15;
+    totalWeight += 0.15;
+
+    // 5. FVG confirmation (weight: 0.10)
+    const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0.0;
+    confirmations += fvgScore * 0.10;
+    totalWeight += 0.10;
+
+    // 6. Volume ratio (weight: 0.15)
+    const volRatioScore = Math.min(parseFloat(signal.volumeRatio || 1) / 3, 1.0);
+    confirmations += volRatioScore * 0.15;
+    totalWeight += 0.15;
+
+    const confidence = totalWeight > 0 ? confirmations / totalWeight : 0;
+
+    return {
+        confidence: parseFloat(confidence.toFixed(3)),
+        components: {
+            momentum: parseFloat(momentumScore.toFixed(3)),
+            orderFlow: parseFloat(flowScore.toFixed(3)),
+            displacement: displacementScore,
+            volumeProfile: parseFloat(vpScore.toFixed(3)),
+            fvg: fvgScore,
+            volumeRatio: parseFloat(volRatioScore.toFixed(3))
+        }
+    };
+}
+
+// [Phase 3] Market Regime Detection — classifies current market conditions
+// Uses realized volatility from bar data to bucket into low/medium/high regimes
+// Each regime adjusts position sizing and score thresholds
+const REGIME_ADJUSTMENTS = {
+    low: {
+        label: 'Low Volatility',
+        positionSizeMultiplier: 1.2,   // Can size up in calm markets
+        scoreThresholdMultiplier: 0.9, // Slightly lower bar (fewer signals, take what comes)
+        maxPositions: 8                // Can hold more in stable markets
+    },
+    medium: {
+        label: 'Normal',
+        positionSizeMultiplier: 1.0,   // Default sizing
+        scoreThresholdMultiplier: 1.0, // Default thresholds
+        maxPositions: 6
+    },
+    high: {
+        label: 'High Volatility',
+        positionSizeMultiplier: 0.6,   // Reduce size in volatile markets
+        scoreThresholdMultiplier: 1.2, // Raise the bar (only best signals)
+        maxPositions: 4                // Fewer positions to control risk
+    }
+};
+
+function detectMarketRegime(bars) {
+    if (!bars || bars.length < 20) return { regime: 'medium', adjustments: REGIME_ADJUSTMENTS.medium };
+
+    // Calculate realized volatility from last 20 bars
+    const recent = bars.slice(-20);
+    let sumTR = 0;
+    for (let i = 1; i < recent.length; i++) {
+        const high = parseFloat(recent[i].h);
+        const low = parseFloat(recent[i].l);
+        const prevClose = parseFloat(recent[i - 1].c);
+        const tr = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+        sumTR += tr;
+    }
+    const avgTR = sumTR / (recent.length - 1);
+    const lastClose = parseFloat(recent[recent.length - 1].c);
+    const atrPct = lastClose > 0 ? avgTR / lastClose : 0;
+
+    // Bucket into regimes (based on typical intraday 1-min ATR% for equities)
+    // Low: < 0.15% ATR (calm/range-bound), Medium: 0.15-0.35%, High: > 0.35% (volatile/news-driven)
+    let regime;
+    if (atrPct < 0.0015) {
+        regime = 'low';
+    } else if (atrPct > 0.0035) {
+        regime = 'high';
+    } else {
+        regime = 'medium';
+    }
+
+    return {
+        regime,
+        atrPct: parseFloat((atrPct * 100).toFixed(3)),
+        adjustments: REGIME_ADJUSTMENTS[regime]
+    };
+}
+
 // [v3.4] Bullish RSI divergence — price makes a lower low but RSI makes a higher low
 // Signals exhaustion of selling pressure and probable reversal — strong entry confirmation
 function detectRSIBullishDivergence(bars, lookback = 20) {
@@ -2176,8 +2299,29 @@ async function scanMomentumBreakouts() {
             console.log(`✅ [DRAWDOWN BREAKER] Drawdown recovered — trading resumed`);
         }
 
+        // [Phase 3] Detect market regime from SPY bars — refreshes every 5 minutes
+        // Applied as position sizing and threshold adjustments throughout the scan
+        if (!globalThis._marketRegime || Date.now() - (globalThis._marketRegimeUpdated || 0) > 5 * 60 * 1000) {
+            try {
+                const spyBars = await fetchBarsWithCache('SPY', alpacaConfig, {
+                    start: new Date().toISOString().split('T')[0],
+                    timeframe: '1Min',
+                    feed: 'sip',
+                    limit: 100
+                });
+                if (spyBars && spyBars.length > 20) {
+                    globalThis._marketRegime = detectMarketRegime(spyBars);
+                    globalThis._marketRegimeUpdated = Date.now();
+                    console.log(`[Regime] Market: ${globalThis._marketRegime.adjustments.label} (ATR: ${globalThis._marketRegime.atrPct}%) — size:×${globalThis._marketRegime.adjustments.positionSizeMultiplier} threshold:×${globalThis._marketRegime.adjustments.scoreThresholdMultiplier} maxPos:${globalThis._marketRegime.adjustments.maxPositions}`);
+                }
+            } catch (e) {
+                // Non-blocking — use default medium regime
+            }
+        }
+        const regime = globalThis._marketRegime || { regime: 'medium', adjustments: REGIME_ADJUSTMENTS.medium };
+
         const symbols = popularStocks.getAllSymbols();
-        console.log(`\n🔍 Momentum Scan: Checking ${symbols.length} stocks...`);
+        console.log(`\n🔍 Momentum Scan: Checking ${symbols.length} stocks... [Regime: ${regime.adjustments.label}]`);
 
         const movers = [];
         const batchSize = 20;
@@ -2204,8 +2348,8 @@ async function scanMomentumBreakouts() {
                 console.log(`   📈 ${mover.symbol} [${mover.tier}]: +${mover.percentChange}% | Vol: ${mover.volumeRatio}x | RSI: ${mover.rsi}`);
             }
 
-            // Cap at 8 positions for focus + better per-trade sizing
-            const maxPositions = 8;
+            // Cap positions based on market regime (low vol: 8, normal: 6, high vol: 4)
+            const maxPositions = regime.adjustments.maxPositions;
             if (positions.size < maxPositions) {
                 const available = maxPositions - positions.size;
                 // Sort: by composite score (tier × momentum × volumeRatio × rsi bonus), desc
@@ -2250,8 +2394,10 @@ async function scanMomentumBreakouts() {
                         console.log(`[Guardrail] ${mover.symbol} BLOCKED — lane paused until ${new Date(guardrails.lanePausedUntil).toLocaleTimeString()}`);
                         continue;
                     }
-                    if ((mover.score || 0) < MIN_SIGNAL_SCORE) {
-                        console.log(`[Guardrail] ${mover.symbol} BLOCKED — score ${(mover.score || 0).toFixed(2)} < ${MIN_SIGNAL_SCORE}`);
+                    // [Phase 3] Regime-adjusted score threshold — high vol raises the bar, low vol lowers it
+                    const regimeScoreThreshold = MIN_SIGNAL_SCORE * regime.adjustments.scoreThresholdMultiplier;
+                    if ((mover.score || 0) < regimeScoreThreshold) {
+                        console.log(`[Guardrail] ${mover.symbol} BLOCKED — score ${(mover.score || 0).toFixed(2)} < ${regimeScoreThreshold.toFixed(2)} (regime: ${regime.adjustments.label})`);
                         continue;
                     }
                     if (aiResult && aiResult.confidence < MIN_SIGNAL_CONFIDENCE) {
@@ -2270,10 +2416,26 @@ async function scanMomentumBreakouts() {
                         console.log(`[FILTER] ${mover.symbol}: Order flow imbalance too weak (${mover.orderFlowImbalance.toFixed(2)}), skipping`);
                         continue;
                     }
+                    // [Phase 3] Committee aggregator — unified confidence from all signal sources
+                    const committee = computeCommitteeScore(mover);
+                    if (committee.confidence < 0.45) {
+                        console.log(`[Committee] ${mover.symbol}: Confidence ${committee.confidence} < 0.45 threshold — ${JSON.stringify(committee.components)}`);
+                        continue;
+                    }
+                    console.log(`[Committee] ${mover.symbol}: APPROVED conf:${committee.confidence} — momentum:${committee.components.momentum} flow:${committee.components.orderFlow} displacement:${committee.components.displacement} VP:${committee.components.volumeProfile} FVG:${committee.components.fvg}`);
+                    mover.committeeConfidence = committee.confidence;
+                    mover.committeeComponents = committee.components;
                     // Apply loss-adjusted position sizing
                     if (guardrails.lossSizeMultiplier < 1.0) {
                         mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * guardrails.lossSizeMultiplier;
                         console.log(`[Guardrail] ${mover.symbol} size cut to ${mover.agentSizeMultiplier.toFixed(2)}x (${guardrails.consecutiveLosses} consecutive losses)`);
+                    }
+                    // [Phase 3] Apply market regime adjustments — size and threshold scaling
+                    mover.marketRegime = regime.regime;
+                    mover.regimeAdjustments = regime.adjustments;
+                    mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * regime.adjustments.positionSizeMultiplier;
+                    if (regime.regime !== 'medium') {
+                        console.log(`[Regime] ${mover.symbol} size adjusted to ×${mover.agentSizeMultiplier.toFixed(2)} (${regime.adjustments.label})`);
                     }
                     await executeTrade(mover, mover.strategy || 'momentum');
                 }
