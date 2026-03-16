@@ -1227,6 +1227,141 @@ function isDisplacementCandle(candles, atr, lookback = 3) {
     return false;
 }
 
+// [Phase 2] Volume Profile for Forex — uses bar frequency and conviction weighting
+// (Forex has no reliable volume; uses candle body/range as conviction proxy)
+function calculateVolumeProfile(candles, numBuckets = 40) {
+    if (!candles || candles.length < 20) return null;
+
+    let minPrice = Infinity, maxPrice = -Infinity;
+    for (const candle of candles) {
+        const high = parseFloat(candle.mid.h);
+        const low = parseFloat(candle.mid.l);
+        if (low < minPrice) minPrice = low;
+        if (high > maxPrice) maxPrice = high;
+    }
+
+    const priceRange = maxPrice - minPrice;
+    if (priceRange <= 0) return null;
+    const bucketSize = priceRange / numBuckets;
+
+    const activityByBucket = new Array(numBuckets).fill(0);
+    let totalActivity = 0;
+
+    for (const candle of candles) {
+        const open = parseFloat(candle.mid.o);
+        const high = parseFloat(candle.mid.h);
+        const low = parseFloat(candle.mid.l);
+        const close = parseFloat(candle.mid.c);
+        const body = Math.abs(close - open);
+        const range = high - low;
+        // Conviction weight: large-body candles count more than dojis
+        const weight = range > 0 ? 1 + (body / range) : 1;
+
+        const barLowBucket = Math.max(0, Math.floor((low - minPrice) / bucketSize));
+        const barHighBucket = Math.min(numBuckets - 1, Math.floor((high - minPrice) / bucketSize));
+        const bucketsInBar = barHighBucket - barLowBucket + 1;
+        const weightPerBucket = bucketsInBar > 0 ? weight / bucketsInBar : 0;
+
+        for (let i = barLowBucket; i <= barHighBucket; i++) {
+            activityByBucket[i] += weightPerBucket;
+        }
+        totalActivity += weight;
+    }
+
+    if (totalActivity === 0) return null;
+
+    // POC
+    let pocBucket = 0;
+    for (let i = 1; i < numBuckets; i++) {
+        if (activityByBucket[i] > activityByBucket[pocBucket]) pocBucket = i;
+    }
+    const poc = minPrice + (pocBucket + 0.5) * bucketSize;
+
+    // Value Area (70%)
+    const targetActivity = totalActivity * 0.70;
+    let vaActivity = activityByBucket[pocBucket];
+    let vaLowBucket = pocBucket;
+    let vaHighBucket = pocBucket;
+
+    while (vaActivity < targetActivity && (vaLowBucket > 0 || vaHighBucket < numBuckets - 1)) {
+        const belowAct = vaLowBucket > 0 ? activityByBucket[vaLowBucket - 1] : 0;
+        const aboveAct = vaHighBucket < numBuckets - 1 ? activityByBucket[vaHighBucket + 1] : 0;
+
+        if (belowAct >= aboveAct && vaLowBucket > 0) {
+            vaLowBucket--;
+            vaActivity += activityByBucket[vaLowBucket];
+        } else if (vaHighBucket < numBuckets - 1) {
+            vaHighBucket++;
+            vaActivity += activityByBucket[vaHighBucket];
+        } else if (vaLowBucket > 0) {
+            vaLowBucket--;
+            vaActivity += activityByBucket[vaLowBucket];
+        } else {
+            break;
+        }
+    }
+
+    const vah = minPrice + (vaHighBucket + 1) * bucketSize;
+    const val = minPrice + vaLowBucket * bucketSize;
+
+    // Low-activity nodes
+    const pocActivity = activityByBucket[pocBucket];
+    const lowVolumeNodes = [];
+    for (let i = 0; i < numBuckets; i++) {
+        if (activityByBucket[i] < pocActivity * 0.30) {
+            lowVolumeNodes.push({
+                priceLow: minPrice + i * bucketSize,
+                priceHigh: minPrice + (i + 1) * bucketSize,
+                priceMid: minPrice + (i + 0.5) * bucketSize
+            });
+        }
+    }
+
+    return { vah, val, poc, lowVolumeNodes, bucketSize };
+}
+
+// [Phase 2] Fair Value Gap Detection — forex candle format (candle.mid.o/h/l/c)
+function detectFairValueGaps(candles, lookback = 20) {
+    if (!candles || candles.length < 3) return { bullish: [], bearish: [] };
+
+    const recent = candles.slice(-lookback);
+    const bullishGaps = [];
+    const bearishGaps = [];
+
+    for (let i = 1; i < recent.length - 1; i++) {
+        const prev = recent[i - 1];
+        const curr = recent[i];
+        const next = recent[i + 1];
+
+        const prevHigh = parseFloat(prev.mid.h);
+        const prevLow = parseFloat(prev.mid.l);
+        const nextHigh = parseFloat(next.mid.h);
+        const nextLow = parseFloat(next.mid.l);
+        const currClose = parseFloat(curr.mid.c);
+        const currOpen = parseFloat(curr.mid.o);
+
+        if (nextLow > prevHigh && currClose > currOpen) {
+            bullishGaps.push({
+                gapLow: prevHigh,
+                gapHigh: nextLow,
+                gapMid: (prevHigh + nextLow) / 2,
+                gapSize: nextLow - prevHigh
+            });
+        }
+
+        if (nextHigh < prevLow && currClose < currOpen) {
+            bearishGaps.push({
+                gapLow: nextHigh,
+                gapHigh: prevLow,
+                gapMid: (nextHigh + prevLow) / 2,
+                gapSize: prevLow - nextHigh
+            });
+        }
+    }
+
+    return { bullish: bullishGaps, bearish: bearishGaps };
+}
+
 // [v3.2] H1 Trend Filter — only trade M15 signals that align with H1 direction
 async function getH1Trend(pair) {
     try {
@@ -1460,12 +1595,17 @@ async function analyzePair(pair) {
     const orderFlowImbalance = calculateOrderFlowImbalance(candles, 20);
     const hasDisplacement = isDisplacementCandle(candles, atr, 3);
 
+    // [Phase 2] Volume Profile and Fair Value Gap analysis
+    const volumeProfile = calculateVolumeProfile(candles, 40);
+    const fvg = detectFairValueGaps(candles, 20);
+
     return {
         pair, currentPrice, sma10, sma20, sma50, rsi, atr,
         atrPct, bb, macd, pullback,
         isUptrend, isDowntrend, trendStrength,
         lastCandleBullish, lastCandleBearish,
-        orderFlowImbalance, hasDisplacement
+        orderFlowImbalance, hasDisplacement,
+        volumeProfile, fvg
     };
 }
 
@@ -1582,19 +1722,38 @@ async function scanForSignals(heldPositions = positions) {
                 // [v7.0] Re-enabled pullbackContinuation — this IS the correct forex strategy
                 // (was 0% WR under old logic that bought tops; now we buy pullbacks to SMA20)
                 const strategy = pullback >= maxPullback * 0.55 ? 'pullbackContinuation' : 'trendContinuation';
+                // [Phase 2] Volume Profile and FVG score adjustments
+                let vpBonus = 1.0;
+                if (analysis.volumeProfile) {
+                    const distToVAL = Math.abs(currentPrice - analysis.volumeProfile.val) / currentPrice;
+                    const distToVAH = Math.abs(currentPrice - analysis.volumeProfile.vah) / currentPrice;
+                    if (distToVAL < 0.002) vpBonus = 1.10; // Near VAL = buying at discount
+                    else if (distToVAH < 0.001) vpBonus = 0.90; // Near VAH = buying at premium
+                }
+                let fvgBonus = 1.0;
+                if (analysis.fvg && analysis.fvg.bullish.length > 0 && analysis.volumeProfile && analysis.volumeProfile.lowVolumeNodes.length > 0) {
+                    const hasConfirmedFVG = analysis.fvg.bullish.some(gap =>
+                        analysis.volumeProfile.lowVolumeNodes.some(node =>
+                            gap.gapMid >= node.priceLow && gap.gapMid <= node.priceHigh
+                        )
+                    );
+                    if (hasConfirmedFVG) fvgBonus = 1.12;
+                }
                 signals.push({
                     pair, direction: 'long', tier,
                     entry: currentPrice,
                     stopLoss:   currentPrice * (1 - atrStop),
                     takeProfit: currentPrice * (1 + atrTarget),
                     rsi, trendStrength, atrPct, h1Trend, pullback,
-                    score: parseFloat((score * regimeProfile.quality * (analysis.hasDisplacement ? 1.15 : 1.0)).toFixed(3)),
+                    score: parseFloat((score * regimeProfile.quality * (analysis.hasDisplacement ? 1.15 : 1.0) * vpBonus * fvgBonus).toFixed(3)),
                     strategy,
                     regime: regimeProfile.regime,
                     regimeQuality: regimeProfile.quality,
                     macdHistogram: macd ? macd.histogram : null,
                     orderFlowImbalance: analysis.orderFlowImbalance,
                     hasDisplacement: analysis.hasDisplacement,
+                    volumeProfile: analysis.volumeProfile ? { vah: analysis.volumeProfile.vah, val: analysis.volumeProfile.val, poc: analysis.volumeProfile.poc } : null,
+                    fvgCount: analysis.fvg ? analysis.fvg.bullish.length + analysis.fvg.bearish.length : 0,
                     session: session.name
                 });
             }
@@ -1640,19 +1799,38 @@ async function scanForSignals(heldPositions = positions) {
                 if (!regimeProfile.tradable) continue;
                 // [v7.0] Re-enabled pullbackContinuation — correct strategy for pullback-to-SMA20 entries
                 const strategy = pullback >= maxPullback * 0.55 ? 'pullbackContinuation' : 'trendContinuation';
+                // [Phase 2] Volume Profile and FVG score adjustments
+                let vpBonus = 1.0;
+                if (analysis.volumeProfile) {
+                    const distToVAH = Math.abs(currentPrice - analysis.volumeProfile.vah) / currentPrice;
+                    const distToVAL = Math.abs(currentPrice - analysis.volumeProfile.val) / currentPrice;
+                    if (distToVAH < 0.002) vpBonus = 1.10; // Near VAH = selling at premium (good for shorts)
+                    else if (distToVAL < 0.001) vpBonus = 0.90; // Near VAL = selling at discount (bad for shorts)
+                }
+                let fvgBonus = 1.0;
+                if (analysis.fvg && analysis.fvg.bearish.length > 0 && analysis.volumeProfile && analysis.volumeProfile.lowVolumeNodes.length > 0) {
+                    const hasConfirmedFVG = analysis.fvg.bearish.some(gap =>
+                        analysis.volumeProfile.lowVolumeNodes.some(node =>
+                            gap.gapMid >= node.priceLow && gap.gapMid <= node.priceHigh
+                        )
+                    );
+                    if (hasConfirmedFVG) fvgBonus = 1.12;
+                }
                 signals.push({
                     pair, direction: 'short', tier,
                     entry: currentPrice,
                     stopLoss:   currentPrice * (1 + atrStop),
                     takeProfit: currentPrice * (1 - atrTarget),
                     rsi, trendStrength, atrPct, h1Trend, pullback,
-                    score: parseFloat((score * regimeProfile.quality * (analysis.hasDisplacement ? 1.15 : 1.0)).toFixed(3)),
+                    score: parseFloat((score * regimeProfile.quality * (analysis.hasDisplacement ? 1.15 : 1.0) * vpBonus * fvgBonus).toFixed(3)),
                     strategy,
                     regime: regimeProfile.regime,
                     regimeQuality: regimeProfile.quality,
                     macdHistogram: macd ? macd.histogram : null,
                     orderFlowImbalance: analysis.orderFlowImbalance,
                     hasDisplacement: analysis.hasDisplacement,
+                    volumeProfile: analysis.volumeProfile ? { vah: analysis.volumeProfile.vah, val: analysis.volumeProfile.val, poc: analysis.volumeProfile.poc } : null,
+                    fvgCount: analysis.fvg ? analysis.fvg.bullish.length + analysis.fvg.bearish.length : 0,
                     session: session.name
                 });
             }

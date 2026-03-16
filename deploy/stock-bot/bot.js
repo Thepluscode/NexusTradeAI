@@ -1548,6 +1548,147 @@ function isDisplacementCandle(bars, atr, lookback = 3) {
     return false;
 }
 
+// [Phase 2] Volume Profile — calculates VAH, VAL, POC from OHLCV bars
+// VAH = Value Area High, VAL = Value Area Low, POC = Point of Control (highest volume price)
+// Value Area contains 70% of total volume, centered around POC
+function calculateVolumeProfile(bars, numBuckets = 50) {
+    if (!bars || bars.length < 20) return null;
+
+    // Find price range
+    let minPrice = Infinity, maxPrice = -Infinity;
+    for (const bar of bars) {
+        const high = parseFloat(bar.h);
+        const low = parseFloat(bar.l);
+        if (low < minPrice) minPrice = low;
+        if (high > maxPrice) maxPrice = high;
+    }
+
+    const priceRange = maxPrice - minPrice;
+    if (priceRange <= 0) return null;
+    const bucketSize = priceRange / numBuckets;
+
+    // Build volume-at-price histogram
+    const volumeByBucket = new Array(numBuckets).fill(0);
+    let totalVolume = 0;
+
+    for (const bar of bars) {
+        const open = parseFloat(bar.o);
+        const high = parseFloat(bar.h);
+        const low = parseFloat(bar.l);
+        const close = parseFloat(bar.c);
+        const volume = parseFloat(bar.v) || 0;
+
+        // Distribute volume across the bar's price range
+        const barLowBucket = Math.max(0, Math.floor((low - minPrice) / bucketSize));
+        const barHighBucket = Math.min(numBuckets - 1, Math.floor((high - minPrice) / bucketSize));
+        const bucketsInBar = barHighBucket - barLowBucket + 1;
+        const volumePerBucket = bucketsInBar > 0 ? volume / bucketsInBar : 0;
+
+        for (let i = barLowBucket; i <= barHighBucket; i++) {
+            volumeByBucket[i] += volumePerBucket;
+        }
+        totalVolume += volume;
+    }
+
+    if (totalVolume === 0) return null;
+
+    // Find POC (bucket with highest volume)
+    let pocBucket = 0;
+    for (let i = 1; i < numBuckets; i++) {
+        if (volumeByBucket[i] > volumeByBucket[pocBucket]) pocBucket = i;
+    }
+    const poc = minPrice + (pocBucket + 0.5) * bucketSize;
+
+    // Calculate Value Area (70% of volume centered on POC)
+    const targetVolume = totalVolume * 0.70;
+    let vaVolume = volumeByBucket[pocBucket];
+    let vaLowBucket = pocBucket;
+    let vaHighBucket = pocBucket;
+
+    while (vaVolume < targetVolume && (vaLowBucket > 0 || vaHighBucket < numBuckets - 1)) {
+        const belowVol = vaLowBucket > 0 ? volumeByBucket[vaLowBucket - 1] : 0;
+        const aboveVol = vaHighBucket < numBuckets - 1 ? volumeByBucket[vaHighBucket + 1] : 0;
+
+        if (belowVol >= aboveVol && vaLowBucket > 0) {
+            vaLowBucket--;
+            vaVolume += volumeByBucket[vaLowBucket];
+        } else if (vaHighBucket < numBuckets - 1) {
+            vaHighBucket++;
+            vaVolume += volumeByBucket[vaHighBucket];
+        } else if (vaLowBucket > 0) {
+            vaLowBucket--;
+            vaVolume += volumeByBucket[vaLowBucket];
+        } else {
+            break;
+        }
+    }
+
+    const vah = minPrice + (vaHighBucket + 1) * bucketSize;
+    const val = minPrice + vaLowBucket * bucketSize;
+
+    // Identify low-volume nodes (buckets with volume < 30% of POC volume)
+    const pocVolume = volumeByBucket[pocBucket];
+    const lowVolumeNodes = [];
+    for (let i = 0; i < numBuckets; i++) {
+        if (volumeByBucket[i] < pocVolume * 0.30) {
+            lowVolumeNodes.push({
+                pricelow: minPrice + i * bucketSize,
+                priceHigh: minPrice + (i + 1) * bucketSize,
+                priceMid: minPrice + (i + 0.5) * bucketSize,
+                volumeRatio: pocVolume > 0 ? volumeByBucket[i] / pocVolume : 0
+            });
+        }
+    }
+
+    return { vah, val, poc, lowVolumeNodes, bucketSize };
+}
+
+// [Phase 2] Fair Value Gap Detection — identifies price gaps left by fast-moving candles
+// Bullish FVG: gap between candle[i-1].high and candle[i+1].low (price moved up too fast)
+// Bearish FVG: gap between candle[i-1].low and candle[i+1].high (price moved down too fast)
+function detectFairValueGaps(bars, lookback = 20) {
+    if (!bars || bars.length < 3) return { bullish: [], bearish: [] };
+
+    const recent = bars.slice(-lookback);
+    const bullishGaps = [];
+    const bearishGaps = [];
+
+    for (let i = 1; i < recent.length - 1; i++) {
+        const prev = recent[i - 1];
+        const curr = recent[i];
+        const next = recent[i + 1];
+
+        const prevHigh = parseFloat(prev.h);
+        const prevLow = parseFloat(prev.l);
+        const nextHigh = parseFloat(next.h);
+        const nextLow = parseFloat(next.l);
+        const currClose = parseFloat(curr.c);
+        const currOpen = parseFloat(curr.o);
+
+        // Bullish FVG: gap between prev candle's high and next candle's low
+        if (nextLow > prevHigh && currClose > currOpen) {
+            bullishGaps.push({
+                gapLow: prevHigh,
+                gapHigh: nextLow,
+                gapMid: (prevHigh + nextLow) / 2,
+                gapSize: nextLow - prevHigh
+            });
+        }
+
+        // Bearish FVG: gap between prev candle's low and next candle's high
+        if (nextHigh < prevLow && currClose < currOpen) {
+            bearishGaps.push({
+                gapLow: nextHigh,
+                gapHigh: prevLow,
+                gapMid: (nextHigh + prevLow) / 2,
+                gapSize: prevLow - nextHigh
+            });
+        }
+    }
+
+    return { bullish: bullishGaps, bearish: bearishGaps };
+}
+
 // [v3.4] Bullish RSI divergence — price makes a lower low but RSI makes a higher low
 // Signals exhaustion of selling pressure and probable reversal — strong entry confirmation
 function detectRSIBullishDivergence(bars, lookback = 20) {
@@ -2331,6 +2472,10 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
         const orderFlowImbalance = calculateOrderFlowImbalance(bars, 20);
         const hasDisplacement = isDisplacementCandle(bars, atr, 3);
 
+        // [Phase 2] Volume Profile and Fair Value Gap analysis
+        const volumeProfile = calculateVolumeProfile(bars, 50);
+        const fvg = detectFairValueGaps(bars, 20);
+
         if (momentumAllowed) {
             // Tier assignment with fallback: start at the highest qualifying tier,
             // fall back to lower tiers if secondary filters (volume ratio, RSI) fail.
@@ -2385,6 +2530,29 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                                     score *= 1.15; // 15% score bonus for displacement confirmation
                                 }
 
+                                // Volume Profile bonus — price near VAL (value) gets a boost
+                                if (volumeProfile) {
+                                    const distToVAL = Math.abs(current - volumeProfile.val) / current;
+                                    const distToVAH = Math.abs(current - volumeProfile.vah) / current;
+                                    if (distToVAL < 0.01) {
+                                        score *= 1.10; // 10% bonus: buying near value area low (discount zone)
+                                    } else if (distToVAH < 0.005) {
+                                        score *= 0.90; // 10% penalty: buying near value area high (premium zone)
+                                    }
+                                }
+
+                                // FVG confirmation bonus — bullish FVG at low-volume node = high conviction
+                                if (fvg.bullish.length > 0 && volumeProfile && volumeProfile.lowVolumeNodes.length > 0) {
+                                    const hasConfirmedFVG = fvg.bullish.some(gap =>
+                                        volumeProfile.lowVolumeNodes.some(node =>
+                                            gap.gapMid >= node.pricelow && gap.gapMid <= node.priceHigh
+                                        )
+                                    );
+                                    if (hasConfirmedFVG) {
+                                        score *= 1.12; // 12% bonus: FVG at low-volume node = strong institutional footprint
+                                    }
+                                }
+
                                 candidates.push({
                                     symbol,
                                     price: current,
@@ -2404,7 +2572,9 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                                     atrTarget,  // [v3.2] ATR-based target price (null if not applicable)
                                     atrPct,
                                     orderFlowImbalance,
-                                    hasDisplacement
+                                    hasDisplacement,
+                                    volumeProfile: volumeProfile ? { vah: volumeProfile.vah, val: volumeProfile.val, poc: volumeProfile.poc } : null,
+                                    fvgCount: fvg.bullish.length + fvg.bearish.length
                                 });
                             }
                         }
@@ -2427,6 +2597,29 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                                 score *= 1.15; // 15% score bonus for displacement confirmation
                             }
 
+                            // Volume Profile bonus — price near VAL (value) gets a boost
+                            if (volumeProfile) {
+                                const distToVAL = Math.abs(current - volumeProfile.val) / current;
+                                const distToVAH = Math.abs(current - volumeProfile.vah) / current;
+                                if (distToVAL < 0.01) {
+                                    score *= 1.10; // 10% bonus: buying near value area low (discount zone)
+                                } else if (distToVAH < 0.005) {
+                                    score *= 0.90; // 10% penalty: buying near value area high (premium zone)
+                                }
+                            }
+
+                            // FVG confirmation bonus — bullish FVG at low-volume node = high conviction
+                            if (fvg.bullish.length > 0 && volumeProfile && volumeProfile.lowVolumeNodes.length > 0) {
+                                const hasConfirmedFVG = fvg.bullish.some(gap =>
+                                    volumeProfile.lowVolumeNodes.some(node =>
+                                        gap.gapMid >= node.pricelow && gap.gapMid <= node.priceHigh
+                                    )
+                                );
+                                if (hasConfirmedFVG) {
+                                    score *= 1.12; // 12% bonus: FVG at low-volume node = strong institutional footprint
+                                }
+                            }
+
                             candidates.push({
                                 symbol,
                                 price: current,
@@ -2446,7 +2639,9 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                                 atrTarget,
                                 atrPct,
                                 orderFlowImbalance,
-                                hasDisplacement
+                                hasDisplacement,
+                                volumeProfile: volumeProfile ? { vah: volumeProfile.vah, val: volumeProfile.val, poc: volumeProfile.poc } : null,
+                                fvgCount: fvg.bullish.length + fvg.bearish.length
                             });
                         }
                     }
