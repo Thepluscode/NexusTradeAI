@@ -616,6 +616,201 @@ let simMaxConsecutiveLosses = 0;
 const fs = require('fs');
 const FOREX_PERF_FILE = path.join(__dirname, 'data/forex-performance.json');
 
+// ===== EVALUATION PERSISTENCE (Improvement 1) =====
+const EVAL_FILE = path.join(__dirname, 'data', 'forex-evaluations.json');
+
+function loadForexEvaluations() {
+    try {
+        if (fs.existsSync(EVAL_FILE)) {
+            const data = JSON.parse(fs.readFileSync(EVAL_FILE, 'utf8'));
+            console.log(`[Persistence] Loaded ${data.length} historical forex evaluations`);
+            return data;
+        }
+    } catch (e) {
+        console.error('[Persistence] Failed to load forex evaluations:', e.message);
+    }
+    return [];
+}
+
+function saveForexEvaluations(evals) {
+    try {
+        const dir = path.dirname(EVAL_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        const trimmed = evals.slice(-500);
+        fs.writeFileSync(EVAL_FILE, JSON.stringify(trimmed, null, 2));
+    } catch (e) {
+        console.error('[Persistence] Failed to save forex evaluations:', e.message);
+    }
+}
+
+// ===== WEIGHT AUTO-LEARNING (Improvement 2) =====
+const WEIGHTS_FILE = path.join(__dirname, 'data', 'forex-weights.json');
+const DEFAULT_FOREX_WEIGHTS = { trend: 0.25, orderFlow: 0.20, displacement: 0.15, volumeProfile: 0.15, fvg: 0.10, macd: 0.15 };
+
+function loadForexWeights() {
+    try {
+        if (fs.existsSync(WEIGHTS_FILE)) {
+            const data = JSON.parse(fs.readFileSync(WEIGHTS_FILE, 'utf8'));
+            if (data.weights && typeof data.weights === 'object') {
+                console.log(`[AutoLearn] Loaded optimized forex weights:`, JSON.stringify(data.weights));
+                return data.weights;
+            }
+        }
+    } catch (e) {
+        console.error('[AutoLearn] Failed to load forex weights:', e.message);
+    }
+    return { ...DEFAULT_FOREX_WEIGHTS };
+}
+
+function saveForexWeights(weights, meta) {
+    try {
+        const dir = path.dirname(WEIGHTS_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(WEIGHTS_FILE, JSON.stringify({ weights, ...meta, updatedAt: new Date().toISOString() }, null, 2));
+        console.log(`[AutoLearn] Saved optimized forex weights:`, JSON.stringify(weights));
+    } catch (e) {
+        console.error('[AutoLearn] Failed to save forex weights:', e.message);
+    }
+}
+
+function optimizeForexWeights() {
+    const evals = globalThis._forexTradeEvaluations || [];
+    if (evals.length < 30) {
+        console.log(`[AutoLearn] Need ${30 - evals.length} more forex trades for weight optimization (have ${evals.length})`);
+        return null;
+    }
+
+    const signalKeys = ['trend', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'macd'];
+    const edges = {};
+
+    for (const key of signalKeys) {
+        const withSignal = evals.filter(e => {
+            const comp = e.signals?.components || {};
+            if (key === 'displacement' || key === 'fvg') return (comp[key] || 0) >= 0.5;
+            return (comp[key] || 0) > 0.3;
+        });
+        const withoutSignal = evals.filter(e => {
+            const comp = e.signals?.components || {};
+            if (key === 'displacement' || key === 'fvg') return (comp[key] || 0) < 0.5;
+            return (comp[key] || 0) <= 0.3;
+        });
+
+        const avgWith = withSignal.length > 0 ? withSignal.reduce((s, e) => s + (e.pnlPct || 0), 0) / withSignal.length : 0;
+        const avgWithout = withoutSignal.length > 0 ? withoutSignal.reduce((s, e) => s + (e.pnlPct || 0), 0) / withoutSignal.length : 0;
+        edges[key] = Math.max(0, avgWith - avgWithout);
+    }
+
+    const MIN_WEIGHT = 0.05;
+    const MAX_WEIGHT = 0.40;
+    const totalEdge = Object.values(edges).reduce((s, e) => s + e, 0);
+
+    if (totalEdge <= 0) {
+        console.log('[AutoLearn] No positive edges detected for forex, keeping default weights');
+        return null;
+    }
+
+    const rawWeights = {};
+    for (const key of signalKeys) {
+        rawWeights[key] = Math.max(MIN_WEIGHT, Math.min(MAX_WEIGHT, edges[key] / totalEdge));
+    }
+
+    const sum = Object.values(rawWeights).reduce((s, w) => s + w, 0);
+    const optimizedWeights = {};
+    for (const key of signalKeys) {
+        optimizedWeights[key] = parseFloat((rawWeights[key] / sum).toFixed(3));
+    }
+
+    const finalSum = Object.values(optimizedWeights).reduce((s, w) => s + w, 0);
+    if (Math.abs(finalSum - 1.0) > 0.001) {
+        optimizedWeights.trend += parseFloat((1.0 - finalSum).toFixed(3));
+    }
+
+    console.log(`[AutoLearn] Optimized forex weights from ${evals.length} trades:`, JSON.stringify(optimizedWeights));
+    saveForexWeights(optimizedWeights, { edges, tradeCount: evals.length });
+    return optimizedWeights;
+}
+
+// ===== SIGNAL DECAY DETECTION (Improvement 4) =====
+function detectForexSignalDecay() {
+    const evals = globalThis._forexTradeEvaluations || [];
+    if (evals.length < 20) return null;
+
+    const recent = evals.slice(-20);
+    const signalKeys = ['trend', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'macd'];
+    const decayWarnings = [];
+
+    for (const key of signalKeys) {
+        const withSignal = recent.filter(e => {
+            const comp = e.signals?.components || {};
+            if (key === 'displacement' || key === 'fvg') return (comp[key] || 0) >= 0.5;
+            return (comp[key] || 0) > 0.3;
+        });
+
+        if (withSignal.length >= 5) {
+            const winRate = withSignal.filter(e => e.pnl > 0).length / withSignal.length;
+            if (winRate < 0.35) {
+                decayWarnings.push({ signal: key, winRate, trades: withSignal.length });
+                if (forexCommitteeWeights[key]) {
+                    const reduced = forexCommitteeWeights[key] * 0.6;
+                    forexCommitteeWeights[key] = Math.max(0.03, reduced);
+                    console.log(`[DecayDetect] Forex ${key} decaying (winRate=${(winRate * 100).toFixed(1)}%) — weight reduced to ${forexCommitteeWeights[key].toFixed(3)}`);
+                }
+            }
+        }
+    }
+
+    if (decayWarnings.length > 0) {
+        const sum = Object.values(forexCommitteeWeights).reduce((s, w) => s + w, 0);
+        for (const key of signalKeys) {
+            forexCommitteeWeights[key] = parseFloat((forexCommitteeWeights[key] / sum).toFixed(3));
+        }
+        const finalSum = Object.values(forexCommitteeWeights).reduce((s, w) => s + w, 0);
+        if (Math.abs(finalSum - 1.0) > 0.001) {
+            forexCommitteeWeights.trend += parseFloat((1.0 - finalSum).toFixed(3));
+        }
+        saveForexWeights(forexCommitteeWeights, { decayWarnings, updatedAt: new Date().toISOString() });
+    }
+
+    const overallWinRate = recent.filter(e => e.pnl > 0).length / recent.length;
+    if (overallWinRate < 0.30) {
+        console.log(`[DecayDetect] CRITICAL: Forex overall win rate ${(overallWinRate * 100).toFixed(1)}% — consider pausing`);
+    }
+
+    return decayWarnings.length > 0 ? decayWarnings : null;
+}
+
+// ===== TRANSACTION COST FILTER (Improvement 3) =====
+const FOREX_SPREAD_COSTS = {
+    'EUR_USD': 0.00015, 'GBP_USD': 0.00020, 'USD_JPY': 0.00015,
+    'AUD_USD': 0.00020, 'USD_CAD': 0.00020, 'NZD_USD': 0.00025,
+    'EUR_GBP': 0.00025, 'EUR_JPY': 0.00025, 'GBP_JPY': 0.00035,
+    'AUD_JPY': 0.00030, 'EUR_AUD': 0.00030, 'GBP_AUD': 0.00035
+};
+const DEFAULT_FOREX_SPREAD = 0.00025;
+
+function isForexPositiveEV(pair, committeeConfidence) {
+    const evals = globalThis._forexTradeEvaluations || [];
+    if (evals.length < 10) return true;
+
+    const recent = evals.slice(-50);
+    const wins = recent.filter(e => e.pnl > 0);
+    const losses = recent.filter(e => e.pnl <= 0);
+
+    const avgWinPct = wins.length > 0 ? wins.reduce((s, e) => s + Math.abs(e.pnlPct || 0), 0) / wins.length : 0.005;
+    const avgLossPct = losses.length > 0 ? losses.reduce((s, e) => s + Math.abs(e.pnlPct || 0), 0) / losses.length : 0.005;
+
+    const spreadCost = FOREX_SPREAD_COSTS[pair] || DEFAULT_FOREX_SPREAD;
+    const roundTripCost = 2 * (spreadCost + 0.0001); // spread + slippage each way
+
+    const ev = (committeeConfidence * avgWinPct) - ((1 - committeeConfidence) * avgLossPct) - roundTripCost;
+
+    if (ev <= 0) {
+        console.log(`[CostFilter] ${pair} REJECTED: EV=${(ev * 10000).toFixed(1)}pips (conf=${committeeConfidence.toFixed(3)}, spread=${(spreadCost * 10000).toFixed(1)}pips)`);
+        return false;
+    }
+    return true;
+}
+
 function loadForexPerf() {
     try {
         if (fs.existsSync(FOREX_PERF_FILE)) {
@@ -660,6 +855,29 @@ function saveForexPerf() {
 
 // Load on startup
 loadForexPerf();
+
+// Initialize evaluations from file (Improvement 1)
+globalThis._forexTradeEvaluations = loadForexEvaluations();
+
+// Initialize committee weights from file (Improvement 2)
+let forexCommitteeWeights = loadForexWeights();
+
+// Optimize weights every 4 hours and once at startup (after 10s)
+setInterval(() => {
+    const newWeights = optimizeForexWeights();
+    if (newWeights) {
+        forexCommitteeWeights = newWeights;
+        console.log('[AutoLearn] Forex committee weights updated');
+    }
+}, 4 * 60 * 60 * 1000);
+
+setTimeout(() => {
+    const newWeights = optimizeForexWeights();
+    if (newWeights) forexCommitteeWeights = newWeights;
+}, 10000);
+
+// Detect signal decay every 2 hours (Improvement 4)
+setInterval(() => { detectForexSignalDecay(); }, 2 * 60 * 60 * 1000);
 
 // ===== REGISTER WITH MEMORY MANAGER =====
 memoryManager.register('forex_positions', positions, { maxSize: 50, maxAge: 7 * 24 * 60 * 60 * 1000 });
@@ -1374,27 +1592,27 @@ function computeForexCommitteeScore(signal) {
     let totalWeight = 0;
     const isLong = signal.direction === 'long';
 
-    // 1. Trend alignment — H1 trend matching signal direction (weight: 0.25)
+    // 1. Trend alignment — H1 trend matching signal direction (weight: dynamic via forexCommitteeWeights)
     const trendScore = (isLong && signal.h1Trend === 'up') || (!isLong && signal.h1Trend === 'down') ? 1.0 : 0.0;
-    confirmations += trendScore * 0.25;
-    totalWeight += 0.25;
+    confirmations += trendScore * forexCommitteeWeights.trend;
+    totalWeight += forexCommitteeWeights.trend;
 
-    // 2. Order flow confirmation — direction-aware (weight: 0.20)
+    // 2. Order flow confirmation — direction-aware (weight: dynamic via forexCommitteeWeights)
     let flowScore = 0.5;
     if (signal.orderFlowImbalance !== undefined) {
         flowScore = isLong
             ? Math.max(0, Math.min(1, signal.orderFlowImbalance + 0.5)) // positive flow favors longs
             : Math.max(0, Math.min(1, -signal.orderFlowImbalance + 0.5)); // negative flow favors shorts
     }
-    confirmations += flowScore * 0.20;
-    totalWeight += 0.20;
+    confirmations += flowScore * forexCommitteeWeights.orderFlow;
+    totalWeight += forexCommitteeWeights.orderFlow;
 
-    // 3. Displacement candle (weight: 0.15)
+    // 3. Displacement candle (weight: dynamic via forexCommitteeWeights)
     const displacementScore = signal.hasDisplacement ? 1.0 : 0.0;
-    confirmations += displacementScore * 0.15;
-    totalWeight += 0.15;
+    confirmations += displacementScore * forexCommitteeWeights.displacement;
+    totalWeight += forexCommitteeWeights.displacement;
 
-    // 4. Volume Profile position — direction-aware (weight: 0.15)
+    // 4. Volume Profile position — direction-aware (weight: dynamic via forexCommitteeWeights)
     let vpScore = 0.5;
     if (signal.volumeProfile) {
         const price = signal.entry;
@@ -1408,23 +1626,23 @@ function computeForexCommitteeScore(signal) {
                 : Math.max(0, positionInRange);
         }
     }
-    confirmations += vpScore * 0.15;
-    totalWeight += 0.15;
+    confirmations += vpScore * forexCommitteeWeights.volumeProfile;
+    totalWeight += forexCommitteeWeights.volumeProfile;
 
-    // 5. FVG confirmation (weight: 0.10)
+    // 5. FVG confirmation (weight: dynamic via forexCommitteeWeights)
     const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0.0;
-    confirmations += fvgScore * 0.10;
-    totalWeight += 0.10;
+    confirmations += fvgScore * forexCommitteeWeights.fvg;
+    totalWeight += forexCommitteeWeights.fvg;
 
-    // 6. MACD momentum (weight: 0.15)
+    // 6. MACD momentum (weight: dynamic via forexCommitteeWeights)
     let macdScore = 0.5;
     if (signal.macdHistogram !== null && signal.macdHistogram !== undefined) {
         macdScore = isLong
             ? Math.min(1, Math.max(0, signal.macdHistogram * 10000 + 0.5))
             : Math.min(1, Math.max(0, -signal.macdHistogram * 10000 + 0.5));
     }
-    confirmations += macdScore * 0.15;
-    totalWeight += 0.15;
+    confirmations += macdScore * forexCommitteeWeights.macd;
+    totalWeight += forexCommitteeWeights.macd;
 
     const confidence = totalWeight > 0 ? confirmations / totalWeight : 0;
 
@@ -2332,6 +2550,7 @@ async function closePositionWithReason(pair, reason) {
 
             if (!globalThis._forexTradeEvaluations) globalThis._forexTradeEvaluations = [];
             globalThis._forexTradeEvaluations.push(outcome);
+            saveForexEvaluations(globalThis._forexTradeEvaluations);
 
             // Keep last 200 evaluations in memory
             if (globalThis._forexTradeEvaluations.length > 200) {
@@ -2592,6 +2811,10 @@ async function tradingLoop() {
             const committee = computeForexCommitteeScore(signal);
             if (committee.confidence < 0.45) {
                 console.log(`[Committee] ${signal.pair} ${signal.direction}: Confidence ${committee.confidence} < 0.45 — ${JSON.stringify(committee.components)}`);
+                continue;
+            }
+            // [Improvement 3] Transaction cost EV filter
+            if (!isForexPositiveEV(signal.pair, committee.confidence)) {
                 continue;
             }
             console.log(`[Committee] ${signal.pair} ${signal.direction}: APPROVED conf:${committee.confidence} — trend:${committee.components.trend} flow:${committee.components.orderFlow} disp:${committee.components.displacement} VP:${committee.components.volumeProfile}`);
@@ -3689,6 +3912,19 @@ app.get('/api/forex/alpha-signal', (req, res) => {
             activePositions: positions.size,
             sampleSize: recent.length,
             recommendation: edge > 0.6 ? 'increase_allocation' : edge < 0.4 ? 'decrease_allocation' : 'maintain'
+        }
+    });
+});
+
+// [Improvement 2] Forex committee weights endpoint
+app.get('/api/forex/weights', (req, res) => {
+    res.json({
+        success: true,
+        data: {
+            weights: forexCommitteeWeights,
+            defaults: DEFAULT_FOREX_WEIGHTS,
+            tradeCount: (globalThis._forexTradeEvaluations || []).length,
+            lastOptimized: 'check weights file'
         }
     });
 });
