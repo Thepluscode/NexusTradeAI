@@ -733,8 +733,8 @@ class APIClient {
   }
 
   async getAPIKeys(): Promise<{ keys: Record<string, unknown>[]; total: number }> {
+    if (!this.apiSecret) return { keys: [], total: 0 };
     try {
-      // Get current user ID from auth
       const user = safeParseUser();
       const userId = user.id || 1;
       const response = await this.aiService.get('/api/v1/keys', {
@@ -769,6 +769,9 @@ class APIClient {
   }
 
   async getAPIUsage(): Promise<Record<string, unknown>> {
+    if (!this.apiSecret) {
+      return { calls_today: 0, calls_month: 0, monthly_limit: 100, active_keys: 0 };
+    }
     try {
       const user = safeParseUser();
       const userId = user.id || 1;
