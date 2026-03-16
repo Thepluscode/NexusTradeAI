@@ -124,6 +124,7 @@ jobs:
       - name: Copy dist to deploy/dashboard/
         if: steps.src-changed.outputs.rebuild == 'true'
         run: |
+          rm -rf deploy/dashboard/dist/assets
           cp -r clients/bot-dashboard/dist/. deploy/dashboard/dist/
 
       # Sync bot source files to deploy dirs so Railway picks up any bot changes.
