@@ -345,7 +345,7 @@ class APIClient {
 
   async getStockEvaluations() {
     try {
-      const response = await this.tradingEngine.get('/api/evaluations');
+      const response = await this.tradingEngine.get('/api/trading/evaluations');
       return response.data?.data || null;
     } catch {
       return null;
@@ -354,7 +354,7 @@ class APIClient {
 
   async getForexEvaluations() {
     try {
-      const response = await this.forexService.get('/api/evaluations');
+      const response = await this.forexService.get('/api/forex/evaluations');
       return response.data?.data || null;
     } catch {
       return null;
@@ -363,7 +363,7 @@ class APIClient {
 
   async getCryptoEvaluations() {
     try {
-      const response = await this.cryptoService.get('/api/evaluations');
+      const response = await this.cryptoService.get('/api/crypto/evaluations');
       return response.data?.data || null;
     } catch {
       return null;
