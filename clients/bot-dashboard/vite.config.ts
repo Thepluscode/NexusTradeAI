@@ -10,24 +10,7 @@ export default defineConfig({
     },
   },
   build: {
-    rolldownOptions: {
-      output: {
-        entryFileNames: 'assets/index.js',
-        chunkFileNames: 'assets/[name]-[hash].js',
-        assetFileNames: 'assets/[name][extname]',
-        manualChunks(id) {
-          if (id.includes('node_modules/react-dom') || id.includes('node_modules/react/') || id.includes('node_modules/react-router')) {
-            return 'vendor-react';
-          }
-          if (id.includes('node_modules/@mui')) {
-            return 'vendor-mui';
-          }
-          if (id.includes('node_modules/@tanstack/react-query') || id.includes('node_modules/react-query') || id.includes('node_modules/axios')) {
-            return 'vendor-query';
-          }
-        },
-      },
-    },
+    chunkSizeWarningLimit: 600,
   },
   server: {
     port: 3020,
