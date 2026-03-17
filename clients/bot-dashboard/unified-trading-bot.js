@@ -603,33 +603,66 @@ const RISK_CONFIG_FILE = path.join(DATA_DIR, 'risk-config.json');
 // ── [Improvement 1] Evaluation Persistence ────────────────────────────────
 const EVAL_FILE = path.join(__dirname, 'data', 'stock-evaluations.json');
 
-function loadEvaluations() {
-    try {
-        if (fs.existsSync(EVAL_FILE)) {
-            const data = JSON.parse(fs.readFileSync(EVAL_FILE, 'utf8'));
-            console.log(`[Persistence] Loaded ${data.length} historical stock evaluations`);
-            return data;
-        }
-    } catch (e) {
-        console.error('[Persistence] Failed to load evaluations:', e.message);
+async function loadEvaluationsFromDB() {
+    if (!dbPool) {
+        console.log('[Persistence] No DB — starting with empty evaluations');
+        return [];
     }
-    return [];
+    try {
+        const result = await dbPool.query(`
+            SELECT symbol, direction, entry_price, exit_price, pnl_usd, pnl_pct,
+                   entry_time, exit_time, close_reason, signal_score, entry_context,
+                   strategy, regime, rsi, volume_ratio, momentum_pct
+            FROM trades
+            WHERE bot = 'stock' AND status = 'closed' AND pnl_usd IS NOT NULL
+            ORDER BY exit_time DESC NULLS LAST
+            LIMIT 500
+        `);
+
+        const evals = result.rows.map(row => {
+            const ctx = typeof row.entry_context === 'string'
+                ? JSON.parse(row.entry_context) : (row.entry_context || {});
+            const entryTime = row.entry_time ? new Date(row.entry_time).getTime() : Date.now();
+            const exitTime = row.exit_time ? new Date(row.exit_time).getTime() : Date.now();
+
+            return {
+                symbol: row.symbol,
+                direction: row.direction || 'long',
+                entryPrice: parseFloat(row.entry_price) || 0,
+                exitPrice: parseFloat(row.exit_price) || 0,
+                pnl: parseFloat(row.pnl_usd) || 0,
+                pnlPct: parseFloat(row.pnl_pct) || 0,
+                holdTimeMs: exitTime - entryTime,
+                signals: {
+                    orderFlow: ctx.orderFlowImbalance ?? 0,
+                    displacement: ctx.hasDisplacement ?? false,
+                    vpPosition: ctx.volumeProfile ?? null,
+                    fvgCount: ctx.fvgCount ?? 0,
+                    committeeConfidence: ctx.committeeConfidence ?? (parseFloat(row.signal_score) || 0),
+                    components: ctx.committeeComponents || {},
+                    regime: row.regime || ctx.marketRegime || 'unknown',
+                    score: parseFloat(row.signal_score) || 0
+                },
+                exitReason: row.close_reason || 'unknown',
+                timestamp: exitTime
+            };
+        });
+
+        console.log(`[Persistence] Loaded ${evals.length} stock evaluations from DB`);
+        return evals;
+    } catch (e) {
+        console.error('[Persistence] DB eval load failed:', e.message);
+        return [];
+    }
 }
 
+// Make saveEvaluations a no-op (DB handles persistence via dbTradeClose)
 function saveEvaluations(evals) {
-    try {
-        const dir = path.dirname(EVAL_FILE);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        // Keep last 500 evaluations
-        const trimmed = evals.slice(-500);
-        fs.writeFileSync(EVAL_FILE, JSON.stringify(trimmed, null, 2));
-    } catch (e) {
-        console.error('[Persistence] Failed to save evaluations:', e.message);
-    }
+    // No-op: trades persisted to PostgreSQL via dbTradeClose()
 }
 
-// Initialize from disk immediately
-globalThis._tradeEvaluations = loadEvaluations();
+// Evaluations will be loaded from DB after initDb() completes (see app.listen startup block)
+globalThis._tradeEvaluations = [];
 
 // ── [Improvement 2] Weight Auto-Learning ─────────────────────────────────
 const WEIGHTS_FILE = path.join(__dirname, 'data', 'stock-weights.json');
@@ -1016,6 +1049,13 @@ function buildStockTradeTags(signal = {}, strategy, tier) {
             atrTarget: signal.atrTarget ?? null,
             atrPct: signal.atrPct ?? null,
             regimeScore: signal.regimeScore ?? null,
+            // NEW: committee data for evaluation auto-learning
+            committeeConfidence: signal.committeeConfidence ?? null,
+            committeeComponents: signal.committeeComponents ?? null,
+            orderFlowImbalance: signal.orderFlowImbalance ?? null,
+            hasDisplacement: signal.hasDisplacement ?? false,
+            fvgCount: signal.fvgCount ?? 0,
+            marketRegime: signal.marketRegime ?? null,
         }
     };
 }
@@ -5905,6 +5945,12 @@ app.listen(PORT, async () => {
 
     // [v6.2] Hydrate agent metadata from DB (survives Railway ephemeral FS wipes)
     await hydrateAgentMetadataFromDB().catch(e => console.warn('Agent hydration error:', e.message));
+
+    // [Persistence] Load evaluations from DB so weight optimizer survives Railway redeploys
+    globalThis._tradeEvaluations = await loadEvaluationsFromDB().catch(e => {
+        console.warn('[Persistence] Evaluation load failed, starting empty:', e.message);
+        return [];
+    });
 
     // ── Hydrate perfData from DB so stats survive redeploys ──
     if (dbPool && perfData.totalTrades === 0) {

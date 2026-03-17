@@ -15,32 +15,66 @@ require('dotenv').config();
 // ============================================================================
 const EVAL_FILE = path.join(__dirname, 'data', 'crypto-evaluations.json');
 
-function loadCryptoEvaluations() {
-    try {
-        if (fs.existsSync(EVAL_FILE)) {
-            const data = JSON.parse(fs.readFileSync(EVAL_FILE, 'utf8'));
-            console.log(`[Persistence] Loaded ${data.length} historical crypto evaluations`);
-            return data;
-        }
-    } catch (e) {
-        console.error('[Persistence] Failed to load crypto evaluations:', e.message);
+async function loadCryptoEvaluationsFromDB() {
+    if (!dbPool) {
+        console.log('[Persistence] No DB — starting with empty crypto evaluations');
+        return [];
     }
-    return [];
+    try {
+        const result = await dbPool.query(`
+            SELECT symbol, direction, entry_price, exit_price, pnl_usd, pnl_pct,
+                   entry_time, exit_time, close_reason, signal_score, entry_context,
+                   strategy, regime
+            FROM trades
+            WHERE bot = 'crypto' AND status = 'closed' AND pnl_usd IS NOT NULL
+            ORDER BY exit_time DESC NULLS LAST
+            LIMIT 500
+        `);
+
+        const evals = result.rows.map(row => {
+            const ctx = typeof row.entry_context === 'string'
+                ? JSON.parse(row.entry_context) : (row.entry_context || {});
+            const entryTime = row.entry_time ? new Date(row.entry_time).getTime() : Date.now();
+            const exitTime = row.exit_time ? new Date(row.exit_time).getTime() : Date.now();
+
+            return {
+                symbol: row.symbol,
+                direction: row.direction || 'long',
+                entryPrice: parseFloat(row.entry_price) || 0,
+                exitPrice: parseFloat(row.exit_price) || 0,
+                pnl: parseFloat(row.pnl_usd) || 0,
+                pnlPct: parseFloat(row.pnl_pct) || 0,
+                holdTimeMs: exitTime - entryTime,
+                signals: {
+                    orderFlow: ctx.orderFlowImbalance ?? 0,
+                    displacement: ctx.hasDisplacement ?? false,
+                    vpPosition: ctx.volumeProfile ?? null,
+                    fvgCount: ctx.fvgCount ?? 0,
+                    committeeConfidence: ctx.committeeConfidence ?? (parseFloat(row.signal_score) || 0),
+                    components: ctx.committeeComponents || {},
+                    regime: row.regime || ctx.marketRegime || 'unknown',
+                    score: parseFloat(row.signal_score) || 0
+                },
+                exitReason: row.close_reason || 'unknown',
+                timestamp: exitTime
+            };
+        });
+
+        console.log(`[Persistence] Loaded ${evals.length} crypto evaluations from DB`);
+        return evals;
+    } catch (e) {
+        console.error('[Persistence] DB crypto eval load failed:', e.message);
+        return [];
+    }
 }
 
+// Make save a no-op — trades are persisted to PostgreSQL via dbCryptoClose()
 function saveCryptoEvaluations(evals) {
-    try {
-        const dir = path.dirname(EVAL_FILE);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        const trimmed = evals.slice(-500);
-        fs.writeFileSync(EVAL_FILE, JSON.stringify(trimmed, null, 2));
-    } catch (e) {
-        console.error('[Persistence] Failed to save crypto evaluations:', e.message);
-    }
+    // No-op: trades persisted to PostgreSQL via dbCryptoClose()
 }
 
-// Initialize evaluations from disk so they survive restarts
-globalThis._cryptoTradeEvaluations = loadCryptoEvaluations();
+// Initialize evaluations to empty array; will be populated from DB after initTradeDb()
+globalThis._cryptoTradeEvaluations = [];
 
 // ============================================================================
 // [Improvement 2] WEIGHT AUTO-LEARNING
@@ -385,7 +419,14 @@ function buildCryptoTradeTags(signal = {}, tier) {
             volumeRatio: signal.volumeRatio ?? null,
             volume24h: signal.volume24h ?? null,
             sizingFactor: signal.sizingFactor ?? null,
-            regimeQuality: signal.regimeQuality ?? null
+            regimeQuality: signal.regimeQuality ?? null,
+            // NEW: committee data for auto-learning
+            committeeConfidence: signal.committeeConfidence ?? null,
+            committeeComponents: signal.committeeComponents ?? null,
+            orderFlowImbalance: signal.orderFlowImbalance ?? null,
+            hasDisplacement: signal.hasDisplacement ?? false,
+            fvgCount: signal.fvgCount ?? 0,
+            marketRegime: signal.marketRegime ?? null,
         }
     };
 }
@@ -3786,6 +3827,9 @@ app.listen(PORT, async () => {
 
     // Connect DB for trade persistence (non-blocking)
     await initTradeDb().catch(e => console.warn('⚠️  Crypto DB init error:', e.message));
+
+    // Load evaluations from DB now that dbPool is ready
+    globalThis._cryptoTradeEvaluations = await loadCryptoEvaluationsFromDB();
 
     // FIRST: load local state (daily counters, operational state like demoMode)
     engine.loadState();
