@@ -150,7 +150,14 @@ function buildForexTradeTags(signal = {}, tier, direction, session) {
             atrPct: signal.atrPct ?? null,
             regimeQuality: signal.regimeQuality ?? null,
             rsi: signal.rsi ?? null,
-            macdHistogram: signal.macdHistogram ?? null
+            macdHistogram: signal.macdHistogram ?? null,
+            // committee data for auto-learning
+            committeeConfidence: signal.committeeConfidence ?? null,
+            committeeComponents: signal.committeeComponents ?? null,
+            orderFlowImbalance: signal.orderFlowImbalance ?? null,
+            hasDisplacement: signal.hasDisplacement ?? false,
+            fvgCount: signal.fvgCount ?? 0,
+            marketRegime: signal.marketRegime ?? null,
         }
     };
 }
@@ -619,28 +626,62 @@ const FOREX_PERF_FILE = path.join(__dirname, 'data/forex-performance.json');
 // ===== EVALUATION PERSISTENCE (Improvement 1) =====
 const EVAL_FILE = path.join(__dirname, 'data', 'forex-evaluations.json');
 
-function loadForexEvaluations() {
-    try {
-        if (fs.existsSync(EVAL_FILE)) {
-            const data = JSON.parse(fs.readFileSync(EVAL_FILE, 'utf8'));
-            console.log(`[Persistence] Loaded ${data.length} historical forex evaluations`);
-            return data;
-        }
-    } catch (e) {
-        console.error('[Persistence] Failed to load forex evaluations:', e.message);
+async function loadForexEvaluationsFromDB() {
+    if (!dbPool) {
+        console.log('[Persistence] No DB — starting with empty forex evaluations');
+        return [];
     }
-    return [];
+    try {
+        const result = await dbPool.query(`
+            SELECT symbol, direction, entry_price, exit_price, pnl_usd, pnl_pct,
+                   entry_time, exit_time, close_reason, signal_score, entry_context,
+                   strategy, regime, session
+            FROM trades
+            WHERE bot = 'forex' AND status = 'closed' AND pnl_usd IS NOT NULL
+            ORDER BY exit_time DESC NULLS LAST
+            LIMIT 500
+        `);
+
+        const evals = result.rows.map(row => {
+            const ctx = typeof row.entry_context === 'string'
+                ? JSON.parse(row.entry_context) : (row.entry_context || {});
+            const entryTime = row.entry_time ? new Date(row.entry_time).getTime() : Date.now();
+            const exitTime = row.exit_time ? new Date(row.exit_time).getTime() : Date.now();
+
+            return {
+                symbol: row.symbol,
+                direction: row.direction || 'long',
+                entryPrice: parseFloat(row.entry_price) || 0,
+                exitPrice: parseFloat(row.exit_price) || 0,
+                pnl: parseFloat(row.pnl_usd) || 0,
+                pnlPct: parseFloat(row.pnl_pct) || 0,
+                holdTimeMs: exitTime - entryTime,
+                signals: {
+                    orderFlow: ctx.orderFlowImbalance ?? 0,
+                    displacement: ctx.hasDisplacement ?? false,
+                    vpPosition: ctx.volumeProfile ?? null,
+                    fvgCount: ctx.fvgCount ?? 0,
+                    committeeConfidence: ctx.committeeConfidence ?? (parseFloat(row.signal_score) || 0),
+                    components: ctx.committeeComponents || {},
+                    regime: row.regime || ctx.marketRegime || 'unknown',
+                    score: parseFloat(row.signal_score) || 0
+                },
+                exitReason: row.close_reason || 'unknown',
+                timestamp: exitTime
+            };
+        });
+
+        console.log(`[Persistence] Loaded ${evals.length} forex evaluations from DB`);
+        return evals;
+    } catch (e) {
+        console.error('[Persistence] DB forex eval load failed:', e.message);
+        return [];
+    }
 }
 
+// No-op: trades are persisted to PostgreSQL via dbForexClose()
 function saveForexEvaluations(evals) {
-    try {
-        const dir = path.dirname(EVAL_FILE);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        const trimmed = evals.slice(-500);
-        fs.writeFileSync(EVAL_FILE, JSON.stringify(trimmed, null, 2));
-    } catch (e) {
-        console.error('[Persistence] Failed to save forex evaluations:', e.message);
-    }
+    // No-op: trades persisted to PostgreSQL via dbForexClose()
 }
 
 // ===== WEIGHT AUTO-LEARNING (Improvement 2) =====
@@ -856,13 +897,13 @@ function saveForexPerf() {
 // Load on startup
 loadForexPerf();
 
-// Initialize evaluations from file (Improvement 1)
-globalThis._forexTradeEvaluations = loadForexEvaluations();
+// Initialize evaluations — will be loaded from DB after initTradeDb() completes (see startup)
+globalThis._forexTradeEvaluations = [];
 
 // Initialize committee weights from file (Improvement 2)
 let forexCommitteeWeights = loadForexWeights();
 
-// Optimize weights every 4 hours and once at startup (after 10s)
+// Optimize weights every 4 hours
 setInterval(() => {
     const newWeights = optimizeForexWeights();
     if (newWeights) {
@@ -870,11 +911,6 @@ setInterval(() => {
         console.log('[AutoLearn] Forex committee weights updated');
     }
 }, 4 * 60 * 60 * 1000);
-
-setTimeout(() => {
-    const newWeights = optimizeForexWeights();
-    if (newWeights) forexCommitteeWeights = newWeights;
-}, 10000);
 
 // Detect signal decay every 2 hours (Improvement 4)
 setInterval(() => { detectForexSignalDecay(); }, 2 * 60 * 60 * 1000);
@@ -3983,6 +4019,14 @@ app.listen(PORT, async () => {
 
     // Connect DB for trade persistence (non-blocking)
     await initTradeDb().catch(e => console.warn('⚠️  Forex DB init error:', e.message));
+
+    // Load evaluations from DB (replaces JSON file — survives redeploys)
+    globalThis._forexTradeEvaluations = await loadForexEvaluationsFromDB();
+    // Optimize weights now that evaluations are loaded (replaces the old 10s setTimeout)
+    setTimeout(() => {
+        const newWeights = optimizeForexWeights();
+        if (newWeights) forexCommitteeWeights = newWeights;
+    }, 5000);
 
     // ── Load credentials from DB into process.env (fallback: env vars already set) ──
     try {
