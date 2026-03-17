@@ -1201,6 +1201,13 @@ function canTrade(pair, direction = 'long') {
         }
     }
 
+    // Check for recently failed orders on this pair (5-minute cooldown)
+    const pairRecentTrades = recentTrades.get(pair) || [];
+    const recentFailed = pairRecentTrades.filter(t => t.failed && (Date.now() - t.time) < 5 * 60 * 1000);
+    if (recentFailed.length >= 2) {
+        return { allowed: false, reason: `${pair} had ${recentFailed.length} failed orders in last 5 min — cooling down` };
+    }
+
     // Check correlation
     const correlatedPositions = getCorrelatedPositions(pair, direction);
     if (correlatedPositions.length >= 2) {
@@ -2285,11 +2292,32 @@ async function executeTrade(signal) {
     const sessionMultiplier = signal.session === 'London/NY Overlap' ? 1.15 : 1.0;
     const positionValue = balance * config.positionSize * sessionMultiplier;
 
-    // [v7.2] Calculate units — positionValue / entry gives notional base-currency units
-    // Previous 7000x multiplier produced millions of units, causing OANDA order rejections
-    let units = signal.direction === 'long'
-        ? Math.floor(positionValue / effectiveEntry)
-        : -Math.floor(positionValue / effectiveEntry);
+    // [v7.3] Calculate units — OANDA units = base currency units.
+    // If base is USD (e.g. USD_JPY), positionValue is already in USD → units = positionValue.
+    // If base is foreign (e.g. EUR_USD), convert USD position value to base currency → units = positionValue / price.
+    const _pair = signal.pair; // e.g. 'EUR_USD'
+    const _baseCurrency = _pair.split('_')[0]; // e.g. 'EUR'
+
+    let rawUnits;
+    if (_baseCurrency === 'USD') {
+        // Base is USD, position value is already in USD
+        rawUnits = Math.round(positionValue);
+    } else {
+        // Base is foreign currency, convert USD position value to base currency units
+        rawUnits = Math.round(positionValue / effectiveEntry);
+    }
+
+    // OANDA accepts integer units; negative for short
+    let units = signal.direction === 'long' ? rawUnits : -rawUnits;
+
+    // Sanity check: cap at 100,000 units (1 standard lot) for safety
+    const maxUnits = 100000;
+    if (Math.abs(units) > maxUnits) {
+        console.log(`[SafetyCheck] ${_pair} units ${units} exceeds max ${maxUnits}, capping`);
+        units = signal.direction === 'long' ? maxUnits : -maxUnits;
+    }
+
+    console.log(`[Units] ${_pair} base=${_baseCurrency} posValue=$${positionValue.toFixed(2)} entry=${effectiveEntry} → ${units} units`);
 
     // [v4.7] Cap units via RISK_PER_TRADE — never risk more than 0.35% of equity per trade
     const stopDistPct = Math.abs(signal.entry - signal.stopLoss) / signal.entry;
@@ -2403,7 +2431,13 @@ async function executeTrade(signal) {
 }
 
 async function closePositionWithReason(pair, reason) {
+    // Capture copies FIRST — before any async operations or Map mutations
     const pos = positions.get(pair);
+    const snapshot = pos?.signalSnapshot ? { ...pos.signalSnapshot } : null;
+    const posCopy = pos ? { ...pos } : null;
+
+    // Delete from Map EARLY — prevents stuck positions if downstream ops throw
+    positions.delete(pair);
 
     // Enhanced alert based on reason type
     if (reason.toLowerCase().includes('stop') || reason.toLowerCase().includes('loss')) {
@@ -2412,18 +2446,18 @@ async function closePositionWithReason(pair, reason) {
         console.log('║                 FOREX STOP LOSS ALERT                 ║');
         console.log('🚨'.repeat(30));
         console.log(`📛 Pair: ${pair}`);
-        console.log(`💰 Entry: ${pos?.entry?.toFixed(5) || 'N/A'}`);
+        console.log(`💰 Entry: ${posCopy?.entry?.toFixed(5) || 'N/A'}`);
         console.log(`🔻 Stop Loss Triggered`);
         console.log(`📉 Reason: ${reason}`);
         console.log(`⏰ Time: ${new Date().toLocaleString()}`);
         console.log('🚨'.repeat(30));
 
         // Send SMS Alert — fire-and-forget so network failure never blocks position close
-        smsAlerts.sendForexStopLoss(pair, pos?.entry?.toFixed(5) || 'N/A', reason)
+        smsAlerts.sendForexStopLoss(pair, posCopy?.entry?.toFixed(5) || 'N/A', reason)
             .catch(e => console.warn(`⚠️  SMS stop-loss alert failed: ${e.message}`));
 
         // Send Telegram Alert — fire-and-forget
-        telegramAlerts.sendForexStopLoss(pair, pos?.entry?.toFixed(5) || 'N/A', reason)
+        telegramAlerts.sendForexStopLoss(pair, posCopy?.entry?.toFixed(5) || 'N/A', reason)
             .catch(e => console.warn(`⚠️  Telegram stop-loss alert failed: ${e.message}`));
 
     } else if (reason.toLowerCase().includes('target') || reason.toLowerCase().includes('profit')) {
@@ -2432,32 +2466,31 @@ async function closePositionWithReason(pair, reason) {
         console.log('║              FOREX PROFIT TARGET HIT                  ║');
         console.log('🎯'.repeat(30));
         console.log(`💎 Pair: ${pair}`);
-        console.log(`💰 Entry: ${pos?.entry?.toFixed(5) || 'N/A'}`);
+        console.log(`💰 Entry: ${posCopy?.entry?.toFixed(5) || 'N/A'}`);
         console.log(`🎯 Take Profit Hit`);
         console.log(`📈 Reason: ${reason}`);
         console.log(`⏰ Time: ${new Date().toLocaleString()}`);
         console.log('🎯'.repeat(30));
 
         // Send SMS Alert — fire-and-forget
-        smsAlerts.sendForexTakeProfit(pair, pos?.entry?.toFixed(5) || 'N/A', reason)
+        smsAlerts.sendForexTakeProfit(pair, posCopy?.entry?.toFixed(5) || 'N/A', reason)
             .catch(e => console.warn(`⚠️  SMS take-profit alert failed: ${e.message}`));
 
         // Send Telegram Alert — fire-and-forget
-        telegramAlerts.sendForexTakeProfit(pair, pos?.entry?.toFixed(5) || 'N/A', reason)
+        telegramAlerts.sendForexTakeProfit(pair, posCopy?.entry?.toFixed(5) || 'N/A', reason)
             .catch(e => console.warn(`⚠️  Telegram take-profit alert failed: ${e.message}`));
 
     } else {
         // TIME-BASED / OTHER EXITS — log and send alert
-        const pos = positions.get(pair);
-        const pnlPct = pos?.unrealizedPL && pos?.entry && pos?.units
-            ? ((pos.unrealizedPL / (pos.entry * Math.abs(pos.units))) * 100).toFixed(2)
+        const pnlPct = posCopy?.unrealizedPL && posCopy?.entry && posCopy?.units
+            ? ((posCopy.unrealizedPL / (posCopy.entry * Math.abs(posCopy.units))) * 100).toFixed(2)
             : '?';
         console.log(`\n⏰ CLOSING ${pair}: ${reason} (P&L: ${pnlPct}%)`);
 
         telegramAlerts.send(
             `⏰ *FOREX TIME EXIT* — ${pair}\n` +
             `Reason: ${reason}\n` +
-            `Entry: ${pos?.entry?.toFixed(5) ?? 'N/A'} → Current: ${pos?.currentPrice?.toFixed(5) ?? 'N/A'}\n` +
+            `Entry: ${posCopy?.entry?.toFixed(5) ?? 'N/A'} → Current: ${posCopy?.currentPrice?.toFixed(5) ?? 'N/A'}\n` +
             `P&L: ${pnlPct}%`
         ).catch(e => console.warn(`⚠️  Telegram time-exit alert failed: ${e.message}`));
     }
@@ -2465,31 +2498,30 @@ async function closePositionWithReason(pair, reason) {
     const result = await closePosition(pair);
 
     if (result) {
-        // Extract actual fill data from OANDA response
-        if (pos) {
+        // Extract actual fill data from OANDA response and update our copy
+        if (posCopy) {
             const fillTx = result.longOrderFillTransaction || result.shortOrderFillTransaction;
             if (fillTx) {
                 const actualPL = parseFloat(fillTx.pl || 0);
                 const actualPrice = parseFloat(fillTx.price || 0);
                 if (actualPL !== 0) {
-                    pos.unrealizedPL = actualPL;
+                    posCopy.unrealizedPL = actualPL;
                 }
                 if (actualPrice > 0) {
-                    pos.currentPrice = actualPrice;
+                    posCopy.currentPrice = actualPrice;
                 }
             }
         }
 
-        // Update sim performance stats — use pos captured BEFORE closePosition() since
-        // closePosition() deletes the entry from the Map
+        // Update sim performance stats
         simTotalTrades++;
-        if (pos) {
-            const isWin = (pos.unrealizedPL || 0) > 0;
-            const isLoss = (pos.unrealizedPL || 0) <= 0;
+        if (posCopy) {
+            const isWin = (posCopy.unrealizedPL || 0) > 0;
+            const isLoss = (posCopy.unrealizedPL || 0) <= 0;
             if (isWin) simWinners++;
             else if (isLoss) simLosers++;
             // Update daily P&L so the circuit breaker has real data
-            const tradePnL = pos.unrealizedPL ?? 0;
+            const tradePnL = posCopy.unrealizedPL ?? 0;
             simDailyPnL += tradePnL;
             simTotalPnL += tradePnL;
             if (tradePnL > 0) {
@@ -2506,66 +2538,67 @@ async function closePositionWithReason(pair, reason) {
         }
         saveForexPerf();
 
-        // Persist close to DB — use unrealizedPL as proxy for exit PnL
-        if (pos) {
-            const exitPnl = pos.unrealizedPL ?? 0;
-            const exitEntry = pos.entry ?? 0;
-            const exitPct = exitEntry > 0 ? (exitPnl / (exitEntry * Math.abs(pos.units ?? 1))) * 100 : 0;
-            const exitPrice = pos.currentPrice ?? exitEntry;
-            dbForexClose(pos.dbTradeId, exitPrice, exitPnl, exitPct, reason).catch(() => {});
-            // [v4.1] Report to Agentic AI learning loop — Scan AI pattern tracking
-            reportForexTradeOutcome(pos, exitPrice, exitPnl, exitPct / 100, reason).catch(() => {});
-            // [v4.6] Record outcome into adaptive guardrails
-            guardrails.recordOutcome(exitPnl > 0);
-        }
-
-        // [Phase 4] Trade evaluation — log signal effectiveness for weight optimization
-        if (pos && pos.signalSnapshot) {
-            const snapshot = pos.signalSnapshot;
-            const evalExitPrice = pos.currentPrice || pos.entry || 0;
-            const evalPnl = pos.unrealizedPL ?? 0;
-            const evalEntry = pos.entry ?? 0;
-            const evalPnlPct = evalEntry > 0 ? evalPnl / (evalEntry * Math.abs(pos.units ?? 1)) : 0;
-            const outcome = {
-                symbol: pos.instrument || pair,
-                direction: pos.direction || 'long',
-                entryPrice: pos.entry,
-                exitPrice: evalExitPrice,
-                pnl: evalPnl,
-                pnlPct: evalPnlPct,
-                holdTimeMs: Date.now() - (snapshot.timestamp || pos.entryTime?.getTime?.() || Date.now()),
-                signals: {
-                    orderFlow: snapshot.orderFlowImbalance,
-                    displacement: snapshot.hasDisplacement,
-                    vpPosition: snapshot.volumeProfile,
-                    fvgCount: snapshot.fvgCount,
-                    committeeConfidence: snapshot.committeeConfidence,
-                    components: snapshot.committeeComponents,
-                    regime: snapshot.marketRegime,
-                    score: snapshot.score
-                },
-                exitReason: reason || 'unknown',
-                timestamp: Date.now()
-            };
-
-            if (!globalThis._forexTradeEvaluations) globalThis._forexTradeEvaluations = [];
-            globalThis._forexTradeEvaluations.push(outcome);
-            saveForexEvaluations(globalThis._forexTradeEvaluations);
-
-            // Keep last 200 evaluations in memory
-            if (globalThis._forexTradeEvaluations.length > 200) {
-                globalThis._forexTradeEvaluations = globalThis._forexTradeEvaluations.slice(-200);
+        // DB operations and evaluation wrapped in try-catch so failures never affect position lifecycle
+        try {
+            // Persist close to DB — use unrealizedPL as proxy for exit PnL
+            if (posCopy) {
+                const exitPnl = posCopy.unrealizedPL ?? 0;
+                const exitEntry = posCopy.entry ?? 0;
+                const exitPct = exitEntry > 0 ? (exitPnl / (exitEntry * Math.abs(posCopy.units ?? 1))) * 100 : 0;
+                const exitPrice = posCopy.currentPrice ?? exitEntry;
+                dbForexClose(posCopy.dbTradeId, exitPrice, exitPnl, exitPct, reason).catch(() => {});
+                // [v4.1] Report to Agentic AI learning loop — Scan AI pattern tracking
+                reportForexTradeOutcome(posCopy, exitPrice, exitPnl, exitPct / 100, reason).catch(() => {});
+                // [v4.6] Record outcome into adaptive guardrails
+                guardrails.recordOutcome(exitPnl > 0);
             }
 
-            const winLoss = evalPnl > 0 ? 'WIN' : 'LOSS';
-            console.log(`[Evaluation] ${outcome.symbol} ${winLoss} ${evalPnlPct > 0 ? '+' : ''}${(evalPnlPct * 100).toFixed(2)}% — committee:${snapshot.committeeConfidence} flow:${snapshot.orderFlowImbalance?.toFixed?.(2) || '?'} displacement:${snapshot.hasDisplacement} regime:${snapshot.marketRegime}`);
-        }
+            // [Phase 4] Trade evaluation — log signal effectiveness for weight optimization
+            // Uses snapshot and posCopy captured at function entry (before any async ops)
+            if (snapshot) {
+                const evalExitPrice = posCopy?.currentPrice || posCopy?.entry || 0;
+                const evalPnl = posCopy?.unrealizedPL ?? 0;
+                const evalEntry = posCopy?.entry ?? 0;
+                const evalPnlPct = evalEntry > 0 ? evalPnl / (evalEntry * Math.abs(posCopy?.units ?? 1)) : 0;
+                const outcome = {
+                    symbol: posCopy?.instrument || pair,
+                    direction: posCopy?.direction || 'long',
+                    entryPrice: posCopy?.entry,
+                    exitPrice: evalExitPrice,
+                    pnl: evalPnl,
+                    pnlPct: evalPnlPct,
+                    holdTimeMs: Date.now() - (snapshot.timestamp || posCopy?.entryTime?.getTime?.() || Date.now()),
+                    signals: {
+                        orderFlow: snapshot.orderFlowImbalance,
+                        displacement: snapshot.hasDisplacement,
+                        vpPosition: snapshot.volumeProfile,
+                        fvgCount: snapshot.fvgCount,
+                        committeeConfidence: snapshot.committeeConfidence,
+                        components: snapshot.committeeComponents,
+                        regime: snapshot.marketRegime,
+                        score: snapshot.score
+                    },
+                    exitReason: reason || 'unknown',
+                    timestamp: Date.now()
+                };
 
-        positions.delete(pair);
+                if (!globalThis._forexTradeEvaluations) globalThis._forexTradeEvaluations = [];
+                globalThis._forexTradeEvaluations.push(outcome);
+                if (globalThis._forexTradeEvaluations.length > 500) {
+                    globalThis._forexTradeEvaluations = globalThis._forexTradeEvaluations.slice(-500);
+                }
+                saveForexEvaluations(globalThis._forexTradeEvaluations);
+
+                const winLoss = evalPnl > 0 ? 'WIN' : 'LOSS';
+                console.log(`[Evaluation] ${outcome.symbol} ${winLoss} ${evalPnlPct > 0 ? '+' : ''}${(evalPnlPct * 100).toFixed(2)}% — committee:${snapshot.committeeConfidence} flow:${snapshot.orderFlowImbalance?.toFixed?.(2) || '?'} displacement:${snapshot.hasDisplacement} regime:${snapshot.marketRegime}`);
+            }
+        } catch (err) {
+            console.error(`[ClosePosition] Post-close operations failed for ${pair}:`, err.message);
+        }
 
         if (reason.toLowerCase().includes('stop')) {
             // Dynamic cooldown: small loss (<1%) → 30 min; medium (1-2%) → 60 min; large (>2%) → 2h
-            const lossPct = pos ? Math.abs(pos.unrealizedPL ?? 0) / (parseFloat(pos.entry ?? 1) * Math.abs(pos.units ?? 1)) * 100 : 1;
+            const lossPct = posCopy ? Math.abs(posCopy.unrealizedPL ?? 0) / (parseFloat(posCopy.entry ?? 1) * Math.abs(posCopy.units ?? 1)) * 100 : 1;
             const cooldownMs = lossPct >= 2 ? MIN_TIME_AFTER_STOP
                 : lossPct >= 1 ? 60 * 60 * 1000
                 : 30 * 60 * 1000;
