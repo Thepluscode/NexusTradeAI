@@ -108,9 +108,10 @@ class PortfolioRiskAgent:
             async with pool.acquire() as conn:
                 rows = await conn.fetch("""
                     SELECT symbol, bot, direction, entry_price, position_size_usd,
-                           unrealized_pnl, asset_class, tier, entry_time
+                           asset_class, tier, entry_time
                     FROM trades
                     WHERE exit_price IS NULL
+                      AND close_reason != 'orphaned_restart'
                     ORDER BY entry_time DESC
                 """)
                 return [dict(r) for r in rows]
