@@ -181,13 +181,21 @@ async function dbForexOpen(pair, direction, tier, entry, stopLoss, takeProfit, u
 
 async function dbForexClose(id, exitPrice, pnlUsd, pnlPct, reason) {
     if (!dbPool || !id) return;
+    const client = await dbPool.connect();
     try {
-        await dbPool.query(
+        await client.query('BEGIN');
+        await client.query(
             `UPDATE trades SET status='closed',exit_price=$1,pnl_usd=$2,pnl_pct=$3,
              exit_time=NOW(),close_reason=$4 WHERE id=$5`,
             [exitPrice, pnlUsd, pnlPct, reason, id]
         );
-    } catch (e) { console.warn('DB forex close failed:', e.message); }
+        await client.query('COMMIT');
+    } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        console.warn('DB forex close failed (rolled back):', e.message);
+    } finally {
+        client.release();
+    }
 }
 
 // ===== PRODUCTION INFRASTRUCTURE =====
@@ -3649,12 +3657,20 @@ class UserForexEngine {
 
     async dbForexClose(id, exitPrice, pnlUsd, pnlPct, reason) {
         if (!dbPool || !id) return;
+        const client = await dbPool.connect();
         try {
-            await dbPool.query(
+            await client.query('BEGIN');
+            await client.query(
                 `UPDATE trades SET status='closed',exit_price=$1,pnl_usd=$2,pnl_pct=$3,exit_time=NOW(),close_reason=$4 WHERE id=$5`,
                 [exitPrice, pnlUsd, pnlPct, reason, id]
             );
-        } catch (e) { console.warn('DB forex close failed:', e.message); }
+            await client.query('COMMIT');
+        } catch (e) {
+            await client.query('ROLLBACK').catch(() => {});
+            console.warn('DB forex close failed (rolled back):', e.message);
+        } finally {
+            client.release();
+        }
     }
 
     canTrade(pair, direction) {
@@ -4091,19 +4107,26 @@ app.listen(PORT, async () => {
             const orphaned = await dbPool.query(
                 `SELECT id, symbol FROM trades WHERE bot='forex' AND status='open' AND user_id IS NULL AND entry_time < NOW() - INTERVAL '5 minutes'`
             );
-            let closedCount = 0;
-            for (const row of orphaned.rows) {
-                if (!positions.has(row.symbol)) {
-                    await dbPool.query(
-                        `UPDATE trades SET status='closed', exit_price=entry_price, pnl_usd=0, pnl_pct=0,
-                         close_reason='orphaned_restart', exit_time=NOW() WHERE id=$1`,
-                        [row.id]
-                    );
-                    closedCount++;
+            const toClose = orphaned.rows.filter(row => !positions.has(row.symbol));
+            if (toClose.length > 0) {
+                const client = await dbPool.connect();
+                try {
+                    await client.query('BEGIN');
+                    for (const row of toClose) {
+                        await client.query(
+                            `UPDATE trades SET status='closed', exit_price=entry_price, pnl_usd=0, pnl_pct=0,
+                             close_reason='orphaned_restart', exit_time=NOW() WHERE id=$1`,
+                            [row.id]
+                        );
+                    }
+                    await client.query('COMMIT');
+                    console.log(`🧹 Closed ${toClose.length} orphaned DB trade(s) from previous session`);
+                } catch (e) {
+                    await client.query('ROLLBACK').catch(() => {});
+                    console.warn('⚠️ Orphaned cleanup rolled back:', e.message);
+                } finally {
+                    client.release();
                 }
-            }
-            if (closedCount > 0) {
-                console.log(`🧹 Closed ${closedCount} orphaned DB trade(s) from previous session`);
             }
         }
     } catch (e) {

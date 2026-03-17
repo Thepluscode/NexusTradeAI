@@ -946,13 +946,21 @@ async function dbTradeOpen(symbol, entryPrice, shares, config, signal, tier, str
 
 async function dbTradeClose(id, exitPrice, pnlUsd, pnlPct, reason) {
     if (!dbPool || !id) return;
+    const client = await dbPool.connect();
     try {
-        await dbPool.query(
+        await client.query('BEGIN');
+        await client.query(
             `UPDATE trades SET status='closed',exit_price=$1,pnl_usd=$2,pnl_pct=$3,
              exit_time=NOW(),close_reason=$4 WHERE id=$5`,
             [exitPrice, pnlUsd, pnlPct, reason, id]
         );
-    } catch (e) { console.warn('DB close failed:', e.message); }
+        await client.query('COMMIT');
+    } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        console.warn('DB close failed (rolled back):', e.message);
+    } finally {
+        client.release();
+    }
 }
 
 function resolveClosedTradeMetrics(position, qty, exitPrice) {
@@ -4747,13 +4755,21 @@ class UserTradingEngine {
 
     async dbTradeClose(id, exitPrice, pnlUsd, pnlPct, reason) {
         if (!dbPool || !id) return;
+        const client = await dbPool.connect();
         try {
-            await dbPool.query(
+            await client.query('BEGIN');
+            await client.query(
                 `UPDATE trades SET status='closed',exit_price=$1,pnl_usd=$2,pnl_pct=$3,
                  exit_time=NOW(),close_reason=$4 WHERE id=$5`,
                 [exitPrice, pnlUsd, pnlPct, reason, id]
             );
-        } catch (e) { console.warn('DB close failed:', e.message); }
+            await client.query('COMMIT');
+        } catch (e) {
+            await client.query('ROLLBACK').catch(() => {});
+            console.warn('DB close failed (rolled back):', e.message);
+        } finally {
+            client.release();
+        }
     }
 
     canTrade(symbol, side = 'buy') {
