@@ -614,7 +614,7 @@ async function loadEvaluationsFromDB() {
                    entry_time, exit_time, close_reason, signal_score, entry_context,
                    strategy, regime, rsi, volume_ratio, momentum_pct
             FROM trades
-            WHERE bot = 'stock' AND status = 'closed' AND pnl_usd IS NOT NULL
+            WHERE bot = 'stock' AND status = 'closed' AND pnl_usd IS NOT NULL AND close_reason != 'orphaned_restart'
             ORDER BY exit_time DESC NULLS LAST
             LIMIT 500
         `);
@@ -1461,8 +1461,8 @@ const OPENING_RANGE_BREAKOUT_CONFIG = {
     rsiMax: 72,
     maxBreakoutPct: 0.03,
     positionSize: 0.004,
-    stopLoss: 0.015,
-    profitTarget: 0.03,   // v6.0: raised from 0.02 — R:R goes from 1.33:1 to 2:1 with 1.5% stop
+    stopLoss: 0.025,       // 2.5% — gives room for normal pullbacks
+    profitTarget: 0.05,   // 5% — maintains 2:1 R:R ratio
     maxPositions: 2
 };
 
@@ -2925,8 +2925,13 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
         // breaking position sizing assumptions (sized for a 4-6% stop, not a 15% stop).
         let atrStop = null, atrTarget = null;
         if (atr !== null && current > 0) {
-            const candidateStop = current * (1 - atrPct * 1.5);
+            let candidateStop = current * (1 - atrPct * 1.5);
             const candidateTarget = current * (1 + atrPct * 3.0);
+            // Ensure minimum stop distance of 1.5% to avoid noise hits
+            const minStopPrice = current * (1 - 0.015); // 1.5% minimum distance
+            if (candidateStop > minStopPrice) {
+                candidateStop = minStopPrice; // Widen stop if ATR is too tight
+            }
             const rr = candidateStop > 0
                 ? (candidateTarget - current) / (current - candidateStop)
                 : 0;
@@ -3439,7 +3444,7 @@ async function closePosition(symbol, qty, reason = 'Manual') {
 
 // [Phase 4] Trade evaluation summary endpoint
 app.get('/api/trading/evaluations', (req, res) => {
-    const evals = globalThis._tradeEvaluations || [];
+    const evals = (globalThis._tradeEvaluations || []).filter(e => e.exitReason !== 'orphaned_restart');
     if (evals.length === 0) {
         return res.json({ success: true, data: { totalTrades: 0, message: 'No evaluations yet' } });
     }
@@ -5117,8 +5122,13 @@ async function analyzeMomentumForEngine(symbol, engine) {
         }
         let atrStop = null, atrTarget = null;
         if (atr !== null && current > 0) {
-            const candidateStop   = current * (1 - atrPct * 1.5);
+            let candidateStop   = current * (1 - atrPct * 1.5);
             const candidateTarget = current * (1 + atrPct * 3.0);
+            // Ensure minimum stop distance of 1.5% to avoid noise hits
+            const minStopPrice = current * (1 - 0.015); // 1.5% minimum distance
+            if (candidateStop > minStopPrice) {
+                candidateStop = minStopPrice; // Widen stop if ATR is too tight
+            }
             const rr = candidateStop > 0 ? (candidateTarget - current) / (current - candidateStop) : 0;
             if (rr >= 1.8) { atrStop = candidateStop; atrTarget = candidateTarget; }
         }

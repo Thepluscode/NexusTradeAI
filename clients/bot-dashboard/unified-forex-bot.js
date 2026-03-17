@@ -637,7 +637,7 @@ async function loadForexEvaluationsFromDB() {
                    entry_time, exit_time, close_reason, signal_score, entry_context,
                    strategy, regime, session
             FROM trades
-            WHERE bot = 'forex' AND status = 'closed' AND pnl_usd IS NOT NULL
+            WHERE bot = 'forex' AND status = 'closed' AND pnl_usd IS NOT NULL AND close_reason != 'orphaned_restart'
             ORDER BY exit_time DESC NULLS LAST
             LIMIT 500
         `);
@@ -2942,7 +2942,7 @@ app.get('/health', (req, res) => {
 
 // [Phase 4] Forex trade evaluation summary endpoint
 app.get('/api/forex/evaluations', (req, res) => {
-    const evals = globalThis._forexTradeEvaluations || [];
+    const evals = (globalThis._forexTradeEvaluations || []).filter(e => e.exitReason !== 'orphaned_restart');
     if (evals.length === 0) {
         return res.json({ success: true, data: { totalTrades: 0, message: 'No evaluations yet' } });
     }
