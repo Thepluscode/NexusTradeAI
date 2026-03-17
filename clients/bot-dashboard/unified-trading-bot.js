@@ -3269,6 +3269,16 @@ async function closePosition(symbol, qty, reason = 'Manual') {
         // Get current price for P&L recording before closing
         let currentPrice = null;
         const position = positions.get(symbol);
+
+        // FIX 1 & 2: Capture snapshot and positionCopy BEFORE any async/fallible operations,
+        // then delete from Map EARLY so the position is never stuck if downstream steps throw.
+        const positionCopy = position ? { ...position } : null;
+        const snapshot = position ? (position.signalSnapshot ? { ...position.signalSnapshot } : null) : null;
+
+        // CRITICAL: Delete from Map immediately — prevents stuck positions even if
+        // DB operations, evaluation, or savePositions fail below.
+        positions.delete(symbol);
+
         try {
             const posUrl = `${alpacaConfig.baseURL}/v2/positions/${symbol}`;
             const posRes = await axios.get(posUrl, {
@@ -3298,23 +3308,6 @@ async function closePosition(symbol, qty, reason = 'Manual') {
             }
         });
 
-        // Record performance data — apply exit slippage (market sell fills ~0.05% below bid)
-        if (position && currentPrice) {
-            const STOCK_EXIT_SLIPPAGE = 0.0005; // 0.05% — matches entry slippage assumption
-            const adjustedExitPrice = currentPrice * (1 - STOCK_EXIT_SLIPPAGE);
-            const closeMetrics = resolveClosedTradeMetrics(position, qty, adjustedExitPrice);
-            if (closeMetrics) {
-                recordTradeClose(symbol, closeMetrics.entryPrice, closeMetrics.exitPrice, closeMetrics.shares, reason);
-                dbTradeClose(position?.dbTradeId, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct, reason).catch(e => console.warn('⚠️  DB operation failed:', e?.message || String(e)));
-                // [v4.1] Report to Agentic AI learning loop — Scan AI pattern tracking
-                reportTradeOutcome(position, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct / 100, reason).catch(e => console.warn('⚠️  DB operation failed:', e?.message || String(e)));
-                    // [v4.6] Feed outcome into adaptive guardrails
-                    guardrails.recordOutcome(closeMetrics.pnlUsd > 0);
-            } else {
-                console.warn(`⚠️ Skipping stock DB close write for ${symbol}: unresolved close metrics`);
-            }
-        }
-
         console.log(`✅ Position closed: ${symbol} (${reason})`);
 
         const tradeRecord = { time: Date.now(), side: 'sell', reason };
@@ -3329,49 +3322,78 @@ async function closePosition(symbol, qty, reason = 'Manual') {
             console.log(`⏸  ${symbol} in stop-loss cooldown for 1 hour`);
         }
 
-        // [Phase 4] Trade evaluation — log signal effectiveness for weight optimization
-        if (position && position.signalSnapshot) {
-            const snapshot = position.signalSnapshot;
-            const evalExitPrice = currentPrice || 0;
-            const evalPnl = currentPrice ? (currentPrice - position.entry) * parseFloat(qty) : 0;
-            const evalPnlPct = (currentPrice && position.entry) ? (currentPrice - position.entry) / position.entry : 0;
-            const outcome = {
-                symbol: position.symbol,
-                direction: 'long',
-                entryPrice: position.entry,
-                exitPrice: evalExitPrice,
-                pnl: evalPnl,
-                pnlPct: evalPnlPct,
-                holdTimeMs: Date.now() - (snapshot.timestamp || position.entryTime?.getTime?.() || Date.now()),
-                signals: {
-                    orderFlow: snapshot.orderFlowImbalance,
-                    displacement: snapshot.hasDisplacement,
-                    vpPosition: snapshot.volumeProfile,
-                    fvgCount: snapshot.fvgCount,
-                    committeeConfidence: snapshot.committeeConfidence,
-                    components: snapshot.committeeComponents,
-                    regime: snapshot.marketRegime,
-                    score: snapshot.score
-                },
-                exitReason: reason || 'unknown',
-                timestamp: Date.now()
-            };
+        // DB / eval operations use positionCopy and snapshot (captured before deletion).
+        // Wrapped in try-catch so failures here never affect position lifecycle.
+        try {
+            // Record performance data — apply exit slippage (market sell fills ~0.05% below bid)
+            if (positionCopy && currentPrice) {
+                const STOCK_EXIT_SLIPPAGE = 0.0005; // 0.05% — matches entry slippage assumption
+                const adjustedExitPrice = currentPrice * (1 - STOCK_EXIT_SLIPPAGE);
+                const closeMetrics = resolveClosedTradeMetrics(positionCopy, qty, adjustedExitPrice);
+                if (closeMetrics) {
+                    recordTradeClose(symbol, closeMetrics.entryPrice, closeMetrics.exitPrice, closeMetrics.shares, reason);
+                    dbTradeClose(positionCopy?.dbTradeId, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct, reason).catch(e => console.warn('⚠️  DB operation failed:', e?.message || String(e)));
+                    // [v4.1] Report to Agentic AI learning loop — Scan AI pattern tracking
+                    reportTradeOutcome(positionCopy, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct / 100, reason).catch(e => console.warn('⚠️  DB operation failed:', e?.message || String(e)));
+                        // [v4.6] Feed outcome into adaptive guardrails
+                        guardrails.recordOutcome(closeMetrics.pnlUsd > 0);
+                } else {
+                    console.warn(`⚠️ Skipping stock DB close write for ${symbol}: unresolved close metrics`);
+                }
+            }
 
-            if (!globalThis._tradeEvaluations) globalThis._tradeEvaluations = [];
-            globalThis._tradeEvaluations.push(outcome);
-            // [Improvement 1] Persist to disk (saveEvaluations keeps last 500)
-            saveEvaluations(globalThis._tradeEvaluations);
+            // [Phase 4] Trade evaluation — log signal effectiveness for weight optimization
+            // FIX 2: Uses pre-captured snapshot so evaluation works even if position was
+            // already removed from the Map (e.g. race condition or re-entrant close).
+            if (snapshot) {
+                const evalExitPrice = currentPrice || 0;
+                const evalPnl = currentPrice ? (currentPrice - positionCopy.entry) * parseFloat(qty) : 0;
+                const evalPnlPct = (currentPrice && positionCopy.entry) ? (currentPrice - positionCopy.entry) / positionCopy.entry : 0;
+                const outcome = {
+                    symbol: positionCopy.symbol || symbol,
+                    direction: positionCopy.direction || 'long',
+                    entryPrice: positionCopy.entry,
+                    exitPrice: evalExitPrice,
+                    pnl: evalPnl,
+                    pnlPct: evalPnlPct,
+                    holdTimeMs: Date.now() - (snapshot.timestamp || positionCopy.entryTime?.getTime?.() || Date.now()),
+                    signals: {
+                        orderFlow: snapshot.orderFlowImbalance,
+                        displacement: snapshot.hasDisplacement,
+                        vpPosition: snapshot.volumeProfile,
+                        fvgCount: snapshot.fvgCount,
+                        committeeConfidence: snapshot.committeeConfidence,
+                        components: snapshot.committeeComponents,
+                        regime: snapshot.marketRegime,
+                        score: snapshot.score
+                    },
+                    exitReason: reason || 'unknown',
+                    timestamp: Date.now()
+                };
 
-            const winLoss = evalPnl > 0 ? 'WIN' : 'LOSS';
-            console.log(`[Evaluation] ${outcome.symbol} ${winLoss} ${evalPnlPct > 0 ? '+' : ''}${(evalPnlPct * 100).toFixed(2)}% — committee:${snapshot.committeeConfidence} flow:${snapshot.orderFlowImbalance?.toFixed?.(2) || '?'} displacement:${snapshot.hasDisplacement} regime:${snapshot.marketRegime}`);
+                if (!globalThis._tradeEvaluations) globalThis._tradeEvaluations = [];
+                globalThis._tradeEvaluations.push(outcome);
+                if (globalThis._tradeEvaluations.length > 500) {
+                    globalThis._tradeEvaluations = globalThis._tradeEvaluations.slice(-500);
+                }
+                // [Improvement 1] Persist to disk (saveEvaluations keeps last 500)
+                saveEvaluations(globalThis._tradeEvaluations);
+
+                const winLoss = evalPnl >= 0 ? 'WIN' : 'LOSS';
+                console.log(`[Evaluation] ${outcome.symbol} ${winLoss} ${evalPnlPct >= 0 ? '+' : ''}${(evalPnlPct * 100).toFixed(2)}% — committee:${snapshot.committeeConfidence?.toFixed?.(3) || snapshot.committeeConfidence || 'N/A'} flow:${snapshot.orderFlowImbalance?.toFixed?.(2) || '?'} displacement:${snapshot.hasDisplacement} regime:${snapshot.marketRegime}`);
+            }
+        } catch (evalError) {
+            console.error(`[ClosePosition] Post-close operations failed for ${symbol}:`, evalError.message);
         }
 
-        positions.delete(symbol);
         savePositions();
         savePerfData();
 
     } catch (error) {
         console.error(`❌ Error closing ${symbol}:`, error.message);
+        // Ensure position is removed from Map even if Alpaca order submission fails,
+        // so the bot is not permanently blocked from re-entering this symbol.
+        positions.delete(symbol);
     }
 }
 
