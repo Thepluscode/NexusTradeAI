@@ -59,15 +59,19 @@ class DecisionAgent:
         market_analysis: Optional[Dict] = None,
         lessons: Optional[List[str]] = None,
         sentiment=None,
+        macro=None,
+        institutional=None,
     ) -> AgentDecision:
         """
         Evaluate a trade signal and return a structured decision.
         sentiment: optional SentimentResult from SentimentAgent
+        macro: optional MacroRegimeResult from MacroAgent
+        institutional: optional InstitutionalFlowResult from InstitutionalAgent
         """
         if not self.client.available:
             return self._rule_based_decision(snapshot)
 
-        prompt = self._build_prompt(snapshot, market_analysis, lessons, sentiment)
+        prompt = self._build_prompt(snapshot, market_analysis, lessons, sentiment, macro, institutional)
         try:
             result = await self.client.call_with_tool(
                 system=DECISION_SYSTEM,
@@ -111,6 +115,8 @@ class DecisionAgent:
         market: Optional[Dict],
         lessons: Optional[List[str]],
         sentiment=None,
+        macro=None,
+        institutional=None,
     ) -> str:
         lines = [
             f"TRADE SIGNAL: {s.direction.upper()} {s.symbol} ({s.asset_class})",
@@ -141,6 +147,34 @@ class DecisionAgent:
             obs = market.get("key_observations", [])
             if obs:
                 lines.append(f"Observations: {'; '.join(obs[:3])}")
+
+        # Macro regime context
+        if macro:
+            lines.append(f"\nMACRO REGIME:")
+            lines.append(f"Regime: {macro.regime} (score: {macro.regime_score:+.2f})")
+            lines.append(f"VIX: {macro.vix} (percentile: {macro.vix_percentile}%)")
+            lines.append(f"Yield curve (10Y-2Y): {macro.yield_spread_10y2y:+.3f}")
+            lines.append(f"DXY: {macro.dxy} ({macro.dxy_trend})")
+            if macro.regime == "risk_off":
+                lines.append("⚠️ Risk-off environment — prefer smaller positions and tighter stops")
+            elif macro.regime == "risk_on":
+                lines.append("✅ Risk-on environment — macro tailwind supports the trade")
+
+        # Institutional flow context (stocks only)
+        if institutional and institutional.total_funds_holding > 0:
+            lines.append(f"\nINSTITUTIONAL FLOW (13F data):")
+            lines.append(f"Net sentiment: {institutional.net_sentiment:+.2f} ({institutional.sentiment_label})")
+            lines.append(f"Funds holding: {institutional.total_funds_holding} | "
+                        f"Increasing: {institutional.total_funds_increasing} | "
+                        f"Decreasing: {institutional.total_funds_decreasing}")
+            if institutional.total_funds_new:
+                lines.append(f"New positions opened: {institutional.total_funds_new}")
+            if institutional.total_funds_exited:
+                lines.append(f"Positions fully exited: {institutional.total_funds_exited}")
+            if institutional.top_holders:
+                lines.append("Top holders:")
+                for h in institutional.top_holders[:3]:
+                    lines.append(f"  - {h['fund']}: {h.get('change_pct', 0):+.1f}% ({h['status']})")
 
         # Sentiment context
         if sentiment and sentiment.headline_count > 0:

@@ -33,6 +33,8 @@ from agents.supervisor_bandit import supervisor
 from agents.analyst_rankings import analyst_rankings
 from agents.portfolio_agent import portfolio_agent
 from agents.sentiment_agent import SentimentAgent
+from agents.macro_agent import macro_agent
+from agents.institutional_agent import institutional_agent
 from agents.autopsy_agent import run_autopsy, save_to_db as save_autopsy_to_db
 
 logger = logging.getLogger(__name__)
@@ -63,6 +65,8 @@ class AgentOrchestrator:
         self.learning_agent = LearningAgent(self._client)
         self.scan_engine = ScanEngine()
         self.sentiment_agent = SentimentAgent()
+        self.macro_agent = macro_agent
+        self.institutional_agent = institutional_agent
         self.supervisor = supervisor
 
         # Decision cache (5-min TTL)
@@ -152,6 +156,45 @@ class AgentOrchestrator:
         except Exception as e:
             logger.error(f"Sentiment agent error (fail-open): {e}")
 
+        # Step 4c: Macro regime analysis (1-hour cache)
+        macro = None
+        try:
+            macro = await self.macro_agent.analyze(asset_class=snapshot.asset_class)
+            # Hard reject in extreme risk-off for aggressive tiers
+            if macro.regime_score < -0.6 and snapshot.tier in ("tier2", "tier3"):
+                self.total_rejections += 1
+                decision = AgentDecision(
+                    approved=False,
+                    confidence=0.9,
+                    reason=f"Extreme risk-off macro (VIX={macro.vix}, score={macro.regime_score:.2f})",
+                    source="macro_agent",
+                    risk_flags=["macro_risk_off"],
+                )
+                self._audit(snapshot, decision, time.time() - start)
+                return decision
+        except Exception as e:
+            logger.error(f"Macro agent error (fail-open): {e}")
+
+        # Step 4d: Institutional flow (24-hour cache, stock-only)
+        institutional = None
+        if snapshot.asset_class == "stock":
+            try:
+                institutional = await self.institutional_agent.analyze(snapshot.symbol)
+                # Hard reject if heavy institutional selling
+                if institutional.net_sentiment < -0.6 and institutional.total_funds_holding >= 3:
+                    self.total_rejections += 1
+                    decision = AgentDecision(
+                        approved=False,
+                        confidence=0.85,
+                        reason=f"Heavy institutional selling ({institutional.total_funds_decreasing + institutional.total_funds_exited} funds reducing/exiting)",
+                        source="institutional_agent",
+                        risk_flags=["institutional_selling"],
+                    )
+                    self._audit(snapshot, decision, time.time() - start)
+                    return decision
+            except Exception as e:
+                logger.error(f"Institutional agent error (fail-open): {e}")
+
         # Step 5: Adaptive context — get lessons and patterns
         lessons = self.learning_agent.get_applicable_lessons(
             symbol=snapshot.symbol,
@@ -169,15 +212,33 @@ class AgentOrchestrator:
             if p.actionable_lesson and p.actionable_lesson not in lessons:
                 lessons.append(p.actionable_lesson)
 
-        # Step 6: Decision agent (with sentiment context)
+        # Step 6: Decision agent (with sentiment + macro + institutional context)
         decision = await self.decision_agent.evaluate(
             snapshot=snapshot,
             market_analysis=market_analysis,
             lessons=lessons,
             sentiment=sentiment,
+            macro=macro,
+            institutional=institutional,
         )
 
-        # Step 6b: Sentiment-based adjustments
+        # Step 6b: Macro-based adjustments
+        if macro:
+            if macro.regime_score < -0.3:
+                decision.position_size_multiplier *= 0.7
+                decision.risk_flags.append("macro_risk_off")
+            elif macro.regime_score > 0.3:
+                decision.confidence = min(1.0, decision.confidence + 0.05)
+
+        # Step 6b2: Institutional-based adjustments (stocks only)
+        if institutional and institutional.total_funds_holding >= 2:
+            if institutional.net_sentiment > 0.4:
+                decision.confidence = min(1.0, decision.confidence + 0.1)
+            elif institutional.net_sentiment < -0.3:
+                decision.position_size_multiplier *= 0.7
+                decision.risk_flags.append("institutional_selling")
+
+        # Step 6c: Sentiment-based adjustments
         if sentiment:
             if sentiment.sentiment_score < -0.3:
                 # Moderately negative sentiment — reduce position size
@@ -233,7 +294,12 @@ class AgentOrchestrator:
             logger.error(f"Portfolio risk check error: {e}")
 
         # Enrich decision with bandit metadata
-        decision.agents_consulted = ["market_agent", "sentiment_agent", "decision_agent", "scan_engine", "supervisor_bandit", "portfolio_agent"]
+        consulted = ["market_agent", "sentiment_agent", "decision_agent", "scan_engine", "supervisor_bandit", "portfolio_agent"]
+        if macro:
+            consulted.append("macro_agent")
+        if institutional:
+            consulted.append("institutional_agent")
+        decision.agents_consulted = consulted
         decision.market_regime = market_analysis.get("regime") if market_analysis else None
         decision.lessons_applied = lessons[:3]
 
@@ -405,6 +471,8 @@ class AgentOrchestrator:
             "scan_engine": self.scan_engine.get_stats(),
             "supervisor_bandit": self.supervisor.get_stats(),
             "analyst_rankings": analyst_rankings.get_stats(),
+            "macro_agent": self.macro_agent.get_stats(),
+            "institutional_agent": self.institutional_agent.get_stats(),
             "portfolio_agent": portfolio_agent.get_stats(),
             "outcome_store": outcome_store.get_stats(),
         }

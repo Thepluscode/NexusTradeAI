@@ -9,3 +9,5 @@ asyncpg>=0.29.0
 stripe>=7.0.0
 feedparser>=6.0.0
 aiohttp>=3.9.0
+yfinance>=0.2.36
+edgartools>=2.0.0

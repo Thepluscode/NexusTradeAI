@@ -59,6 +59,8 @@ from agents.supervisor_bandit import supervisor as agent_supervisor
 from agents.backfill import backfill_from_db, backfill_from_json
 from agents.analyst_rankings import analyst_rankings
 from agents.portfolio_agent import portfolio_agent
+from agents.macro_agent import macro_agent
+from agents.institutional_agent import institutional_agent
 from agents.autopsy_agent import get_recent_autopsies, get_failure_mode_patterns
 
 # Import Public API (v6.0 — monetization layer)
@@ -964,6 +966,22 @@ if FASTAPI_AVAILABLE:
         }
 
     # ========================================
+    # MACRO REGIME + INSTITUTIONAL FLOW ENDPOINTS (v8.0)
+    # ========================================
+
+    @app.get("/agent/macro")
+    async def get_macro_regime(asset_class: str = "stock"):
+        """Get current macro regime assessment (VIX, yield curve, DXY)."""
+        result = await macro_agent.analyze(asset_class)
+        return result.to_dict()
+
+    @app.get("/agent/institutional/{symbol}")
+    async def get_institutional_flow(symbol: str):
+        """Get institutional positioning for a stock symbol (13F data)."""
+        result = await institutional_agent.analyze(symbol)
+        return result.to_dict()
+
+    # ========================================
     # POST-LOSS AUTOPSY ENDPOINTS (v7.1)
     # ========================================
 
@@ -1066,6 +1084,21 @@ if FASTAPI_AVAILABLE:
             logger.info("[Startup] Public API tables ready")
         except Exception as e:
             logger.error(f"[Startup] Public API table init error (non-fatal): {e}")
+
+        # v8.0: Warm up macro + institutional data caches (background)
+        async def _warmup_data_agents():
+            try:
+                await macro_agent.warmup()
+                logger.info("[Startup] Macro agent warmed up")
+            except Exception as e:
+                logger.error(f"[Startup] Macro warmup error (non-fatal): {e}")
+            try:
+                await institutional_agent.warmup()
+                logger.info("[Startup] Institutional agent ready")
+            except Exception as e:
+                logger.error(f"[Startup] Institutional warmup error (non-fatal): {e}")
+
+        asyncio.create_task(_warmup_data_agents())
 
         _training_task = asyncio.create_task(_daily_training_loop())
         logger.info("Background daily training loop scheduled (every 6h)")
