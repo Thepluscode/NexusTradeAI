@@ -314,9 +314,8 @@ class PairsTradingStrategy(BaseStrategy):
             signal = TradingSignal(
                 signal_type=SignalType.BUY,
                 symbol=symbol_1,
-                price=current_price,
+                entry_price=current_price,
                 confidence=confidence,
-                strategy_name=self.name,
                 metadata={
                     'pair_symbol': symbol_2,
                     'hedge_ratio': pair_state.hedge_ratio,
@@ -324,7 +323,8 @@ class PairsTradingStrategy(BaseStrategy):
                     'half_life': pair_state.half_life,
                     'correlation': pair_state.correlation,
                     'action': 'long_spread',
-                    'note': f'Buy {symbol_1}, Sell {pair_state.hedge_ratio:.2f}x {symbol_2}'
+                    'note': f'Buy {symbol_1}, Sell {pair_state.hedge_ratio:.2f}x {symbol_2}',
+                    'strategy_name': self.name
                 }
             )
         
@@ -336,9 +336,8 @@ class PairsTradingStrategy(BaseStrategy):
             signal = TradingSignal(
                 signal_type=SignalType.SELL,
                 symbol=symbol_1,
-                price=current_price,
+                entry_price=current_price,
                 confidence=confidence,
-                strategy_name=self.name,
                 metadata={
                     'pair_symbol': symbol_2,
                     'hedge_ratio': pair_state.hedge_ratio,
@@ -346,7 +345,8 @@ class PairsTradingStrategy(BaseStrategy):
                     'half_life': pair_state.half_life,
                     'correlation': pair_state.correlation,
                     'action': 'short_spread',
-                    'note': f'Sell {symbol_1}, Buy {pair_state.hedge_ratio:.2f}x {symbol_2}'
+                    'note': f'Sell {symbol_1}, Buy {pair_state.hedge_ratio:.2f}x {symbol_2}',
+                    'strategy_name': self.name
                 }
             )
         

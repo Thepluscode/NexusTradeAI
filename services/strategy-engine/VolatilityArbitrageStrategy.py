@@ -208,9 +208,8 @@ class VolatilityArbitrageStrategy(BaseStrategy):
                 signal = TradingSignal(
                     signal_type=SignalType.BUY,
                     symbol=market_data[-1].symbol if hasattr(market_data[-1], 'symbol') else 'UNKNOWN',
-                    price=current_price,
+                    entry_price=current_price,
                     confidence=confidence,
-                    strategy_name=self.name,
                     stop_loss=current_price * (1 - vol_state.realized_vol * 2),  # 2x vol stop
                     take_profit=current_price * (1 + vol_state.realized_vol),  # 1x vol target
                     metadata={
@@ -218,7 +217,8 @@ class VolatilityArbitrageStrategy(BaseStrategy):
                         'realized_vol': vol_state.realized_vol,
                         'forecast_vol': vol_state.forecast_vol,
                         'vol_percentile': vol_state.vol_percentile,
-                        'signal_reason': 'high_vol_mean_reversion'
+                        'signal_reason': 'high_vol_mean_reversion',
+                        'strategy_name': self.name
                     }
                 )
         
@@ -237,16 +237,16 @@ class VolatilityArbitrageStrategy(BaseStrategy):
                     signal = TradingSignal(
                         signal_type=SignalType.SELL,
                         symbol=market_data[-1].symbol if hasattr(market_data[-1], 'symbol') else 'UNKNOWN',
-                        price=current_price,
+                        entry_price=current_price,
                         confidence=confidence,
-                        strategy_name=self.name,
                         metadata={
                             'vol_ratio': vol_ratio,
                             'realized_vol': vol_state.realized_vol,
                             'forecast_vol': vol_state.forecast_vol,
                             'vol_percentile': vol_state.vol_percentile,
                             'recent_return': recent_return,
-                            'signal_reason': 'low_vol_expansion_bearish'
+                            'signal_reason': 'low_vol_expansion_bearish',
+                            'strategy_name': self.name
                         }
                     )
                 else:
@@ -254,15 +254,15 @@ class VolatilityArbitrageStrategy(BaseStrategy):
                     signal = TradingSignal(
                         signal_type=SignalType.NEUTRAL,
                         symbol=market_data[-1].symbol if hasattr(market_data[-1], 'symbol') else 'UNKNOWN',
-                        price=current_price,
+                        entry_price=current_price,
                         confidence=confidence,
-                        strategy_name=self.name,
                         metadata={
                             'vol_ratio': vol_ratio,
                             'realized_vol': vol_state.realized_vol,
                             'forecast_vol': vol_state.forecast_vol,
                             'vol_percentile': vol_state.vol_percentile,
-                            'signal_reason': 'low_vol_expansion_warning'
+                            'signal_reason': 'low_vol_expansion_warning',
+                            'strategy_name': self.name
                         }
                     )
         

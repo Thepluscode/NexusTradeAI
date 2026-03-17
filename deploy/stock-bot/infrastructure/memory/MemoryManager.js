@@ -160,15 +160,15 @@ class MemoryManager extends EventEmitter {
     const startTime = Date.now();
     let totalCleaned = 0;
 
-    console.log('🧹 Running memory cleanup cycle...');
-
     for (const [name, config] of this.dataStructures.entries()) {
       const cleaned = this.cleanupDataStructure(name, config);
       totalCleaned += cleaned;
     }
 
     const duration = Date.now() - startTime;
-    console.log(`✅ Cleanup complete: ${totalCleaned} items removed (${duration}ms)`);
+    if (totalCleaned > 0) {
+      console.log(`🧹 Memory cleanup: ${totalCleaned} items removed (${duration}ms)`);
+    }
 
     this.emit('cleanup', { totalCleaned, duration });
 
@@ -249,7 +249,7 @@ class MemoryManager extends EventEmitter {
   /**
    * Clean up Set data structure
    */
-  cleanupSet(set, maxSize, _maxAge, _strategy) {
+  cleanupSet(set, maxSize, maxAge, strategy) {
     if (set.size <= maxSize) {
       return 0;
     }

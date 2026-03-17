@@ -276,9 +276,8 @@ class RegimeBasedMomentumStrategy(BaseStrategy):
             signal = TradingSignal(
                 signal_type=SignalType.BUY,
                 symbol=symbol,
-                price=current_price,
+                entry_price=current_price,
                 confidence=confidence,
-                strategy_name=self.name,
                 stop_loss=current_price * (1 - config.stop_loss_pct),
                 take_profit=current_price * (1 + config.take_profit_pct),
                 metadata={
@@ -287,7 +286,8 @@ class RegimeBasedMomentumStrategy(BaseStrategy):
                     'max_positions': config.max_positions,
                     'roc_fast': momentum['roc_fast'],
                     'ma_crossover': momentum['ma_crossover'],
-                    'breakout_level': momentum['high_lookback']
+                    'breakout_level': momentum['high_lookback'],
+                    'strategy_name': self.name
                 }
             )
         
@@ -302,9 +302,8 @@ class RegimeBasedMomentumStrategy(BaseStrategy):
             signal = TradingSignal(
                 signal_type=SignalType.SELL,
                 symbol=symbol,
-                price=current_price,
+                entry_price=current_price,
                 confidence=confidence,
-                strategy_name=self.name,
                 stop_loss=current_price * (1 + config.stop_loss_pct),
                 take_profit=current_price * (1 - config.take_profit_pct),
                 metadata={
@@ -312,7 +311,8 @@ class RegimeBasedMomentumStrategy(BaseStrategy):
                     'position_size_mult': config.position_size_multiplier,
                     'roc_fast': momentum['roc_fast'],
                     'ma_crossover': momentum['ma_crossover'],
-                    'breakdown_level': momentum['low_lookback']
+                    'breakdown_level': momentum['low_lookback'],
+                    'strategy_name': self.name
                 }
             )
         
