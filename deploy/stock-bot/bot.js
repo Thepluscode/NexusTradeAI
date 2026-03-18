@@ -1429,26 +1429,29 @@ const EXIT_CONFIG = {
     idealHoldDays: 3,         // Ideal 3-day momentum trades
     stalePositionDays: 10,    // Force close after 10 days
 
-    // Dynamic profit targets based on hold time (v6.0: aligned with tier targets — day-0 was 5% which overrode tier1's 8%)
+    // [v9.0] Profit targets aligned with new tier configs (3.5-6% targets)
+    // Old 8% day-0 target was never hit — winners closed end-of-day at +1.4%
     profitTargetByDay: {
-        0: 0.08,  // Day 0-1: 8% target — match tier1 target, let winners run
-        1: 0.07,  // Day 1-2: 7% target — still strong momentum
-        2: 0.06,  // Day 2-3: 6% target — momentum still intact
-        3: 0.05,  // Day 3-4: 5% target — start relaxing
-        4: 0.04,  // Day 4-5: 4% target
-        5: 0.03,  // Day 5-6: 3% target
-        6: 0.02,  // Day 6-7: 2% target
-        7: 0.01   // Day 7+: ANY profit
+        0: 0.035, // Day 0: 3.5% — match tier1 target
+        1: 0.03,  // Day 1: 3%
+        2: 0.025, // Day 2: 2.5%
+        3: 0.02,  // Day 3: 2%
+        4: 0.015, // Day 4: 1.5%
+        5: 0.01,  // Day 5: 1%
+        6: 0.005, // Day 6: 0.5%
+        7: 0.003  // Day 7+: any green
     },
 
-    // Trailing stops (v6.0: widened — old levels locked profit too early, converting winners to micro-wins)
-    // Realized R:R was ~1:1 instead of configured 2:1 because +2%/+3% locks triggered too aggressively
+    // [v9.0] Trailing stops — protect gains early, let profit protection handle the rest
+    // Start at +0.5% (stocks move more than forex but still need early protection)
     trailingStopLevels: [
-        { gainThreshold: 0.03, lockPercent: 0.50 },  // +3%: lock 50% — first lock at meaningful gain
-        { gainThreshold: 0.05, lockPercent: 0.65 },  // +5%: lock 65%
-        { gainThreshold: 0.08, lockPercent: 0.80 },  // +8%: lock 80%
-        { gainThreshold: 0.12, lockPercent: 0.90 },  // +12%: lock 90%
-        { gainThreshold: 0.15, lockPercent: 0.95 }   // +15%: lock 95%
+        { gainThreshold: 0.005, lockPercent: 0.15 },  // +0.5%: lock 15% (breakeven zone)
+        { gainThreshold: 0.01,  lockPercent: 0.30 },   // +1.0%: lock 30%
+        { gainThreshold: 0.015, lockPercent: 0.45 },   // +1.5%: lock 45%
+        { gainThreshold: 0.02,  lockPercent: 0.55 },   // +2.0%: lock 55%
+        { gainThreshold: 0.03,  lockPercent: 0.65 },   // +3.0%: lock 65%
+        { gainThreshold: 0.05,  lockPercent: 0.80 },   // +5.0%: lock 80%
+        { gainThreshold: 0.08,  lockPercent: 0.90 },   // +8.0%: lock 90%
     ],
 
     // Momentum reversal thresholds
@@ -1460,42 +1463,47 @@ const EXIT_CONFIG = {
     }
 };
 
+// [v9.0] Momentum tiers recalibrated — tighter stops, realistic targets
+// Old: 4% stop / 8% target → losses at -2.7% while wins close at +1.4% end-of-day
+// New: Risk less, take profit earlier, let profit protection handle runners
 const MOMENTUM_CONFIG = {
     tier1: {
-        threshold: 3.5,       // raised from 2.5 — 2.5% catches noise; 3.5% is real momentum
-        minVolume: 500000,    // raised from 300k — require meaningful liquidity
-        volumeRatio: 1.8,     // v5.0: raised from 1.5 — higher volume = higher conviction (30% WR at 1.5x)
-        rsiMax: 66,           // v5.0: tightened from 68 — avoid approaching overbought
-        rsiMin: 40,           // v5.0: tightened from 38 — avoid deeply oversold mean-reversion traps
+        threshold: 3.5,
+        minVolume: 500000,
+        volumeRatio: 1.8,
+        rsiMax: 66,
+        rsiMin: 40,
         positionSize: 0.005,
-        stopLoss: 0.04,
-        profitTarget: 0.08,
-        maxPositions: 5       // reduced from 6 — fewer, higher-quality positions
+        stopLoss: 0.02,        // [v9.0] 2% stop (was 4%) — cut losers faster
+        profitTarget: 0.035,   // [v9.0] 3.5% target (was 8%) — achievable, 1.75:1 R:R
+        maxPositions: 4
     },
     tier2: {
         threshold: 5.0,
-        minVolume: 750000,    // raised from 500k
-        volumeRatio: 2.0,     // v5.0: raised from 1.5 — require strong volume surge
-        rsiMax: 66,           // v5.0: tightened from 68
-        rsiMin: 40,           // v5.0: tightened from 38
+        minVolume: 750000,
+        volumeRatio: 2.0,
+        rsiMax: 66,
+        rsiMin: 40,
         positionSize: 0.0075,
-        stopLoss: 0.05,
-        profitTarget: 0.10,
+        stopLoss: 0.025,       // [v9.0] 2.5% stop (was 5%)
+        profitTarget: 0.045,   // [v9.0] 4.5% target (was 10%) — 1.8:1 R:R
         maxPositions: 3
     },
     tier3: {
         threshold: 10.0,
-        minVolume: 1000000,   // raised from 750k — high-momentum moves need high volume
-        volumeRatio: 2.2,     // v5.0: raised from 1.8 — extreme moves need extreme volume
-        rsiMax: 68,           // v5.0: tightened from 70
-        rsiMin: 40,           // v5.0: tightened from 38
+        minVolume: 1000000,
+        volumeRatio: 2.2,
+        rsiMax: 68,
+        rsiMin: 40,
         positionSize: 0.01,
-        stopLoss: 0.06,
-        profitTarget: 0.15,
+        stopLoss: 0.03,        // [v9.0] 3% stop (was 6%)
+        profitTarget: 0.06,    // [v9.0] 6% target (was 15%) — 2:1 R:R
         maxPositions: 2
     }
 };
 
+// [v9.0] ORB recalibrated — old 5% target never hit (wins were all end-of-day at +1.4%)
+// Tighter stop + realistic target = positive R:R on actual fills
 const OPENING_RANGE_BREAKOUT_CONFIG = {
     openingRangeMinutes: 15,
     entryCutoffHour: 11,
@@ -1503,11 +1511,11 @@ const OPENING_RANGE_BREAKOUT_CONFIG = {
     breakoutBufferPct: 0.001,
     minBreakoutVolumeRatio: 1.8,
     rsiMin: 48,
-    rsiMax: 72,
+    rsiMax: 68,             // [v9.0] tightened from 72 — reject overbought entries
     maxBreakoutPct: 0.03,
     positionSize: 0.004,
-    stopLoss: 0.025,       // 2.5% — gives room for normal pullbacks
-    profitTarget: 0.05,   // 5% — maintains 2:1 R:R ratio
+    stopLoss: 0.012,        // [v9.0] 1.2% stop (was 2.5%) — tighter risk, quick exit on fail
+    profitTarget: 0.020,    // [v9.0] 2.0% target (was 5%) — realistic ORB target, 1.67:1 R:R
     maxPositions: 2
 };
 
