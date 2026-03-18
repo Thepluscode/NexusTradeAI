@@ -308,9 +308,9 @@ class AgentOrchestrator:
         decision.market_regime = market_analysis.get("regime") if market_analysis else None
         decision.lessons_applied = lessons[:3]
 
-        # Store bandit arm on the decision for reward attribution
-        self._last_bandit_arm = bandit_rec.selected_arm
-        self._last_bandit_context = bandit_rec.context_key
+        # Store bandit arm ON THE DECISION (not instance var) for correct reward attribution
+        decision.bandit_arm = bandit_rec.selected_arm
+        decision.bandit_context = bandit_rec.context_key
 
         # Step 8: Safety guardrails (hardcoded, non-negotiable)
         decision = SafetyGuardrails.validate_decision(decision, snapshot)
@@ -328,9 +328,10 @@ class AgentOrchestrator:
         self._cache_decision(cache_key, decision)
         self._audit(snapshot, decision, latency)
 
-        # [v4.1] Log decision to outcome store (four-learner shared store)
+        # [v4.1] Log decision to outcome store — capture decision_run_id for linking outcomes
         try:
-            await outcome_store.log_decision(snapshot, decision, latency * 1000)
+            decision_id = await outcome_store.log_decision(snapshot, decision, latency * 1000)
+            decision.decision_run_id = decision_id  # Store ID on decision so bots can pass it back
         except Exception as e:
             logger.error(f"Outcome store decision log error: {e}")
 
@@ -360,11 +361,12 @@ class AgentOrchestrator:
         if outcome.pnl_pct:
             self.kill_switch.update_pnl(outcome.pnl_pct / 100)
 
-        # [v4.1] Log outcome + calculate reward in shared outcome store
+        # [v4.1] Log outcome + calculate reward — pass decision_run_id for proper linking
         reward = None
         try:
             reward = await outcome_store.log_outcome(
                 outcome=outcome,
+                decision_run_id=outcome.decision_run_id,  # Links back to the original decision
                 pattern_type=lesson.get("pattern_type", "") if lesson else "",
                 actionable_lesson=lesson.get("actionable_lesson", "") if lesson else "",
                 lesson_confidence=lesson.get("confidence_in_lesson", 0) if lesson else 0,
@@ -374,10 +376,10 @@ class AgentOrchestrator:
         except Exception as e:
             logger.error(f"Outcome store log error: {e}")
 
-        # [v4.2] Feed reward back to supervisor bandit
+        # [v4.2] Feed reward back to supervisor bandit — use arm from outcome, not instance var
         if reward:
             try:
-                arm = getattr(self, '_last_bandit_arm', 'moderate')
+                arm = outcome.bandit_arm or 'moderate'
                 self.supervisor.update(
                     regime=outcome.entry_regime or "unknown",
                     asset_class=outcome.asset_class,

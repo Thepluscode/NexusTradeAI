@@ -2260,6 +2260,8 @@ async function reportTradeOutcome(position, exitPrice, pnl, pnlPct, exitReason) 
             agent_approved: position.agentApproved,
             agent_confidence: position.agentConfidence,
             agent_reason: position.agentReason,
+            decision_run_id: position.decisionRunId || null,
+            bandit_arm: position.banditArm || null,
         };
         await axios.post(`${BRIDGE_URL}/agent/trade-outcome`, payload, { timeout: 5000 });
         console.log(`[Learn] ${position.symbol} outcome reported: ${pnlPct > 0 ? 'WIN' : 'LOSS'} ${(pnlPct * 100).toFixed(1)}%`);
@@ -2697,6 +2699,8 @@ async function scanMomentumBreakouts() {
                     mover.agentApproved = true;
                     mover.agentConfidence = aiResult.confidence;
                     mover.agentReason = aiResult.reason;
+                    mover.decisionRunId = aiResult.decision_run_id || null;
+                    mover.banditArm = aiResult.bandit_arm || 'moderate';
                     if (aiResult.position_size_multiplier && aiResult.position_size_multiplier !== 1.0) {
                         mover.agentSizeMultiplier = aiResult.position_size_multiplier;
                     }
@@ -3279,6 +3283,8 @@ async function executeTrade(signal, strategy) {
             agentConfidence: signal.agentConfidence || null,
             agentReason: signal.agentReason || null,
             agentSizeMultiplier: signal.agentSizeMultiplier || 1.0,
+            decisionRunId: signal.decisionRunId || null,
+            banditArm: signal.banditArm || 'moderate',
             // [Phase 4] Signal snapshot for trade evaluation loop
             signalSnapshot: {
                 orderFlowImbalance: signal.orderFlowImbalance || 0,
@@ -4951,6 +4957,8 @@ class UserTradingEngine {
                 agentConfidence: signal.agentConfidence || null,
                 agentReason: signal.agentReason || null,
                 agentSizeMultiplier: signal.agentSizeMultiplier || 1.0,
+                decisionRunId: signal.decisionRunId || null,
+                banditArm: signal.banditArm || 'moderate',
             });
             this.dbTradeOpen(signal.symbol, effectiveEntry, shares, config, signal, tier, strategy)
                 .then(id => { const p = this.positions.get(signal.symbol); if (p) p.dbTradeId = id; })
@@ -5025,6 +5033,8 @@ class UserTradingEngine {
                 mover.agentApproved = true;
                 mover.agentConfidence = aiResult.confidence;
                 mover.agentReason = aiResult.reason;
+                mover.decisionRunId = aiResult.decision_run_id || null;
+                mover.banditArm = aiResult.bandit_arm || 'moderate';
                 if (aiResult.position_size_multiplier && aiResult.position_size_multiplier !== 1.0) {
                     mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * aiResult.position_size_multiplier;
                 }

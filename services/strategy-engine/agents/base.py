@@ -43,7 +43,7 @@ class MarketSnapshot:
         return {k: v for k, v in asdict(self).items() if v is not None}
 
     def cache_key(self) -> str:
-        return f"{self.symbol}:{self.direction}:{self.tier}"
+        return f"{self.symbol}:{self.direction}:{self.tier}:{self.asset_class}"
 
 
 @dataclass
@@ -59,6 +59,7 @@ class AgentDecision:
     agents_consulted: List[str] = field(default_factory=list)
     market_regime: Optional[str] = None
     lessons_applied: List[str] = field(default_factory=list)
+    decision_run_id: Optional[int] = None  # DB ID for linking outcomes back
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -113,6 +114,8 @@ class TradeOutcome:
     agent_approved: Optional[bool] = None
     agent_confidence: Optional[float] = None
     agent_reason: Optional[str] = None
+    decision_run_id: Optional[int] = None  # Links outcome back to the decision that approved it
+    bandit_arm: Optional[str] = None  # Supervisor bandit arm used (for reward attribution)
     timestamp: str = ""
 
     def to_dict(self) -> Dict:

@@ -1897,6 +1897,8 @@ async function reportForexTradeOutcome(position, exitPrice, pnl, pnlPct, exitRea
             agent_approved: position.agentApproved,
             agent_confidence: position.agentConfidence,
             agent_reason: position.agentReason,
+            decision_run_id: position.decisionRunId || null,
+            bandit_arm: position.banditArm || null,
         };
         await axios.post(`${BRIDGE_URL}/agent/trade-outcome`, payload, { timeout: 5000 });
         console.log(`[Learn] ${position.pair} outcome reported: ${pnl > 0 ? 'WIN' : 'LOSS'} ${(pnlPct * 100).toFixed(2)}%`);
@@ -2852,6 +2854,8 @@ async function tradingLoop() {
             signal.agentApproved = true;
             signal.agentConfidence = aiResult.confidence;
             signal.agentReason = aiResult.reason;
+            signal.decisionRunId = aiResult.decision_run_id || null;  // For linking outcomes back
+            signal.banditArm = aiResult.bandit_arm || 'moderate';
             if (aiResult.position_size_multiplier && aiResult.position_size_multiplier !== 1.0) {
                 signal.agentSizeMultiplier = aiResult.position_size_multiplier;
             }

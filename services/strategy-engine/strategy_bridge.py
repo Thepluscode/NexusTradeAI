@@ -142,6 +142,8 @@ class TradeOutcomeRequest(BaseModel):
     agent_approved: Optional[bool] = None
     agent_confidence: Optional[float] = None
     agent_reason: Optional[str] = None
+    decision_run_id: Optional[int] = None  # Links back to the agent decision
+    bandit_arm: Optional[str] = None  # For supervisor bandit reward attribution
 
 class StrategySignalResponse(BaseModel):
     strategy: str
@@ -580,6 +582,8 @@ if FASTAPI_AVAILABLE:
             "lessons_applied": decision.lessons_applied,
             "source": decision.source,
             "agents_consulted": decision.agents_consulted,
+            "decision_run_id": decision.decision_run_id,  # Bots pass this back with trade-outcome
+            "bandit_arm": getattr(decision, 'bandit_arm', 'moderate'),
             "timestamp": datetime.now().isoformat()
         }
 
@@ -608,6 +612,8 @@ if FASTAPI_AVAILABLE:
             agent_approved=req.agent_approved,
             agent_confidence=req.agent_confidence,
             agent_reason=req.agent_reason,
+            decision_run_id=req.decision_run_id,  # Links outcome → decision
+            bandit_arm=req.bandit_arm,  # For correct reward attribution
             timestamp=datetime.now().isoformat(),
         )
         await agent_orchestrator.record_trade_outcome(outcome)

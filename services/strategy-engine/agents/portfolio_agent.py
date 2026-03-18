@@ -108,7 +108,13 @@ class PortfolioRiskAgent:
             async with pool.acquire() as conn:
                 rows = await conn.fetch("""
                     SELECT symbol, bot, direction, entry_price, position_size_usd,
-                           bot AS asset_class, tier, entry_time
+                           CASE
+                               WHEN bot ILIKE '%stock%' THEN 'stock'
+                               WHEN bot ILIKE '%forex%' THEN 'forex'
+                               WHEN bot ILIKE '%crypto%' THEN 'crypto'
+                               ELSE bot
+                           END AS asset_class,
+                           tier, entry_time
                     FROM trades
                     WHERE exit_price IS NULL
                       AND (close_reason IS NULL OR close_reason != 'orphaned_restart')

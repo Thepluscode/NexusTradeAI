@@ -1434,6 +1434,8 @@ class CryptoTradingEngine {
                 entry_score: position.score || undefined,
                 agent_approved: position.agentApproved,
                 agent_confidence: position.agentConfidence,
+                decision_run_id: position.decisionRunId || null,
+                bandit_arm: position.banditArm || null,
             };
             await axios.post(`${bridgeUrl}/agent/trade-outcome`, payload, { timeout: 5000 });
             console.log(`[Learn] ${position.symbol} outcome reported: ${pnl > 0 ? 'WIN' : 'LOSS'} ${(pnlPct * 100).toFixed(2)}%`);
@@ -1765,8 +1767,8 @@ class CryptoTradingEngine {
                 // Old: required momentum > threshold (price far above SMA20 = chasing).
                 // New: require price NEAR SMA20 (pulled back to support in uptrend).
                 // momentum = (price - sma20) / sma20; near SMA20 means momentum close to 0.
-                if (momentum > 0.01) continue;  // Price >1% above SMA20 = already moved, skip (was 0.3% — too narrow)
-                if (momentum < -0.02) continue;  // Price >2% below SMA20 = broken support, skip (was 1% — too narrow)
+                if (momentum > 0.03) continue;  // Price >3% above SMA20 = already moved, skip (was 1% — too narrow for crypto volatility)
+                if (momentum < -0.03) continue;  // Price >3% below SMA20 = broken support, skip (was 2% — too narrow for crypto volatility)
 
                 // Check position limits for this tier
                 const tierPositions = Array.from(this.positions.values())
@@ -2065,6 +2067,9 @@ class CryptoTradingEngine {
                 currentPrice: signal.price,
                 unrealizedPnL: 0,
                 unrealizedPnLPct: 0,
+                // [v8.0] Decision linkage for bandit learning
+                decisionRunId: signal.decisionRunId || null,
+                banditArm: signal.banditArm || null,
                 // [Phase 4] Signal snapshot for trade evaluation
                 signalSnapshot: {
                     orderFlowImbalance: signal.orderFlowImbalance || 0,
@@ -2166,20 +2171,16 @@ class CryptoTradingEngine {
                 continue;
             }
 
-            // [v6.3] ATR Adverse Exit — use configured stop loss, NOT raw 5-min ATR.
-            // Old formula: atrPct * 2.4 * 100 → with 5-min ATR of ~0.2%, this was 0.48% (10x tighter than stop).
-            // Now: only trigger if the position's configured stop % is available; otherwise skip.
-            // The regular stop-loss check below already handles risk — this is a belt-and-suspenders
-            // check that uses ATR-scaled threshold at 80% of the configured stop to exit slightly early
-            // if the move is ATR-confirmed adverse (high-conviction adverse move).
-            if (position.atrPct && position.stopLossPercent) {
-                const atrAdversePct = position.stopLossPercent * 0.8; // 80% of configured stop
-                if (pnlPercent <= -atrAdversePct) {
-                    console.log(`📉 ${symbol}: ATR ADVERSE EXIT at $${currentPrice.toFixed(2)} (${pnlPercent.toFixed(2)}% vs threshold -${atrAdversePct.toFixed(2)}%)`);
-                    await this.closePosition(symbol, currentPrice, 'ATR Adverse Exit');
-                    continue;
-                }
-            }
+            // v8.0 DISABLED: was prematurely closing trades before targets reached
+            // [v6.3] ATR Adverse Exit — disabled because it exits at 80% of stop,
+            // preventing the actual stop loss from being the risk management tool.
+            // if (position.atrPct && position.stopLossPercent) {
+            //     const atrAdversePct = position.stopLossPercent * 0.8;
+            //     if (pnlPercent <= -atrAdversePct) {
+            //         await this.closePosition(symbol, currentPrice, 'ATR Adverse Exit');
+            //         continue;
+            //     }
+            // }
 
             // Check stop loss
             if (currentPrice <= position.stopLoss) {
@@ -2447,6 +2448,8 @@ class CryptoTradingEngine {
                         signal.agentConfidence = aiResult.confidence;
                         signal.agentReason = aiResult.reason;
                         signal.agentPositionSizeMultiplier = aiResult.position_size_multiplier || 1.0;
+                        signal.decisionRunId = aiResult.decision_run_id || null;
+                        signal.banditArm = aiResult.bandit_arm || 'moderate';
                         // [v4.6] Adaptive guardrails — pre-trade quality gate
                         if (this.isLanePaused()) {
                             console.log(`[Guardrail] ${signal.symbol} BLOCKED — lane paused until ${new Date(this.guardrails.lanePausedUntil).toLocaleTimeString()}`);
