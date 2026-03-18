@@ -50,8 +50,13 @@ class LearningAgent:
         """
         Analyze a completed trade and extract lessons.
         Returns lesson dict or None.
+        Only uses Claude for significant trades (>2% P&L) to conserve API budget.
         """
         if not self.client.available:
+            return self._rule_based_lesson(outcome)
+
+        # v8.0: Only use Claude for significant trades — small trades get rule-based
+        if abs(outcome.pnl_pct or 0) < 2.0:
             return self._rule_based_lesson(outcome)
 
         prompt = self._build_prompt(outcome)

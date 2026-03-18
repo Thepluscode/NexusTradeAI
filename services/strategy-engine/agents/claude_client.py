@@ -155,14 +155,14 @@ class ClaudeClient:
 
     def __init__(self):
         self.api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        self.model = "claude-sonnet-4-20250514"
+        self.model = "claude-haiku-4-5-20251001"  # 10x cheaper than Sonnet, great for structured tool_use
         self.client = None
         self._available = False
         self._daily_calls = 0
-        self._daily_budget = 200  # max API calls per day
+        self._daily_budget = 400  # max API calls per day (raised from 200)
         self._last_reset = time.time()
         self._call_timestamps: List[float] = []
-        self._hourly_limit = 60
+        self._hourly_limit = 30  # reduced from 60 to pace usage evenly
 
         self._init()
 

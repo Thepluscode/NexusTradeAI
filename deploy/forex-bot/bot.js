@@ -1812,7 +1812,7 @@ console.log(`🤖 Strategy Bridge URL: ${BRIDGE_URL}`);
 // [v6.3] Agent decision cache — avoids redundant Claude API calls when the same
 // pair appears in consecutive scan cycles with similar conditions.
 const _forexAgentCache = new Map(); // key: pair, value: { result, price, timestamp }
-const _FOREX_AGENT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const _FOREX_AGENT_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes — forex sessions are long, saves API budget
 const _FOREX_AGENT_CACHE_PRICE_DRIFT = 0.003; // 0.3% price change invalidates (forex is tighter)
 
 async function queryAIAdvisor(signal) {

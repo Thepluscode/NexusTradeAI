@@ -33,9 +33,9 @@ Key regime definitions:
 class MarketAnalysisAgent:
     """Cached market regime analyzer using Claude."""
 
-    def __init__(self, client: ClaudeClient, cache_ttl: int = 60):
+    def __init__(self, client: ClaudeClient, cache_ttl: int = 600):
         self.client = client
-        self.cache_ttl = cache_ttl
+        self.cache_ttl = cache_ttl  # 10 minutes (was 60s — regime doesn't change every tick)
         self._cache: Dict[str, Dict] = {}
         self.total_calls = 0
         self.total_cache_hits = 0
@@ -43,7 +43,8 @@ class MarketAnalysisAgent:
     async def analyze(self, snapshot: MarketSnapshot) -> Optional[Dict]:
         """
         Get market regime analysis for the given snapshot.
-        Returns cached result if fresh, otherwise calls Claude.
+        Uses rule-based analysis (no Claude call) — the DecisionAgent already
+        receives all indicators and makes the Claude call. This saves ~50% of API budget.
         """
         cache_key = f"{snapshot.asset_class}:{snapshot.symbol}"
         cached = self._get_cached(cache_key)
@@ -51,23 +52,12 @@ class MarketAnalysisAgent:
             self.total_cache_hits += 1
             return cached
 
-        if not self.client.available:
-            return self._default_analysis(snapshot)
-
-        prompt = self._build_prompt(snapshot)
-        result = await self.client.call_with_tool(
-            system=MARKET_ANALYSIS_SYSTEM,
-            user_message=prompt,
-            tool=MARKET_ANALYSIS_TOOL,
-            timeout_seconds=10
-        )
-
-        if result:
-            self.total_calls += 1
-            self._cache[cache_key] = {"value": result, "ts": time.time()}
-            return result
-
-        return self._default_analysis(snapshot)
+        # v8.0: Always use rule-based — eliminates redundant Claude call.
+        # The DecisionAgent already sees all indicators in its prompt.
+        result = self._default_analysis(snapshot)
+        self.total_calls += 1
+        self._cache[cache_key] = {"value": result, "ts": time.time()}
+        return result
 
     def _get_cached(self, key: str) -> Optional[Dict]:
         entry = self._cache.get(key)

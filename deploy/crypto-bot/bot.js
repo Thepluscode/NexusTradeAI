@@ -1353,7 +1353,7 @@ class CryptoTradingEngine {
     // symbol appears in consecutive scan cycles with similar market conditions.
     // Cache TTL: 5 minutes. If price moves >1% from cached evaluation, cache is invalidated.
     _agentCache = new Map(); // key: symbol, value: { result, price, timestamp }
-    _AGENT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+    _AGENT_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes — crypto signals don't change fast, saves API budget
     _AGENT_CACHE_PRICE_DRIFT = 0.01; // 1% price change invalidates cache
 
     async queryAIAdvisor(signal) {

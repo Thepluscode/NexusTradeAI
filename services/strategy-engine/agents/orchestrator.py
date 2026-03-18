@@ -60,7 +60,7 @@ class AgentOrchestrator:
     def __init__(self):
         self._client = ClaudeClient()
         self.kill_switch = KillSwitch()
-        self.market_agent = MarketAnalysisAgent(self._client, cache_ttl=60)
+        self.market_agent = MarketAnalysisAgent(self._client, cache_ttl=600)  # 10 min cache
         self.decision_agent = DecisionAgent(self._client)
         self.learning_agent = LearningAgent(self._client)
         self.scan_engine = ScanEngine()
@@ -69,9 +69,14 @@ class AgentOrchestrator:
         self.institutional_agent = institutional_agent
         self.supervisor = supervisor
 
-        # Decision cache (5-min TTL)
+        # Decision cache — asset-class-aware TTLs to reduce API burn
         self._cache: Dict[str, Dict] = {}
-        self._cache_ttl = 300
+        self._cache_ttl_by_asset = {
+            "crypto": 900,   # 15 minutes — crypto runs 24/7, signals don't change fast
+            "forex": 600,    # 10 minutes — forex sessions are long
+            "stock": 300,    # 5 minutes — stocks move faster intraday
+        }
+        self._cache_ttl = 300  # default fallback
 
         # Stats
         self.total_evaluations = 0
@@ -103,9 +108,9 @@ class AgentOrchestrator:
             self._audit(snapshot, decision, time.time() - start)
             return decision
 
-        # Step 2: Cache check
+        # Step 2: Cache check (asset-class-aware TTL)
         cache_key = snapshot.cache_key()
-        cached = self._get_cached(cache_key)
+        cached = self._get_cached(cache_key, snapshot.asset_class)
         if cached:
             self.total_cache_hits += 1
             cached.source = "cache"
@@ -386,8 +391,8 @@ class AgentOrchestrator:
         if lesson:
             logger.info(f"[Learn] {outcome.symbol}: {lesson.get('actionable_lesson', 'no lesson')}")
 
-        # [v7.1] Post-loss autopsy — run 5 parallel analysis agents on losing trades
-        if outcome.pnl_pct is not None and outcome.pnl_pct < 0:
+        # [v7.1] Post-loss autopsy — only on significant losses (>1%) to save API budget
+        if outcome.pnl_pct is not None and outcome.pnl_pct < -1.0:
             try:
                 autopsy_report = await run_autopsy(
                     outcome=outcome,
@@ -414,10 +419,12 @@ class AgentOrchestrator:
             except Exception as e:
                 logger.error(f"Autopsy agent error (non-fatal): {e}")
 
-    def _get_cached(self, key: str) -> Optional[AgentDecision]:
+    def _get_cached(self, key: str, asset_class: str = "") -> Optional[AgentDecision]:
         entry = self._cache.get(key)
-        if entry and (time.time() - entry["ts"]) < self._cache_ttl:
-            return entry["decision"]
+        if entry:
+            ttl = self._cache_ttl_by_asset.get(asset_class, self._cache_ttl)
+            if (time.time() - entry["ts"]) < ttl:
+                return entry["decision"]
         return None
 
     def _cache_decision(self, key: str, decision: AgentDecision):
