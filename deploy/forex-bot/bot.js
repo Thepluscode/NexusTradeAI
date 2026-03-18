@@ -1035,25 +1035,28 @@ const EXIT_CONFIG = {
     idealHoldDays: 2,            // 2-day swings
     stalePositionDays: 7,        // Force close
 
-    // [v8.0] Dynamic profit targets — relaxed to let trades reach their ATR target
-    // Previously Day-0 target (2.5%) was BELOW the ATR target (4%), closing winners prematurely
+    // [v9.0] Realistic forex profit targets — EUR/USD moves ~0.3-0.5%/day
+    // Previous 4% targets were stock-calibrated and never hit (0W/19L)
     profitTargetByDay: {
-        0: 0.04,   // Day 0-1: 4% (match ATR target — let it run)
-        1: 0.035,  // Day 1-2: 3.5%
-        2: 0.025,  // Day 2-3: 2.5%
-        3: 0.02,   // Day 3-4: 2%
-        4: 0.015,  // Day 4-5: 1.5%
-        5: 0.01    // Day 5+: 1%
+        0: 0.012,  // Day 0: 1.2% (aggressive intraday — rare but possible)
+        1: 0.008,  // Day 1: 0.8% (typical good swing)
+        2: 0.006,  // Day 2: 0.6% (take what the market gives)
+        3: 0.004,  // Day 3: 0.4%
+        4: 0.003,  // Day 4: 0.3% (just get out green)
+        5: 0.002   // Day 5+: 0.2% (any profit is a win)
     },
 
-    // [v7.2] Trailing stops — relaxed to let forex winners run
-    // Previous levels locked too early (+1.5%/40%), cutting winners before reaching 4% target
+    // [v9.0] Tight trailing stops for forex — protect small gains
+    // Forex P&L swings fast: $600 can become -$200 in hours
+    // Must lock gains starting at +0.2% (20 pips on EUR/USD)
     trailingStopLevels: [
-        { gainThreshold: 0.02, lockPercent: 0.30 },   // +2.0%: lock 30% (was +1.5%/40%)
-        { gainThreshold: 0.03, lockPercent: 0.45 },    // +3.0%: lock 45% (was +2.5%/55%)
-        { gainThreshold: 0.04, lockPercent: 0.60 },    // +4.0%: lock 60% (was +4%/70%)
-        { gainThreshold: 0.06, lockPercent: 0.80 },    // +6.0%: lock 80%
-        { gainThreshold: 0.08, lockPercent: 0.90 }     // +8.0%: lock 90%
+        { gainThreshold: 0.002, lockPercent: 0.15 },  // +0.2%: lock 15% (breakeven protection)
+        { gainThreshold: 0.003, lockPercent: 0.25 },  // +0.3%: lock 25%
+        { gainThreshold: 0.005, lockPercent: 0.40 },  // +0.5%: lock 40% ($570 → at least $228 locked)
+        { gainThreshold: 0.008, lockPercent: 0.55 },  // +0.8%: lock 55%
+        { gainThreshold: 0.012, lockPercent: 0.70 },  // +1.2%: lock 70%
+        { gainThreshold: 0.020, lockPercent: 0.85 },  // +2.0%: lock 85%
+        { gainThreshold: 0.030, lockPercent: 0.92 },  // +3.0%: lock 92%
     ],
 
     // Momentum reversal
@@ -1065,32 +1068,34 @@ const EXIT_CONFIG = {
 };
 
 // ===== TIERED MOMENTUM CONFIG (Forex) =====
+// [v9.0] Recalibrated for realistic forex moves (EUR/USD ~50-80 pips/day)
+// Old targets (4-6%) were stock-calibrated and never hit → 0% win rate
 const MOMENTUM_CONFIG = {
     tier1: {
-        threshold: 0.004,       // 0.4% (40 pips) — raised from 0.3% to filter noise
-        rsiMax: 65,             // tightened from 70
-        rsiMin: 35,             // tightened from 30
-        positionSize: 0.008,    // 0.8% of account (cut from 1%)
-        stopLoss: 0.02,         // 2.0%
-        profitTarget: 0.04,     // 4% (2:1 R/R)
-        maxPositions: 3         // reduced from 4
+        threshold: 0.003,       // 0.3% (30 pips) — lowered to catch more setups
+        rsiMax: 65,
+        rsiMin: 35,
+        positionSize: 0.008,    // 0.8% of account
+        stopLoss: 0.008,        // 0.8% (80 pips) — tighter stop, was 2%
+        profitTarget: 0.012,    // 1.2% (1.5:1 R/R) — realistic forex target
+        maxPositions: 3
     },
     tier2: {
-        threshold: 0.006,       // 0.6% (60 pips) — raised from 0.5%
-        rsiMax: 68,             // tightened from 72
-        rsiMin: 32,             // tightened from 28
-        positionSize: 0.012,    // 1.2% (cut from 1.5%)
-        stopLoss: 0.02,         // 2%
-        profitTarget: 0.045,    // 4.5% (2.25:1 R/R)
+        threshold: 0.005,       // 0.5% (50 pips)
+        rsiMax: 68,
+        rsiMin: 32,
+        positionSize: 0.012,    // 1.2%
+        stopLoss: 0.010,        // 1.0% (100 pips)
+        profitTarget: 0.015,    // 1.5% (1.5:1 R/R)
         maxPositions: 2
     },
     tier3: {
-        threshold: 0.010,       // 1.0% (100 pips) — raised from 0.8% to require real moves
-        rsiMax: 72,             // tightened from 75
-        rsiMin: 28,             // tightened from 25
-        positionSize: 0.015,    // 1.5% (cut from 2%)
-        stopLoss: 0.025,        // 2.5%
-        profitTarget: 0.06,     // 6% (2.4:1 R/R)
+        threshold: 0.008,       // 0.8% (80 pips) — strong moves
+        rsiMax: 72,
+        rsiMin: 28,
+        positionSize: 0.015,    // 1.5%
+        stopLoss: 0.012,        // 1.2%
+        profitTarget: 0.020,    // 2.0% (1.67:1 R/R)
         maxPositions: 1
     }
 };
@@ -2179,8 +2184,11 @@ async function scanForSignals(heldPositions = positions) {
         // [v6.1] ATR-based stops/targets — adapts to each pair's volatility
         // v3.2 had 2.0x ATR for BOTH stop and target (1:1 R:R) → 0% win rate.
         // Fix: 2.5x ATR stop (wider to avoid noise sweep) + 5.0x ATR target (2:1 R:R minimum)
-        const atrStop   = atrPct > 0 ? atrPct * 4.0 : config.stopLoss;   // [v7.1] 4x ATR → ~25-40 pip stops on majors (was 2.5x → 10-15 pips = noise)
-        const atrTarget = atrPct > 0 ? atrPct * 8.0 : config.profitTarget; // [v7.1] 8x ATR target, maintains 2:1 R:R
+        // [v9.0] ATR-based stops/targets capped to config limits
+        // With ATR% ~0.07%, 4x=0.28% stop, 8x=0.56% target — reasonable for forex
+        // Cap ensures we never exceed tier config (e.g., 0.8% stop, 1.2% target)
+        const atrStop   = atrPct > 0 ? Math.min(atrPct * 4.0, config.stopLoss) : config.stopLoss;
+        const atrTarget = atrPct > 0 ? Math.min(atrPct * 8.0, config.profitTarget) : config.profitTarget;
 
         // LONG Signal — [v7.0] Pullback-to-support entry: 4 key filters only
         // 1) H1 trend up  2) Price near SMA20  3) RSI 35-55  4) MACD histogram > 0
