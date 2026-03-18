@@ -10,7 +10,29 @@ const { createUserCredentialStore } = require('./userCredentialStore');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 // ===== MONTE CARLO POSITION SIZER =====
-const MonteCarloSizer = require('../../services/trading/monte-carlo-sizer');
+// Try external module, fallback to inline Kelly-based sizer for Railway deploy
+let MonteCarloSizer;
+try {
+    MonteCarloSizer = require('../../services/trading/monte-carlo-sizer');
+} catch (_) {
+    MonteCarloSizer = class MonteCarloSizer {
+        constructor() { this.tradeReturns = []; this.lastOptimization = null; }
+        addTrade(r) { this.tradeReturns.push(r); if (this.tradeReturns.length > 500) this.tradeReturns.shift(); }
+        optimize() {
+            if (this.tradeReturns.length < 20) return { optimalFraction: 0.02, halfKelly: 0.01, medianReturn: 0, confidence: 'low' };
+            const wins = this.tradeReturns.filter(r => r > 0);
+            const losses = this.tradeReturns.filter(r => r <= 0);
+            const winRate = wins.length / this.tradeReturns.length;
+            const avgWin = wins.length ? wins.reduce((a, b) => a + b, 0) / wins.length : 0;
+            const avgLoss = losses.length ? Math.abs(losses.reduce((a, b) => a + b, 0) / losses.length) : 1;
+            const kelly = avgLoss > 0 ? Math.max(0, (winRate * avgWin - (1 - winRate) * avgLoss) / avgWin) : 0.01;
+            const halfKelly = Math.min(Math.max(kelly / 2, 0.005), 0.125);
+            this.lastOptimization = { optimalFraction: kelly, halfKelly, medianReturn: 0, confidence: this.tradeReturns.length >= 50 ? 'high' : 'medium' };
+            return this.lastOptimization;
+        }
+    };
+    console.log('[MONTE-CARLO] Using inline fallback sizer (external module not available)');
+}
 const monteCarloSizer = new MonteCarloSizer();
 
 // ── PostgreSQL trade persistence (optional — requires DATABASE_URL) ──────────
