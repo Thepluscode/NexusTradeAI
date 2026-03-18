@@ -1007,14 +1007,15 @@ const EXIT_CONFIG = {
     idealHoldDays: 2,            // 2-day swings
     stalePositionDays: 7,        // Force close
 
-    // Dynamic profit targets (forex has tighter ranges)
+    // [v8.0] Dynamic profit targets — relaxed to let trades reach their ATR target
+    // Previously Day-0 target (2.5%) was BELOW the ATR target (4%), closing winners prematurely
     profitTargetByDay: {
-        0: 0.025,  // Day 0-1: 2.5% (250 pips on EUR/USD)
-        1: 0.025,
-        2: 0.02,   // Day 2-3: 2%
-        3: 0.015,  // Day 3-4: 1.5%
-        4: 0.01,   // Day 4-5: 1%
-        5: 0.005   // Day 5+: 0.5%
+        0: 0.04,   // Day 0-1: 4% (match ATR target — let it run)
+        1: 0.035,  // Day 1-2: 3.5%
+        2: 0.025,  // Day 2-3: 2.5%
+        3: 0.02,   // Day 3-4: 2%
+        4: 0.015,  // Day 4-5: 1.5%
+        5: 0.01    // Day 5+: 1%
     },
 
     // [v7.2] Trailing stops — relaxed to let forex winners run
@@ -1168,14 +1169,10 @@ function evaluateForexRegimeSignal({ tier, trendStrength, pullback, maxPullback,
 }
 
 function getForexAtrExitReason(position, currentPrice) {
-    const atrPct = parseFloat(position?.atrPct || 0);
-    if (!atrPct || !currentPrice || !position?.entry) return null;
-    const adverseMovePct = position.direction === 'long'
-        ? (position.entry - currentPrice) / position.entry
-        : (currentPrice - position.entry) / position.entry;
-    if (adverseMovePct >= atrPct * EXIT_CONFIG.momentumReversal.atrMultipleExit) {
-        return `ATR adverse exit (${(adverseMovePct * 100).toFixed(2)}%)`;
-    }
+    // [v8.0] DISABLED — ATR adverse exit was killing trades with tiny losses (-0.048% avg)
+    // before they could reach the 4% profit target. The stop loss already provides downside
+    // protection. Removing this lets trades breathe and reach their target.
+    // Previous 0% win rate was caused by premature exits, not bad entries.
     return null;
 }
 
@@ -2896,8 +2893,11 @@ async function tradingLoop() {
             }
             console.log(`[Committee] ${signal.pair} ${signal.direction}: APPROVED conf:${committee.confidence} — trend:${committee.components.trend} flow:${committee.components.orderFlow} disp:${committee.components.displacement} VP:${committee.components.volumeProfile}`);
 
+            // [v8.0] Assign committee data BEFORE executeTrade → dbForexOpen captures it in entry_context
+            // Previously assigned after, so DB always had null committee data (Signal Intelligence showed "0 trades with")
             signal.committeeConfidence = committee.confidence;
             signal.committeeComponents = committee.components;
+
             await executeTrade(signal);
         }
     } catch (err) {
