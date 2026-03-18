@@ -605,6 +605,7 @@ const CORRELATION_GROUPS = {
 const positions = new Map();
 const recentTrades = new Map();
 const stoppedOutPairs = new Map();
+const profitProtectReentryPairs = new Map(); // pair → timestamp, expires after 30 min
 const tradesPerPair = new Map();
 let totalTradesToday = 0;
 let scanCount = 0;
@@ -1243,13 +1244,26 @@ function isNearHighImpactEvent() {
 }
 
 function canTrade(pair, direction = 'long') {
+    // [Profit-Protect] Check re-entry flag — bypass cooldowns if pair was closed by profit protection
+    // Re-entry window expires after 30 minutes
+    const reentryTime = profitProtectReentryPairs.get(pair);
+    const hasReentryFlag = reentryTime && (Date.now() - reentryTime < 30 * 60 * 1000);
+
+    // Clean up expired re-entry flags
+    if (reentryTime && (Date.now() - reentryTime >= 30 * 60 * 1000)) {
+        profitProtectReentryPairs.delete(pair);
+    }
+
     // Check stop-out cooldown (dynamic: 30min for small losses, 2h for large)
-    const stopEntry = stoppedOutPairs.get(pair);
-    if (stopEntry) {
-        const { time, cooldownMs } = typeof stopEntry === 'object' ? stopEntry : { time: stopEntry, cooldownMs: MIN_TIME_AFTER_STOP };
-        if (Date.now() - time < cooldownMs) {
-            const minsLeft = Math.ceil((cooldownMs - (Date.now() - time)) / 60000);
-            return { allowed: false, reason: `Stop-out cooldown (${minsLeft}m left)` };
+    // BYPASSED if profit-protect re-entry flag is active
+    if (!hasReentryFlag) {
+        const stopEntry = stoppedOutPairs.get(pair);
+        if (stopEntry) {
+            const { time, cooldownMs } = typeof stopEntry === 'object' ? stopEntry : { time: stopEntry, cooldownMs: MIN_TIME_AFTER_STOP };
+            if (Date.now() - time < cooldownMs) {
+                const minsLeft = Math.ceil((cooldownMs - (Date.now() - time)) / 60000);
+                return { allowed: false, reason: `Stop-out cooldown (${minsLeft}m left)` };
+            }
         }
     }
 
@@ -1258,20 +1272,22 @@ function canTrade(pair, direction = 'long') {
         return { allowed: false, reason: `Daily limit (${MAX_TRADES_PER_DAY})` };
     }
 
-    // Check per-pair limit
+    // Check per-pair limit — BYPASSED if profit-protect re-entry flag is active
     const pairTrades = tradesPerPair.get(pair) || 0;
-    if (pairTrades >= MAX_TRADES_PER_PAIR) {
+    if (!hasReentryFlag && pairTrades >= MAX_TRADES_PER_PAIR) {
         return { allowed: false, reason: `Pair limit (${MAX_TRADES_PER_PAIR})` };
     }
 
-    // Check time between trades
-    const recent = recentTrades.get(pair) || [];
-    if (recent.length > 0) {
-        const lastTrade = recent[recent.length - 1];
-        const timeSince = Date.now() - lastTrade.time;
-        if (timeSince < MIN_TIME_BETWEEN_TRADES) {
-            const minsLeft = Math.ceil((MIN_TIME_BETWEEN_TRADES - timeSince) / 60000);
-            return { allowed: false, reason: `Cooldown (${minsLeft} min)` };
+    // Check time between trades — BYPASSED if profit-protect re-entry flag is active
+    if (!hasReentryFlag) {
+        const recent = recentTrades.get(pair) || [];
+        if (recent.length > 0) {
+            const lastTrade = recent[recent.length - 1];
+            const timeSince = Date.now() - lastTrade.time;
+            if (timeSince < MIN_TIME_BETWEEN_TRADES) {
+                const minsLeft = Math.ceil((MIN_TIME_BETWEEN_TRADES - timeSince) / 60000);
+                return { allowed: false, reason: `Cooldown (${minsLeft} min)` };
+            }
         }
     }
 
@@ -2490,6 +2506,8 @@ async function executeTrade(signal) {
             agentConfidence: signal.agentConfidence || 0,
             agentReason: signal.agentReason || '',
             agentSizeMultiplier: signal.agentSizeMultiplier || 1.0,
+            peakUnrealizedPL: 0, // [Profit-Protect] track highest unrealized P&L
+            wasPositive: false,  // [Profit-Protect] breakeven lock flag
             // [Phase 4] Signal snapshot for trade evaluation loop
             signalSnapshot: {
                 orderFlowImbalance: signal.orderFlowImbalance || 0,
@@ -2761,6 +2779,41 @@ async function managePositions() {
         // Write live market values back so status endpoint returns them for demo positions
         localPos.currentPrice = currentPrice;
         localPos.unrealizedPL = unrealizedPL;
+
+        // ===== AGGRESSIVE PROFIT PROTECTION (runs BEFORE trailing stops) =====
+
+        // 1. Update peak P&L tracking
+        if (localPos.peakUnrealizedPL === undefined) localPos.peakUnrealizedPL = 0;
+        if (unrealizedPL > localPos.peakUnrealizedPL) {
+            localPos.peakUnrealizedPL = unrealizedPL;
+        }
+
+        // 2. Breakeven lock: once trade was positive (> $2), never let it go negative
+        if (unrealizedPL > 2) {
+            localPos.wasPositive = true;
+        }
+        if (localPos.wasPositive && unrealizedPL < -1) {
+            console.log(`[PROFIT-PROTECT] ${pair}: was +$${localPos.peakUnrealizedPL.toFixed(2)}, now $${unrealizedPL.toFixed(2)} — closing to protect capital`);
+            profitProtectReentryPairs.set(pair, Date.now());
+            console.log(`[RE-ENTRY] ${pair} eligible for re-entry after profit-protect close`);
+            await closePositionWithReason(pair, `Profit-Protect breakeven lock (peak +$${localPos.peakUnrealizedPL.toFixed(2)}, now $${unrealizedPL.toFixed(2)})`);
+            continue;
+        }
+
+        // 3. Peak drawback protection: if peak > $10 and dropped > 40% from peak, take profit
+        if (localPos.peakUnrealizedPL > 10 && unrealizedPL > 0) {
+            const dropFromPeak = localPos.peakUnrealizedPL - unrealizedPL;
+            const dropPct = (dropFromPeak / localPos.peakUnrealizedPL) * 100;
+            if (dropPct > 40) {
+                console.log(`[PROFIT-PROTECT] ${pair}: peak +$${localPos.peakUnrealizedPL.toFixed(2)}, now +$${unrealizedPL.toFixed(2)} (${dropPct.toFixed(1)}% drawback) — taking profit`);
+                profitProtectReentryPairs.set(pair, Date.now());
+                console.log(`[RE-ENTRY] ${pair} eligible for re-entry after profit-protect close`);
+                await closePositionWithReason(pair, `Profit-Protect drawback (peak +$${localPos.peakUnrealizedPL.toFixed(2)}, now +$${unrealizedPL.toFixed(2)}, ${dropPct.toFixed(1)}% drop)`);
+                continue;
+            }
+        }
+
+        // ===== END PROFIT PROTECTION =====
 
         // Update trailing stop
         updateTrailingStop(localPos, currentPrice);
@@ -4274,19 +4327,25 @@ app.listen(PORT, async () => {
             const shortUnits = parseInt(p.short?.units || '0');
             if (longUnits > 0) {
                 const avgPrice = parseFloat(p.long.averagePrice || '0');
+                const hydratedPL = parseFloat(p.unrealizedPL || '0');
                 positions.set(instrument, {
                     instrument, direction: 'long', tier: 'tier1',
                     entry: avgPrice, stopLoss: avgPrice * 0.985, takeProfit: avgPrice * 1.03,
-                    units: longUnits, entryTime: new Date(), session: 'restored'
+                    units: longUnits, entryTime: new Date(), session: 'restored',
+                    peakUnrealizedPL: Math.max(0, hydratedPL),
+                    wasPositive: hydratedPL > 2
                 });
                 tradesPerPair.set(instrument, MAX_TRADES_PER_PAIR); // block further entries
-                console.log(`🔄 Restored position: ${instrument} LONG ${longUnits} units @ ${avgPrice}`);
+                console.log(`🔄 Restored position: ${instrument} LONG ${longUnits} units @ ${avgPrice} (peakPL: $${Math.max(0, hydratedPL).toFixed(2)})`);
             } else if (shortUnits < 0) {
                 const avgPrice = parseFloat(p.short.averagePrice || '0');
+                const hydratedPL = parseFloat(p.unrealizedPL || '0');
                 positions.set(instrument, {
                     instrument, direction: 'short', tier: 'tier1',
                     entry: avgPrice, stopLoss: avgPrice * 1.015, takeProfit: avgPrice * 0.97,
-                    units: shortUnits, entryTime: new Date(), session: 'restored'
+                    units: shortUnits, entryTime: new Date(), session: 'restored',
+                    peakUnrealizedPL: Math.max(0, hydratedPL),
+                    wasPositive: hydratedPL > 2
                 });
                 tradesPerPair.set(instrument, MAX_TRADES_PER_PAIR);
                 console.log(`🔄 Restored position: ${instrument} SHORT ${Math.abs(shortUnits)} units @ ${avgPrice}`);

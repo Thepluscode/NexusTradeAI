@@ -573,6 +573,9 @@ function loadPositions() {
                 positions.set(symbol, {
                     ...pos,
                     entryTime: pos.entryTime ? new Date(pos.entryTime) : new Date(),
+                    // [Profit Protection] Ensure fields exist for positions saved before this feature
+                    peakUnrealizedPL: pos.peakUnrealizedPL || 0,
+                    wasPositive: pos.wasPositive || false,
                 });
             }
             if (positions.size > 0) {
@@ -615,6 +618,11 @@ const recentTrades = new Map();
 const stoppedOutSymbols = new Map();
 const tradesPerSymbol = new Map();
 let totalTradesToday = 0;
+
+// ===== PROFIT PROTECTION SYSTEM =====
+// Tracks symbols closed via profit-protect that are eligible for re-entry (bypasses cooldown)
+const profitProtectReentrySymbols = new Map(); // symbol -> timestamp
+const PROFIT_PROTECT_REENTRY_WINDOW = 30 * 60 * 1000; // 30 minutes
 
 // Daily loss circuit breaker — updated by the status endpoint each poll
 let cachedDailyPnL = 0;
@@ -2300,8 +2308,17 @@ async function reportTradeOutcome(position, exitPrice, pnl, pnlPct, exitReason) 
 }
 
 function canTrade(symbol, side = 'buy') {
+    // [Profit Protection] Check if this symbol has a valid re-entry flag (bypasses cooldowns)
+    const reentryTime = profitProtectReentrySymbols.get(symbol);
+    const hasReentryFlag = reentryTime && (Date.now() - reentryTime) < PROFIT_PROTECT_REENTRY_WINDOW;
+
+    // Clean up expired re-entry flags
+    if (reentryTime && !hasReentryFlag) {
+        profitProtectReentrySymbols.delete(symbol);
+    }
+
     const stopTime = stoppedOutSymbols.get(symbol);
-    if (stopTime) {
+    if (stopTime && !hasReentryFlag) {
         const timeSinceStop = Date.now() - stopTime;
         if (timeSinceStop < MIN_TIME_AFTER_STOP) {
             return false;
@@ -2311,6 +2328,13 @@ function canTrade(symbol, side = 'buy') {
     }
 
     if (totalTradesToday >= MAX_TRADES_PER_DAY) return false;
+
+    // Re-entry flag bypasses per-symbol limit and time cooldowns
+    if (hasReentryFlag) {
+        console.log(`[RE-ENTRY] ${symbol}: profit-protect re-entry flag active — bypassing cooldowns`);
+        profitProtectReentrySymbols.delete(symbol); // consume the flag
+        return true;
+    }
 
     const symbolTrades = tradesPerSymbol.get(symbol) || 0;
     if (symbolTrades >= MAX_TRADES_PER_SYMBOL) return false;
@@ -2496,6 +2520,7 @@ async function managePositions() {
                 const restoredEntry = alpacaPos.created_at
                     ? new Date(alpacaPos.created_at)
                     : new Date(Date.now() - 24 * 60 * 60 * 1000);
+                const restoredUnrealizedPL = parseFloat(alpacaPos.unrealized_pl) || 0;
                 position = {
                     symbol,
                     entry: avgEntry,
@@ -2503,7 +2528,10 @@ async function managePositions() {
                     stopLoss: avgEntry * 0.93,
                     target: avgEntry * 1.20,
                     strategy: 'existing',
-                    entryTime: restoredEntry
+                    entryTime: restoredEntry,
+                    // [Profit Protection] Initialize peak from current state
+                    peakUnrealizedPL: Math.max(0, restoredUnrealizedPL),
+                    wasPositive: restoredUnrealizedPL > 3
                 };
                 positions.set(symbol, position);
                 savePositions();
@@ -2515,7 +2543,53 @@ async function managePositions() {
             // Update trailing stops (aggressive)
             updateTrailingStop(position, currentPrice, unrealizedPL);
 
-            console.log(`   ${symbol}: $${currentPrice.toFixed(2)} (${unrealizedPL >= 0 ? '+' : ''}${unrealizedPL.toFixed(2)}%) | Stop: $${position.stopLoss.toFixed(2)} | Hold: ${holdDays.toFixed(1)}d`);
+            // ===== PROFIT PROTECTION SYSTEM =====
+            // Uses dollar P&L from Alpaca for precise breakeven/drawback tracking
+            const unrealizedPLDollar = parseFloat(alpacaPos.unrealized_pl) || 0;
+
+            // Initialize peakUnrealizedPL if missing (e.g. positions from before this feature)
+            if (position.peakUnrealizedPL === undefined || position.peakUnrealizedPL === null) {
+                position.peakUnrealizedPL = Math.max(0, unrealizedPLDollar);
+                position.wasPositive = unrealizedPLDollar > 3;
+            }
+
+            // Track peak P&L — only ratchets up, never down
+            if (unrealizedPLDollar > position.peakUnrealizedPL) {
+                position.peakUnrealizedPL = unrealizedPLDollar;
+            }
+
+            // Mark position as "was positive" once it exceeds $3 (accounts for spread/slippage)
+            if (unrealizedPLDollar > 3 && !position.wasPositive) {
+                position.wasPositive = true;
+                console.log(`[PROFIT-PROTECT] ${symbol}: position now profitable (+$${unrealizedPLDollar.toFixed(2)}) — breakeven lock ARMED`);
+            }
+
+            // Breakeven lock: if was profitable but now losing, close immediately
+            if (position.wasPositive && unrealizedPLDollar < -2) {
+                console.log(`[PROFIT-PROTECT] ${symbol}: was +$${position.peakUnrealizedPL.toFixed(2)}, now $${unrealizedPLDollar.toFixed(2)} — closing to protect capital`);
+                // Set re-entry flag before closing
+                profitProtectReentrySymbols.set(symbol, Date.now());
+                console.log(`[RE-ENTRY] ${symbol} eligible for re-entry after profit-protect close`);
+                await closePosition(symbol, alpacaPos.qty, 'Profit Protection - Breakeven Lock');
+                continue;
+            }
+
+            // Peak drawback protection: if peak > $15 and dropped > 40% from peak, take remaining profit
+            if (position.peakUnrealizedPL > 15 && unrealizedPLDollar > 0) {
+                const dropFromPeak = position.peakUnrealizedPL - unrealizedPLDollar;
+                const dropPct = (dropFromPeak / position.peakUnrealizedPL) * 100;
+                if (dropPct > 40) {
+                    console.log(`[PROFIT-PROTECT] ${symbol}: peak +$${position.peakUnrealizedPL.toFixed(2)}, now +$${unrealizedPLDollar.toFixed(2)} (${dropPct.toFixed(1)}% drawback) — taking profit`);
+                    // Set re-entry flag before closing
+                    profitProtectReentrySymbols.set(symbol, Date.now());
+                    console.log(`[RE-ENTRY] ${symbol} eligible for re-entry after profit-protect close`);
+                    await closePosition(symbol, alpacaPos.qty, `Profit Protection - ${dropPct.toFixed(0)}% Drawback from Peak`);
+                    continue;
+                }
+            }
+            // ===== END PROFIT PROTECTION =====
+
+            console.log(`   ${symbol}: $${currentPrice.toFixed(2)} (${unrealizedPL >= 0 ? '+' : ''}${unrealizedPL.toFixed(2)}%) | Stop: $${position.stopLoss.toFixed(2)} | Hold: ${holdDays.toFixed(1)}d | Peak: +$${position.peakUnrealizedPL.toFixed(2)}${position.wasPositive ? ' [BEL]' : ''}`);
 
             // NEW: Check multiple exit conditions
             const exitReason = await shouldExitPosition(position, currentPrice, alpacaPos);
@@ -3310,6 +3384,9 @@ async function executeTrade(signal, strategy) {
             tier,
             config,
             entryTime,
+            // [Profit Protection] Track peak unrealized P&L for breakeven lock + drawback protection
+            peakUnrealizedPL: 0,
+            wasPositive: false,
             entryVolume: signal.entryVolume,
             rsi: signal.rsi,
             vwap: signal.vwap,
@@ -4016,6 +4093,7 @@ app.post('/api/accounts/demo/reset', (req, res) => {
         recentTrades.clear();
         tradesPerSymbol.clear();      // was missing — prevented new trades after reset
         stoppedOutSymbols.clear();    // was missing — cooldowns persisted after reset
+        profitProtectReentrySymbols.clear();
         guardrails.resetDaily();
 
         // Reset the global perfData in memory (use Object.assign, not const — don't shadow)
@@ -4528,6 +4606,7 @@ function resetDailyCounters() {
         totalTradesToday = 0;
         tradesPerSymbol.clear();
         stoppedOutSymbols.clear();
+        profitProtectReentrySymbols.clear();
         guardrails.resetDaily();
         lastResetDate = today;
     }
@@ -4626,6 +4705,7 @@ class UserTradingEngine {
         this.recentTrades = new Map();
         this.stoppedOutSymbols = new Map();
         this.tradesPerSymbol = new Map();
+        this.profitProtectReentrySymbols = new Map();
         this.totalTradesToday = 0;
         this.cachedDailyPnL = 0;
         this.scanCount = 0;
@@ -4818,13 +4898,23 @@ class UserTradingEngine {
     }
 
     canTrade(symbol, side = 'buy') {
+        // [Profit Protection] Check re-entry flag
+        const reentryTime = this.profitProtectReentrySymbols.get(symbol);
+        const hasReentryFlag = reentryTime && (Date.now() - reentryTime) < PROFIT_PROTECT_REENTRY_WINDOW;
+        if (reentryTime && !hasReentryFlag) this.profitProtectReentrySymbols.delete(symbol);
+
         const stopTime = this.stoppedOutSymbols.get(symbol);
-        if (stopTime) {
+        if (stopTime && !hasReentryFlag) {
             const timeSinceStop = Date.now() - stopTime;
             if (timeSinceStop < MIN_TIME_AFTER_STOP) return false;
             else this.stoppedOutSymbols.delete(symbol);
         }
         if (this.totalTradesToday >= MAX_TRADES_PER_DAY) return false;
+        if (hasReentryFlag) {
+            console.log(`[RE-ENTRY] [Engine ${this.userId}] ${symbol}: profit-protect re-entry flag active — bypassing cooldowns`);
+            this.profitProtectReentrySymbols.delete(symbol);
+            return true;
+        }
         const symbolTrades = this.tradesPerSymbol.get(symbol) || 0;
         if (symbolTrades >= MAX_TRADES_PER_SYMBOL) return false;
         const recent = this.recentTrades.get(symbol) || [];
@@ -4844,6 +4934,7 @@ class UserTradingEngine {
             this.totalTradesToday = 0;
             this.tradesPerSymbol.clear();
             this.stoppedOutSymbols.clear();
+            this.profitProtectReentrySymbols.clear();
             this.lastResetDate = today;
         }
     }
@@ -4925,12 +5016,45 @@ class UserTradingEngine {
                 let position = this.positions.get(symbol);
                 if (!position) {
                     const restoredEntry = alpacaPos.created_at ? new Date(alpacaPos.created_at) : new Date(Date.now() - 86400000);
+                    const restoredPL = parseFloat(alpacaPos.unrealized_pl) || 0;
                     position = { symbol, entry: avgEntry, shares: parseFloat(alpacaPos.qty),
                         stopLoss: avgEntry * 0.93, target: avgEntry * 1.20,
-                        strategy: 'existing', entryTime: restoredEntry };
+                        strategy: 'existing', entryTime: restoredEntry,
+                        peakUnrealizedPL: Math.max(0, restoredPL), wasPositive: restoredPL > 3 };
                     this.positions.set(symbol, position);
                 }
                 updateTrailingStop(position, currentPrice, unrealizedPL);
+
+                // ===== PROFIT PROTECTION (per-user engine) =====
+                const unrealizedPLDollar = parseFloat(alpacaPos.unrealized_pl) || 0;
+                if (position.peakUnrealizedPL === undefined) {
+                    position.peakUnrealizedPL = Math.max(0, unrealizedPLDollar);
+                    position.wasPositive = unrealizedPLDollar > 3;
+                }
+                if (unrealizedPLDollar > position.peakUnrealizedPL) position.peakUnrealizedPL = unrealizedPLDollar;
+                if (unrealizedPLDollar > 3 && !position.wasPositive) {
+                    position.wasPositive = true;
+                    console.log(`[PROFIT-PROTECT] [Engine ${this.userId}] ${symbol}: breakeven lock ARMED (+$${unrealizedPLDollar.toFixed(2)})`);
+                }
+                if (position.wasPositive && unrealizedPLDollar < -2) {
+                    console.log(`[PROFIT-PROTECT] [Engine ${this.userId}] ${symbol}: was +$${position.peakUnrealizedPL.toFixed(2)}, now $${unrealizedPLDollar.toFixed(2)} — closing to protect capital`);
+                    this.profitProtectReentrySymbols.set(symbol, Date.now());
+                    console.log(`[RE-ENTRY] [Engine ${this.userId}] ${symbol} eligible for re-entry after profit-protect close`);
+                    await this.closePosition(symbol, alpacaPos.qty, 'Profit Protection - Breakeven Lock');
+                    continue;
+                }
+                if (position.peakUnrealizedPL > 15 && unrealizedPLDollar > 0) {
+                    const dropPct = ((position.peakUnrealizedPL - unrealizedPLDollar) / position.peakUnrealizedPL) * 100;
+                    if (dropPct > 40) {
+                        console.log(`[PROFIT-PROTECT] [Engine ${this.userId}] ${symbol}: peak +$${position.peakUnrealizedPL.toFixed(2)}, now +$${unrealizedPLDollar.toFixed(2)} (${dropPct.toFixed(1)}% drawback) — taking profit`);
+                        this.profitProtectReentrySymbols.set(symbol, Date.now());
+                        console.log(`[RE-ENTRY] [Engine ${this.userId}] ${symbol} eligible for re-entry after profit-protect close`);
+                        await this.closePosition(symbol, alpacaPos.qty, `Profit Protection - ${dropPct.toFixed(0)}% Drawback from Peak`);
+                        continue;
+                    }
+                }
+                // ===== END PROFIT PROTECTION =====
+
                 const exitReason = await shouldExitPosition(position, currentPrice, alpacaPos, this.alpacaConfig);
                 if (exitReason) { await this.closePosition(symbol, alpacaPos.qty, exitReason); continue; }
                 if (currentPrice <= position.stopLoss) {
@@ -5005,6 +5129,9 @@ class UserTradingEngine {
                 agentSizeMultiplier: signal.agentSizeMultiplier || 1.0,
                 decisionRunId: signal.decisionRunId || null,
                 banditArm: signal.banditArm || 'moderate',
+                // [Profit Protection]
+                peakUnrealizedPL: 0,
+                wasPositive: false,
             });
             this.dbTradeOpen(signal.symbol, effectiveEntry, shares, config, signal, tier, strategy)
                 .then(id => { const p = this.positions.get(signal.symbol); if (p) p.dbTradeId = id; })

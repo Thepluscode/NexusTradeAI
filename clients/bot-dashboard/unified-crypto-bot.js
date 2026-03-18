@@ -1229,6 +1229,11 @@ class CryptoTradingEngine {
         // Monte Carlo position sizer (v9.0)
         this.monteCarloSizer = new MonteCarloSizer();
 
+        // [v10.0] Aggressive Profit Protection — re-entry map
+        // Stores { symbol: timestamp } for symbols closed via profit-protect
+        // Allows bypassing cooldown for 15 minutes after profit-protect close
+        this.profitProtectReentrySymbols = new Map();
+
         // Adaptive guardrails state (v4.6)
         this.guardrails = {
             consecutiveLosses: 0,
@@ -1973,13 +1978,22 @@ class CryptoTradingEngine {
             return { allowed: false, reason: 'Symbol limit reached' };
         }
 
-        // Check cooldown period
-        const lastTrade = this.lastTradeTime.get(symbol);
-        if (lastTrade) {
-            const timeSince = (Date.now() - lastTrade) / 60000; // minutes
-            if (timeSince < this.config.minTimeBetweenTrades) {
-                console.log(`❌ ${symbol}: Cooldown active (${timeSince.toFixed(1)}/${this.config.minTimeBetweenTrades} min)`);
-                return { allowed: false, reason: 'Cooldown period' };
+        // Check cooldown period — bypass if profit-protect re-entry is active
+        const reentryTimestamp = this.profitProtectReentrySymbols.get(symbol);
+        const reentryActive = reentryTimestamp && (Date.now() - reentryTimestamp) < 15 * 60 * 1000; // 15 min window
+        if (reentryActive) {
+            console.log(`✅ ${symbol}: Cooldown BYPASSED — profit-protect re-entry active (${((Date.now() - reentryTimestamp) / 60000).toFixed(1)} min ago)`);
+            // Clean up expired flag
+        } else {
+            // Clean up expired re-entry flag if any
+            if (reentryTimestamp) this.profitProtectReentrySymbols.delete(symbol);
+            const lastTrade = this.lastTradeTime.get(symbol);
+            if (lastTrade) {
+                const timeSince = (Date.now() - lastTrade) / 60000; // minutes
+                if (timeSince < this.config.minTimeBetweenTrades) {
+                    console.log(`❌ ${symbol}: Cooldown active (${timeSince.toFixed(1)}/${this.config.minTimeBetweenTrades} min)`);
+                    return { allowed: false, reason: 'Cooldown period' };
+                }
             }
         }
 
@@ -2105,6 +2119,9 @@ class CryptoTradingEngine {
                 currentPrice: signal.price,
                 unrealizedPnL: 0,
                 unrealizedPnLPct: 0,
+                // [v10.0] Aggressive Profit Protection tracking
+                peakUnrealizedPL: 0,
+                wasInProfit: false,
                 // [v8.0] Decision linkage for bandit learning
                 decisionRunId: signal.decisionRunId || null,
                 banditArm: signal.banditArm || null,
@@ -2173,6 +2190,64 @@ class CryptoTradingEngine {
 
             const pnlPercent = ((currentPrice - position.entry) / position.entry) * 100;
             const pnlUSD = (currentPrice - position.entry) * position.quantity;
+
+            // ================================================================
+            // [v10.0] AGGRESSIVE PROFIT PROTECTION
+            // Once a trade has been in profit, NEVER let it go negative.
+            // ================================================================
+
+            // Initialize peakUnrealizedPL if missing (e.g. hydrated positions)
+            if (position.peakUnrealizedPL == null) {
+                position.peakUnrealizedPL = Math.max(0, pnlUSD);
+            }
+            if (position.wasInProfit == null) {
+                position.wasInProfit = pnlUSD > 2;
+            }
+
+            // Track peak unrealized P&L
+            if (pnlUSD > position.peakUnrealizedPL) {
+                position.peakUnrealizedPL = pnlUSD;
+            }
+
+            // Mark as "was in profit" once we exceed $2 (covers spread)
+            if (pnlUSD > 2 && !position.wasInProfit) {
+                position.wasInProfit = true;
+                console.log(`[PROFIT-PROTECT] ${symbol}: entered profit zone (+$${pnlUSD.toFixed(2)}) — breakeven lock ACTIVE`);
+            }
+
+            // Breakeven lock: if was in profit and now dropped below -$1, close immediately
+            if (position.wasInProfit && pnlUSD < -1) {
+                console.log(`[PROFIT-PROTECT] ${symbol}: was +$${position.peakUnrealizedPL.toFixed(2)}, now $${pnlUSD.toFixed(2)} — closing to protect capital`);
+                // Set re-entry flag before closing
+                this.profitProtectReentrySymbols.set(symbol, Date.now());
+                console.log(`[RE-ENTRY] ${symbol} eligible for re-entry after profit-protect close`);
+                await this.closePosition(symbol, currentPrice, 'Profit Protection - Breakeven Lock');
+                (this._userTelegram || telegramAlerts).send(
+                    `🛡️ *CRYPTO PROFIT PROTECT* — ${symbol}\n` +
+                    `Was +$${position.peakUnrealizedPL.toFixed(2)}, dropped to $${pnlUSD.toFixed(2)}\n` +
+                    `Breakeven lock triggered — capital preserved`
+                ).catch(e => console.warn(`⚠️  Telegram profit-protect alert failed: ${e.message}`));
+                continue;
+            }
+
+            // Peak drawback protection: if peak > $10 and current dropped >40% from peak, take profit
+            if (position.peakUnrealizedPL > 10 && pnlUSD > 0) {
+                const dropFromPeak = position.peakUnrealizedPL - pnlUSD;
+                const dropPct = (dropFromPeak / position.peakUnrealizedPL) * 100;
+                if (dropPct > 40) {
+                    console.log(`[PROFIT-PROTECT] ${symbol}: peak +$${position.peakUnrealizedPL.toFixed(2)}, now +$${pnlUSD.toFixed(2)} (${dropPct.toFixed(1)}% drawback) — taking profit`);
+                    // Set re-entry flag before closing
+                    this.profitProtectReentrySymbols.set(symbol, Date.now());
+                    console.log(`[RE-ENTRY] ${symbol} eligible for re-entry after profit-protect close`);
+                    await this.closePosition(symbol, currentPrice, 'Profit Protection - Peak Drawback');
+                    (this._userTelegram || telegramAlerts).send(
+                        `🛡️ *CRYPTO PROFIT PROTECT* — ${symbol}\n` +
+                        `Peak +$${position.peakUnrealizedPL.toFixed(2)} → now +$${pnlUSD.toFixed(2)} (${dropPct.toFixed(1)}% drawback)\n` +
+                        `Locked in +$${pnlUSD.toFixed(2)} profit`
+                    ).catch(e => console.warn(`⚠️  Telegram profit-protect alert failed: ${e.message}`));
+                    continue;
+                }
+            }
 
             // Time-based exit: close stale or overdue positions
             const holdDays = (Date.now() - (position.openTime?.getTime?.() ?? Date.now())) / (1000 * 60 * 60 * 24);
