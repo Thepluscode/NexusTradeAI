@@ -621,7 +621,7 @@ let totalTradesToday = 0;
 
 // ===== PROFIT PROTECTION SYSTEM =====
 // Tracks symbols closed via profit-protect that are eligible for re-entry (bypasses cooldown)
-const profitProtectReentrySymbols = new Map(); // symbol -> timestamp
+const profitProtectReentrySymbols = new Map(); // symbol -> { timestamp, direction, entry }
 const PROFIT_PROTECT_REENTRY_WINDOW = 30 * 60 * 1000; // 30 minutes
 
 // Daily loss circuit breaker — updated by the status endpoint each poll
@@ -2309,7 +2309,8 @@ async function reportTradeOutcome(position, exitPrice, pnl, pnlPct, exitReason) 
 
 function canTrade(symbol, side = 'buy') {
     // [Profit Protection] Check if this symbol has a valid re-entry flag (bypasses cooldowns)
-    const reentryTime = profitProtectReentrySymbols.get(symbol);
+    const reentryData = profitProtectReentrySymbols.get(symbol);
+    const reentryTime = reentryData ? reentryData.timestamp : null;
     const hasReentryFlag = reentryTime && (Date.now() - reentryTime) < PROFIT_PROTECT_REENTRY_WINDOW;
 
     // Clean up expired re-entry flags
@@ -2349,6 +2350,82 @@ function canTrade(symbol, side = 'buy') {
     }
 
     return true;
+}
+
+// [v10.1] Re-entry validation — only allow re-entry if conditions still favor the original direction
+function isStockReentryValid(symbol, signal) {
+    const reentryData = profitProtectReentrySymbols.get(symbol);
+    if (!reentryData) return { valid: true, reason: 'no re-entry flag' };
+
+    const { direction: origDirection } = reentryData;
+
+    // Stock bot is long-only, so direction should always match. But validate anyway.
+    const signalDirection = 'long'; // stock bot only buys
+    if (signalDirection !== origDirection) {
+        console.log(`[RE-ENTRY CHECK] ${symbol}: direction mismatch (was ${origDirection}, now ${signalDirection}) — REJECTED`);
+        profitProtectReentrySymbols.delete(symbol);
+        return { valid: false, reason: `direction mismatch` };
+    }
+
+    // Trend must still be up (EMA crossover or percentChange positive)
+    const percentChange = parseFloat(signal.percentChange || 0);
+    const trendAligned = percentChange > 0;
+
+    // RSI must not be overbought for longs
+    const rsi = parseFloat(signal.rsi || 50);
+    const rsiExhausted = rsi > 70;
+
+    // Momentum must still be positive
+    const momentumAligned = percentChange > 0;
+
+    const pass = trendAligned && !rsiExhausted && momentumAligned;
+    console.log(`[RE-ENTRY CHECK] ${symbol}: trend=${percentChange > 0 ? 'up' : 'down'}(${trendAligned ? 'OK' : 'FAIL'}), rsi=${rsi.toFixed(1)}(${rsiExhausted ? 'EXHAUSTED' : 'OK'}), momentum=${percentChange}%(${momentumAligned ? 'OK' : 'FAIL'}) — ${pass ? 'APPROVED' : 'REJECTED'}`);
+
+    if (!pass) {
+        profitProtectReentrySymbols.delete(symbol);
+    }
+    return { valid: pass, reason: pass ? 'conditions still favorable' : `trend=${!trendAligned ? 'down' : 'ok'}, rsi=${rsiExhausted ? 'overbought' : 'ok'}, momentum=${!momentumAligned ? 'negative' : 'ok'}` };
+}
+
+// [v10.1] Entry quality gate — every stock signal must pass before execution
+function isStockEntryQualified(signal, committee) {
+    const reasons = [];
+    const symbol = signal.symbol;
+    const direction = 'long'; // stock bot is long-only
+
+    // 1. Signal score must be above minimum threshold
+    const score = signal.score || 0;
+    if (score <= 0) {
+        reasons.push(`score=${score.toFixed(2)} <= 0`);
+    }
+
+    // 2. Volume must confirm (volume ratio > 1.0 or volume above average)
+    const volRatio = parseFloat(signal.volumeRatio || 0);
+    if (volRatio < 1.0) {
+        reasons.push(`volumeRatio=${volRatio.toFixed(2)} < 1.0`);
+    }
+
+    // 3. Trend must align with direction (percentChange must be positive for longs)
+    const percentChange = parseFloat(signal.percentChange || 0);
+    if (percentChange <= 0) {
+        reasons.push(`percentChange=${percentChange.toFixed(2)}% not positive`);
+    }
+
+    // 4. RSI must be between 30-70
+    const rsi = parseFloat(signal.rsi || 50);
+    if (rsi < 30 || rsi > 70) {
+        reasons.push(`rsi=${rsi.toFixed(1)} outside 30-70`);
+    }
+
+    // 5. Not entering against a strong move (don't buy after a -3% day)
+    if (percentChange < -3) {
+        reasons.push(`strong counter-move ${percentChange.toFixed(1)}% (don't buy dips > -3%)`);
+    }
+
+    const pass = reasons.length === 0;
+    console.log(`[QUALITY GATE] ${symbol} ${direction}: score=${score.toFixed(2)}, volume=${volRatio.toFixed(2)}, rsi=${rsi.toFixed(1)}, change=${percentChange.toFixed(1)}% — ${pass ? 'PASS' : 'FAIL: ' + reasons.join(', ')}`);
+
+    return { qualified: pass, reason: pass ? 'all checks passed' : reasons.join(', ') };
 }
 
 // ===== NEW: GET CURRENT MARKET DATA FOR POSITION =====
@@ -2567,9 +2644,9 @@ async function managePositions() {
             // Breakeven lock: if was profitable but now losing, close immediately
             if (position.wasPositive && unrealizedPLDollar < -2) {
                 console.log(`[PROFIT-PROTECT] ${symbol}: was +$${position.peakUnrealizedPL.toFixed(2)}, now $${unrealizedPLDollar.toFixed(2)} — closing to protect capital`);
-                // Set re-entry flag before closing
-                profitProtectReentrySymbols.set(symbol, Date.now());
-                console.log(`[RE-ENTRY] ${symbol} eligible for re-entry after profit-protect close`);
+                // Set re-entry flag before closing (stock bot is long-only)
+                profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: 'long', entry: position.entryPrice || currentPrice });
+                console.log(`[RE-ENTRY] ${symbol} eligible for re-entry (direction: long) after profit-protect close`);
                 await closePosition(symbol, alpacaPos.qty, 'Profit Protection - Breakeven Lock');
                 continue;
             }
@@ -2580,9 +2657,9 @@ async function managePositions() {
                 const dropPct = (dropFromPeak / position.peakUnrealizedPL) * 100;
                 if (dropPct > 40) {
                     console.log(`[PROFIT-PROTECT] ${symbol}: peak +$${position.peakUnrealizedPL.toFixed(2)}, now +$${unrealizedPLDollar.toFixed(2)} (${dropPct.toFixed(1)}% drawback) — taking profit`);
-                    // Set re-entry flag before closing
-                    profitProtectReentrySymbols.set(symbol, Date.now());
-                    console.log(`[RE-ENTRY] ${symbol} eligible for re-entry after profit-protect close`);
+                    // Set re-entry flag before closing (stock bot is long-only)
+                    profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: 'long', entry: position.entryPrice || currentPrice });
+                    console.log(`[RE-ENTRY] ${symbol} eligible for re-entry (direction: long) after profit-protect close`);
                     await closePosition(symbol, alpacaPos.qty, `Profit Protection - ${dropPct.toFixed(0)}% Drawback from Peak`);
                     continue;
                 }
@@ -2858,6 +2935,20 @@ async function scanMomentumBreakouts() {
                     mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * regime.adjustments.positionSizeMultiplier;
                     if (regime.regime !== 'medium') {
                         console.log(`[Regime] ${mover.symbol} size adjusted to ×${mover.agentSizeMultiplier.toFixed(2)} (${regime.adjustments.label})`);
+                    }
+                    // [v10.1] Re-entry validation — if this is a re-entry, require extra confirmation
+                    if (profitProtectReentrySymbols.has(mover.symbol)) {
+                        const reentryCheck = isStockReentryValid(mover.symbol, mover);
+                        if (!reentryCheck.valid) {
+                            console.log(`[RE-ENTRY] ${mover.symbol}: re-entry BLOCKED — ${reentryCheck.reason}`);
+                            continue;
+                        }
+                    }
+                    // [v10.1] Entry quality gate — final profitability checklist
+                    const qualityCheck = isStockEntryQualified(mover, committee);
+                    if (!qualityCheck.qualified) {
+                        console.log(`[QUALITY GATE] ${mover.symbol}: BLOCKED — ${qualityCheck.reason}`);
+                        continue;
                     }
                     await executeTrade(mover, mover.strategy || 'momentum');
                 }
@@ -4899,7 +4990,8 @@ class UserTradingEngine {
 
     canTrade(symbol, side = 'buy') {
         // [Profit Protection] Check re-entry flag
-        const reentryTime = this.profitProtectReentrySymbols.get(symbol);
+        const reentryData = this.profitProtectReentrySymbols.get(symbol);
+        const reentryTime = reentryData ? reentryData.timestamp : null;
         const hasReentryFlag = reentryTime && (Date.now() - reentryTime) < PROFIT_PROTECT_REENTRY_WINDOW;
         if (reentryTime && !hasReentryFlag) this.profitProtectReentrySymbols.delete(symbol);
 
@@ -5038,8 +5130,8 @@ class UserTradingEngine {
                 }
                 if (position.wasPositive && unrealizedPLDollar < -2) {
                     console.log(`[PROFIT-PROTECT] [Engine ${this.userId}] ${symbol}: was +$${position.peakUnrealizedPL.toFixed(2)}, now $${unrealizedPLDollar.toFixed(2)} — closing to protect capital`);
-                    this.profitProtectReentrySymbols.set(symbol, Date.now());
-                    console.log(`[RE-ENTRY] [Engine ${this.userId}] ${symbol} eligible for re-entry after profit-protect close`);
+                    this.profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: 'long', entry: position.entryPrice || currentPrice });
+                    console.log(`[RE-ENTRY] [Engine ${this.userId}] ${symbol} eligible for re-entry (direction: long) after profit-protect close`);
                     await this.closePosition(symbol, alpacaPos.qty, 'Profit Protection - Breakeven Lock');
                     continue;
                 }
@@ -5047,8 +5139,8 @@ class UserTradingEngine {
                     const dropPct = ((position.peakUnrealizedPL - unrealizedPLDollar) / position.peakUnrealizedPL) * 100;
                     if (dropPct > 40) {
                         console.log(`[PROFIT-PROTECT] [Engine ${this.userId}] ${symbol}: peak +$${position.peakUnrealizedPL.toFixed(2)}, now +$${unrealizedPLDollar.toFixed(2)} (${dropPct.toFixed(1)}% drawback) — taking profit`);
-                        this.profitProtectReentrySymbols.set(symbol, Date.now());
-                        console.log(`[RE-ENTRY] [Engine ${this.userId}] ${symbol} eligible for re-entry after profit-protect close`);
+                        this.profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: 'long', entry: position.entryPrice || currentPrice });
+                        console.log(`[RE-ENTRY] [Engine ${this.userId}] ${symbol} eligible for re-entry (direction: long) after profit-protect close`);
                         await this.closePosition(symbol, alpacaPos.qty, `Profit Protection - ${dropPct.toFixed(0)}% Drawback from Peak`);
                         continue;
                     }
@@ -5210,6 +5302,21 @@ class UserTradingEngine {
                 mover.banditArm = aiResult.bandit_arm || 'moderate';
                 if (aiResult.position_size_multiplier && aiResult.position_size_multiplier !== 1.0) {
                     mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * aiResult.position_size_multiplier;
+                }
+
+                // [v10.1] Re-entry validation — if this is a re-entry, require extra confirmation
+                if (this.profitProtectReentrySymbols.has(mover.symbol)) {
+                    const reentryCheck = isStockReentryValid(mover.symbol, mover);
+                    if (!reentryCheck.valid) {
+                        console.log(`[Engine ${this.userId}][RE-ENTRY] ${mover.symbol}: re-entry BLOCKED — ${reentryCheck.reason}`);
+                        continue;
+                    }
+                }
+                // [v10.1] Entry quality gate — final profitability checklist
+                const qualityCheck = isStockEntryQualified(mover, null);
+                if (!qualityCheck.qualified) {
+                    console.log(`[Engine ${this.userId}][QUALITY GATE] ${mover.symbol}: BLOCKED — ${qualityCheck.reason}`);
+                    continue;
                 }
 
                 await this.executeTrade(mover, mover.strategy || 'momentum');

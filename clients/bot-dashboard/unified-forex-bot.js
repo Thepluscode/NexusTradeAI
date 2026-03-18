@@ -605,7 +605,7 @@ const CORRELATION_GROUPS = {
 const positions = new Map();
 const recentTrades = new Map();
 const stoppedOutPairs = new Map();
-const profitProtectReentryPairs = new Map(); // pair → timestamp, expires after 30 min
+const profitProtectReentryPairs = new Map(); // pair → { timestamp, direction, entry }, expires after 30 min
 const tradesPerPair = new Map();
 let totalTradesToday = 0;
 let scanCount = 0;
@@ -1246,7 +1246,8 @@ function isNearHighImpactEvent() {
 function canTrade(pair, direction = 'long') {
     // [Profit-Protect] Check re-entry flag — bypass cooldowns if pair was closed by profit protection
     // Re-entry window expires after 30 minutes
-    const reentryTime = profitProtectReentryPairs.get(pair);
+    const reentryData = profitProtectReentryPairs.get(pair);
+    const reentryTime = reentryData ? reentryData.timestamp : null;
     const hasReentryFlag = reentryTime && (Date.now() - reentryTime < 30 * 60 * 1000);
 
     // Clean up expired re-entry flags
@@ -1305,6 +1306,91 @@ function canTrade(pair, direction = 'long') {
     }
 
     return { allowed: true };
+}
+
+// [v10.1] Re-entry validation — only allow re-entry if conditions still favor the original direction
+function isReentryValid(pair, signal) {
+    const reentryData = profitProtectReentryPairs.get(pair);
+    if (!reentryData) return { valid: true, reason: 'no re-entry flag' }; // Not a re-entry, pass through
+
+    const { direction: origDirection } = reentryData;
+
+    // Direction must match the original trade direction
+    if (signal.direction !== origDirection) {
+        console.log(`[RE-ENTRY CHECK] ${pair}: direction flipped (was ${origDirection}, now ${signal.direction}) — REJECTED`);
+        profitProtectReentryPairs.delete(pair); // consume flag
+        return { valid: false, reason: `direction flipped from ${origDirection} to ${signal.direction}` };
+    }
+
+    // Trend must still align (H1 trend must match direction)
+    const trendAligned = (signal.direction === 'long' && signal.h1Trend === 'up') ||
+                         (signal.direction === 'short' && signal.h1Trend === 'down');
+
+    // RSI must not be in exhaustion zone
+    const rsi = signal.rsi || 50;
+    const rsiExhausted = (signal.direction === 'long' && rsi > 70) ||
+                         (signal.direction === 'short' && rsi < 30);
+
+    // Momentum must still be positive for the direction
+    const momentum = signal.macdHistogram || 0;
+    const momentumAligned = (signal.direction === 'long' && momentum > 0) ||
+                            (signal.direction === 'short' && momentum < 0);
+
+    const pass = trendAligned && !rsiExhausted && momentumAligned;
+    console.log(`[RE-ENTRY CHECK] ${pair}: trend=${signal.h1Trend}(${trendAligned ? 'OK' : 'FAIL'}), rsi=${rsi.toFixed(1)}(${rsiExhausted ? 'EXHAUSTED' : 'OK'}), momentum=${momentum.toFixed(5)}(${momentumAligned ? 'OK' : 'FAIL'}) — ${pass ? 'APPROVED' : 'REJECTED'}`);
+
+    if (!pass) {
+        profitProtectReentryPairs.delete(pair); // consume flag on rejection
+    }
+    return { valid: pass, reason: pass ? 'conditions still favorable' : `trend=${!trendAligned ? 'misaligned' : 'ok'}, rsi=${rsiExhausted ? 'exhausted' : 'ok'}, momentum=${!momentumAligned ? 'opposed' : 'ok'}` };
+}
+
+// [v10.1] Entry quality gate — every signal must pass before execution
+function isForexEntryQualified(signal, committee) {
+    const reasons = [];
+    const pair = signal.pair;
+    const direction = signal.direction;
+
+    // 1. Committee confidence must be >= 0.50 (raised from 0.45)
+    const conf = committee ? committee.confidence : 0;
+    if (conf < 0.50) {
+        reasons.push(`confidence ${conf.toFixed(2)} < 0.50`);
+    }
+
+    // 2. H1 trend must align with trade direction
+    const h1Aligned = (direction === 'long' && signal.h1Trend === 'up') ||
+                      (direction === 'short' && signal.h1Trend === 'down');
+    if (!h1Aligned) {
+        reasons.push(`h1Trend=${signal.h1Trend} misaligned with ${direction}`);
+    }
+
+    // 3. RSI must be between 30-70 (no extreme entries)
+    const rsi = signal.rsi || 50;
+    if (rsi < 30 || rsi > 70) {
+        reasons.push(`rsi=${rsi.toFixed(1)} outside 30-70`);
+    }
+
+    // 4. At least 2 out of 6 committee components must be positive
+    let positiveCount = 0;
+    if (committee && committee.components) {
+        const comps = committee.components;
+        for (const key of Object.keys(comps)) {
+            if (typeof comps[key] === 'number' && comps[key] > 0) positiveCount++;
+        }
+    }
+    if (positiveCount < 2) {
+        reasons.push(`components=${positiveCount}/6 positive (need 2+)`);
+    }
+
+    // 5. If signal score exists, must be > 0
+    if (signal.score !== undefined && signal.score !== null && signal.score <= 0) {
+        reasons.push(`score=${signal.score} <= 0`);
+    }
+
+    const pass = reasons.length === 0;
+    console.log(`[QUALITY GATE] ${pair} ${direction}: confidence=${conf.toFixed(2)}, h1Trend=${signal.h1Trend}, rsi=${rsi.toFixed(1)}, components=${positiveCount}/6 — ${pass ? 'PASS' : 'FAIL: ' + reasons.join(', ')}`);
+
+    return { qualified: pass, reason: pass ? 'all checks passed' : reasons.join(', ') };
 }
 
 function getCorrelatedPositions(pair, direction) {
@@ -2794,8 +2880,8 @@ async function managePositions() {
         }
         if (localPos.wasPositive && unrealizedPL < -1) {
             console.log(`[PROFIT-PROTECT] ${pair}: was +$${localPos.peakUnrealizedPL.toFixed(2)}, now $${unrealizedPL.toFixed(2)} — closing to protect capital`);
-            profitProtectReentryPairs.set(pair, Date.now());
-            console.log(`[RE-ENTRY] ${pair} eligible for re-entry after profit-protect close`);
+            profitProtectReentryPairs.set(pair, { timestamp: Date.now(), direction: localPos.direction || (isLong ? 'long' : 'short'), entry: entryPrice });
+            console.log(`[RE-ENTRY] ${pair} eligible for re-entry (direction: ${localPos.direction || (isLong ? 'long' : 'short')}) after profit-protect close`);
             await closePositionWithReason(pair, `Profit-Protect breakeven lock (peak +$${localPos.peakUnrealizedPL.toFixed(2)}, now $${unrealizedPL.toFixed(2)})`);
             continue;
         }
@@ -2806,8 +2892,8 @@ async function managePositions() {
             const dropPct = (dropFromPeak / localPos.peakUnrealizedPL) * 100;
             if (dropPct > 40) {
                 console.log(`[PROFIT-PROTECT] ${pair}: peak +$${localPos.peakUnrealizedPL.toFixed(2)}, now +$${unrealizedPL.toFixed(2)} (${dropPct.toFixed(1)}% drawback) — taking profit`);
-                profitProtectReentryPairs.set(pair, Date.now());
-                console.log(`[RE-ENTRY] ${pair} eligible for re-entry after profit-protect close`);
+                profitProtectReentryPairs.set(pair, { timestamp: Date.now(), direction: localPos.direction || (isLong ? 'long' : 'short'), entry: entryPrice });
+                console.log(`[RE-ENTRY] ${pair} eligible for re-entry (direction: ${localPos.direction || (isLong ? 'long' : 'short')}) after profit-protect close`);
                 await closePositionWithReason(pair, `Profit-Protect drawback (peak +$${localPos.peakUnrealizedPL.toFixed(2)}, now +$${unrealizedPL.toFixed(2)}, ${dropPct.toFixed(1)}% drop)`);
                 continue;
             }
@@ -3016,6 +3102,13 @@ async function tradingLoop() {
             signal.committeeConfidence = committee.confidence;
             signal.committeeComponents = committee.components;
 
+            // [v10.1] Entry quality gate for flip signals
+            const flipQualityCheck = isForexEntryQualified(signal, committee);
+            if (!flipQualityCheck.qualified) {
+                console.log(`[QUALITY GATE] ${signal.pair} ${signal.direction} (flip): BLOCKED — ${flipQualityCheck.reason}`);
+                continue;
+            }
+
             // === EXECUTE FLIP ===
             console.log(`\n🔄 [FLIP-REVERSAL] Closing ${signal.pair} ${signal.existingDirection} → opening ${signal.direction}`);
             console.log(`   Committee confidence: ${committee.confidence} | Score: ${signal.score}`);
@@ -3120,6 +3213,22 @@ async function tradingLoop() {
             // Previously assigned after, so DB always had null committee data (Signal Intelligence showed "0 trades with")
             signal.committeeConfidence = committee.confidence;
             signal.committeeComponents = committee.components;
+
+            // [v10.1] Re-entry validation — if this is a re-entry, require extra confirmation
+            if (profitProtectReentryPairs.has(signal.pair)) {
+                const reentryCheck = isReentryValid(signal.pair, signal);
+                if (!reentryCheck.valid) {
+                    console.log(`[RE-ENTRY] ${signal.pair} ${signal.direction}: re-entry BLOCKED — ${reentryCheck.reason}`);
+                    continue;
+                }
+            }
+
+            // [v10.1] Entry quality gate — final profitability checklist
+            const qualityCheck = isForexEntryQualified(signal, committee);
+            if (!qualityCheck.qualified) {
+                console.log(`[QUALITY GATE] ${signal.pair} ${signal.direction}: BLOCKED — ${qualityCheck.reason}`);
+                continue;
+            }
 
             await executeTrade(signal);
         }
@@ -4082,6 +4191,12 @@ class UserForexEngine {
             if (committee.confidence < 0.50) continue;
             signal.committeeConfidence = committee.confidence;
             signal.committeeComponents = committee.components;
+            // [v10.1] Quality gate for flip signals
+            const flipQC = isForexEntryQualified(signal, committee);
+            if (!flipQC.qualified) {
+                console.log(`[ForexEngine ${this.userId}][QUALITY GATE] ${signal.pair} ${signal.direction} (flip): BLOCKED — ${flipQC.reason}`);
+                continue;
+            }
             console.log(`🔄 [ForexEngine ${this.userId}] [FLIP-REVERSAL] Closing ${signal.pair} ${signal.existingDirection} → opening ${signal.direction}`);
             await this.closePositionWithReason(signal.pair, `flip-reversal → ${signal.direction}`);
             this.totalTradesToday++;
@@ -4091,6 +4206,23 @@ class UserForexEngine {
         const maxNewPos = 5 - this.positions.size;
         for (const signal of normalSignals.slice(0, Math.min(maxNewPos, MAX_SIGNALS_PER_CYCLE))) {
             if (!this.positions.has(signal.pair) && this.canTrade(signal.pair, signal.direction)) {
+                // [v10.1] Re-entry validation
+                if (profitProtectReentryPairs.has(signal.pair)) {
+                    const reentryCheck = isReentryValid(signal.pair, signal);
+                    if (!reentryCheck.valid) {
+                        console.log(`[ForexEngine ${this.userId}][RE-ENTRY] ${signal.pair}: BLOCKED — ${reentryCheck.reason}`);
+                        continue;
+                    }
+                }
+                // [v10.1] Quality gate
+                const committee = computeForexCommitteeScore(signal);
+                const qc = isForexEntryQualified(signal, committee);
+                if (!qc.qualified) {
+                    console.log(`[ForexEngine ${this.userId}][QUALITY GATE] ${signal.pair}: BLOCKED — ${qc.reason}`);
+                    continue;
+                }
+                signal.committeeConfidence = committee.confidence;
+                signal.committeeComponents = committee.components;
                 await this.executeTrade(signal);
             }
         }

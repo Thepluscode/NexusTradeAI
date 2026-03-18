@@ -1230,7 +1230,7 @@ class CryptoTradingEngine {
         this.monteCarloSizer = new MonteCarloSizer();
 
         // [v10.0] Aggressive Profit Protection — re-entry map
-        // Stores { symbol: timestamp } for symbols closed via profit-protect
+        // Stores { symbol: { timestamp, direction, entry } } for symbols closed via profit-protect
         // Allows bypassing cooldown for 15 minutes after profit-protect close
         this.profitProtectReentrySymbols = new Map();
 
@@ -1979,7 +1979,8 @@ class CryptoTradingEngine {
         }
 
         // Check cooldown period — bypass if profit-protect re-entry is active
-        const reentryTimestamp = this.profitProtectReentrySymbols.get(symbol);
+        const reentryData = this.profitProtectReentrySymbols.get(symbol);
+        const reentryTimestamp = reentryData ? reentryData.timestamp : null;
         const reentryActive = reentryTimestamp && (Date.now() - reentryTimestamp) < 15 * 60 * 1000; // 15 min window
         if (reentryActive) {
             console.log(`✅ ${symbol}: Cooldown BYPASSED — profit-protect re-entry active (${((Date.now() - reentryTimestamp) / 60000).toFixed(1)} min ago)`);
@@ -2004,6 +2005,91 @@ class CryptoTradingEngine {
         }
 
         return { allowed: true };
+    }
+
+    // [v10.1] Re-entry validation — only allow re-entry if conditions still favor the original direction
+    isCryptoReentryValid(symbol, signal) {
+        const reentryData = this.profitProtectReentrySymbols.get(symbol);
+        if (!reentryData) return { valid: true, reason: 'no re-entry flag' };
+
+        const { direction: origDirection } = reentryData;
+
+        // Direction must match the original trade direction
+        const signalDirection = signal.direction || 'long';
+        if (signalDirection !== origDirection) {
+            console.log(`[RE-ENTRY CHECK] ${symbol}: direction flipped (was ${origDirection}, now ${signalDirection}) — REJECTED`);
+            this.profitProtectReentrySymbols.delete(symbol);
+            return { valid: false, reason: `direction flipped from ${origDirection} to ${signalDirection}` };
+        }
+
+        // Trend must still be aligned (EMA above SMA for longs)
+        const momentum = signal.momentum || 0;
+        const trendAligned = (signalDirection === 'long' && momentum >= 0) ||
+                             (signalDirection === 'short' && momentum <= 0);
+
+        // RSI must not be in exhaustion zone
+        const rsi = signal.rsi || 50;
+        const rsiExhausted = (signalDirection === 'long' && rsi > 75) ||
+                             (signalDirection === 'short' && rsi < 25);
+
+        // Momentum must be positive for direction
+        const momentumAligned = trendAligned; // same check for crypto
+
+        const pass = trendAligned && !rsiExhausted && momentumAligned;
+        console.log(`[RE-ENTRY CHECK] ${symbol}: trend=${trendAligned ? 'aligned' : 'misaligned'}, rsi=${rsi.toFixed(1)}(${rsiExhausted ? 'EXHAUSTED' : 'OK'}), momentum=${momentum.toFixed(2)}%(${momentumAligned ? 'OK' : 'FAIL'}) — ${pass ? 'APPROVED' : 'REJECTED'}`);
+
+        if (!pass) {
+            this.profitProtectReentrySymbols.delete(symbol);
+        }
+        return { valid: pass, reason: pass ? 'conditions still favorable' : `trend=${!trendAligned ? 'misaligned' : 'ok'}, rsi=${rsiExhausted ? 'exhausted' : 'ok'}` };
+    }
+
+    // [v10.1] Entry quality gate — every crypto signal must pass before execution
+    isCryptoEntryQualified(signal, committee, btcBullish) {
+        const reasons = [];
+        const symbol = signal.symbol;
+        const direction = signal.direction || 'long';
+
+        // 1. Committee confidence must be >= 0.50 (raised from 0.45)
+        const conf = committee ? committee.confidence : 0;
+        if (conf < 0.50) {
+            reasons.push(`confidence ${conf.toFixed(2)} < 0.50`);
+        }
+
+        // 2. BTC correlation check — if BTC is bearish, don't go LONG on altcoins
+        const isAltcoin = symbol !== 'XBTUSD' && symbol !== 'ETHUSD';
+        if (direction === 'long' && isAltcoin && btcBullish === false) {
+            reasons.push(`BTC bearish — no long altcoin entries`);
+        }
+
+        // 3. RSI between 25-75 (crypto gets wider range due to volatility)
+        const rsi = signal.rsi || 50;
+        if (rsi < 25 || rsi > 75) {
+            reasons.push(`rsi=${rsi.toFixed(1)} outside 25-75`);
+        }
+
+        // 4. At least 2 committee components must be positive
+        let positiveCount = 0;
+        if (committee && committee.components) {
+            const comps = committee.components;
+            for (const key of Object.keys(comps)) {
+                if (typeof comps[key] === 'number' && comps[key] > 0) positiveCount++;
+            }
+        }
+        if (positiveCount < 2) {
+            reasons.push(`components=${positiveCount} positive (need 2+)`);
+        }
+
+        // 5. ATR regime must not be "extreme volatility" (too risky)
+        if (signal.marketRegime === 'extreme' || signal.marketRegime === 'high') {
+            reasons.push(`regime=${signal.marketRegime} (too volatile)`);
+        }
+
+        const pass = reasons.length === 0;
+        const btcTrend = btcBullish === true ? 'bullish' : btcBullish === false ? 'bearish' : 'unknown';
+        console.log(`[QUALITY GATE] ${symbol} ${direction}: confidence=${conf.toFixed(2)}, btcTrend=${btcTrend}, rsi=${rsi.toFixed(1)}, components=${positiveCount}, regime=${signal.marketRegime || 'unknown'} — ${pass ? 'PASS' : 'FAIL: ' + reasons.join(', ')}`);
+
+        return { qualified: pass, reason: pass ? 'all checks passed' : reasons.join(', ') };
     }
 
     // ========================================================================
@@ -2218,9 +2304,9 @@ class CryptoTradingEngine {
             // Breakeven lock: if was in profit and now dropped below -$1, close immediately
             if (position.wasInProfit && pnlUSD < -1) {
                 console.log(`[PROFIT-PROTECT] ${symbol}: was +$${position.peakUnrealizedPL.toFixed(2)}, now $${pnlUSD.toFixed(2)} — closing to protect capital`);
-                // Set re-entry flag before closing
-                this.profitProtectReentrySymbols.set(symbol, Date.now());
-                console.log(`[RE-ENTRY] ${symbol} eligible for re-entry after profit-protect close`);
+                // Set re-entry flag before closing (crypto bot is long-only)
+                this.profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: position.direction || 'long', entry: position.entry || currentPrice });
+                console.log(`[RE-ENTRY] ${symbol} eligible for re-entry (direction: ${position.direction || 'long'}) after profit-protect close`);
                 await this.closePosition(symbol, currentPrice, 'Profit Protection - Breakeven Lock');
                 (this._userTelegram || telegramAlerts).send(
                     `🛡️ *CRYPTO PROFIT PROTECT* — ${symbol}\n` +
@@ -2237,8 +2323,8 @@ class CryptoTradingEngine {
                 if (dropPct > 40) {
                     console.log(`[PROFIT-PROTECT] ${symbol}: peak +$${position.peakUnrealizedPL.toFixed(2)}, now +$${pnlUSD.toFixed(2)} (${dropPct.toFixed(1)}% drawback) — taking profit`);
                     // Set re-entry flag before closing
-                    this.profitProtectReentrySymbols.set(symbol, Date.now());
-                    console.log(`[RE-ENTRY] ${symbol} eligible for re-entry after profit-protect close`);
+                    this.profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: position.direction || 'long', entry: position.entry || currentPrice });
+                    console.log(`[RE-ENTRY] ${symbol} eligible for re-entry (direction: ${position.direction || 'long'}) after profit-protect close`);
                     await this.closePosition(symbol, currentPrice, 'Profit Protection - Peak Drawback');
                     (this._userTelegram || telegramAlerts).send(
                         `🛡️ *CRYPTO PROFIT PROTECT* — ${symbol}\n` +
@@ -2624,6 +2710,22 @@ class CryptoTradingEngine {
                         // [Phase 3] Regime-based position cap
                         if (this.positions.size >= cryptoRegime.adjustments.maxPositions) {
                             console.log(`[Regime] ${signal.symbol} BLOCKED — max positions for ${cryptoRegime.adjustments.label} regime (${this.positions.size}/${cryptoRegime.adjustments.maxPositions})`);
+                            continue;
+                        }
+                        // [v10.1] Re-entry validation — if this is a re-entry, require extra confirmation
+                        if (this.profitProtectReentrySymbols.has(signal.symbol)) {
+                            const reentryCheck = this.isCryptoReentryValid(signal.symbol, signal);
+                            if (!reentryCheck.valid) {
+                                console.log(`[RE-ENTRY] ${signal.symbol}: re-entry BLOCKED — ${reentryCheck.reason}`);
+                                continue;
+                            }
+                        }
+                        // [v10.1] Entry quality gate — final profitability checklist
+                        // btcBullish is not in scope here, so we check BTC trend from signal's sizing hint
+                        const btcBullishForGate = signal.sizingFactor >= 1.0; // sizingFactor < 1.0 means BTC was bearish
+                        const qualityCheck = this.isCryptoEntryQualified(signal, committee, btcBullishForGate);
+                        if (!qualityCheck.qualified) {
+                            console.log(`[QUALITY GATE] ${signal.symbol}: BLOCKED — ${qualityCheck.reason}`);
                             continue;
                         }
                         await this.executeTrade(signal);
