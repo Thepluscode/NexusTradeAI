@@ -16,6 +16,9 @@ from strategy_manager import StrategyManager
 from ensemble_manager import EnsembleStrategyManager
 from strategy_framework import MarketData, MovingAverageCrossoverStrategy
 from strategies import RSIMeanReversionStrategy, MomentumBreakoutStrategy, ScalpingStrategy, AIEnhancedStrategy
+from VolatilityArbitrageStrategy import VolatilityArbitrageStrategy
+from RegimeBasedMomentumStrategy import RegimeBasedMomentumStrategy
+from PairsTradingStrategy import PairsTradingStrategy
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -40,7 +43,11 @@ def init_strategy_engine():
             (RSIMeanReversionStrategy(rsi_period=14, oversold=30, overbought=70), 0.8),
             (MomentumBreakoutStrategy(period=20, volume_multiplier=1.5), 1.2),
             (ScalpingStrategy(fast_ema=5, slow_ema=13), 0.6),
-            (AIEnhancedStrategy(), 1.5)
+            (AIEnhancedStrategy(), 1.5),
+            # Conservative weights — not yet validated in production
+            (VolatilityArbitrageStrategy(), 0.7),
+            (RegimeBasedMomentumStrategy(), 0.9),
+            (PairsTradingStrategy(), 0.5),
         ]
 
         for strategy, weight in strategies:

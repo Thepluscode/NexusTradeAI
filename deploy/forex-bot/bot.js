@@ -9,6 +9,10 @@ const rateLimit = require('express-rate-limit');
 const { createUserCredentialStore } = require('./userCredentialStore');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
+// ===== MONTE CARLO POSITION SIZER =====
+const MonteCarloSizer = require('../../services/trading/monte-carlo-sizer');
+const monteCarloSizer = new MonteCarloSizer();
+
 // ── PostgreSQL trade persistence (optional — requires DATABASE_URL) ──────────
 const { Pool: PgPool } = require('pg');
 let dbPool = null;
@@ -626,6 +630,7 @@ let simTotalLossAmount = 0;
 let simProfitFactor = 0;
 let simConsecutiveLosses = 0;
 let simMaxConsecutiveLosses = 0;
+let flipReversalsToday = 0;       // [v8.1] Track flip-on-reversal count
 
 // ===== FOREX PERFORMANCE PERSISTENCE =====
 const fs = require('fs');
@@ -897,6 +902,7 @@ function saveForexPerf() {
             profitFactor: simProfitFactor,
             consecutiveLosses: simConsecutiveLosses,
             maxConsecutiveLosses: simMaxConsecutiveLosses,
+            flipReversalsToday,
             lastUpdate: new Date().toISOString()
         }));
     } catch {}
@@ -2061,8 +2067,23 @@ async function scanForSignals(heldPositions = positions) {
     // Previously sequential (~2s × 12 pairs = 24s lag); now concurrent (~2-3s total)
     const tradablePairs = FOREX_PAIRS.filter(pair => !heldPositions.has(pair) && canTrade(pair).allowed);
 
+    // [v8.1] Also scan pairs with existing positions for flip-reversal candidates
+    const MIN_HOLD_TIME_FOR_FLIP = 15 * 60 * 1000; // 15 minutes minimum before allowing flip
+    const flipCandidatePairs = FOREX_PAIRS.filter(pair => {
+        if (!heldPositions.has(pair)) return false;
+        const pos = heldPositions.get(pair);
+        // Must have been held for at least 15 minutes
+        const holdTime = Date.now() - (pos.entryTime instanceof Date ? pos.entryTime.getTime() : pos.entryTime || 0);
+        if (holdTime < MIN_HOLD_TIME_FOR_FLIP) return false;
+        // Must have room for 2 trades (close + open) under daily limit
+        if (totalTradesToday + 2 > MAX_TRADES_PER_DAY) return false;
+        return true;
+    });
+
+    const allPairsToScan = [...new Set([...tradablePairs, ...flipCandidatePairs])];
+
     const pairResults = await Promise.allSettled(
-        tradablePairs.map(async pair => {
+        allPairsToScan.map(async pair => {
             const [analysis, h1Trend] = await Promise.all([
                 analyzePair(pair),
                 getH1Trend(pair)
@@ -2106,10 +2127,15 @@ async function scanForSignals(heldPositions = positions) {
 
         const config = MOMENTUM_CONFIG[tier];
         const maxPullback = FOREX_PULLBACK_CONFIG[tier] || FOREX_PULLBACK_CONFIG.tier1;
-        // [Phase 3] Regime-based total position cap
-        if (positions.size >= forexRegime.adjustments.maxPositions) continue;
+
+        // [v8.1] Detect flip-reversal candidate: pair has existing position in opposite direction
+        const existingPos = heldPositions.get(pair);
+        const isFlipCandidate = !!existingPos;
+
+        // [Phase 3] Regime-based total position cap — skip for flip candidates (net position count unchanged)
+        if (!isFlipCandidate && positions.size >= forexRegime.adjustments.maxPositions) continue;
         const tierPositions = Array.from(positions.values()).filter(p => p.tier === tier).length;
-        if (tierPositions >= config.maxPositions) continue;
+        if (!isFlipCandidate && tierPositions >= config.maxPositions) continue;
         if (pullback > maxPullback) {
             console.log(`[Pullback Filter] ${pair} skipped — extended ${ (pullback * 100).toFixed(2)}% from M15 trend anchor (max ${(maxPullback * 100).toFixed(2)}%)`);
             continue;
@@ -2194,24 +2220,30 @@ async function scanForSignals(heldPositions = positions) {
                     );
                     if (hasConfirmedFVG) fvgBonus = 1.12;
                 }
-                signals.push({
-                    pair, direction: 'long', tier,
-                    entry: currentPrice,
-                    stopLoss:   currentPrice * (1 - atrStop),
-                    takeProfit: currentPrice * (1 + atrTarget),
-                    rsi, trendStrength, atrPct, h1Trend, pullback,
-                    score: parseFloat((score * regimeProfile.quality * (analysis.hasDisplacement ? 1.15 : 1.0) * vpBonus * fvgBonus).toFixed(3)),
-                    strategy,
-                    regime: regimeProfile.regime,
-                    regimeQuality: regimeProfile.quality,
-                    marketRegime: forexRegime.regime,
-                    macdHistogram: macd ? macd.histogram : null,
-                    orderFlowImbalance: analysis.orderFlowImbalance,
-                    hasDisplacement: analysis.hasDisplacement,
-                    volumeProfile: analysis.volumeProfile ? { vah: analysis.volumeProfile.vah, val: analysis.volumeProfile.val, poc: analysis.volumeProfile.poc } : null,
-                    fvgCount: analysis.fvg ? analysis.fvg.bullish.length + analysis.fvg.bearish.length : 0,
-                    session: session.name
-                });
+                // [v8.1] Only generate flip signal if direction is opposite to existing position
+                const isFlipLong = isFlipCandidate && existingPos && existingPos.direction === 'short';
+                if (!isFlipCandidate || isFlipLong) {
+                    signals.push({
+                        pair, direction: 'long', tier,
+                        entry: currentPrice,
+                        stopLoss:   currentPrice * (1 - atrStop),
+                        takeProfit: currentPrice * (1 + atrTarget),
+                        rsi, trendStrength, atrPct, h1Trend, pullback,
+                        score: parseFloat((score * regimeProfile.quality * (analysis.hasDisplacement ? 1.15 : 1.0) * vpBonus * fvgBonus).toFixed(3)),
+                        strategy,
+                        regime: regimeProfile.regime,
+                        regimeQuality: regimeProfile.quality,
+                        marketRegime: forexRegime.regime,
+                        macdHistogram: macd ? macd.histogram : null,
+                        orderFlowImbalance: analysis.orderFlowImbalance,
+                        hasDisplacement: analysis.hasDisplacement,
+                        volumeProfile: analysis.volumeProfile ? { vah: analysis.volumeProfile.vah, val: analysis.volumeProfile.val, poc: analysis.volumeProfile.poc } : null,
+                        fvgCount: analysis.fvg ? analysis.fvg.bullish.length + analysis.fvg.bearish.length : 0,
+                        session: session.name,
+                        isFlipReversal: isFlipLong || false,
+                        existingDirection: isFlipLong ? 'short' : null
+                    });
+                }
             }
         }
 
@@ -2272,24 +2304,30 @@ async function scanForSignals(heldPositions = positions) {
                     );
                     if (hasConfirmedFVG) fvgBonus = 1.12;
                 }
-                signals.push({
-                    pair, direction: 'short', tier,
-                    entry: currentPrice,
-                    stopLoss:   currentPrice * (1 + atrStop),
-                    takeProfit: currentPrice * (1 - atrTarget),
-                    rsi, trendStrength, atrPct, h1Trend, pullback,
-                    score: parseFloat((score * regimeProfile.quality * (analysis.hasDisplacement ? 1.15 : 1.0) * vpBonus * fvgBonus).toFixed(3)),
-                    strategy,
-                    regime: regimeProfile.regime,
-                    regimeQuality: regimeProfile.quality,
-                    marketRegime: forexRegime.regime,
-                    macdHistogram: macd ? macd.histogram : null,
-                    orderFlowImbalance: analysis.orderFlowImbalance,
-                    hasDisplacement: analysis.hasDisplacement,
-                    volumeProfile: analysis.volumeProfile ? { vah: analysis.volumeProfile.vah, val: analysis.volumeProfile.val, poc: analysis.volumeProfile.poc } : null,
-                    fvgCount: analysis.fvg ? analysis.fvg.bullish.length + analysis.fvg.bearish.length : 0,
-                    session: session.name
-                });
+                // [v8.1] Only generate flip signal if direction is opposite to existing position
+                const isFlipShort = isFlipCandidate && existingPos && existingPos.direction === 'long';
+                if (!isFlipCandidate || isFlipShort) {
+                    signals.push({
+                        pair, direction: 'short', tier,
+                        entry: currentPrice,
+                        stopLoss:   currentPrice * (1 + atrStop),
+                        takeProfit: currentPrice * (1 - atrTarget),
+                        rsi, trendStrength, atrPct, h1Trend, pullback,
+                        score: parseFloat((score * regimeProfile.quality * (analysis.hasDisplacement ? 1.15 : 1.0) * vpBonus * fvgBonus).toFixed(3)),
+                        strategy,
+                        regime: regimeProfile.regime,
+                        regimeQuality: regimeProfile.quality,
+                        marketRegime: forexRegime.regime,
+                        macdHistogram: macd ? macd.histogram : null,
+                        orderFlowImbalance: analysis.orderFlowImbalance,
+                        hasDisplacement: analysis.hasDisplacement,
+                        volumeProfile: analysis.volumeProfile ? { vah: analysis.volumeProfile.vah, val: analysis.volumeProfile.val, poc: analysis.volumeProfile.poc } : null,
+                        fvgCount: analysis.fvg ? analysis.fvg.bullish.length + analysis.fvg.bearish.length : 0,
+                        session: session.name,
+                        isFlipReversal: isFlipShort || false,
+                        existingDirection: isFlipShort ? 'long' : null
+                    });
+                }
             }
         }
     }
@@ -2333,7 +2371,18 @@ async function executeTrade(signal) {
 
     // [v3.9] Session multiplier: reduced from 1.5→1.15 to cut exposure during overlap
     const sessionMultiplier = signal.session === 'London/NY Overlap' ? 1.15 : 1.0;
-    const positionValue = balance * config.positionSize * sessionMultiplier;
+
+    // [v9.0] Monte Carlo position sizing — override when 20+ trade samples available
+    let mcMultiplier = 1.0;
+    if (monteCarloSizer.tradeReturns.length >= 20) {
+        const mcResult = monteCarloSizer.optimize();
+        const halfKelly = mcResult.halfKelly;
+        mcMultiplier = Math.min(halfKelly / 0.01, 2.0); // cap at 2x base
+        mcMultiplier = Math.max(mcMultiplier, 0.25);     // floor at 0.25x
+        console.log(`[MONTE-CARLO] Using optimized position size: multiplier ${mcMultiplier.toFixed(2)}x (halfKelly: ${(halfKelly * 100).toFixed(1)}%, samples: ${mcResult.sampleSize}, confidence: ${mcResult.confidence})`);
+    }
+
+    const positionValue = balance * config.positionSize * sessionMultiplier * mcMultiplier;
 
     // [v7.3] Calculate units — OANDA units = base currency units.
     // If base is USD (e.g. USD_JPY), positionValue is already in USD → units = positionValue.
@@ -2594,6 +2643,8 @@ async function closePositionWithReason(pair, reason) {
                 reportForexTradeOutcome(posCopy, exitPrice, exitPnl, exitPct / 100, reason).catch(() => {});
                 // [v4.6] Record outcome into adaptive guardrails
                 guardrails.recordOutcome(exitPnl > 0);
+                // Feed trade outcome to Monte Carlo position sizer (as decimal, e.g. 0.05 for +5%)
+                monteCarloSizer.addTrade(exitPct / 100);
             }
 
             // [Phase 4] Trade evaluation — log signal effectiveness for weight optimization
@@ -2756,6 +2807,8 @@ async function managePositions() {
                         : simTotalLossAmount > 0 ? parseFloat((simTotalWinAmount / simTotalLossAmount).toFixed(2))
                         : simTotalWinAmount > 0 ? 9.99 : 0;
                     saveForexPerf();
+                    // Feed trade outcome to Monte Carlo sizer
+                    monteCarloSizer.addTrade(exitPct / 100);
                     console.log(`📊 [DB] Synced closed trade ${pair}: exit=${exitPrice} pnl=${realPnl.toFixed(2)} reason=${reason}`);
                 }
             } catch (e) {
@@ -2795,7 +2848,7 @@ async function tradingLoop() {
 
     const session = getCurrentSession();
     console.log(`📊 Session: ${session.name} (${session.quality})`);
-    console.log(`📈 Positions: ${positions.size} | Trades today: ${totalTradesToday}/${MAX_TRADES_PER_DAY}`);
+    console.log(`📈 Positions: ${positions.size} | Trades today: ${totalTradesToday}/${MAX_TRADES_PER_DAY} | Flips: ${flipReversalsToday}`);
 
     // Manage existing positions (always runs when market open, even if paused)
     await managePositions();
@@ -2825,9 +2878,92 @@ async function tradingLoop() {
         const signals = await scanForSignals();
         console.log(`🔍 Signals found: ${signals.length}`);
 
-        // Execute top signals
+        // [v8.1] Process flip-reversal signals first (close old + open new)
+        const flipSignals = signals.filter(s => s.isFlipReversal);
+        const normalSignals = signals.filter(s => !s.isFlipReversal);
+
+        for (const signal of flipSignals) {
+            // Flip requires committee confidence >= 0.50 (stronger than normal 0.45 threshold)
+            const committee = computeForexCommitteeScore(signal);
+            if (committee.confidence < 0.50) {
+                console.log(`[FLIP-REVERSAL] ${signal.pair} ${signal.existingDirection} → ${signal.direction} SKIPPED — committee confidence ${committee.confidence} < 0.50`);
+                continue;
+            }
+            // Verify we still have the position (could have been closed by managePositions)
+            const existingPos = positions.get(signal.pair);
+            if (!existingPos || existingPos.direction !== signal.existingDirection) {
+                continue;
+            }
+            // Verify daily trade budget allows 2 more trades (close + open)
+            if (totalTradesToday + 2 > MAX_TRADES_PER_DAY) {
+                console.log(`[FLIP-REVERSAL] ${signal.pair} SKIPPED — daily limit would be exceeded (${totalTradesToday}+2 > ${MAX_TRADES_PER_DAY})`);
+                continue;
+            }
+            // Re-check minimum hold time (in case time passed since scan)
+            const holdTime = Date.now() - (existingPos.entryTime instanceof Date ? existingPos.entryTime.getTime() : existingPos.entryTime || 0);
+            if (holdTime < 15 * 60 * 1000) {
+                console.log(`[FLIP-REVERSAL] ${signal.pair} SKIPPED — position only held ${Math.round(holdTime / 60000)}min (min 15min)`);
+                continue;
+            }
+
+            // AI advisor gate (same as normal trades)
+            const aiResult = await queryAIAdvisor(signal);
+            if (!aiResult.approved) {
+                console.log(`[FLIP-REVERSAL] ${signal.pair} ${signal.direction} REJECTED by AI — ${aiResult.reason}`);
+                continue;
+            }
+            signal.agentApproved = true;
+            signal.agentConfidence = aiResult.confidence;
+            signal.agentReason = aiResult.reason;
+            signal.decisionRunId = aiResult.decision_run_id || null;
+            signal.banditArm = aiResult.bandit_arm || 'moderate';
+            if (aiResult.position_size_multiplier && aiResult.position_size_multiplier !== 1.0) {
+                signal.agentSizeMultiplier = aiResult.position_size_multiplier;
+            }
+
+            // Guardrail checks
+            if (guardrails.isPaused) continue;
+            if ((signal.score || 0) < MIN_SIGNAL_SCORE) continue;
+            if (aiResult.confidence < MIN_SIGNAL_CONFIDENCE) continue;
+
+            // Transaction cost EV filter
+            if (!isForexPositiveEV(signal.pair, committee.confidence)) continue;
+
+            // Assign committee data
+            signal.committeeConfidence = committee.confidence;
+            signal.committeeComponents = committee.components;
+
+            // === EXECUTE FLIP ===
+            console.log(`\n🔄 [FLIP-REVERSAL] Closing ${signal.pair} ${signal.existingDirection} → opening ${signal.direction}`);
+            console.log(`   Committee confidence: ${committee.confidence} | Score: ${signal.score}`);
+
+            // Step 1: Close existing position (counts as 1 trade)
+            const closeSuccess = await closePositionWithReason(signal.pair, `flip-reversal → ${signal.direction}`);
+            totalTradesToday++; // close counts as a trade for anti-churning
+
+            if (closeSuccess) {
+                // Step 2: Open new position in opposite direction
+                const openSuccess = await executeTrade(signal);
+                if (openSuccess) {
+                    flipReversalsToday++;
+                    console.log(`✅ [FLIP-REVERSAL] ${signal.pair} flipped to ${signal.direction} (flip #${flipReversalsToday} today)`);
+                    telegramAlerts.send(
+                        `🔄 *FOREX FLIP-REVERSAL* — ${signal.pair}\n` +
+                        `${signal.existingDirection.toUpperCase()} → ${signal.direction.toUpperCase()}\n` +
+                        `Committee: ${committee.confidence} | Score: ${signal.score}\n` +
+                        `Flip #${flipReversalsToday} today`
+                    ).catch(() => {});
+                } else {
+                    console.log(`❌ [FLIP-REVERSAL] ${signal.pair} closed old position but failed to open new ${signal.direction}`);
+                }
+            } else {
+                console.log(`❌ [FLIP-REVERSAL] ${signal.pair} failed to close existing ${signal.existingDirection} position`);
+            }
+        }
+
+        // Execute top normal signals (non-flip)
         const maxNewPositions = 5 - positions.size;
-        const signalsToExecute = signals.slice(0, Math.min(maxNewPositions, MAX_SIGNALS_PER_CYCLE));
+        const signalsToExecute = normalSignals.slice(0, Math.min(maxNewPositions, MAX_SIGNALS_PER_CYCLE));
 
         for (const signal of signalsToExecute) {
             // [v5.0] HARD GATE: every trade MUST be approved by the agentic AI pipeline
@@ -2919,6 +3055,7 @@ function resetDailyCounters() {
         tradesPerPair.clear();
         stoppedOutPairs.clear();
         simDailyPnL = 0;
+        flipReversalsToday = 0;
         lastEquity = null; // reset daily baseline for LIVE mode too
         guardrails.resetDaily();
         _lastForexResetDate = today;
@@ -3035,6 +3172,7 @@ app.get('/api/forex/status', async (req, res) => {
                     profitFactor: simProfitFactor,
                     consecutiveLosses: simConsecutiveLosses,
                     maxConsecutiveLosses: simMaxConsecutiveLosses,
+                    flipReversalsToday,
                     maxDrawdown: 0
                 },
                 config: {
@@ -3125,6 +3263,7 @@ app.get('/api/forex/status', async (req, res) => {
                 profitFactor: simProfitFactor,
                 consecutiveLosses: simConsecutiveLosses,
                 maxConsecutiveLosses: simMaxConsecutiveLosses,
+                flipReversalsToday,
                 maxDrawdown: 0
             },
             config: {
@@ -3783,7 +3922,14 @@ class UserForexEngine {
         const slippageAdj = signal.direction === 'long' ? 1 + FOREX_SLIPPAGE : 1 - FOREX_SLIPPAGE;
         const effectiveEntry = signal.entry * slippageAdj;
         const sessionMultiplier = signal.session === 'London/NY Overlap' ? 1.15 : 1.0;
-        const positionValue = balance * config.positionSize * sessionMultiplier;
+        // [v9.0] Monte Carlo position sizing for multi-user engine
+        let mcMult = 1.0;
+        if (monteCarloSizer.tradeReturns.length >= 20) {
+            const mcR = monteCarloSizer.optimize();
+            mcMult = Math.min(mcR.halfKelly / 0.01, 2.0);
+            mcMult = Math.max(mcMult, 0.25);
+        }
+        const positionValue = balance * config.positionSize * sessionMultiplier * mcMult;
         const units = signal.direction === 'long'
             ? Math.floor(positionValue / effectiveEntry * 7000)
             : -Math.floor(positionValue / effectiveEntry * 7000);
@@ -3840,8 +3986,27 @@ class UserForexEngine {
         } finally {
             Object.assign(oandaConfig, savedConfig);
         }
+
+        // [v8.1] Process flip-reversal signals first
+        const flipSignals = signals.filter(s => s.isFlipReversal);
+        const normalSignals = signals.filter(s => !s.isFlipReversal);
+
+        for (const signal of flipSignals) {
+            const existingPos = this.positions.get(signal.pair);
+            if (!existingPos || existingPos.direction !== signal.existingDirection) continue;
+            if (this.totalTradesToday + 2 > MAX_TRADES_PER_DAY) continue;
+            const committee = computeForexCommitteeScore(signal);
+            if (committee.confidence < 0.50) continue;
+            signal.committeeConfidence = committee.confidence;
+            signal.committeeComponents = committee.components;
+            console.log(`🔄 [ForexEngine ${this.userId}] [FLIP-REVERSAL] Closing ${signal.pair} ${signal.existingDirection} → opening ${signal.direction}`);
+            await this.closePositionWithReason(signal.pair, `flip-reversal → ${signal.direction}`);
+            this.totalTradesToday++;
+            await this.executeTrade(signal);
+        }
+
         const maxNewPos = 5 - this.positions.size;
-        for (const signal of signals.slice(0, Math.min(maxNewPos, MAX_SIGNALS_PER_CYCLE))) {
+        for (const signal of normalSignals.slice(0, Math.min(maxNewPos, MAX_SIGNALS_PER_CYCLE))) {
             if (!this.positions.has(signal.pair) && this.canTrade(signal.pair, signal.direction)) {
                 await this.executeTrade(signal);
             }

@@ -10,6 +10,9 @@ const rateLimit = require('express-rate-limit');
 const { createUserCredentialStore } = require('./userCredentialStore');
 require('dotenv').config();
 
+// ===== MONTE CARLO POSITION SIZER =====
+const MonteCarloSizer = require('../../services/trading/monte-carlo-sizer');
+
 // ============================================================================
 // [Improvement 1] EVALUATION PERSISTENCE
 // ============================================================================
@@ -1201,6 +1204,9 @@ class CryptoTradingEngine {
         this.credentialsError = null;
         this.lastCredentialCheckAt = 0;
 
+        // Monte Carlo position sizer (v9.0)
+        this.monteCarloSizer = new MonteCarloSizer();
+
         // Adaptive guardrails state (v4.6)
         this.guardrails = {
             consecutiveLosses: 0,
@@ -1994,12 +2000,22 @@ class CryptoTradingEngine {
             // [v4.6] Apply agent position_size_multiplier
             const agentSizeMultiplier = signal.agentPositionSizeMultiplier || 1.0;
 
+            // [v9.0] Monte Carlo position sizing — override Kelly when 20+ trade samples available
+            let mcMultiplier = 1.0;
+            if (this.monteCarloSizer.tradeReturns.length >= 20) {
+                const mcResult = this.monteCarloSizer.optimize();
+                const halfKelly = mcResult.halfKelly;
+                mcMultiplier = Math.min(halfKelly / 0.01, 2.0); // cap at 2x base
+                mcMultiplier = Math.max(mcMultiplier, 0.25);     // floor at 0.25x
+                console.log(`[MONTE-CARLO] Using optimized position size: multiplier ${mcMultiplier.toFixed(2)}x (halfKelly: ${(halfKelly * 100).toFixed(1)}%, samples: ${mcResult.sampleSize}, confidence: ${mcResult.confidence})`);
+            }
+
             const positionSizeUSD = Math.min(
-                this.config.basePositionSizeUSD * sizingMultiplier * signalSizingFactor * guardrailMultiplier * agentSizeMultiplier,
+                this.config.basePositionSizeUSD * sizingMultiplier * signalSizingFactor * guardrailMultiplier * agentSizeMultiplier * mcMultiplier,
                 this.config.maxPositionSizeUSD,
                 riskCapUSD
             );
-            console.log(`   [Kelly Sizing] WinRate: ${(runningWinRate * 100).toFixed(1)}% → kelly ${sizingMultiplier.toFixed(2)}x · signal ${signalSizingFactor.toFixed(2)}x · guardrail ${guardrailMultiplier.toFixed(2)}x · agent ${agentSizeMultiplier.toFixed(2)}x → $${positionSizeUSD.toFixed(0)} (risk cap $${riskCapUSD.toFixed(0)})`);
+            console.log(`   [Kelly Sizing] WinRate: ${(runningWinRate * 100).toFixed(1)}% → kelly ${sizingMultiplier.toFixed(2)}x · signal ${signalSizingFactor.toFixed(2)}x · guardrail ${guardrailMultiplier.toFixed(2)}x · agent ${agentSizeMultiplier.toFixed(2)}x · mc ${mcMultiplier.toFixed(2)}x → $${positionSizeUSD.toFixed(0)} (risk cap $${riskCapUSD.toFixed(0)})`);
 
             // [v3.5] Crypto slippage model — Kraken taker fee is 0.26%; market orders
             // also move the book. Model as 0.30% total execution cost.
@@ -2273,6 +2289,9 @@ class CryptoTradingEngine {
             console.log(`✅ Position closed: ${symbol} - ${reason}`);
             console.log(`   Exit: $${price.toFixed(2)}`);
             console.log(`   P/L: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}% ($${pnlUSD.toFixed(2)})`);
+
+            // Feed trade outcome to Monte Carlo position sizer (as decimal, e.g. 0.05 for +5%)
+            this.monteCarloSizer.addTrade(pnlPercent / 100);
 
             // Persist close to DB (fire-and-forget)
             const closeTrade = this._dbClose ? this._dbClose.bind(this) : dbCryptoClose;

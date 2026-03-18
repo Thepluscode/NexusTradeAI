@@ -10,6 +10,10 @@ const rateLimit = require('express-rate-limit');
 const { createUserCredentialStore } = require('./userCredentialStore');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
+// ===== MONTE CARLO POSITION SIZER =====
+const MonteCarloSizer = require('../../services/trading/monte-carlo-sizer');
+const monteCarloSizer = new MonteCarloSizer();
+
 // ===== PRODUCTION INFRASTRUCTURE =====
 const memoryManager = require('./infrastructure/memory/MemoryManager');
 const { metrics, createMetricsServer } = require('./infrastructure/monitoring/metrics');
@@ -918,6 +922,9 @@ function recordTradeClose(symbol, entryPrice, exitPrice, shares, reason) {
 
     console.log(`📈 TRADE CLOSED: ${symbol} | ${isWin ? 'WIN' : 'LOSS'} ${pnlPct.toFixed(2)}% ($${pnlDollar.toFixed(2)}) | Reason: ${reason}`);
     console.log(`📊 Running stats: ${perfData.winningTrades}W/${perfData.losingTrades}L | WR: ${perfData.winRate.toFixed(1)}% | PF: ${perfData.profitFactor.toFixed(2)}`);
+
+    // Feed trade outcome to Monte Carlo position sizer (as decimal, e.g. 0.05 for +5%)
+    monteCarloSizer.addTrade(pnlPct / 100);
 
     savePerfData();
 }
@@ -3195,7 +3202,17 @@ async function executeTrade(signal, strategy) {
         const STOCK_SLIPPAGE = 0.0005; // 0.05% — conservative estimate for liquid stocks
         const effectiveEntry = signal.price * (1 + STOCK_SLIPPAGE);
 
-        const positionSize = equity * config.positionSize * kellyMultiplier;
+        // [v9.0] Monte Carlo position sizing — override Kelly when we have 20+ trade samples
+        let mcMultiplier = 1.0;
+        if (monteCarloSizer.tradeReturns.length >= 20) {
+            const mcResult = monteCarloSizer.optimize();
+            const halfKelly = mcResult.halfKelly;
+            mcMultiplier = Math.min(halfKelly / 0.01, 2.0); // cap at 2x base
+            mcMultiplier = Math.max(mcMultiplier, 0.25);     // floor at 0.25x
+            console.log(`[MONTE-CARLO] Using optimized position size: multiplier ${mcMultiplier.toFixed(2)}x (halfKelly: ${(halfKelly * 100).toFixed(1)}%, samples: ${mcResult.sampleSize}, confidence: ${mcResult.confidence})`);
+        }
+
+        const positionSize = equity * config.positionSize * kellyMultiplier * mcMultiplier;
         let shares = Math.floor(positionSize / effectiveEntry);
 
         // [v4.7] Cap shares by RISK_PER_TRADE — max dollar risk per trade = equity * RISK_PER_TRADE
@@ -4930,7 +4947,14 @@ class UserTradingEngine {
             }
             const STOCK_SLIPPAGE = 0.0005;
             const effectiveEntry = signal.price * (1 + STOCK_SLIPPAGE);
-            const positionSize = equity * config.positionSize * kellyMultiplier;
+            // [v9.0] Monte Carlo position sizing for multi-user engine
+            let mcMultiplier = 1.0;
+            if (monteCarloSizer.tradeReturns.length >= 20) {
+                const mcResult = monteCarloSizer.optimize();
+                mcMultiplier = Math.min(mcResult.halfKelly / 0.01, 2.0);
+                mcMultiplier = Math.max(mcMultiplier, 0.25);
+            }
+            const positionSize = equity * config.positionSize * kellyMultiplier * mcMultiplier;
             if (!signal.price || signal.price <= 0) return null;
             let shares = Math.floor(positionSize / effectiveEntry);
             // [v4.7] Cap shares by RISK_PER_TRADE
