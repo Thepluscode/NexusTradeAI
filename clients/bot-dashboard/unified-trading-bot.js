@@ -619,6 +619,15 @@ const stoppedOutSymbols = new Map();
 const tradesPerSymbol = new Map();
 let totalTradesToday = 0;
 
+// [v11.0] SPY Trend Hard Gate — reject all LONG entries when SPY is bearish
+let spyBullish = true; // default true until first update (avoid blocking at startup)
+
+// [v11.0] ORB trade limit — max 2 ORB trades per day (focus on best setups)
+let orbTradesToday = 0;
+
+// [v11.0] Symbol quality filter — ban known meme/penny stocks
+const BANNED_SYMBOLS = new Set(['MVIS', 'HUT', 'RIOT', 'MARA', 'CLSK', 'LCID']);
+
 // ===== PROFIT PROTECTION SYSTEM =====
 // Tracks symbols closed via profit-protect that are eligible for re-entry (bypasses cooldown)
 const profitProtectReentrySymbols = new Map(); // symbol -> { timestamp, direction, entry }
@@ -1999,7 +2008,7 @@ function detectFairValueGaps(bars, lookback = 20) {
 
 // [Phase 3] Committee Aggregator — combines multiple signal confirmations into unified confidence
 // Each signal source contributes independently; more confirmations = higher confidence
-// Minimum threshold: 0.45 confidence required to trade (prevents marginal entries)
+// Minimum threshold: 0.50 confidence required to trade (prevents marginal entries)
 function computeCommitteeScore(signal) {
     let confirmations = 0;
     let totalWeight = 0;
@@ -2804,6 +2813,22 @@ async function scanMomentumBreakouts() {
                     globalThis._marketRegime = detectMarketRegime(spyBars);
                     globalThis._marketRegimeUpdated = Date.now();
                     console.log(`[Regime] Market: ${globalThis._marketRegime.adjustments.label} (ATR: ${globalThis._marketRegime.atrPct}%) — size:×${globalThis._marketRegime.adjustments.positionSizeMultiplier} threshold:×${globalThis._marketRegime.adjustments.scoreThresholdMultiplier} maxPos:${globalThis._marketRegime.adjustments.maxPositions}`);
+
+                    // [v11.0] SPY Trend Hard Gate — compute spyBullish from SPY bars
+                    const spyCloses = spyBars.map(b => b.c);
+                    const spyPrice = spyCloses[spyCloses.length - 1];
+                    const spySma20 = spyCloses.length >= 20
+                        ? spyCloses.slice(-20).reduce((a, b) => a + b, 0) / 20
+                        : null;
+                    const spyPrice5Ago = spyCloses.length >= 6 ? spyCloses[spyCloses.length - 6] : spyPrice;
+                    const spyRsi = calculateRSI(spyBars);
+                    const spyHasMomentum = spyPrice > spyPrice5Ago;
+                    if (spySma20 !== null) {
+                        spyBullish = (spyPrice > spySma20) && spyHasMomentum && (spyRsi > 40);
+                        // Also mark bearish on extreme weakness
+                        if (spyPrice < spySma20 || spyRsi < 35) spyBullish = false;
+                        console.log(`[SPY GATE] SPY $${spyPrice.toFixed(2)} vs SMA20 $${spySma20.toFixed(2)} | RSI ${spyRsi.toFixed(1)} | Momentum ${spyHasMomentum ? '+' : '-'} → ${spyBullish ? 'BULLISH' : 'BEARISH'}`);
+                    }
                 }
             } catch (e) {
                 // Non-blocking — use default medium regime
@@ -2821,8 +2846,13 @@ async function scanMomentumBreakouts() {
             console.log(`[Portfolio Risk] Warnings: ${portfolioRisk.warnings.join('; ')}`);
         }
 
+        // [v11.0] SPY Trend Hard Gate — log status each cycle
+        if (!spyBullish) {
+            console.log(`[SPY GATE] Market bearish — LONG momentum and ORB entries will be rejected this cycle`);
+        }
+
         const symbols = popularStocks.getAllSymbols();
-        console.log(`\n🔍 Momentum Scan: Checking ${symbols.length} stocks... [Regime: ${regime.adjustments.label}]`);
+        console.log(`\n🔍 Momentum Scan: Checking ${symbols.length} stocks... [Regime: ${regime.adjustments.label}] [SPY: ${spyBullish ? 'BULLISH' : 'BEARISH'}]`);
 
         const movers = [];
         const batchSize = 20;
@@ -2861,6 +2891,16 @@ async function scanMomentumBreakouts() {
                 // ORB window gets 2 signals/cycle; otherwise 1 (data: ORB = 59% WR, +$85)
                 const effectiveMaxSignals = isOpeningRangeBreakoutWindow() ? 2 : MAX_SIGNALS_PER_CYCLE;
                 for (const mover of ranked.slice(0, Math.min(available, effectiveMaxSignals))) {
+                    // [v11.0] SPY Trend Hard Gate — reject all LONG entries when SPY is bearish
+                    if (!spyBullish) {
+                        console.log(`[SPY GATE] ${mover.symbol}: Market bearish — skipping LONG entry`);
+                        continue;
+                    }
+                    // [v11.0] ORB daily limit — max 2 ORB trades per day
+                    if ((mover.tier === 'orb' || mover.strategy === 'openingRangeBreakout') && orbTradesToday >= 2) {
+                        console.log(`[ORB LIMIT] ${mover.symbol}: Already ${orbTradesToday} ORB trades today (max 2) — skipping`);
+                        continue;
+                    }
                     // [v5.0] HARD GATE: every trade MUST be approved by the agentic AI pipeline
                     const aiResult = await queryAIAdvisor(mover);
 
@@ -2921,15 +2961,21 @@ async function scanMomentumBreakouts() {
                     }
                     // [Phase 3] Committee aggregator — unified confidence from all signal sources
                     const committee = computeCommitteeScore(mover);
-                    if (committee.confidence < 0.45) {
-                        console.log(`[Committee] ${mover.symbol}: Confidence ${committee.confidence} < 0.45 threshold — ${JSON.stringify(committee.components)}`);
+                    if (committee.confidence < 0.50) {
+                        console.log(`[Committee] ${mover.symbol}: Confidence ${committee.confidence} < 0.50 threshold — ${JSON.stringify(committee.components)}`);
+                        continue;
+                    }
+                    // [v11.0] Require 2+ positive components — prevents marginal single-signal entries
+                    const positiveComponents = Object.values(committee.components).filter(v => v > 0).length;
+                    if (positiveComponents < 2) {
+                        console.log(`[Committee] ${mover.symbol}: Only ${positiveComponents} positive component(s) (need 2+) — ${JSON.stringify(committee.components)}`);
                         continue;
                     }
                     // [Improvement 3] Transaction cost filter — reject negative EV trades
                     if (!isPositiveEV(committee.confidence)) {
                         continue; // Skip this trade — negative expected value after costs
                     }
-                    console.log(`[Committee] ${mover.symbol}: APPROVED conf:${committee.confidence} — momentum:${committee.components.momentum} flow:${committee.components.orderFlow} displacement:${committee.components.displacement} VP:${committee.components.volumeProfile} FVG:${committee.components.fvg}`);
+                    console.log(`[Committee] ${mover.symbol}: APPROVED conf:${committee.confidence} (${positiveComponents}/6 positive) — momentum:${committee.components.momentum} flow:${committee.components.orderFlow} displacement:${committee.components.displacement} VP:${committee.components.volumeProfile} FVG:${committee.components.fvg}`);
                     mover.committeeConfidence = committee.confidence;
                     mover.committeeComponents = committee.components;
                     // Apply loss-adjusted position sizing
@@ -2977,6 +3023,8 @@ async function scanMomentumBreakouts() {
 
 async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
     try {
+        // [v11.0] Symbol quality filter — skip banned meme/penny stocks early
+        if (BANNED_SYMBOLS.has(symbol)) return null;
         if (!backtestMode && !isGoodTradingTime()) return null;
 
         // For backtest mode outside market hours, use last 2 trading days so we get bars
@@ -3041,7 +3089,9 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
 
         const rsi = calculateRSI(bars);
 
-        if (current < 1.0 || current > 1000) return null;
+        // [v11.0] Minimum price $20 — removes penny stock noise
+        if (current < 20) return null;
+        if (current > 1000) return null;
         if (volumeToday < 500000) return null;
 
         // VWAP filter: price must be at or above VWAP — only buy strength, not weakness
@@ -3434,6 +3484,8 @@ async function executeTrade(signal, strategy) {
         // If the order succeeds but the response fails (network timeout, etc.), we already
         // consumed the trade slot. On API failure we roll back below.
         totalTradesToday++;
+        // [v11.0] Track ORB trades separately for daily limit
+        if (tier === 'orb' || strategy === 'openingRangeBreakout') orbTradesToday++;
         tradesPerSymbol.set(signal.symbol, (tradesPerSymbol.get(signal.symbol) || 0) + 1);
         const tradeRecord = {
             time: Date.now(),
@@ -3465,6 +3517,7 @@ async function executeTrade(signal, strategy) {
         } catch (orderError) {
             // Rollback anti-churning state on API failure
             totalTradesToday = Math.max(0, totalTradesToday - 1);
+            if (tier === 'orb' || strategy === 'openingRangeBreakout') orbTradesToday = Math.max(0, orbTradesToday - 1);
             tradesPerSymbol.set(signal.symbol, Math.max(0, (tradesPerSymbol.get(signal.symbol) || 1) - 1));
             recent.pop();
             console.error(`❌ Order API failed for ${signal.symbol} (anti-churning rolled back):`, orderError.message);
@@ -4189,6 +4242,7 @@ app.post('/api/accounts/demo/reset', (req, res) => {
     try {
         // Reset anti-churning state
         totalTradesToday = 0;
+        orbTradesToday = 0;
         recentTrades.clear();
         tradesPerSymbol.clear();      // was missing — prevented new trades after reset
         stoppedOutSymbols.clear();    // was missing — cooldowns persisted after reset
@@ -4703,6 +4757,7 @@ function resetDailyCounters() {
     if (today !== lastResetDate) {
         console.log(`\n📅 New trading day: ${today} - resetting daily counters`);
         totalTradesToday = 0;
+        orbTradesToday = 0;
         tradesPerSymbol.clear();
         stoppedOutSymbols.clear();
         profitProtectReentrySymbols.clear();
@@ -5276,6 +5331,16 @@ class UserTradingEngine {
                 .sort((a, b) => (b.score || 0) - (a.score || 0));
             const engineMaxSignals = isOpeningRangeBreakoutWindow() ? 2 : MAX_SIGNALS_PER_CYCLE;
             for (const mover of ranked.slice(0, Math.min(available, engineMaxSignals))) {
+                // [v11.0] SPY Trend Hard Gate — reject all LONG entries when SPY is bearish
+                if (!spyBullish) {
+                    console.log(`[Engine ${this.userId}][SPY GATE] ${mover.symbol}: Market bearish — skipping LONG entry`);
+                    continue;
+                }
+                // [v11.0] ORB daily limit — max 2 ORB trades per day
+                if ((mover.tier === 'orb' || mover.strategy === 'openingRangeBreakout') && orbTradesToday >= 2) {
+                    console.log(`[Engine ${this.userId}][ORB LIMIT] ${mover.symbol}: Already ${orbTradesToday} ORB trades today (max 2) — skipping`);
+                    continue;
+                }
                 // [Guardrail] Apply loss-adjusted position sizing
                 if (guardrails.lossSizeMultiplier < 1.0) {
                     mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * guardrails.lossSizeMultiplier;
@@ -5362,6 +5427,8 @@ class UserTradingEngine {
 // ── Engine-aware analyzeMomentum: same logic but uses engine's alpacaConfig & positions ──
 async function analyzeMomentumForEngine(symbol, engine) {
     try {
+        // [v11.0] Symbol quality filter — skip banned meme/penny stocks early
+        if (BANNED_SYMBOLS.has(symbol)) return null;
         if (!isGoodTradingTime()) return null;
         const today = new Date().toISOString().split('T')[0];
         const bars = await fetchBarsWithCache(symbol, engine.alpacaConfig,
@@ -5381,7 +5448,8 @@ async function analyzeMomentumForEngine(symbol, engine) {
         const percentChange = ((current - todayOpen) / todayOpen) * 100;
         const volumeRatio = volumeToday / (prevVolume || 1);
         const rsi = calculateRSI(bars);
-        if (current < 1.0 || current > 1000) return null;
+        // [v11.0] Minimum price $20 — removes penny stock noise
+        if (current < 20 || current > 1000) return null;
         if (volumeToday < 500000) return null;
         const vwap = calculateVWAP(bars);
         if (vwap && current < vwap) return null;

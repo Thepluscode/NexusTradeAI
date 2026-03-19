@@ -1481,39 +1481,55 @@ class CryptoTradingEngine {
     // BTC CORRELATION STRATEGY
     // ========================================================================
 
-    // [v3.2] Enhanced BTC filter — adds RSI health check and 24h change threshold
-    // Prevents entering altcoin trades when BTC is overbought or in sharp decline
+    // [v3.3] Strict BTC filter — SMA50 trend, tight RSI band, 24h sensitivity, 4h momentum gate
+    // Prevents entering altcoin trades when BTC is not in a CLEAR uptrend
     async isBTCBullish() {
         const btcPrices = this.priceHistory.get('XBTUSD') || [];
-        if (btcPrices.length < 20) return true; // Default allow when insufficient data
+        if (btcPrices.length < 50) return true; // Default allow when insufficient data (need 50 for SMA50)
 
+        const sma50 = this.calculateSMA(btcPrices, 50);
         const sma20 = this.calculateSMA(btcPrices, 20);
         const currentPrice = btcPrices[btcPrices.length - 1];
         const ema9 = this.calculateEMA(btcPrices, 9);
 
-        // Basic trend check: price above SMA20, EMA9 above SMA20
-        const isTrending = currentPrice > sma20 && ema9 > sma20;
-        if (!isTrending) return false;
-
-        // [v3.2] RSI health check: avoid overbought (>70) and weak (<45) BTC
-        const btcRsi = this.calculateRSI(btcPrices, 14);
-        if (btcRsi < 45 || btcRsi > 70) {
-            console.log(`[BTC Filter] RSI ${btcRsi.toFixed(1)} outside healthy range 45-70`);
+        // [v3.3] Stricter trend check: price above SMA50 (not just SMA20) AND EMA9 above SMA20
+        const isTrending = currentPrice > sma50 && ema9 > sma20;
+        if (!isTrending) {
+            console.log(`[BTC Filter] Trend fail — price ${currentPrice > sma50 ? '>' : '<'} SMA50, EMA9 ${ema9 > sma20 ? '>' : '<'} SMA20`);
             return false;
         }
 
-        // [v3.2] 24h change check: avoid altcoin entries when BTC dropped >2% today
+        // [v3.3] Tighter RSI band: 48-68 (was 45-70) — requires healthier momentum
+        const btcRsi = this.calculateRSI(btcPrices, 14);
+        if (btcRsi < 48 || btcRsi > 68) {
+            console.log(`[BTC Filter] RSI ${btcRsi.toFixed(1)} outside healthy range 48-68`);
+            return false;
+        }
+
+        // [v3.3] 24h change check: tightened to -1% (was -2%) — more sensitive to drops
         try {
             const ticker = await this.kraken.get24hTicker('XBTUSD');
             if (ticker) {
                 const change24h = parseFloat(ticker.priceChangePercent);
-                if (change24h < -2) {
+                if (change24h < -1) {
                     console.log(`[BTC Filter] 24h change ${change24h.toFixed(1)}% too negative — holding off altcoins`);
                     return false;
                 }
             }
         } catch (e) {
             // Non-critical — proceed if ticker fetch fails
+        }
+
+        // [v3.3] 4-hour momentum gate: catches BTC rolling over from a peak
+        // Even if price is still above SMA50, a fast drop signals danger for altcoins
+        // 100 candles × 5min = 500min; 4h = 48 candles back
+        if (btcPrices.length >= 48) {
+            const price4hAgo = btcPrices[btcPrices.length - 48];
+            const momentum4h = (currentPrice - price4hAgo) / price4hAgo;
+            if (momentum4h < -0.01) {
+                console.log(`[BTC MOMENTUM] BTC dropping ${(momentum4h * 100).toFixed(2)}% in 4h — pausing altcoin entries`);
+                return false;
+            }
         }
 
         return true;
@@ -1575,14 +1591,18 @@ class CryptoTradingEngine {
         // Check BTC trend first (for altcoin correlation)
         const btcBullish = await this.isBTCBullish();
         if (!btcBullish) {
-            console.log('🔴 BTC is bearish/neutral — scanning all symbols but halving altcoin position size');
+            console.log('🔴 BTC is bearish/neutral — BLOCKING all altcoin LONG entries (BTC gate)');
         }
 
         for (const symbol of scanSymbols) {
-            // When BTC is bearish, reduce altcoin position size (50%) instead of hard-skipping.
-            // Hard-skipping 10/12 symbols leaves the bot idle for hours when BTC consolidates.
-            // We still trade altcoins but with tighter sizing to limit exposure.
-            const btcSizingFactor = (!btcBullish && symbol !== 'XBTUSD' && symbol !== 'ETHUSD') ? 0.5 : 1.0;
+            // [v3.3] Hard reject: when BTC is not bullish, NO altcoin LONG entries allowed.
+            // Only XBTUSD itself can still be traded regardless of BTC trend.
+            // Previous approach (halving size) still let losing trades through (ETH -3.98%, SOL -5.16%).
+            if (!btcBullish && symbol !== 'XBTUSD') {
+                console.log(`[BTC GATE] BTC bearish — rejecting ${symbol} LONG entry`);
+                continue;
+            }
+            const btcSizingFactor = 1.0;
 
             // Skip if already have position
             if (this.positions.has(symbol)) {

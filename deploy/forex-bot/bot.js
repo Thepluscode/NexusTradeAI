@@ -1866,6 +1866,45 @@ async function getH1Trend(pair) {
     }
 }
 
+// [v11.0] D1 Trend Confirmation — prevents counter-trend entries against the daily bias
+// Cache D1 trend for 4 hours (daily trend doesn't change fast)
+const d1TrendCache = new Map(); // pair -> { trend, timestamp }
+const D1_CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours
+
+async function getD1Trend(pair) {
+    // Check cache first
+    const cached = d1TrendCache.get(pair);
+    if (cached && (Date.now() - cached.timestamp) < D1_CACHE_TTL) {
+        return cached.trend;
+    }
+
+    try {
+        const d1Candles = await getCandles(pair, 'D', 30);
+        if (d1Candles.length < 22) {
+            d1TrendCache.set(pair, { trend: 'neutral', timestamp: Date.now() });
+            return 'neutral';
+        }
+        const closes = d1Candles.map(c => parseFloat(c.mid.c));
+        const period = 20;
+        const sma20 = closes.slice(-period).reduce((a, b) => a + b, 0) / period;
+        const currentPrice = closes[closes.length - 1];
+        const last3 = closes.slice(-3);
+        const aboveCount = last3.filter(c => c > sma20).length;
+        const belowCount = last3.filter(c => c < sma20).length;
+
+        let trend = 'neutral';
+        if (currentPrice > sma20 && aboveCount >= 2) trend = 'up';
+        else if (currentPrice < sma20 && belowCount >= 2) trend = 'down';
+
+        d1TrendCache.set(pair, { trend, timestamp: Date.now() });
+        return trend;
+    } catch (e) {
+        console.warn(`[D1 Trend] ${pair}: ${e.message}`);
+        d1TrendCache.set(pair, { trend: 'neutral', timestamp: Date.now() });
+        return 'neutral';
+    }
+}
+
 // [Phase 3] Forex Regime Detection — classifies market conditions from aggregate pair volatility
 // Forex regimes: low-vol (range/consolidation), normal (trending), high-vol (news/crisis)
 const FOREX_REGIME_ADJUSTMENTS = {
@@ -2213,11 +2252,12 @@ async function scanForSignals(heldPositions = positions) {
 
     const pairResults = await Promise.allSettled(
         allPairsToScan.map(async pair => {
-            const [analysis, h1Trend] = await Promise.all([
+            const [analysis, h1Trend, d1Trend] = await Promise.all([
                 analyzePair(pair),
-                getH1Trend(pair)
+                getH1Trend(pair),
+                getD1Trend(pair)
             ]);
-            return { pair, analysis, h1Trend };
+            return { pair, analysis, h1Trend, d1Trend };
         })
     );
 
@@ -2241,7 +2281,7 @@ async function scanForSignals(heldPositions = positions) {
     for (const result of pairResults) {
         if (result.status === 'rejected' || !result.value.analysis) continue;
 
-        const { pair, analysis, h1Trend } = result.value;
+        const { pair, analysis, h1Trend, d1Trend } = result.value;
         const {
             currentPrice, rsi, isUptrend, isDowntrend, trendStrength,
             atrPct, bb, macd, pullback, lastCandleBullish, lastCandleBearish
@@ -2295,7 +2335,18 @@ async function scanForSignals(heldPositions = positions) {
         // LONG Signal — [v7.0] Pullback-to-support entry: 4 key filters only
         // 1) H1 trend up  2) Price near SMA20  3) RSI 35-55  4) MACD histogram > 0
         const pullbackToMA = Math.abs(currentPrice - analysis.sma20) / analysis.sma20;
-        if (h1Trend === 'up' && pullbackToMA <= 0.005 && rsi >= 35 && rsi <= 55 && macd !== null && macd.histogram > 0) {
+
+        // [v11.0] D1 trend gate — block counter-trend entries
+        const d1LongOk = d1Trend !== 'down';
+        if (!d1LongOk) {
+            console.log(`[D1 FILTER] ${pair} long: D1 trend=${d1Trend} — REJECTED (counter-trend)`);
+        }
+        const d1ShortOk = d1Trend !== 'up';
+        if (!d1ShortOk && h1Trend === 'down') {
+            console.log(`[D1 FILTER] ${pair} short: D1 trend=${d1Trend} — REJECTED (counter-trend)`);
+        }
+
+        if (d1LongOk && h1Trend === 'up' && pullbackToMA <= 0.005 && rsi >= 35 && rsi <= 55 && macd !== null && macd.histogram > 0) {
             // [v3.3] Strategy Bridge advisory — only block if bridge explicitly signals SHORT with high confidence
             const bridgeLong = await queryStrategyBridge(pair, 'long');
             if (bridgeLong !== null && bridgeLong.direction === 'short' && bridgeLong.confidence > 0.7) {
@@ -2360,7 +2411,7 @@ async function scanForSignals(heldPositions = positions) {
                         entry: currentPrice,
                         stopLoss:   currentPrice * (1 - atrStop),
                         takeProfit: currentPrice * (1 + atrTarget),
-                        rsi, trendStrength, atrPct, h1Trend, pullback,
+                        rsi, trendStrength, atrPct, h1Trend, d1Trend, pullback,
                         score: parseFloat((score * regimeProfile.quality * (analysis.hasDisplacement ? 1.15 : 1.0) * vpBonus * fvgBonus).toFixed(3)),
                         strategy,
                         regime: regimeProfile.regime,
@@ -2381,7 +2432,7 @@ async function scanForSignals(heldPositions = positions) {
 
         // SHORT Signal — [v7.0] Pullback-to-resistance entry: 4 key filters only
         // 1) H1 trend down  2) Price near SMA20  3) RSI 45-65  4) MACD histogram < 0
-        if (h1Trend === 'down' && pullbackToMA <= 0.005 && rsi >= 45 && rsi <= 65 && macd !== null && macd.histogram < 0) {
+        if (d1ShortOk && h1Trend === 'down' && pullbackToMA <= 0.005 && rsi >= 45 && rsi <= 65 && macd !== null && macd.histogram < 0) {
             // [v3.3] Strategy Bridge advisory — only block if bridge explicitly signals LONG with high confidence
             const bridgeShort = await queryStrategyBridge(pair, 'short');
             if (bridgeShort !== null && bridgeShort.direction === 'long' && bridgeShort.confidence > 0.7) {
@@ -2444,7 +2495,7 @@ async function scanForSignals(heldPositions = positions) {
                         entry: currentPrice,
                         stopLoss:   currentPrice * (1 + atrStop),
                         takeProfit: currentPrice * (1 - atrTarget),
-                        rsi, trendStrength, atrPct, h1Trend, pullback,
+                        rsi, trendStrength, atrPct, h1Trend, d1Trend, pullback,
                         score: parseFloat((score * regimeProfile.quality * (analysis.hasDisplacement ? 1.15 : 1.0) * vpBonus * fvgBonus).toFixed(3)),
                         strategy,
                         regime: regimeProfile.regime,
@@ -3199,8 +3250,8 @@ async function tradingLoop() {
             }
             // [Phase 3] Committee aggregator — final quality gate
             const committee = computeForexCommitteeScore(signal);
-            if (committee.confidence < 0.45) {
-                console.log(`[Committee] ${signal.pair} ${signal.direction}: Confidence ${committee.confidence} < 0.45 — ${JSON.stringify(committee.components)}`);
+            if (committee.confidence < 0.50) {
+                console.log(`[Committee] ${signal.pair} ${signal.direction}: Confidence ${committee.confidence} < 0.50 — ${JSON.stringify(committee.components)}`);
                 continue;
             }
             // [Improvement 3] Transaction cost EV filter
