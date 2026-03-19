@@ -298,7 +298,7 @@ const FOREX_BOT_URL = process.env.FOREX_BOT_URL || 'http://localhost:3005';
 
 // Telegram alerts
 const { getTelegramAlertService } = require('./infrastructure/notifications/telegram-alerts');
-const telegramAlerts = getTelegramAlertService();
+let telegramAlerts = getTelegramAlertService();
 
 // SMS alerts (graceful fallback)
 const { getSMSAlertService } = require('./infrastructure/notifications/sms-alerts');
@@ -4216,6 +4216,31 @@ app.listen(PORT, async () => {
     }
 
     setTimeout(() => autoRestartCryptoEngines().catch(e => console.warn('Auto-restart error:', e.message)), 5000);
+
+    // ── Load Telegram credentials from DB into process.env ──
+    try {
+        if (dbPool) {
+            const firstUser = await dbPool.query('SELECT id FROM users ORDER BY id ASC LIMIT 1');
+            if (firstUser.rows.length > 0) {
+                const userId = firstUser.rows[0].id;
+                const tgCreds = await loadUserCredentials(userId, 'telegram').catch(() => ({}));
+                for (const [key, value] of Object.entries(tgCreds)) {
+                    if (!process.env[key]) process.env[key] = value;
+                }
+                if (Object.keys(tgCreds).length > 0) console.log(`🔑 Loaded telegram credentials from DB for user ${userId}`);
+                // Reinitialize Telegram after DB credentials are loaded
+                if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+                    if (!process.env.TELEGRAM_ALERTS_ENABLED) process.env.TELEGRAM_ALERTS_ENABLED = 'true';
+                    telegramAlerts = getTelegramAlertService();
+                    if (telegramAlerts.enabled) {
+                        console.log('📱 [TELEGRAM] Reinitialized with DB credentials - crypto alerts enabled');
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        console.warn('⚠️  Crypto startup Telegram credential load failed:', e.message);
+    }
 
     // Register engines for all existing users with Kraken credentials (staggered)
     setTimeout(async () => {

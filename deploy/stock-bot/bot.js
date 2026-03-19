@@ -521,7 +521,7 @@ const popularStocks = require('./services/trading/popular-stocks-list');
 
 // Initialize Alert Services
 const smsAlerts = getSMSAlertService();
-const telegramAlerts = getTelegramAlertService();
+let telegramAlerts = getTelegramAlertService();
 
 const positions = new Map();
 let scanCount = 0;
@@ -6415,6 +6415,14 @@ app.listen(PORT, async () => {
                 if (process.env.ALPACA_API_KEY)    alpacaConfig.apiKey    = process.env.ALPACA_API_KEY;
                 if (process.env.ALPACA_SECRET_KEY) alpacaConfig.secretKey = process.env.ALPACA_SECRET_KEY;
                 if (process.env.ALPACA_BASE_URL)   alpacaConfig.baseURL   = process.env.ALPACA_BASE_URL;
+                // Reinitialize Telegram after DB credentials are loaded
+                if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+                    if (!process.env.TELEGRAM_ALERTS_ENABLED) process.env.TELEGRAM_ALERTS_ENABLED = 'true';
+                    telegramAlerts = getTelegramAlertService();
+                    if (telegramAlerts.enabled) {
+                        console.log('📱 [TELEGRAM] Reinitialized with DB credentials - stock alerts enabled');
+                    }
+                }
             }
         }
     } catch (e) {

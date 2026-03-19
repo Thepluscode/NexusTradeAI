@@ -550,7 +550,7 @@ app.get('/api/auth/me', requireJwt, async (req, res) => {
 
 // Initialize Alert Services
 const smsAlerts = getSMSAlertService();
-const telegramAlerts = getTelegramAlertService();
+let telegramAlerts = getTelegramAlertService();
 
 // OANDA Configuration
 // UK/Europe accounts (101-004-xxx) use different endpoints than US accounts
@@ -4495,6 +4495,14 @@ app.listen(PORT, async () => {
                 // Refresh in-memory OANDA config
                 if (process.env.OANDA_ACCOUNT_ID)   oandaConfig.accountId   = process.env.OANDA_ACCOUNT_ID;
                 if (process.env.OANDA_ACCESS_TOKEN) oandaConfig.accessToken = process.env.OANDA_ACCESS_TOKEN;
+                // Reinitialize Telegram after DB credentials are loaded
+                if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+                    if (!process.env.TELEGRAM_ALERTS_ENABLED) process.env.TELEGRAM_ALERTS_ENABLED = 'true';
+                    telegramAlerts = getTelegramAlertService();
+                    if (telegramAlerts.enabled) {
+                        console.log('📱 [TELEGRAM] Reinitialized with DB credentials - forex alerts enabled');
+                    }
+                }
             }
         }
     } catch (e) {
