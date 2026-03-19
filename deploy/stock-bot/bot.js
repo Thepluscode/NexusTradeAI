@@ -4861,6 +4861,7 @@ class UserTradingEngine {
         this.tradesPerSymbol = new Map();
         this.profitProtectReentrySymbols = new Map();
         this.totalTradesToday = 0;
+        this.orbTradesToday = 0;
         this.cachedDailyPnL = 0;
         this.scanCount = 0;
         this.lastScanTime = null;
@@ -5087,6 +5088,7 @@ class UserTradingEngine {
         if (today !== this.lastResetDate) {
             console.log(`\n📅 [Engine ${this.userId}] New trading day — resetting counters`);
             this.totalTradesToday = 0;
+            this.orbTradesToday = 0;
             this.tradesPerSymbol.clear();
             this.stoppedOutSymbols.clear();
             this.profitProtectReentrySymbols.clear();
@@ -5298,6 +5300,7 @@ class UserTradingEngine {
             this.recentTrades.set(signal.symbol, recent);
             this.tradesPerSymbol.set(signal.symbol, (this.tradesPerSymbol.get(signal.symbol) || 0) + 1);
             this.totalTradesToday++;
+            if (tier === 'orb' || strategy === 'openingRangeBreakout') this.orbTradesToday++;
             (this._telegram || telegramAlerts).sendStockEntry(signal.symbol, signal.price, parseFloat(stopPrice), parseFloat(targetPrice), shares, tier).catch(() => {});
             console.log(`✅ [Engine ${this.userId}] TRADE: ${signal.symbol} [${tier}] x${shares} @ $${signal.price}`);
             return orderResponse.data;
@@ -5324,7 +5327,8 @@ class UserTradingEngine {
             await new Promise(resolve => setTimeout(resolve, 500));
         }
         movers.sort((a, b) => (b.score || 0) - (a.score || 0));
-        const maxPositions = 8;
+        const regime = globalThis._marketRegime || { adjustments: { maxPositions: 6 } };
+        const maxPositions = regime.adjustments.maxPositions || 6;
         if (this.positions.size < maxPositions) {
             const available = maxPositions - this.positions.size;
             const ranked = movers.filter(m => !this.positions.has(m.symbol) && this.canTrade(m.symbol, 'buy'))
@@ -5337,10 +5341,33 @@ class UserTradingEngine {
                     continue;
                 }
                 // [v11.0] ORB daily limit — max 2 ORB trades per day
-                if ((mover.tier === 'orb' || mover.strategy === 'openingRangeBreakout') && orbTradesToday >= 2) {
-                    console.log(`[Engine ${this.userId}][ORB LIMIT] ${mover.symbol}: Already ${orbTradesToday} ORB trades today (max 2) — skipping`);
+                if ((mover.tier === 'orb' || mover.strategy === 'openingRangeBreakout') && this.orbTradesToday >= 2) {
+                    console.log(`[Engine ${this.userId}][ORB LIMIT] ${mover.symbol}: Already ${this.orbTradesToday} ORB trades today (max 2) — skipping`);
                     continue;
                 }
+                // [Phase 1] Order flow confirmation
+                if (mover.orderFlowImbalance !== undefined && mover.orderFlowImbalance < 0.1) {
+                    console.log(`[Engine ${this.userId}][FILTER] ${mover.symbol}: Order flow imbalance too weak (${mover.orderFlowImbalance.toFixed(2)}), skipping`);
+                    continue;
+                }
+                // [Phase 3] Committee aggregator — unified confidence from all signal sources
+                const committee = computeCommitteeScore(mover);
+                if (committee.confidence < 0.50) {
+                    console.log(`[Engine ${this.userId}][Committee] ${mover.symbol}: Confidence ${committee.confidence} < 0.50 — skipping`);
+                    continue;
+                }
+                const positiveComponents = Object.values(committee.components).filter(v => v > 0).length;
+                if (positiveComponents < 2) {
+                    console.log(`[Engine ${this.userId}][Committee] ${mover.symbol}: Only ${positiveComponents} positive component(s) (need 2+) — skipping`);
+                    continue;
+                }
+                // [Improvement 3] Transaction cost filter — reject negative EV trades
+                if (!isPositiveEV(committee.confidence)) {
+                    console.log(`[Engine ${this.userId}][EV] ${mover.symbol}: Negative EV after costs — skipping`);
+                    continue;
+                }
+                mover.committeeConfidence = committee.confidence;
+                mover.committeeComponents = committee.components;
                 // [Guardrail] Apply loss-adjusted position sizing
                 if (guardrails.lossSizeMultiplier < 1.0) {
                     mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * guardrails.lossSizeMultiplier;
