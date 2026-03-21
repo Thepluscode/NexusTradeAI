@@ -1696,8 +1696,10 @@ class CryptoTradingEngine {
                 let stopPct = fallbackStopPct;
                 let targetPct = fallbackTargetPct;
                 if (atrPct && atrPct > 0) {
-                    stopPct = Math.min(Math.max(atrPct * 2.5, fallbackStopPct * 0.85), fallbackStopPct * 1.6);
-                    targetPct = Math.max(stopPct * rewardMultiple, fallbackTargetPct * 0.9);
+                    // [v12.0] Research: stop must be >= 1.5x ATR to avoid noise shakeouts
+                    // Floor: max(1.5x ATR, config stop), Cap: 8% to prevent extreme stops
+                    stopPct = Math.min(Math.max(atrPct * 1.5, fallbackStopPct), 0.08);
+                    targetPct = Math.min(Math.max(stopPct * rewardMultiple, fallbackTargetPct), 0.20);
                 }
                 return { stopPct, targetPct };
             };

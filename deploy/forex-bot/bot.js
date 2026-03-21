@@ -2326,11 +2326,13 @@ async function scanForSignals(heldPositions = positions) {
         // [v6.1] ATR-based stops/targets — adapts to each pair's volatility
         // v3.2 had 2.0x ATR for BOTH stop and target (1:1 R:R) → 0% win rate.
         // Fix: 2.5x ATR stop (wider to avoid noise sweep) + 5.0x ATR target (2:1 R:R minimum)
-        // [v9.0] ATR-based stops/targets capped to config limits
-        // With ATR% ~0.07%, 4x=0.28% stop, 8x=0.56% target — reasonable for forex
-        // Cap ensures we never exceed tier config (e.g., 0.8% stop, 1.2% target)
-        const atrStop   = atrPct > 0 ? Math.min(atrPct * 4.0, config.stopLoss) : config.stopLoss;
-        const atrTarget = atrPct > 0 ? Math.min(atrPct * 8.0, config.profitTarget) : config.profitTarget;
+        // [v12.0] ATR-based stops: FLOOR at 1.5x ATR, never tighter than volatility demands
+        // Old logic used Math.min which CAPPED stops — made them tighter than ATR, causing premature stop-outs
+        // New: stop = max(config, 1.5x ATR), target = max(config, 3x ATR) for 2:1 R:R minimum
+        // Cap at 3% stop / 5% target to prevent absurd stops on extreme volatility
+        const atrStop   = atrPct > 0 ? Math.min(Math.max(atrPct * 1.5, config.stopLoss), 0.03) : config.stopLoss;
+        const atrTarget = atrPct > 0 ? Math.min(Math.max(atrPct * 3.0, config.profitTarget), 0.05) : config.profitTarget;
+        if (atrPct > 0) console.log(`   [ATR Stops] ${pair}: atrPct=${(atrPct*100).toFixed(3)}% | Stop: ${(atrStop*100).toFixed(3)}% | Target: ${(atrTarget*100).toFixed(3)}%`);
 
         // LONG Signal — [v7.0] Pullback-to-support entry: 4 key filters only
         // 1) H1 trend up  2) Price near SMA20  3) RSI 35-55  4) MACD histogram > 0

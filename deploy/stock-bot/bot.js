@@ -2416,10 +2416,12 @@ function isStockEntryQualified(signal, committee) {
         reasons.push(`score=${score.toFixed(2)} <= 0`);
     }
 
-    // 2. Volume must confirm (volume ratio > 1.0 or volume above average)
+    // 2. Volume must confirm breakout (research: volume > 20-period SMA confirms real momentum)
     const volRatio = parseFloat(signal.volumeRatio || 0);
-    if (volRatio < 1.0) {
-        reasons.push(`volumeRatio=${volRatio.toFixed(2)} < 1.0`);
+    const isORB = signal.tier === 'orb' || signal.strategy === 'openingRangeBreakout';
+    const minVolRatio = isORB ? 1.5 : 1.0; // ORB needs stronger volume confirmation
+    if (volRatio < minVolRatio) {
+        reasons.push(`volumeRatio=${volRatio.toFixed(2)} < ${minVolRatio} (${isORB ? 'ORB needs 1.5x' : 'min 1.0x'})`);
     }
 
     // 3. Trend must align with direction (percentChange must be positive for longs)
@@ -2428,10 +2430,10 @@ function isStockEntryQualified(signal, committee) {
         reasons.push(`percentChange=${percentChange.toFixed(2)}% not positive`);
     }
 
-    // 4. RSI must be between 30-70
+    // 4. RSI must be between 30-65 (research: reject overbought entries > 65 to avoid buying peaks)
     const rsi = parseFloat(signal.rsi || 50);
-    if (rsi < 30 || rsi > 70) {
-        reasons.push(`rsi=${rsi.toFixed(1)} outside 30-70`);
+    if (rsi < 30 || rsi > 65) {
+        reasons.push(`rsi=${rsi.toFixed(1)} outside 30-65`);
     }
 
     // 5. Not entering against a strong move (don't buy after a -3% day)
@@ -3475,11 +3477,12 @@ async function executeTrade(signal, strategy) {
             return null;
         }
 
-        // [v3.2] Prefer ATR-based stops when they provide >= 1.8:1 R:R, else use config defaults
-        // [v3.5] Stops/targets computed from effectiveEntry (includes slippage) for realistic R:R
-        const stopPrice = (signal.atrStop || effectiveEntry * (1 - config.stopLoss)).toFixed(2);
-        const targetPrice = (signal.atrTarget || effectiveEntry * (1 + config.profitTarget)).toFixed(2);
-        if (signal.atrStop) console.log(`   [ATR Stops] Using volatility-adapted: Stop $${stopPrice}, Target $${targetPrice}`);
+        // [v12.0] ATR-based stops: 1.5x ATR minimum distance, 3x ATR target for 2:1 R:R
+        const atrStopPct = signal.atrPct ? Math.max(config.stopLoss, signal.atrPct * 1.5) : config.stopLoss;
+        const atrTargetPct = signal.atrPct ? Math.max(config.profitTarget, signal.atrPct * 3.0) : config.profitTarget;
+        const stopPrice = (signal.atrStop || effectiveEntry * (1 - atrStopPct)).toFixed(2);
+        const targetPrice = (signal.atrTarget || effectiveEntry * (1 + atrTargetPct)).toFixed(2);
+        if (signal.atrPct) console.log(`   [ATR Stops] atrPct=${(signal.atrPct*100).toFixed(2)}% | Stop: ${(atrStopPct*100).toFixed(2)}% ($${stopPrice}) | Target: ${(atrTargetPct*100).toFixed(2)}% ($${targetPrice})`);
         if (kellyMultiplier !== 1.0) console.log(`   [Kelly] Size multiplier: ${kellyMultiplier.toFixed(2)}x (winRate:${perfData.winRate.toFixed(1)}% pf:${perfData.profitFactor.toFixed(2)})`);
 
         // [v7.0] Update anti-churning state BEFORE API call to prevent race-condition duplicates.
@@ -5269,8 +5272,12 @@ class UserTradingEngine {
             const maxRiskShares = Math.floor((equity * RISK_PER_TRADE) / (effectiveEntry * stopLossPct));
             if (maxRiskShares > 0 && shares > maxRiskShares) shares = maxRiskShares;
             if (shares < 1) return null;
-            const stopPrice  = (signal.atrStop  || effectiveEntry * (1 - config.stopLoss)).toFixed(2);
-            const targetPrice = (signal.atrTarget || effectiveEntry * (1 + config.profitTarget)).toFixed(2);
+            // [v12.0] ATR-based stops: 1.5x ATR min distance, 3x ATR target for 2:1 R:R
+            const eAtrStopPct = signal.atrPct ? Math.max(config.stopLoss, signal.atrPct * 1.5) : config.stopLoss;
+            const eAtrTargetPct = signal.atrPct ? Math.max(config.profitTarget, signal.atrPct * 3.0) : config.profitTarget;
+            const stopPrice  = (signal.atrStop  || effectiveEntry * (1 - eAtrStopPct)).toFixed(2);
+            const targetPrice = (signal.atrTarget || effectiveEntry * (1 + eAtrTargetPct)).toFixed(2);
+            if (signal.atrPct) console.log(`   [ATR Stops] [Engine ${this.userId}] atrPct=${(signal.atrPct*100).toFixed(2)}% | Stop: ${(eAtrStopPct*100).toFixed(2)}% ($${stopPrice}) | Target: ${(eAtrTargetPct*100).toFixed(2)}% ($${targetPrice})`);
             const orderResponse = await axios.post(`${this.alpacaConfig.baseURL}/v2/orders`, {
                 symbol: signal.symbol, qty: shares, side: 'buy', type: 'market', time_in_force: 'day'
             }, {
