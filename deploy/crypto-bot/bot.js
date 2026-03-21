@@ -2315,14 +2315,16 @@ class CryptoTradingEngine {
                 position.peakUnrealizedPL = pnlUSD;
             }
 
-            // Mark as "was in profit" once we exceed $2 (covers spread)
-            if (pnlUSD > 2 && !position.wasInProfit) {
+            // Mark as "was in profit" once we exceed meaningful threshold (0.5% of position or $8 min)
+            const posValue = (position.quantity || 0) * currentPrice;
+            const profitThreshold = Math.max(8, posValue * 0.005); // 0.5% of position or $8
+            if (pnlUSD > profitThreshold && !position.wasInProfit) {
                 position.wasInProfit = true;
-                console.log(`[PROFIT-PROTECT] ${symbol}: entered profit zone (+$${pnlUSD.toFixed(2)}) — breakeven lock ACTIVE`);
+                console.log(`[PROFIT-PROTECT] ${symbol}: entered profit zone (+$${pnlUSD.toFixed(2)}, threshold $${profitThreshold.toFixed(2)}) — breakeven lock ACTIVE`);
             }
 
-            // Breakeven lock: if was in profit and now dropped below -$1, close immediately
-            if (position.wasInProfit && pnlUSD < -1) {
+            // Breakeven lock: if was in profit and now dropped below -$2, close immediately
+            if (position.wasInProfit && pnlUSD < -2) {
                 console.log(`[PROFIT-PROTECT] ${symbol}: was +$${position.peakUnrealizedPL.toFixed(2)}, now $${pnlUSD.toFixed(2)} — closing to protect capital`);
                 // Set re-entry flag before closing (crypto bot is long-only)
                 this.profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: position.direction || 'long', entry: position.entry || currentPrice });

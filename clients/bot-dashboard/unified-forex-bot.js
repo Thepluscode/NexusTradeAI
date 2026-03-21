@@ -2925,11 +2925,14 @@ async function managePositions() {
             localPos.peakUnrealizedPL = unrealizedPL;
         }
 
-        // 2. Breakeven lock: once trade was positive (> $2), never let it go negative
-        if (unrealizedPL > 2) {
+        // 2. Breakeven lock: once trade was meaningfully positive (0.3% of position or $6 min), never let it go negative
+        const forexPosValue = Math.abs(localPos.units || 0) * currentPrice;
+        const forexProfitThreshold = Math.max(6, forexPosValue * 0.003); // 0.3% of position or $6
+        if (unrealizedPL > forexProfitThreshold) {
+            if (!localPos.wasPositive) console.log(`[PROFIT-PROTECT] ${pair}: entered profit zone (+$${unrealizedPL.toFixed(2)}, threshold $${forexProfitThreshold.toFixed(2)}) — breakeven lock ACTIVE`);
             localPos.wasPositive = true;
         }
-        if (localPos.wasPositive && unrealizedPL < -1) {
+        if (localPos.wasPositive && unrealizedPL < -2) {
             console.log(`[PROFIT-PROTECT] ${pair}: was +$${localPos.peakUnrealizedPL.toFixed(2)}, now $${unrealizedPL.toFixed(2)} — closing to protect capital`);
             profitProtectReentryPairs.set(pair, { timestamp: Date.now(), direction: localPos.direction || (isLong ? 'long' : 'short'), entry: entryPrice });
             console.log(`[RE-ENTRY] ${pair} eligible for re-entry (direction: ${localPos.direction || (isLong ? 'long' : 'short')}) after profit-protect close`);

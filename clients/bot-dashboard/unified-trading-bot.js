@@ -2652,14 +2652,16 @@ async function managePositions() {
                 position.peakUnrealizedPL = unrealizedPLDollar;
             }
 
-            // Mark position as "was positive" once it exceeds $3 (accounts for spread/slippage)
-            if (unrealizedPLDollar > 3 && !position.wasPositive) {
+            // Mark position as "was positive" once it exceeds meaningful threshold (0.5% of position or $8 min)
+            const stockPosValue = (position.shares || 1) * currentPrice;
+            const stockProfitThreshold = Math.max(8, stockPosValue * 0.005);
+            if (unrealizedPLDollar > stockProfitThreshold && !position.wasPositive) {
                 position.wasPositive = true;
-                console.log(`[PROFIT-PROTECT] ${symbol}: position now profitable (+$${unrealizedPLDollar.toFixed(2)}) — breakeven lock ARMED`);
+                console.log(`[PROFIT-PROTECT] ${symbol}: position now profitable (+$${unrealizedPLDollar.toFixed(2)}, threshold $${stockProfitThreshold.toFixed(2)}) — breakeven lock ARMED`);
             }
 
             // Breakeven lock: if was profitable but now losing, close immediately
-            if (position.wasPositive && unrealizedPLDollar < -2) {
+            if (position.wasPositive && unrealizedPLDollar < -3) {
                 console.log(`[PROFIT-PROTECT] ${symbol}: was +$${position.peakUnrealizedPL.toFixed(2)}, now $${unrealizedPLDollar.toFixed(2)} — closing to protect capital`);
                 // Set re-entry flag before closing (stock bot is long-only)
                 profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: 'long', entry: position.entryPrice || currentPrice });
@@ -5189,11 +5191,13 @@ class UserTradingEngine {
                     position.wasPositive = unrealizedPLDollar > 3;
                 }
                 if (unrealizedPLDollar > position.peakUnrealizedPL) position.peakUnrealizedPL = unrealizedPLDollar;
-                if (unrealizedPLDollar > 3 && !position.wasPositive) {
+                const enginePosValue = (parseInt(alpacaPos.qty) || 1) * currentPrice;
+                const engineProfitThreshold = Math.max(8, enginePosValue * 0.005);
+                if (unrealizedPLDollar > engineProfitThreshold && !position.wasPositive) {
                     position.wasPositive = true;
-                    console.log(`[PROFIT-PROTECT] [Engine ${this.userId}] ${symbol}: breakeven lock ARMED (+$${unrealizedPLDollar.toFixed(2)})`);
+                    console.log(`[PROFIT-PROTECT] [Engine ${this.userId}] ${symbol}: breakeven lock ARMED (+$${unrealizedPLDollar.toFixed(2)}, threshold $${engineProfitThreshold.toFixed(2)})`);
                 }
-                if (position.wasPositive && unrealizedPLDollar < -2) {
+                if (position.wasPositive && unrealizedPLDollar < -3) {
                     console.log(`[PROFIT-PROTECT] [Engine ${this.userId}] ${symbol}: was +$${position.peakUnrealizedPL.toFixed(2)}, now $${unrealizedPLDollar.toFixed(2)} — closing to protect capital`);
                     this.profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: 'long', entry: position.entryPrice || currentPrice });
                     console.log(`[RE-ENTRY] [Engine ${this.userId}] ${symbol} eligible for re-entry (direction: long) after profit-protect close`);
