@@ -1047,17 +1047,16 @@ const EXIT_CONFIG = {
         5: 0.002   // Day 5+: 0.2% (any profit is a win)
     },
 
-    // [v9.0] Tight trailing stops for forex — protect small gains
-    // Forex P&L swings fast: $600 can become -$200 in hours
-    // Must lock gains starting at +0.2% (20 pips on EUR/USD)
+    // [v13.0] Trailing stops — MUST give trades room to breathe
+    // Previous 0.2% start caused noise-triggered stops converting winners into -0.06% to -0.1% losers
+    // Research: trailing should start only after 1x risk (0.8% stop → trail from 0.8% gain)
+    // This ensures 1:1 R:R minimum before any trailing tightens the stop
     trailingStopLevels: [
-        { gainThreshold: 0.002, lockPercent: 0.15 },  // +0.2%: lock 15% (breakeven protection)
-        { gainThreshold: 0.003, lockPercent: 0.25 },  // +0.3%: lock 25%
-        { gainThreshold: 0.005, lockPercent: 0.40 },  // +0.5%: lock 40% ($570 → at least $228 locked)
-        { gainThreshold: 0.008, lockPercent: 0.55 },  // +0.8%: lock 55%
-        { gainThreshold: 0.012, lockPercent: 0.70 },  // +1.2%: lock 70%
-        { gainThreshold: 0.020, lockPercent: 0.85 },  // +2.0%: lock 85%
-        { gainThreshold: 0.030, lockPercent: 0.92 },  // +3.0%: lock 92%
+        { gainThreshold: 0.008, lockPercent: 0.30 },  // +0.8% (1x risk): lock 30% → stop at +0.24%
+        { gainThreshold: 0.012, lockPercent: 0.45 },  // +1.2% (1.5x risk): lock 45% → stop at +0.54%
+        { gainThreshold: 0.020, lockPercent: 0.60 },  // +2.0%: lock 60%
+        { gainThreshold: 0.030, lockPercent: 0.75 },  // +3.0%: lock 75%
+        { gainThreshold: 0.040, lockPercent: 0.85 },  // +4.0%: lock 85%
     ],
 
     // Momentum reversal
@@ -2761,8 +2760,9 @@ async function closePositionWithReason(pair, reason) {
 
     } else {
         // TIME-BASED / OTHER EXITS — log and send alert
-        const pnlPct = posCopy?.unrealizedPL && posCopy?.entry && posCopy?.units
-            ? ((posCopy.unrealizedPL / (posCopy.entry * Math.abs(posCopy.units))) * 100).toFixed(2)
+        // [v13.0] FIX: price movement % instead of PnL/notional
+        const pnlPct = posCopy?.currentPrice && posCopy?.entry
+            ? (((posCopy.currentPrice - posCopy.entry) / posCopy.entry) * (posCopy.direction === 'short' ? -100 : 100)).toFixed(2)
             : '?';
         console.log(`\n⏰ CLOSING ${pair}: ${reason} (P&L: ${pnlPct}%)`);
 
@@ -2823,8 +2823,11 @@ async function closePositionWithReason(pair, reason) {
             if (posCopy) {
                 const exitPnl = posCopy.unrealizedPL ?? 0;
                 const exitEntry = posCopy.entry ?? 0;
-                const exitPct = exitEntry > 0 ? (exitPnl / (exitEntry * Math.abs(posCopy.units ?? 1))) * 100 : 0;
                 const exitPrice = posCopy.currentPrice ?? exitEntry;
+                // [v13.0] FIX: use price movement % instead of PnL/notional (broken for JPY pairs)
+                const exitPct = exitEntry > 0
+                    ? ((exitPrice - exitEntry) / exitEntry) * (posCopy.direction === 'short' ? -100 : 100)
+                    : 0;
                 dbForexClose(posCopy.dbTradeId, exitPrice, exitPnl, exitPct, reason).catch(() => {});
                 // [v4.1] Report to Agentic AI learning loop — Scan AI pattern tracking
                 reportForexTradeOutcome(posCopy, exitPrice, exitPnl, exitPct / 100, reason).catch(() => {});
@@ -2840,7 +2843,10 @@ async function closePositionWithReason(pair, reason) {
                 const evalExitPrice = posCopy?.currentPrice || posCopy?.entry || 0;
                 const evalPnl = posCopy?.unrealizedPL ?? 0;
                 const evalEntry = posCopy?.entry ?? 0;
-                const evalPnlPct = evalEntry > 0 ? evalPnl / (evalEntry * Math.abs(posCopy?.units ?? 1)) : 0;
+                // [v13.0] FIX: price movement % instead of PnL/notional (broken for JPY)
+                const evalPnlPct = evalEntry > 0
+                    ? ((evalExitPrice - evalEntry) / evalEntry) * (posCopy?.direction === 'short' ? -1 : 1)
+                    : 0;
                 const outcome = {
                     symbol: posCopy?.instrument || pair,
                     direction: posCopy?.direction || 'long',
@@ -2928,7 +2934,10 @@ async function managePositions() {
         }
 
         // 2. Breakeven lock: once trade was meaningfully positive (0.3% of position or $6 min), never let it go negative
-        const forexPosValue = Math.abs(localPos.units || 0) * currentPrice;
+        // [v13.0] FIX: For JPY pairs, units*price gives JPY notional (e.g. 7000*150=1M JPY) not USD
+        // For USD-base pairs (USD_JPY), units ARE the USD value. For crosses, divide by JPY rate.
+        const rawPosValue = Math.abs(localPos.units || 0) * currentPrice;
+        const forexPosValue = pair.includes('JPY') ? rawPosValue / currentPrice : rawPosValue;
         const forexProfitThreshold = Math.max(6, forexPosValue * 0.003); // 0.3% of position or $6
         if (unrealizedPL > forexProfitThreshold) {
             if (!localPos.wasPositive) console.log(`[PROFIT-PROTECT] ${pair}: entered profit zone (+$${unrealizedPL.toFixed(2)}, threshold $${forexProfitThreshold.toFixed(2)}) — breakeven lock ACTIVE`);
@@ -2986,8 +2995,13 @@ async function managePositions() {
         // Check profit target by day
         const dayIndex = Math.min(Math.floor(holdDays), 5);
         const targetPct = EXIT_CONFIG.profitTargetByDay[dayIndex];
-        // plPct = P/L as fraction of position notional value (entryPrice × units)
-        const plPct = (entryPrice > 0 && units > 0) ? unrealizedPL / (entryPrice * units) : 0;
+        // [v13.0] FIX: plPct must be price movement %, NOT unrealizedPL/(entry*units)
+        // Old formula gave 0.00005% for JPY pairs (wrong by 10,000x) → profit targets never fired
+        const plPct = entryPrice > 0
+            ? (localPos.direction === 'long'
+                ? (currentPrice - entryPrice) / entryPrice
+                : (entryPrice - currentPrice) / entryPrice)
+            : 0;
 
         if (plPct >= targetPct) {
             await closePositionWithReason(pair, `Day-${dayIndex} target hit (+${(plPct * 100).toFixed(2)}%)`);
@@ -4085,14 +4099,19 @@ class UserForexEngine {
         if (pos?.dbTradeId) {
             const exitPnl = pos.unrealizedPL ?? 0;
             const exitEntry = pos.entry ?? 0;
-            const exitPct = exitEntry > 0 ? (exitPnl / (exitEntry * Math.abs(pos.units ?? 1))) * 100 : 0;
             const exitPrice = pos.currentPrice ?? exitEntry;
+            // [v13.0] FIX: price movement % instead of PnL/notional (broken for JPY)
+            const exitPct = exitEntry > 0
+                ? ((exitPrice - exitEntry) / exitEntry) * (pos.direction === 'short' ? -100 : 100)
+                : 0;
             this.dbForexClose(pos.dbTradeId, exitPrice, exitPnl, exitPct, reason).catch(() => {});
         }
         await this.closeOandaPosition(pair);
         if (reason.toLowerCase().includes('stop')) {
-            // Dynamic cooldown: small loss (<1%) → 30 min; medium (1-2%) → 60 min; large (>2%) → 2h
-            const lossPct = pos ? Math.abs(pos.unrealizedPL ?? 0) / (parseFloat(pos.entry ?? 1) * Math.abs(pos.units ?? 1)) * 100 : 1;
+            // Dynamic cooldown based on price movement
+            const lossPct = pos && pos.entry > 0 && pos.currentPrice > 0
+                ? Math.abs((pos.currentPrice - pos.entry) / pos.entry) * 100
+                : 1;
             const cooldownMs = lossPct >= 2 ? MIN_TIME_AFTER_STOP
                 : lossPct >= 1 ? 60 * 60 * 1000
                 : 30 * 60 * 1000;
@@ -4117,7 +4136,10 @@ class UserForexEngine {
                         const exitPrice = parseFloat(trade.closePrice ?? trade.averageClosePrice ?? localPos.entry ?? 0);
                         const realPnl   = parseFloat(trade.realizedPL ?? 0);
                         const exitEntry = localPos.entry ?? 0;
-                        const exitPct   = exitEntry > 0 ? (realPnl / (exitEntry * Math.abs(localPos.units ?? 1))) * 100 : 0;
+                        // [v13.0] FIX: price movement % instead of PnL/notional (broken for JPY)
+                        const exitPct   = exitEntry > 0
+                            ? ((exitPrice - exitEntry) / exitEntry) * (localPos.direction === 'short' ? -100 : 100)
+                            : 0;
                         const reason    = realPnl < 0 ? 'Stop Loss' : 'Take Profit';
                         this.dbForexClose(localPos.dbTradeId, exitPrice, realPnl, exitPct, reason).catch(() => {});
                         console.log(`📊 [ForexEngine ${this.userId}] Synced closed trade ${pair}: pnl=${realPnl.toFixed(2)}`);
@@ -4139,6 +4161,34 @@ class UserForexEngine {
             const currentPrice = units !== 0 ? avgPrice + (isLong ? 1 : -1) * (unrealizedPL / Math.abs(units)) : avgPrice;
             position.unrealizedPL = unrealizedPL;
             position.currentPrice = currentPrice;
+
+            // [v13.0] Profit protection (same as global managePositions)
+            if (position.peakUnrealizedPL === undefined) position.peakUnrealizedPL = 0;
+            if (unrealizedPL > position.peakUnrealizedPL) position.peakUnrealizedPL = unrealizedPL;
+
+            const rawEngPosVal = Math.abs(position.units || 0) * currentPrice;
+            const engPosValue = instrument.includes('JPY') ? rawEngPosVal / currentPrice : rawEngPosVal;
+            const engProfitThreshold = Math.max(6, engPosValue * 0.003);
+            if (unrealizedPL > engProfitThreshold) {
+                if (!position.wasPositive) console.log(`[ForexEngine ${this.userId}][PROFIT-PROTECT] ${instrument}: breakeven lock ACTIVE (+$${unrealizedPL.toFixed(2)})`);
+                position.wasPositive = true;
+            }
+            if (position.wasPositive && unrealizedPL < -2) {
+                console.log(`[ForexEngine ${this.userId}][PROFIT-PROTECT] ${instrument}: was +$${position.peakUnrealizedPL.toFixed(2)}, now $${unrealizedPL.toFixed(2)} — closing`);
+                await this.closePositionWithReason(instrument, `Profit-Protect breakeven lock`);
+                continue;
+            }
+            if (position.peakUnrealizedPL > 10 && unrealizedPL > 0) {
+                const dropPct = ((position.peakUnrealizedPL - unrealizedPL) / position.peakUnrealizedPL) * 100;
+                if (dropPct > 40) {
+                    await this.closePositionWithReason(instrument, `Profit-Protect drawback (${dropPct.toFixed(1)}% drop from peak)`);
+                    continue;
+                }
+            }
+
+            // [v13.0] Trailing stops (uses module-level updateTrailingStop)
+            updateTrailingStop(position, currentPrice);
+
             const atrExitReason = getForexAtrExitReason(position, currentPrice);
             if (atrExitReason) { await this.closePositionWithReason(instrument, atrExitReason); continue; }
             // Time-based exit: max 5 days
@@ -4326,9 +4376,15 @@ async function runForexScanQueue() {
     if (forexScanQueueRunning) return;
     forexScanQueueRunning = true;
     try {
-        for (const engine of forexEngineRegistry.values()) {
+        const engines = Array.from(forexEngineRegistry.values());
+        for (const engine of engines) {
             try { await engine.tradingLoop(); }
             catch (e) { console.error(`❌ [ForexQueue] Engine ${engine.userId} crashed:`, e.message); }
+        }
+        // [v13.0] Keep global scan counters in sync so status endpoint shows activity
+        if (engines.length > 0) {
+            scanCount++;
+            lastScanTime = new Date();
         }
     } finally { forexScanQueueRunning = false; }
 }
