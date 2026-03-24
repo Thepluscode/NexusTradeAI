@@ -6594,9 +6594,11 @@ app.listen(PORT, async () => {
         try {
             // Run ScanQueue for all registered user engines
             await runScanQueue();
-            // Also run the default module-level loop (for env-var / admin mode backward compat)
-            // Skip it if there are registered user engines already trading
-            if (engineRegistry.size === 0) {
+            // [v13.0] Fall back to global loop if NO engines are actively running
+            // Bug: pre-registration creates engines with botRunning=false, blocking global loop
+            // while per-user engines silently skip scans.
+            const anyEngineRunning = Array.from(engineRegistry.values()).some(e => e.botRunning);
+            if (engineRegistry.size === 0 || !anyEngineRunning) {
                 await tradingLoop();
             }
         } catch (e) { console.error('❌ Stock loop crashed:', e); }

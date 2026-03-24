@@ -4755,7 +4755,11 @@ app.listen(PORT, async () => {
     setInterval(() => {
         resetDailyCounters();
         runForexScanQueue().catch(e => console.error('❌ Forex ScanQueue crashed:', e));
-        if (forexEngineRegistry.size === 0) {
+        // [v13.0] Fall back to global loop if NO engines are actively running
+        // Bug: pre-registration creates engines with botRunning=false, which blocks the global loop
+        // while per-user engines silently skip scans. Now checks if any engine is actually running.
+        const anyEngineRunning = Array.from(forexEngineRegistry.values()).some(e => e.botRunning);
+        if (forexEngineRegistry.size === 0 || !anyEngineRunning) {
             tradingLoop().catch(e => console.error('❌ Forex loop crashed:', e));
         }
     }, 5 * 60 * 1000);
