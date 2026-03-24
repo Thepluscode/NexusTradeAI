@@ -2008,7 +2008,8 @@ function detectFairValueGaps(bars, lookback = 20) {
 
 // [Phase 3] Committee Aggregator — combines multiple signal confirmations into unified confidence
 // Each signal source contributes independently; more confirmations = higher confidence
-// Minimum threshold: 0.50 confidence required to trade (prevents marginal entries)
+// [v13.1] Threshold lowered from 0.50 to 0.45 — binary components (displacement, FVG) rarely fire,
+// making 0.50 nearly unreachable. Neutral defaults (0.3) + 0.45 threshold still filters weak signals.
 function computeCommitteeScore(signal) {
     let confirmations = 0;
     let totalWeight = 0;
@@ -2026,7 +2027,8 @@ function computeCommitteeScore(signal) {
     totalWeight += committeeWeights.orderFlow;
 
     // 3. Displacement candle (weight: dynamic via committeeWeights)
-    const displacementScore = signal.hasDisplacement ? 1.0 : 0.0;
+    // [v13.1] Neutral default 0.3 when absent — binary 0 was killing scores since displacement is rare
+    const displacementScore = signal.hasDisplacement ? 1.0 : 0.3;
     confirmations += displacementScore * committeeWeights.displacement;
     totalWeight += committeeWeights.displacement;
 
@@ -2046,7 +2048,8 @@ function computeCommitteeScore(signal) {
     totalWeight += committeeWeights.volumeProfile;
 
     // 5. FVG confirmation (weight: dynamic via committeeWeights)
-    const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0.0;
+    // [v13.1] Neutral default 0.3 when absent — binary 0 was killing scores since FVG is rare
+    const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0.3;
     confirmations += fvgScore * committeeWeights.fvg;
     totalWeight += committeeWeights.fvg;
 
@@ -2965,8 +2968,8 @@ async function scanMomentumBreakouts() {
                     }
                     // [Phase 3] Committee aggregator — unified confidence from all signal sources
                     const committee = computeCommitteeScore(mover);
-                    if (committee.confidence < 0.50) {
-                        console.log(`[Committee] ${mover.symbol}: Confidence ${committee.confidence} < 0.50 threshold — ${JSON.stringify(committee.components)}`);
+                    if (committee.confidence < 0.45) {
+                        console.log(`[Committee] ${mover.symbol}: Confidence ${committee.confidence} < 0.45 threshold — ${JSON.stringify(committee.components)}`);
                         continue;
                     }
                     // [v11.0] Require 2+ positive components — prevents marginal single-signal entries
@@ -5363,8 +5366,8 @@ class UserTradingEngine {
                 }
                 // [Phase 3] Committee aggregator — unified confidence from all signal sources
                 const committee = computeCommitteeScore(mover);
-                if (committee.confidence < 0.50) {
-                    console.log(`[Engine ${this.userId}][Committee] ${mover.symbol}: Confidence ${committee.confidence} < 0.50 — skipping`);
+                if (committee.confidence < 0.45) {
+                    console.log(`[Engine ${this.userId}][Committee] ${mover.symbol}: Confidence ${committee.confidence} < 0.45 — skipping`);
                     continue;
                 }
                 const positiveComponents = Object.values(committee.components).filter(v => v > 0).length;

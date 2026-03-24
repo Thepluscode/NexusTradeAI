@@ -2347,6 +2347,17 @@ async function scanForSignals(heldPositions = positions) {
             console.log(`[D1 FILTER] ${pair} short: D1 trend=${d1Trend} — REJECTED (counter-trend)`);
         }
 
+        // [v13.1] Diagnostic: log why longs fail on D1-allowed pairs
+        if (d1LongOk && h1Trend !== 'up') {
+            console.log(`[LONG DIAG] ${pair}: d1Long=OK but h1Trend=${h1Trend} (need up) — skipped`);
+        } else if (d1LongOk && h1Trend === 'up') {
+            const longFails = [];
+            if (pullbackToMA > 0.005) longFails.push(`pullback=${(pullbackToMA*100).toFixed(3)}%>0.5%`);
+            if (rsi < 35 || rsi > 55) longFails.push(`rsi=${rsi.toFixed(1)} outside 35-55`);
+            if (!macd) longFails.push('macd=null');
+            else if (macd.histogram <= 0) longFails.push(`macdHist=${macd.histogram.toFixed(5)}<=0`);
+            if (longFails.length > 0) console.log(`[LONG DIAG] ${pair}: h1=up d1=OK but ${longFails.join(', ')}`);
+        }
         if (d1LongOk && h1Trend === 'up' && pullbackToMA <= 0.005 && rsi >= 35 && rsi <= 55 && macd !== null && macd.histogram > 0) {
             // [v3.3] Strategy Bridge advisory — only block if bridge explicitly signals SHORT with high confidence
             const bridgeLong = await queryStrategyBridge(pair, 'long');
@@ -2433,6 +2444,17 @@ async function scanForSignals(heldPositions = positions) {
 
         // SHORT Signal — [v7.0] Pullback-to-resistance entry: 4 key filters only
         // 1) H1 trend down  2) Price near SMA20  3) RSI 45-65  4) MACD histogram < 0
+        // [v13.1] Diagnostic: log why shorts fail so we can tune filters
+        if (d1ShortOk && h1Trend !== 'down') {
+            console.log(`[SHORT DIAG] ${pair}: d1Short=OK but h1Trend=${h1Trend} (need down) — skipped`);
+        } else if (d1ShortOk && h1Trend === 'down') {
+            const shortFails = [];
+            if (pullbackToMA > 0.005) shortFails.push(`pullback=${(pullbackToMA*100).toFixed(3)}%>0.5%`);
+            if (rsi < 45 || rsi > 65) shortFails.push(`rsi=${rsi.toFixed(1)} outside 45-65`);
+            if (!macd) shortFails.push('macd=null');
+            else if (macd.histogram >= 0) shortFails.push(`macdHist=${macd.histogram.toFixed(5)}>=0`);
+            if (shortFails.length > 0) console.log(`[SHORT DIAG] ${pair}: h1=down d1=OK but ${shortFails.join(', ')}`);
+        }
         if (d1ShortOk && h1Trend === 'down' && pullbackToMA <= 0.005 && rsi >= 45 && rsi <= 65 && macd !== null && macd.histogram < 0) {
             // [v3.3] Strategy Bridge advisory — only block if bridge explicitly signals LONG with high confidence
             const bridgeShort = await queryStrategyBridge(pair, 'short');
