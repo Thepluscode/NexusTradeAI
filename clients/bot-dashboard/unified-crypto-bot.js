@@ -224,6 +224,140 @@ function isCryptoPositiveEV(committeeConfidence) {
 }
 
 // ============================================================================
+// [v14.1] CONFIDENCE CALIBRATION (Platt Scaling)
+// Raw committee scores ≠ actual win probability. Calibrate using outcomes.
+// ============================================================================
+
+// Platt scaling: P(win | score) = 1 / (1 + exp(A * score + B))
+// Fit A and B from evaluation data using gradient descent
+let plattParams = { A: -2.0, B: 0.5, calibrated: false, sampleSize: 0 };
+
+function fitPlattScaling() {
+    const evals = globalThis._cryptoTradeEvaluations || [];
+    if (evals.length < 20) return null; // Need minimum 20 trades
+
+    // Build (score, outcome) pairs from evaluations
+    const data = evals
+        .filter(e => e.signals && e.signals.committeeConfidence !== undefined)
+        .map(e => ({
+            score: e.signals.committeeConfidence,
+            win: e.pnl > 0 ? 1 : 0
+        }));
+
+    if (data.length < 15) return null;
+
+    // Gradient descent to fit A and B
+    let A = -2.0, B = 0.5;
+    const lr = 0.01;
+    const epochs = 200;
+
+    for (let epoch = 0; epoch < epochs; epoch++) {
+        let gradA = 0, gradB = 0;
+        for (const { score, win } of data) {
+            const z = A * score + B;
+            const p = 1 / (1 + Math.exp(-z)); // sigmoid
+            const error = p - win;
+            gradA += error * score;
+            gradB += error;
+        }
+        A -= lr * gradA / data.length;
+        B -= lr * gradB / data.length;
+    }
+
+    // Validate: calibrated probability should be between 0.1 and 0.9 for typical scores
+    const testP = 1 / (1 + Math.exp(-(A * 0.5 + B)));
+    if (testP < 0.05 || testP > 0.95) {
+        console.log(`[Calibration] Platt fit unstable (P(0.5)=${testP.toFixed(3)}) — keeping defaults`);
+        return null;
+    }
+
+    return { A, B, calibrated: true, sampleSize: data.length };
+}
+
+function calibrateConfidence(rawConfidence) {
+    if (!plattParams.calibrated) return rawConfidence;
+    const z = plattParams.A * rawConfidence + plattParams.B;
+    return 1 / (1 + Math.exp(-z));
+}
+
+// Refit calibration every 4 hours (with weight optimization)
+setInterval(() => {
+    const newParams = fitPlattScaling();
+    if (newParams) {
+        plattParams = newParams;
+        // Show calibration mapping for key scores
+        const at30 = calibrateConfidence(0.30);
+        const at45 = calibrateConfidence(0.45);
+        const at60 = calibrateConfidence(0.60);
+        console.log(`[Calibration] Platt updated (n=${newParams.sampleSize}): raw 0.30→${at30.toFixed(3)}, 0.45→${at45.toFixed(3)}, 0.60→${at60.toFixed(3)}`);
+    }
+}, 4 * 60 * 60 * 1000);
+
+// Initial fit after 20 seconds
+setTimeout(() => {
+    const newParams = fitPlattScaling();
+    if (newParams) {
+        plattParams = newParams;
+        console.log(`[Calibration] Initial Platt fit (n=${newParams.sampleSize}): A=${newParams.A.toFixed(3)}, B=${newParams.B.toFixed(3)}`);
+    }
+}, 20000);
+
+// ============================================================================
+// [v14.1] PORTFOLIO ALLOCATOR (Rule-based, upgradeable to PPO at 500+ trades)
+// Combines calibrated confidence + regime routing + portfolio state
+// ============================================================================
+
+function computeAllocation(signal, calibratedConfidence, regime, portfolioState) {
+    // Base allocation = calibrated confidence (0-1)
+    let allocation = calibratedConfidence;
+
+    // 1. Regime adjustment — scale with regime routing weights
+    const routing = regime && regime.strategyRouting
+        ? regime.strategyRouting
+        : { momentumWeight: 1.0, meanReversionWeight: 1.0, pullbackWeight: 1.0 };
+    const strategyKey = signal.strategy === 'meanReversion' ? 'meanReversionWeight'
+        : signal.strategy === 'trendPullback' ? 'pullbackWeight' : 'momentumWeight';
+    allocation *= (routing[strategyKey] || 1.0);
+
+    // 2. Portfolio state adjustment — reduce allocation when portfolio is stressed
+    const { openPositions, maxPositions, unrealizedPnL, dailyLoss, maxDailyLoss } = portfolioState;
+
+    // Concentration penalty: as we fill positions, reduce remaining allocation
+    const fillRatio = openPositions / Math.max(1, maxPositions);
+    allocation *= (1 - fillRatio * 0.3); // At 100% filled, reduce by 30%
+
+    // Drawdown penalty: reduce allocation when losing
+    if (dailyLoss > 0 && maxDailyLoss > 0) {
+        const drawdownRatio = dailyLoss / maxDailyLoss;
+        allocation *= Math.max(0.3, 1 - drawdownRatio); // Scale down with losses
+    }
+
+    // Unrealized loss penalty: underwater positions = reduce new risk
+    if (unrealizedPnL < 0) {
+        const unrealizedPainRatio = Math.abs(unrealizedPnL) / Math.max(100, maxDailyLoss * 0.5);
+        allocation *= Math.max(0.5, 1 - unrealizedPainRatio * 0.5);
+    }
+
+    // 3. Apply strategy-regime learned weights
+    const srWeight = strategyRegimeWeights[signal.strategy] || 1.0;
+    allocation *= Math.min(1.5, srWeight); // Cap at 1.5x boost
+
+    // Clamp to [0.1, 1.5] — never fully zero (exploration), never more than 1.5x
+    allocation = Math.max(0.1, Math.min(1.5, allocation));
+
+    return {
+        allocation: parseFloat(allocation.toFixed(3)),
+        factors: {
+            calibratedConfidence: parseFloat(calibratedConfidence.toFixed(3)),
+            regimeRouting: parseFloat((routing[strategyKey] || 1.0).toFixed(3)),
+            concentrationPenalty: parseFloat((1 - fillRatio * 0.3).toFixed(3)),
+            drawdownPenalty: dailyLoss > 0 ? parseFloat((Math.max(0.3, 1 - dailyLoss / maxDailyLoss)).toFixed(3)) : 1.0,
+            strategyRegimeWeight: parseFloat(srWeight.toFixed(3))
+        }
+    };
+}
+
+// ============================================================================
 // [Improvement 4] SIGNAL DECAY DETECTION
 // ============================================================================
 function detectCryptoSignalDecay() {
@@ -544,17 +678,28 @@ let strategyRegimeWeights = { momentum: 1.0, meanReversion: 1.0, trendPullback: 
 async function loadStrategyRegimeWeights() {
     if (!dbPool) return { momentum: 1.0, meanReversion: 1.0, trendPullback: 1.0 };
     try {
+        // [v14.1] Exponential decay: recent regime performance matters more than old
+        // Rows updated recently get higher weight; stale rows decay toward neutral (1.0)
         const result = await dbPool.query(`
-            SELECT strategy, win_rate, profit_factor, total_trades
+            SELECT strategy, regime, win_rate, profit_factor, total_trades, last_updated
             FROM strategy_regime_performance
-            WHERE bot = 'crypto' AND total_trades >= 10
+            WHERE bot = 'crypto' AND total_trades >= 5
         `);
+        const DECAY_HALF_LIFE_HOURS = 72; // 3 days half-life
+        const now = Date.now();
         const strategyPerf = {};
+
         for (const row of result.rows) {
+            const ageHours = (now - new Date(row.last_updated).getTime()) / (1000 * 60 * 60);
+            const decayFactor = Math.pow(0.5, ageHours / DECAY_HALF_LIFE_HOURS);
+            const effectiveTrades = row.total_trades * decayFactor;
+            const pf = parseFloat(row.profit_factor) || 1.0;
+
             if (!strategyPerf[row.strategy]) strategyPerf[row.strategy] = { totalWeight: 0, weightedPF: 0 };
-            strategyPerf[row.strategy].totalWeight += row.total_trades;
-            strategyPerf[row.strategy].weightedPF += parseFloat(row.profit_factor) * row.total_trades;
+            strategyPerf[row.strategy].totalWeight += effectiveTrades;
+            strategyPerf[row.strategy].weightedPF += pf * effectiveTrades;
         }
+
         const weights = {};
         for (const [strategy, data] of Object.entries(strategyPerf)) {
             const avgPF = data.totalWeight > 0 ? data.weightedPF / data.totalWeight : 1.0;
@@ -1040,7 +1185,8 @@ function computeCryptoCommitteeScore(signal) {
     totalWeight += cryptoCommitteeWeights.orderFlow;
 
     // 3. Displacement candle (weight: cryptoCommitteeWeights.displacement)
-    const displacementScore = signal.hasDisplacement ? 1.0 : 0.0;
+    // [v14.1] Neutral 0.3 when absent — binary 0 killed scores (same fix as stock bot)
+    const displacementScore = signal.hasDisplacement ? 1.0 : 0.3;
     confirmations += displacementScore * cryptoCommitteeWeights.displacement;
     totalWeight += cryptoCommitteeWeights.displacement;
 
@@ -1060,7 +1206,8 @@ function computeCryptoCommitteeScore(signal) {
     totalWeight += cryptoCommitteeWeights.volumeProfile;
 
     // 5. FVG confirmation (weight: cryptoCommitteeWeights.fvg)
-    const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0.0;
+    // [v14.1] Neutral 0.3 when absent — binary 0 killed scores (same fix as stock bot)
+    const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0.3;
     confirmations += fvgScore * cryptoCommitteeWeights.fvg;
     totalWeight += cryptoCommitteeWeights.fvg;
 
@@ -2767,6 +2914,8 @@ class CryptoTradingEngine {
                         vpPosition: snapshot.volumeProfile,
                         fvgCount: snapshot.fvgCount,
                         committeeConfidence: snapshot.committeeConfidence,
+                        calibratedConfidence: snapshot.calibratedConfidence,
+                        allocation: snapshot.allocation,
                         components: snapshot.committeeComponents,
                         regime: snapshot.marketRegime,
                         score: snapshot.score
@@ -2954,19 +3103,41 @@ class CryptoTradingEngine {
                             console.log(`[Committee] ${signal.symbol}: Confidence ${committee.confidence} < 0.45 threshold — ${JSON.stringify(committee.components)}`);
                             continue;
                         }
-                        console.log(`[Committee] ${signal.symbol}: APPROVED conf:${committee.confidence} — momentum:${committee.components.momentum} flow:${committee.components.orderFlow} displacement:${committee.components.displacement} VP:${committee.components.volumeProfile} FVG:${committee.components.fvg}`);
+
+                        // [v14.1] Confidence Calibration — convert raw score to actual win probability
+                        const rawConf = committee.confidence;
+                        const calibratedConf = calibrateConfidence(rawConf);
+                        const calTag = plattParams.calibrated ? ` cal:${calibratedConf.toFixed(3)}` : '';
+                        console.log(`[Committee] ${signal.symbol}: APPROVED conf:${rawConf}${calTag} — momentum:${committee.components.momentum} flow:${committee.components.orderFlow} displacement:${committee.components.displacement} VP:${committee.components.volumeProfile} FVG:${committee.components.fvg}`);
+
+                        // [v14.1] Portfolio Allocator — compute capital allocation from calibrated confidence + state
+                        const portfolioState = {
+                            openPositions: this.positions.size,
+                            maxPositions: cryptoRegime.adjustments.maxPositions,
+                            unrealizedPnL: Array.from(this.positions.values()).reduce((s, p) => s + (p.unrealizedPnL || 0), 0),
+                            dailyLoss: this.dailyLoss || 0,
+                            maxDailyLoss: Math.abs(parseFloat(process.env.MAX_DAILY_LOSS || '500'))
+                        };
+                        const alloc = computeAllocation(signal, calibratedConf, cryptoRegime, portfolioState);
+                        console.log(`[Allocator] ${signal.symbol}: allocation=${alloc.allocation} (conf:${alloc.factors.calibratedConfidence} regime:${alloc.factors.regimeRouting} conc:${alloc.factors.concentrationPenalty} dd:${alloc.factors.drawdownPenalty} sr:${alloc.factors.strategyRegimeWeight})`);
+
+                        // Use calibrated confidence for EV filter
                         // [Improvement 3] Transaction cost filter — reject if EV is negative after fees/slippage
-                        if (!isCryptoPositiveEV(committee.confidence)) {
+                        if (!isCryptoPositiveEV(calibratedConf)) {
                             continue;
                         }
-                        signal.committeeConfidence = committee.confidence;
+                        signal.committeeConfidence = rawConf;
+                        signal.calibratedConfidence = calibratedConf;
+                        signal.allocation = alloc.allocation;
+                        signal.allocationFactors = alloc.factors;
                         signal.committeeComponents = committee.components;
                         if (this.getLossSizeMultiplier() < 1.0) {
                             signal.guardrailSizeMultiplier = this.getLossSizeMultiplier();
                             console.log(`[Guardrail] ${signal.symbol} size cut to ${signal.guardrailSizeMultiplier.toFixed(2)}x (${this.guardrails.consecutiveLosses} consecutive losses)`);
                         }
                         // [Phase 3] Apply crypto regime adjustments — size scaling
-                        signal.agentPositionSizeMultiplier = (signal.agentPositionSizeMultiplier || 1.0) * cryptoRegime.adjustments.positionSizeMultiplier;
+                        // [v14.1] Also apply allocator-derived size adjustment
+                        signal.agentPositionSizeMultiplier = (signal.agentPositionSizeMultiplier || 1.0) * cryptoRegime.adjustments.positionSizeMultiplier * alloc.allocation;
                         signal.marketRegime = cryptoRegime.regime;
                         if (cryptoRegime.regime !== 'medium') {
                             console.log(`[Regime] ${signal.symbol} size adjusted to x${signal.agentPositionSizeMultiplier.toFixed(2)} (${cryptoRegime.adjustments.label})`);
@@ -4292,6 +4463,29 @@ app.get('/api/crypto/weights', (req, res) => {
             defaults: DEFAULT_CRYPTO_WEIGHTS,
             tradeCount: (globalThis._cryptoTradeEvaluations || []).length,
             lastOptimized: 'check weights file'
+        }
+    });
+});
+
+// [v14.1] Allocator + Calibration status API
+app.get('/api/crypto/allocator', (req, res) => {
+    const evals = globalThis._cryptoTradeEvaluations || [];
+    const calibrationMap = [0.30, 0.40, 0.45, 0.50, 0.60, 0.70].map(raw => ({
+        rawConfidence: raw,
+        calibratedProbability: parseFloat(calibrateConfidence(raw).toFixed(4))
+    }));
+    res.json({
+        success: true,
+        data: {
+            calibration: {
+                fitted: plattParams.calibrated,
+                sampleSize: plattParams.sampleSize,
+                params: { A: plattParams.A, B: plattParams.B },
+                mapping: calibrationMap
+            },
+            strategyWeights: strategyRegimeWeights,
+            totalEvaluations: evals.length,
+            status: plattParams.calibrated ? 'calibrated' : 'uncalibrated (using raw scores)'
         }
     });
 });
