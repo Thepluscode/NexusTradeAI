@@ -981,7 +981,7 @@ const MIN_TIME_AFTER_STOP = 2 * 60 * 60 * 1000;  // 2 hours after stop-out
 const RISK_PER_TRADE = parseFloat(process.env.RISK_PER_TRADE || '0.0035');      // 0.35% per trade — forex is worst lane
 const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.74');
 const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.74');
-const MIN_REWARD_RISK = parseFloat(process.env.MIN_REWARD_RISK || '1.8');  // [v7.1] lowered from 2.1 — wider ATR stops push some valid signals under 2.1
+const MIN_REWARD_RISK = parseFloat(process.env.FOREX_MIN_REWARD_RISK || process.env.MIN_REWARD_RISK || '1.4');  // [v13.2] forex-specific: 1.4 (TP/SL is 1.2%/0.8% = 1.5 R:R by design)
 const MAX_SIGNALS_PER_CYCLE = parseInt(process.env.MAX_SIGNALS_PER_CYCLE || '1');
 const MAX_CONSECUTIVE_LOSSES = parseInt(process.env.MAX_CONSECUTIVE_LOSSES || '5');  // [v7.1] forex has more frequent small losses; 3 caused death spiral
 const LOSS_PAUSE_MS = parseInt(process.env.LOSS_PAUSE_MS || '7200000');
