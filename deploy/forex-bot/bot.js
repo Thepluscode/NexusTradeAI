@@ -189,7 +189,7 @@ function buildForexTradeTags(signal = {}, tier, direction, session) {
 }
 
 async function dbForexOpen(pair, direction, tier, entry, stopLoss, takeProfit, units, session, signal = {}) {
-    if (!dbPool) return null;
+    if (!dbPool) { console.warn(`⚠️  [DB] dbForexOpen(${pair}) skipped — dbPool is null`); return null; }
     try {
         const absUnits = Math.abs(units);
         const positionSizeUsd = entry > 0 ? parseFloat((absUnits * entry).toFixed(2)) : null;
@@ -2686,8 +2686,13 @@ async function executeTrade(signal) {
 
         // Persist trade opening to DB (fire-and-forget)
         dbForexOpen(signal.pair, signal.direction, signal.tier, signal.entry, signal.stopLoss, signal.takeProfit, units, signal.session, signal)
-            .then(id => { const p = positions.get(signal.pair); if (p) p.dbTradeId = id; })
-            .catch(() => {});
+            .then(id => {
+                const p = positions.get(signal.pair);
+                if (p) p.dbTradeId = id;
+                if (id) console.log(`📝 [DB] ${signal.pair} trade persisted (id: ${id})`);
+                else console.warn(`⚠️  [DB] ${signal.pair} trade NOT persisted — no id returned`);
+            })
+            .catch(e => console.error(`❌ [DB] ${signal.pair} trade persistence failed:`, e.message));
 
         // Update tracking
         totalTradesToday++;
@@ -4604,27 +4609,55 @@ app.listen(PORT, async () => {
             if (longUnits > 0) {
                 const avgPrice = parseFloat(p.long.averagePrice || '0');
                 const hydratedPL = parseFloat(p.unrealizedPL || '0');
+                const stopLong = avgPrice * 0.985;
+                const tpLong = avgPrice * 1.03;
                 positions.set(instrument, {
                     instrument, direction: 'long', tier: 'tier1',
-                    entry: avgPrice, stopLoss: avgPrice * 0.985, takeProfit: avgPrice * 1.03,
+                    entry: avgPrice, stopLoss: stopLong, takeProfit: tpLong,
                     units: longUnits, entryTime: new Date(), session: 'restored',
                     peakUnrealizedPL: Math.max(0, hydratedPL),
                     wasPositive: hydratedPL > 2
                 });
                 tradesPerPair.set(instrument, MAX_TRADES_PER_PAIR); // block further entries
                 console.log(`🔄 Restored position: ${instrument} LONG ${longUnits} units @ ${avgPrice} (peakPL: $${Math.max(0, hydratedPL).toFixed(2)})`);
+                // Ensure restored position has a DB trade row
+                if (dbPool) {
+                    const existing = await dbPool.query(`SELECT id FROM trades WHERE bot='forex' AND symbol=$1 AND status='open' AND user_id IS NULL`, [instrument]);
+                    if (existing.rows.length === 0) {
+                        dbForexOpen(instrument, 'long', 'tier1', avgPrice, stopLong, tpLong, longUnits, 'restored', {})
+                            .then(id => { const pos = positions.get(instrument); if (pos) pos.dbTradeId = id; console.log(`📝 [DB] Restored ${instrument} LONG persisted (id: ${id})`); })
+                            .catch(e => console.warn(`⚠️  [DB] Restored ${instrument} persistence failed:`, e.message));
+                    } else {
+                        const pos = positions.get(instrument); if (pos) pos.dbTradeId = existing.rows[0].id;
+                        console.log(`📝 [DB] Restored ${instrument} LONG already in DB (id: ${existing.rows[0].id})`);
+                    }
+                }
             } else if (shortUnits < 0) {
                 const avgPrice = parseFloat(p.short.averagePrice || '0');
                 const hydratedPL = parseFloat(p.unrealizedPL || '0');
+                const stopShort = avgPrice * 1.015;
+                const tpShort = avgPrice * 0.97;
                 positions.set(instrument, {
                     instrument, direction: 'short', tier: 'tier1',
-                    entry: avgPrice, stopLoss: avgPrice * 1.015, takeProfit: avgPrice * 0.97,
+                    entry: avgPrice, stopLoss: stopShort, takeProfit: tpShort,
                     units: shortUnits, entryTime: new Date(), session: 'restored',
                     peakUnrealizedPL: Math.max(0, hydratedPL),
                     wasPositive: hydratedPL > 2
                 });
                 tradesPerPair.set(instrument, MAX_TRADES_PER_PAIR);
                 console.log(`🔄 Restored position: ${instrument} SHORT ${Math.abs(shortUnits)} units @ ${avgPrice}`);
+                // Ensure restored position has a DB trade row
+                if (dbPool) {
+                    const existing = await dbPool.query(`SELECT id FROM trades WHERE bot='forex' AND symbol=$1 AND status='open' AND user_id IS NULL`, [instrument]);
+                    if (existing.rows.length === 0) {
+                        dbForexOpen(instrument, 'short', 'tier1', avgPrice, stopShort, tpShort, shortUnits, 'restored', {})
+                            .then(id => { const pos = positions.get(instrument); if (pos) pos.dbTradeId = id; console.log(`📝 [DB] Restored ${instrument} SHORT persisted (id: ${id})`); })
+                            .catch(e => console.warn(`⚠️  [DB] Restored ${instrument} persistence failed:`, e.message));
+                    } else {
+                        const pos = positions.get(instrument); if (pos) pos.dbTradeId = existing.rows[0].id;
+                        console.log(`📝 [DB] Restored ${instrument} SHORT already in DB (id: ${existing.rows[0].id})`);
+                    }
+                }
             }
         }
         console.log(`✅ Hydrated ${positions.size} positions from OANDA (DB open trades: to be reconciled)`);

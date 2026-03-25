@@ -1511,8 +1511,9 @@ const MOMENTUM_CONFIG = {
     }
 };
 
-// [v9.0] ORB recalibrated — old 5% target never hit (wins were all end-of-day at +1.4%)
-// Tighter stop + realistic target = positive R:R on actual fills
+// [v13.2] ORB recalibrated — 1.2% stop was too tight for opening range volatility
+// PLTR/INTC both stopped at -1.3% within minutes. Opening 30min has 2-3x normal vol.
+// Widened to 2.0% stop / 3.5% target (1.75:1 R:R) — gives room for opening shakeouts.
 const OPENING_RANGE_BREAKOUT_CONFIG = {
     openingRangeMinutes: 15,
     entryCutoffHour: 11,
@@ -1523,8 +1524,8 @@ const OPENING_RANGE_BREAKOUT_CONFIG = {
     rsiMax: 68,             // [v9.0] tightened from 72 — reject overbought entries
     maxBreakoutPct: 0.03,
     positionSize: 0.004,
-    stopLoss: 0.012,        // [v9.0] 1.2% stop (was 2.5%) — tighter risk, quick exit on fail
-    profitTarget: 0.020,    // [v9.0] 2.0% target (was 5%) — realistic ORB target, 1.67:1 R:R
+    stopLoss: 0.020,        // [v13.2] 2.0% stop (was 1.2%) — opening vol needs room, matches tier1
+    profitTarget: 0.035,    // [v13.2] 3.5% target (was 2.0%) — 1.75:1 R:R, ORB winners run further
     maxPositions: 2
 };
 
