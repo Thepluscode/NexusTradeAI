@@ -412,6 +412,27 @@ async function initTradeDb() {
             )
         `);
         console.log('✅ Crypto bot: Password reset tokens table ready');
+
+        // [v14.0] Strategy-regime performance tracking
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS strategy_regime_performance (
+                id SERIAL PRIMARY KEY,
+                bot VARCHAR(20) NOT NULL DEFAULT 'crypto',
+                strategy VARCHAR(50) NOT NULL,
+                regime VARCHAR(50) NOT NULL,
+                total_trades INTEGER DEFAULT 0,
+                winning_trades INTEGER DEFAULT 0,
+                total_pnl_pct DECIMAL(12,4) DEFAULT 0,
+                total_win_pnl_pct DECIMAL(12,4) DEFAULT 0,
+                total_loss_pnl_pct DECIMAL(12,4) DEFAULT 0,
+                win_rate DECIMAL(6,4) DEFAULT 0,
+                profit_factor DECIMAL(8,4) DEFAULT 0,
+                avg_pnl_pct DECIMAL(8,4) DEFAULT 0,
+                last_updated TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(bot, strategy, regime)
+            )
+        `);
+        console.log('✅ Crypto bot: Strategy-regime performance table ready');
     } catch (e) {
         console.warn('⚠️  Crypto DB init failed:', e.message);
         dbPool = null;
@@ -489,6 +510,80 @@ async function dbCryptoClose(id, exitPrice, pnlUsd, pnlPct, reason) {
         client.release();
     }
 }
+
+// [v14.0] Strategy-regime performance tracking — logs which strategy wins in which regime
+async function updateStrategyRegimePerformance(strategy, regime, pnlPct, isWin) {
+    if (!dbPool || !strategy || !regime) return;
+    try {
+        await dbPool.query(`
+            INSERT INTO strategy_regime_performance (bot, strategy, regime, total_trades, winning_trades, total_pnl_pct, total_win_pnl_pct, total_loss_pnl_pct, last_updated)
+            VALUES ('crypto', $1, $2, 1, $3, $4, $5, $6, NOW())
+            ON CONFLICT (bot, strategy, regime) DO UPDATE SET
+                total_trades = strategy_regime_performance.total_trades + 1,
+                winning_trades = strategy_regime_performance.winning_trades + $3,
+                total_pnl_pct = strategy_regime_performance.total_pnl_pct + $4,
+                total_win_pnl_pct = strategy_regime_performance.total_win_pnl_pct + $5,
+                total_loss_pnl_pct = strategy_regime_performance.total_loss_pnl_pct + $6,
+                win_rate = CASE WHEN (strategy_regime_performance.total_trades + 1) > 0
+                    THEN (strategy_regime_performance.winning_trades + $3)::decimal / (strategy_regime_performance.total_trades + 1)
+                    ELSE 0 END,
+                profit_factor = CASE WHEN ABS(strategy_regime_performance.total_loss_pnl_pct + $6) > 0.0001
+                    THEN ABS(strategy_regime_performance.total_win_pnl_pct + $5) / ABS(strategy_regime_performance.total_loss_pnl_pct + $6)
+                    ELSE 0 END,
+                avg_pnl_pct = (strategy_regime_performance.total_pnl_pct + $4) / (strategy_regime_performance.total_trades + 1),
+                last_updated = NOW()
+        `, [strategy, regime, isWin ? 1 : 0, pnlPct, isWin ? pnlPct : 0, isWin ? 0 : pnlPct]);
+    } catch (e) {
+        console.warn('[StrategyPerf] DB update failed:', e.message);
+    }
+}
+
+// [v14.0] Load strategy-regime weights from DB for auto-adjustment
+let strategyRegimeWeights = { momentum: 1.0, meanReversion: 1.0, trendPullback: 1.0 };
+
+async function loadStrategyRegimeWeights() {
+    if (!dbPool) return { momentum: 1.0, meanReversion: 1.0, trendPullback: 1.0 };
+    try {
+        const result = await dbPool.query(`
+            SELECT strategy, win_rate, profit_factor, total_trades
+            FROM strategy_regime_performance
+            WHERE bot = 'crypto' AND total_trades >= 10
+        `);
+        const strategyPerf = {};
+        for (const row of result.rows) {
+            if (!strategyPerf[row.strategy]) strategyPerf[row.strategy] = { totalWeight: 0, weightedPF: 0 };
+            strategyPerf[row.strategy].totalWeight += row.total_trades;
+            strategyPerf[row.strategy].weightedPF += parseFloat(row.profit_factor) * row.total_trades;
+        }
+        const weights = {};
+        for (const [strategy, data] of Object.entries(strategyPerf)) {
+            const avgPF = data.totalWeight > 0 ? data.weightedPF / data.totalWeight : 1.0;
+            weights[strategy] = Math.max(0.3, Math.min(2.0, avgPF)); // Clamp [0.3, 2.0]
+        }
+        return {
+            momentum: weights.momentum || 1.0,
+            meanReversion: weights.meanReversion || 1.0,
+            trendPullback: weights.trendPullback || 1.0
+        };
+    } catch (e) {
+        console.warn('[StrategyPerf] Load failed:', e.message);
+        return { momentum: 1.0, meanReversion: 1.0, trendPullback: 1.0 };
+    }
+}
+
+// Refresh strategy weights every 4 hours (same cadence as committee weights)
+setInterval(async () => {
+    strategyRegimeWeights = await loadStrategyRegimeWeights();
+    console.log('[StrategyPerf] Updated strategy weights:', JSON.stringify(strategyRegimeWeights));
+}, 4 * 60 * 60 * 1000);
+
+// Initial load after 15 seconds
+setTimeout(async () => {
+    strategyRegimeWeights = await loadStrategyRegimeWeights();
+    if (Object.values(strategyRegimeWeights).some(w => w !== 1.0)) {
+        console.log('[StrategyPerf] Loaded strategy weights:', JSON.stringify(strategyRegimeWeights));
+    }
+}, 15000);
 
 /**
  * UNIFIED CRYPTO TRADING BOT
@@ -608,6 +703,22 @@ const CRYPTO_CONFIG = {
         sizingFactor: 0.85
     },
 
+    // [v14.0] Mean Reversion Strategy — fires in low-vol/sideways regimes only
+    // Bollinger Band extremes + RSI oversold = buy the dip to the mean
+    meanReversionStrategy: {
+        bollingerPeriod: 20,
+        bollingerStdDev: 2,
+        rsiOversold: 30,         // Buy when RSI < 30
+        rsiOverbought: 70,       // Short when RSI > 70 (future)
+        stopLossPercent: 0.025,  // 2.5% stop (tighter than momentum)
+        profitTargetPercent: 0.04, // 4% target (reversion to mean)
+        maxPositions: 2,
+        sizingFactor: 0.7,       // Smaller size than momentum trades
+        minBandwidth: 0.02,      // Min BB width (avoid ultra-tight ranges)
+        maxBandwidth: 0.10,      // Max BB width (too wide = trending, not ranging)
+        requiredRegimes: ['low', 'medium'] // Only fire in low/medium vol
+    },
+
     // Crypto-Specific Filters
     filters: {
         btcCorrelation: true,  // Check BTC trend before altcoin trades
@@ -634,7 +745,20 @@ const CRYPTO_CONFIG = {
     stalePositionDays: 5    // Emergency close after 5 days regardless of P/L
 };
 
-function scoreCryptoSignal({ strategy, tier, momentum, trendStrength, volumeRatio, rsi, sizingFactor, macdBullish }) {
+function scoreCryptoSignal({ strategy, tier, momentum, trendStrength, volumeRatio, rsi, sizingFactor, macdBullish, bollingerPercentB }) {
+    // [v14.0] Mean reversion has its own scoring logic
+    if (strategy === 'meanReversion') {
+        const baseWeight = 1.2;
+        // RSI extremity: further from 50 = stronger signal
+        const rsiExtremity = rsi < 30 ? Math.max(0.8, (30 - rsi) / 15) : rsi > 70 ? Math.max(0.8, (rsi - 70) / 15) : 0.5;
+        // Bollinger %B: closer to band edge = stronger signal
+        const bbExtremity = bollingerPercentB !== undefined
+            ? (bollingerPercentB < 0.1 ? 1.3 : bollingerPercentB < 0.2 ? 1.15 : bollingerPercentB > 0.9 ? 1.3 : 1.0)
+            : 1.0;
+        const volWeight = Math.max(0.8, Math.min(1.5, volumeRatio || 1));
+        return parseFloat((baseWeight * rsiExtremity * bbExtremity * volWeight * Math.max(0.5, sizingFactor)).toFixed(3));
+    }
+
     const tierWeight = tier === 'tier3' ? 2.6 : tier === 'tier2' ? 1.9 : tier === 'tier1' ? 1.3 : 1.1;
     const strategyWeight = strategy === 'trendPullback' ? 1.05 : 1.25;
     const rsiSweetSpot = strategy === 'trendPullback'
@@ -651,7 +775,25 @@ function scoreCryptoSignal({ strategy, tier, momentum, trendStrength, volumeRati
     );
 }
 
-function evaluateCryptoRegimeSignal({ strategy, btcBullish, trendStrength, volumeRatio, rsi, pullbackPct, tier }) {
+function evaluateCryptoRegimeSignal({ strategy, btcBullish, trendStrength, volumeRatio, rsi, pullbackPct, tier, cryptoRegime }) {
+    // [v14.0] Mean reversion: only tradable in low/medium vol regimes
+    if (strategy === 'meanReversion') {
+        const regimeLabel = cryptoRegime ? cryptoRegime.regime : 'medium';
+        if (regimeLabel === 'high') {
+            return { tradable: false, regime: 'mean-revert-blocked', quality: 0 };
+        }
+        let quality = regimeLabel === 'low' ? 1.15 : 1.0; // Bonus in low vol (ideal for mean reversion)
+        if (rsi < 25 || rsi > 75) quality *= 1.10; // Extreme RSI = stronger mean reversion signal
+        if (volumeRatio >= 1.2) quality *= 1.05;
+        // BTC trend matters less for mean reversion (counter-trend by nature)
+        if (!btcBullish) quality *= 0.95; // Slight penalty, not a hard block
+        return {
+            tradable: quality >= 0.9,
+            regime: `mean-revert-${regimeLabel}`,
+            quality: parseFloat(quality.toFixed(3))
+        };
+    }
+
     let quality = btcBullish ? 1.08 : 0.86;
     if (strategy === 'trendPullback') {
         if (pullbackPct >= 0.4 && pullbackPct <= 1.8) quality *= 1.08;
@@ -994,10 +1136,18 @@ function detectCryptoRegime(klines) {
         regime = 'medium';
     }
 
+    // [v14.0] Strategy-regime routing: which strategy class to prefer
+    const strategyPreference = {
+        low:    { preferred: 'meanReversion', momentumWeight: 0.3, meanReversionWeight: 1.0, pullbackWeight: 0.5 },
+        medium: { preferred: 'blended',       momentumWeight: 0.7, meanReversionWeight: 0.5, pullbackWeight: 0.8 },
+        high:   { preferred: 'momentum',      momentumWeight: 1.0, meanReversionWeight: 0.0, pullbackWeight: 0.6 }
+    };
+
     return {
         regime,
         adjustments: CRYPTO_REGIME_ADJUSTMENTS[regime],
-        atrPct: parseFloat(atrPct.toFixed(6))
+        atrPct: parseFloat(atrPct.toFixed(6)),
+        strategyRouting: strategyPreference[regime] || strategyPreference.medium
     };
 }
 
@@ -1321,6 +1471,21 @@ class CryptoTradingEngine {
         };
     }
 
+    // [v14.0] Bollinger Bands — used by mean reversion strategy
+    calculateBollingerBands(prices, period = 20, stdDevMultiplier = 2) {
+        if (prices.length < period) return null;
+        const slice = prices.slice(-period);
+        const sma = slice.reduce((a, b) => a + b, 0) / period;
+        const variance = slice.reduce((sum, p) => sum + Math.pow(p - sma, 2), 0) / period;
+        const stdDev = Math.sqrt(variance);
+        const upper = sma + stdDevMultiplier * stdDev;
+        const lower = sma - stdDevMultiplier * stdDev;
+        const bandWidth = sma > 0 ? (upper - lower) / sma : 0;
+        const currentPrice = prices[prices.length - 1];
+        const percentB = (upper - lower) > 0 ? (currentPrice - lower) / (upper - lower) : 0.5;
+        return { upper, middle: sma, lower, bandwidth: bandWidth, percentB };
+    }
+
     calculateATR(klines, period = 14) {
         if (!klines || klines.length < period + 1) return null;
         const trs = [];
@@ -1584,7 +1749,7 @@ class CryptoTradingEngine {
     // MOMENTUM SCANNING
     // ========================================================================
 
-    async scanForOpportunities() {
+    async scanForOpportunities(cryptoRegime = null) {
         const opportunities = [];
         const scanSymbols = await this.refreshSupportedSymbols();
 
@@ -1798,8 +1963,68 @@ class CryptoTradingEngine {
                         }
                     }
 
+                    // [v14.0] Apply strategy-regime weight from learning system
+                    pullbackScore *= (strategyRegimeWeights.trendPullback || 1.0);
+                    if (cryptoRegime && cryptoRegime.strategyRouting) pullbackScore *= cryptoRegime.strategyRouting.pullbackWeight;
                     pullbackSignal.score = parseFloat(pullbackScore.toFixed(3));
                     bestSignal = pullbackSignal;
+                }
+            }
+
+            // [v14.0] Mean Reversion Strategy — Bollinger Band + RSI extremes in low/medium vol
+            const mrConfig = this.config.meanReversionStrategy;
+            const routing = cryptoRegime ? cryptoRegime.strategyRouting : { meanReversionWeight: 0.5 };
+            if (routing.meanReversionWeight > 0) {
+                const bb = this.calculateBollingerBands(data.prices, mrConfig.bollingerPeriod, mrConfig.bollingerStdDev);
+                if (bb && bb.bandwidth >= mrConfig.minBandwidth && bb.bandwidth <= mrConfig.maxBandwidth) {
+                    const mrPositions = Array.from(this.positions.values()).filter(p => p.strategy === 'meanReversion').length;
+                    // LONG mean reversion: price at/below lower band + RSI oversold
+                    if (mrPositions < mrConfig.maxPositions && bb.percentB <= 0.15 && rsi < mrConfig.rsiOversold) {
+                        const mrRegimeProfile = evaluateCryptoRegimeSignal({
+                            strategy: 'meanReversion', btcBullish, trendStrength: 0, volumeRatio, rsi, pullbackPct: 0, tier: 'meanRevert', cryptoRegime
+                        });
+                        if (mrRegimeProfile.tradable) {
+                            const atrRisk = buildAtrRisk(mrConfig.stopLossPercent, mrConfig.profitTargetPercent, 1.6);
+                            const mrSignal = {
+                                symbol,
+                                tier: 'meanRevert',
+                                strategy: 'meanReversion',
+                                marketRegime: mrRegimeProfile.regime,
+                                regime: mrRegimeProfile.regime,
+                                regimeQuality: mrRegimeProfile.quality,
+                                price: data.currentPrice,
+                                momentum: momentum * 100,
+                                trendStrength: trendStrength * 100,
+                                pullbackPct: 0,
+                                atrPct,
+                                rsi,
+                                volume24h: data.volume24h,
+                                volumeRatio,
+                                sizingFactor: combinedSizingFactor * mrConfig.sizingFactor,
+                                stopLoss: data.currentPrice * (1 + 0.003) * (1 - atrRisk.stopPct),
+                                takeProfit: data.currentPrice * (1 + 0.003) * (1 + atrRisk.targetPct),
+                                stopLossPercent: atrRisk.stopPct * 100,
+                                profitTargetPercent: atrRisk.targetPct * 100,
+                                bollingerPercentB: bb.percentB,
+                                bollingerBandwidth: bb.bandwidth,
+                                orderFlowImbalance,
+                                hasDisplacement,
+                                volumeProfileData: volumeProfile ? { vah: volumeProfile.vah, val: volumeProfile.val, poc: volumeProfile.poc } : null,
+                                fvgCount: fvg.bullish.length + fvg.bearish.length
+                            };
+                            let mrScore = scoreCryptoSignal({
+                                strategy: 'meanReversion', tier: 'meanRevert', momentum: 0, trendStrength: 0,
+                                volumeRatio, rsi, sizingFactor: mrSignal.sizingFactor, macdBullish, bollingerPercentB: bb.percentB
+                            }) * mrRegimeProfile.quality;
+                            // Apply strategy-regime weight from learning system
+                            mrScore *= (strategyRegimeWeights.meanReversion || 1.0) * routing.meanReversionWeight;
+                            mrSignal.score = parseFloat(mrScore.toFixed(3));
+                            console.log(`🔄 ${symbol} (meanReversion): BB%B ${(bb.percentB * 100).toFixed(1)}%, RSI ${rsi.toFixed(1)}, BW ${(bb.bandwidth * 100).toFixed(2)}%, score ${mrSignal.score}`);
+                            if (!bestSignal || mrSignal.score > bestSignal.score) {
+                                bestSignal = mrSignal;
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1810,6 +2035,7 @@ class CryptoTradingEngine {
                 continue;
             }
 
+            // [v14.0] Apply strategy-regime weights to momentum signals
             // Try each tier
             for (const [tierName, tier] of Object.entries(this.config.tiers)) {
                 // Check RSI range
@@ -1926,6 +2152,9 @@ class CryptoTradingEngine {
                     }
                 }
 
+                // [v14.0] Apply strategy-regime weight from learning system
+                momentumScore *= (strategyRegimeWeights.momentum || 1.0);
+                if (cryptoRegime && cryptoRegime.strategyRouting) momentumScore *= cryptoRegime.strategyRouting.momentumWeight;
                 momentumSignal.score = parseFloat(momentumScore.toFixed(3));
 
                 console.log(`✨ ${symbol} (${tierName}): Momentum ${(momentum * 100).toFixed(2)}%, RSI ${rsi.toFixed(1)}, Vol $${(data.volume24h / 1000000).toFixed(1)}M`);
@@ -2085,9 +2314,13 @@ class CryptoTradingEngine {
         }
 
         // 3. RSI between 25-75 (crypto gets wider range due to volatility)
+        // [v14.0] Mean reversion specifically targets RSI extremes — widen range for it
         const rsi = signal.rsi || 50;
-        if (rsi < 25 || rsi > 75) {
-            reasons.push(`rsi=${rsi.toFixed(1)} outside 25-75`);
+        const isMeanReversion = signal.strategy === 'meanReversion';
+        const rsiLow = isMeanReversion ? 15 : 25;
+        const rsiHigh = isMeanReversion ? 85 : 75;
+        if (rsi < rsiLow || rsi > rsiHigh) {
+            reasons.push(`rsi=${rsi.toFixed(1)} outside ${rsiLow}-${rsiHigh}`);
         }
 
         // 4. At least 2 committee components must be positive
@@ -2504,6 +2737,12 @@ class CryptoTradingEngine {
             const closeTrade = this._dbClose ? this._dbClose.bind(this) : dbCryptoClose;
             closeTrade(position.dbTradeId, adjustedExitPrice, pnlUSD, pnlPercent, reason).catch(e => console.warn(`⚠️  DB trade close failed: ${e.message}`));
 
+            // [v14.0] Strategy-regime performance tracking
+            const tradeStrategy = position.strategy || 'momentum';
+            const tradeRegime = position.signalSnapshot?.marketRegime || position.regime || 'medium';
+            updateStrategyRegimePerformance(tradeStrategy, tradeRegime, pnlPercent, pnlUSD > 0)
+                .catch(e => console.warn('[StrategyPerf] Update failed:', e.message));
+
             // [v4.1] Report to Agentic AI learning loop — Scan AI pattern tracking
             this.reportTradeOutcome(position, adjustedExitPrice, pnlUSD, pnlPercent / 100, reason).catch(() => {});
 
@@ -2521,6 +2760,7 @@ class CryptoTradingEngine {
                     pnl: pnlUSD,
                     pnlPct: position.entry > 0 ? (adjustedExitPrice - position.entry) / position.entry : 0,
                     holdTimeMs: Date.now() - (snapshot.timestamp || Date.now()),
+                    strategy: position.strategy || 'momentum',
                     signals: {
                         orderFlow: snapshot.orderFlowImbalance,
                         displacement: snapshot.hasDisplacement,
@@ -2641,7 +2881,7 @@ class CryptoTradingEngine {
                 // Scan for new opportunities
                 if (this.positions.size < this.config.maxTotalPositions) {
                     console.log(`\n🔍 Scanning ${this.activeSymbols.length || this.config.symbols.length} crypto pairs...`);
-                    const opportunities = await this.scanForOpportunities();
+                    const opportunities = await this.scanForOpportunities(cryptoRegime);
 
                     console.log(`\n🎯 Found ${opportunities.length} signal(s)`);
 
@@ -4054,6 +4294,22 @@ app.get('/api/crypto/weights', (req, res) => {
             lastOptimized: 'check weights file'
         }
     });
+});
+
+// [v14.0] Strategy-regime performance API
+app.get('/api/crypto/strategy-performance', async (req, res) => {
+    if (!dbPool) return res.json({ success: true, data: { message: 'No DB connected', currentWeights: strategyRegimeWeights } });
+    try {
+        const result = await dbPool.query(`
+            SELECT strategy, regime, total_trades, win_rate, profit_factor, avg_pnl_pct, last_updated
+            FROM strategy_regime_performance
+            WHERE bot = 'crypto'
+            ORDER BY strategy, regime
+        `);
+        res.json({ success: true, data: { performance: result.rows, currentWeights: strategyRegimeWeights } });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
 });
 
 // ============================================================================
