@@ -3629,10 +3629,17 @@ app.get('/health', (req, res) => {
 
 // [Phase 4] Forex trade evaluation summary endpoint
 app.get('/api/forex/evaluations', (req, res) => {
-    const evals = (globalThis._forexTradeEvaluations || []).filter(e => e.exitReason !== 'orphaned_restart');
-    if (evals.length === 0) {
+    const rawEvals = (globalThis._forexTradeEvaluations || []).filter(e => e.exitReason !== 'orphaned_restart');
+    if (rawEvals.length === 0) {
         return res.json({ success: true, data: { totalTrades: 0, message: 'No evaluations yet' } });
     }
+
+    // Normalize pnlPct: old data stored as percentage (5.77), new as decimal (0.0577)
+    const evals = rawEvals.map(e => {
+        let pnlPct = e.pnlPct || 0;
+        if (Math.abs(pnlPct) > 1) pnlPct = pnlPct / 100;
+        return { ...e, pnlPct };
+    });
 
     const wins = evals.filter(e => e.pnl > 0);
     const losses = evals.filter(e => e.pnl <= 0);

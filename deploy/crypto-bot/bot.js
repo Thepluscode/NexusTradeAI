@@ -1771,6 +1771,19 @@ class CryptoTradingEngine {
             const result = response.data;
             console.log(`[Agent] ${signal.symbol}: ${result.approved ? 'APPROVED' : 'REJECTED'} (source: ${result.source}, conf: ${(result.confidence || 0).toFixed(2)}) — ${result.reason}`);
 
+            // [v15.0] Detect rubber-stamp pass-through from strategy bridge
+            const isRubberStamp = result.approved === true
+                && result.confidence >= 1.0
+                && typeof result.reason === 'string'
+                && result.reason.toLowerCase().includes('rule-based');
+            if (isRubberStamp) {
+                const freshCommittee = computeCryptoCommitteeScore(signal);
+                result.confidence = freshCommittee.confidence;
+                result.reason = `${result.reason} [rubber-stamp: replaced 1.0 with committee ${freshCommittee.confidence.toFixed(2)}]`;
+                result.source = 'rule_based_downgraded';
+                console.log(`[Agent] ${signal.symbol}: rubber-stamp detected — confidence downgraded to committee:${freshCommittee.confidence.toFixed(2)}`);
+            }
+
             // Cache the result
             this._agentCache.set(signal.symbol, {
                 result,
@@ -3299,6 +3312,11 @@ class CryptoTradingEngine {
                     // Execute trades
                     for (const signal of opportunities) {
                         if (this.positions.size >= this.config.maxTotalPositions) break;
+                        // [v15.0] Early position check — skip AI eval if we already hold this symbol
+                        if (this.positions.has(signal.symbol)) {
+                            console.log(`⏭️  ${signal.symbol}: Already have open position — skipping AI eval`);
+                            continue;
+                        }
                         // [v5.0] HARD GATE: every trade MUST be approved by the agentic AI pipeline
                         const aiResult = await this.queryAIAdvisor(signal);
 
@@ -4665,10 +4683,17 @@ app.post('/api/crypto/close-all', async (req, res) => {
 
 // [Phase 4] Trade evaluation summary endpoint
 app.get('/api/crypto/evaluations', (req, res) => {
-    const evals = (globalThis._cryptoTradeEvaluations || []).filter(e => e.exitReason !== 'orphaned_restart');
-    if (evals.length === 0) {
+    const rawEvals = (globalThis._cryptoTradeEvaluations || []).filter(e => e.exitReason !== 'orphaned_restart');
+    if (rawEvals.length === 0) {
         return res.json({ success: true, data: { totalTrades: 0, message: 'No evaluations yet' } });
     }
+
+    // Normalize pnlPct: old data stored as percentage (5.77), new as decimal (0.0577)
+    const evals = rawEvals.map(e => {
+        let pnlPct = e.pnlPct || 0;
+        if (Math.abs(pnlPct) > 1) pnlPct = pnlPct / 100;
+        return { ...e, pnlPct };
+    });
 
     const wins = evals.filter(e => e.pnl > 0);
     const losses = evals.filter(e => e.pnl <= 0);
@@ -4677,16 +4702,18 @@ app.get('/api/crypto/evaluations', (req, res) => {
     const signals = ['orderFlow', 'displacement', 'fvgCount'];
     for (const sig of signals) {
         const withSignal = evals.filter(e => {
-            if (sig === 'orderFlow') return (e.signals.orderFlow || 0) > 0.1;
+            if (!e.signals) return false;
+            if (sig === 'orderFlow') return Math.abs(e.signals.orderFlow || 0) > 0.1;
             if (sig === 'displacement') return e.signals.displacement === true;
             if (sig === 'fvgCount') return (e.signals.fvgCount || 0) > 0;
             return false;
         });
         const withoutSignal = evals.filter(e => {
-            if (sig === 'orderFlow') return (e.signals.orderFlow || 0) <= 0.1;
+            if (!e.signals) return true;
+            if (sig === 'orderFlow') return Math.abs(e.signals.orderFlow || 0) <= 0.1;
             if (sig === 'displacement') return e.signals.displacement !== true;
             if (sig === 'fvgCount') return (e.signals.fvgCount || 0) === 0;
-            return false;
+            return true;
         });
         const avgWith = withSignal.length > 0 ? withSignal.reduce((s, e) => s + (e.pnlPct || 0), 0) / withSignal.length : 0;
         const avgWithout = withoutSignal.length > 0 ? withoutSignal.reduce((s, e) => s + (e.pnlPct || 0), 0) / withoutSignal.length : 0;
