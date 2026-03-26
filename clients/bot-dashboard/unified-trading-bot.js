@@ -10,6 +10,9 @@ const rateLimit = require('express-rate-limit');
 const { createUserCredentialStore } = require('./userCredentialStore');
 const { createSignalEndpoints } = require('../../services/signals/api-handlers');
 const { BOT_COMPONENTS } = require('../../services/signals/committee-scorer');
+const { computeCorrelationGuard } = require('../../services/signals/exit-manager');
+const { checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth } = require('../../services/signals/health-monitor');
+const { optimize, evaluateStrategies } = require('../../services/signals/auto-optimizer');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 // ===== MONTE CARLO POSITION SIZER =====
@@ -528,6 +531,9 @@ let telegramAlerts = getTelegramAlertService();
 const positions = new Map();
 let scanCount = 0;
 let lastScanTime = null;
+let lastScanCompletedAt = 0; // for health monitor
+const recentErrors = []; // { timestamp, error } for health monitoring
+const MAX_ERROR_HISTORY = 100;
 
 // Persistent bot state (survives restarts)
 const BOT_STATE_FILE = path.join(__dirname, 'data/stock-bot-state.json');
@@ -1396,6 +1402,11 @@ const RISK_PER_TRADE = parseFloat(process.env.RISK_PER_TRADE || '0.0075');      
 const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.68');
 const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.75');  // v5.0: raised from 0.68 — filter out low-conviction entries
 const MIN_REWARD_RISK = parseFloat(process.env.MIN_REWARD_RISK || '1.75');
+
+// Auto-optimizer state — runs every 4 hours
+let optimizedParams = null;
+let lastOptimizationTime = 0;
+const OPTIMIZATION_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours
 const MAX_SIGNALS_PER_CYCLE = parseInt(process.env.MAX_SIGNALS_PER_CYCLE || '1');
 const MAX_CONSECUTIVE_LOSSES = parseInt(process.env.MAX_CONSECUTIVE_LOSSES || '3');
 const LOSS_PAUSE_MS = parseInt(process.env.LOSS_PAUSE_MS || '7200000');          // 2h pause after N consecutive losses
@@ -3032,8 +3043,9 @@ async function scanMomentumBreakouts() {
                     // [v4.7] Check reward/risk ratio meets minimum threshold
                     const tierCfg = MOMENTUM_CONFIG[mover.tier] || MOMENTUM_CONFIG.tier1;
                     const rewardRisk = (tierCfg.profitTarget || 0.08) / (tierCfg.stopLoss || 0.04);
-                    if (rewardRisk < MIN_REWARD_RISK) {
-                        console.log(`[Guardrail] ${mover.symbol} BLOCKED — R:R ${rewardRisk.toFixed(2)} < ${MIN_REWARD_RISK}`);
+                    const effectiveMinRR = optimizedParams?.minRewardRisk || MIN_REWARD_RISK;
+                    if (rewardRisk < effectiveMinRR) {
+                        console.log(`[Guardrail] ${mover.symbol} BLOCKED — R:R ${rewardRisk.toFixed(2)} < ${effectiveMinRR}`);
                         continue;
                     }
                     // [Phase 1] Order flow confirmation — skip if flow opposes trade direction
@@ -3043,8 +3055,9 @@ async function scanMomentumBreakouts() {
                     }
                     // [Phase 3] Committee aggregator — unified confidence from all signal sources
                     const committee = computeCommitteeScore(mover);
-                    if (committee.confidence < 0.50) {
-                        console.log(`[Committee] ${mover.symbol}: Confidence ${committee.confidence} < 0.50 threshold — ${JSON.stringify(committee.components)}`);
+                    const committeeThreshold = optimizedParams?.committeeThreshold || 0.50;
+                    if (committee.confidence < committeeThreshold) {
+                        console.log(`[Committee] ${mover.symbol}: Confidence ${committee.confidence} < ${committeeThreshold} threshold — ${JSON.stringify(committee.components)}`);
                         continue;
                     }
                     // [v11.0] Require 2+ positive components — prevents marginal single-signal entries
@@ -3086,6 +3099,18 @@ async function scanMomentumBreakouts() {
                         console.log(`[QUALITY GATE] ${mover.symbol}: BLOCKED — ${qualityCheck.reason}`);
                         continue;
                     }
+                    // [Correlation Guard] Check own-position concentration before executing
+                    try {
+                        const ownPositions = Array.from(positions.values());
+                        const guard = computeCorrelationGuard(ownPositions);
+                        if (guard.isConcentrated) {
+                            const signalDir = 'long'; // stock bot is long-only
+                            if (!guard.canOpenLong) {
+                                console.log(`[CORRELATION] ${mover.symbol} ${signalDir} BLOCKED — portfolio ${(guard.exposureRatio * 100).toFixed(0)}% ${guard.directionBias} (${guard.longCount}L/${guard.shortCount}S)`);
+                                continue;
+                            }
+                        }
+                    } catch (_guardErr) { /* guard is optional — never block trading on error */ }
                     await executeTrade(mover, mover.strategy || 'momentum');
                 }
             } else {
@@ -4487,18 +4512,19 @@ app.get('/api/portfolio/risk', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-    const memoryReport = memoryManager.getReport();
-    res.json({
-        status: 'ok',
-        bot: 'unified-trading-bot-improved',
-        memory: {
-            heapUsedMB: memoryReport.heap.used,
-            heapLimitMB: memoryReport.heap.limit,
-            usagePercent: memoryReport.heap.usagePercent
-        },
-        uptime: process.uptime(),
-        timestamp: new Date().toISOString()
+    const health = aggregateHealth({
+        scan: checkScanHealth(lastScanCompletedAt, 60000),
+        errors: checkErrorRate(recentErrors),
+        trading: checkTradingHealth({
+            totalTrades: perfData.totalTrades || 0,
+            winRate: (perfData.winRate || 50) / 100,
+            profitFactor: perfData.profitFactor || 1.0,
+            maxDrawdownPct: perfData.maxDrawdown || 0,
+            consecutiveLosses: perfData.consecutiveLosses || 0,
+        }),
+        memory: checkMemoryHealth(),
     });
+    res.json(health);
 });
 
 // Trading bot start/stop/pause endpoints (for dashboard compatibility)
@@ -5697,8 +5723,9 @@ class UserTradingEngine {
                 }
                 // [Phase 3] Committee aggregator — unified confidence from all signal sources
                 const committee = computeCommitteeScore(mover);
-                if (committee.confidence < 0.50) {
-                    console.log(`[Engine ${this.userId}][Committee] ${mover.symbol}: Confidence ${committee.confidence} < 0.50 — skipping`);
+                const committeeThreshold = optimizedParams?.committeeThreshold || 0.50;
+                if (committee.confidence < committeeThreshold) {
+                    console.log(`[Engine ${this.userId}][Committee] ${mover.symbol}: Confidence ${committee.confidence} < ${committeeThreshold} — skipping`);
                     continue;
                 }
                 const positiveComponents = Object.values(committee.components).filter(v => v > 0).length;
@@ -5763,6 +5790,15 @@ class UserTradingEngine {
                     console.log(`[Engine ${this.userId}][QUALITY GATE] ${mover.symbol}: BLOCKED — ${qualityCheck.reason}`);
                     continue;
                 }
+                // [Correlation Guard] Check own-position concentration before executing
+                try {
+                    const ownPositions = Array.from(this.positions.values());
+                    const guard = computeCorrelationGuard(ownPositions);
+                    if (guard.isConcentrated && !guard.canOpenLong) {
+                        console.log(`[Engine ${this.userId}][CORRELATION] ${mover.symbol} long BLOCKED — portfolio ${(guard.exposureRatio * 100).toFixed(0)}% ${guard.directionBias} (${guard.longCount}L/${guard.shortCount}S)`);
+                        continue;
+                    }
+                } catch (_guardErr) { /* guard is optional — never block trading on error */ }
 
                 await this.executeTrade(mover, mover.strategy || 'momentum');
             }
@@ -6083,6 +6119,30 @@ async function tradingLoop() {
     scanCount++;
     lastScanTime = new Date();
 
+    // Auto-optimizer: re-evaluate parameters every 4 hours
+    if (Date.now() - lastOptimizationTime > OPTIMIZATION_INTERVAL) {
+        try {
+            const trades = globalThis._tradeEvaluations || [];
+            const result = optimize(trades);
+            if (result.improved) {
+                optimizedParams = result.params;
+                console.log(`[AUTO-OPTIMIZE] New params adopted: committee=${result.params.committeeThreshold}, R:R=${result.params.minRewardRisk} (WFE: ${result.wfe}, PF: ${result.metrics.profitFactor.toFixed(2)})`);
+            } else {
+                optimizedParams = null;
+                console.log(`[AUTO-OPTIMIZE] Keeping defaults — ${result.reason}`);
+            }
+            // Log strategy performance
+            const stratPerf = evaluateStrategies(trades);
+            for (const [strat, perf] of Object.entries(stratPerf)) {
+                console.log(`[STRATEGY] ${strat}: ${perf.trades} trades, WR ${(perf.winRate*100).toFixed(0)}%, PF ${perf.profitFactor.toFixed(2)}, ${perf.active ? 'ACTIVE' : 'INACTIVE'}`);
+            }
+            lastOptimizationTime = Date.now();
+        } catch (e) {
+            console.log(`[AUTO-OPTIMIZE] Error: ${e.message}`);
+            lastOptimizationTime = Date.now(); // don't retry immediately
+        }
+    }
+
     // Always manage existing positions (stop losses / trailing stops / EOD) even when
     // stopped or paused — we never want to be stuck in a position we can't exit.
     await checkEndOfDay();
@@ -6129,8 +6189,11 @@ async function tradingLoop() {
         }
     } catch (err) {
         console.error('❌ Stock trading loop error:', err.message);
+        recentErrors.push({ timestamp: Date.now(), error: err.message });
+        if (recentErrors.length > MAX_ERROR_HISTORY) recentErrors.shift();
     }
 
+    lastScanCompletedAt = Date.now();
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 }
 

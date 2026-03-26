@@ -9,6 +9,9 @@ const rateLimit = require('express-rate-limit');
 const { createUserCredentialStore } = require('./userCredentialStore');
 const { createSignalEndpoints } = require('../../services/signals/api-handlers');
 const { BOT_COMPONENTS } = require('../../services/signals/committee-scorer');
+const { computeCorrelationGuard } = require('../../services/signals/exit-manager');
+const { optimize: autoOptimize, evaluateStrategies: autoEvaluateStrategies, PARAM_BOUNDS: AUTO_PARAM_BOUNDS } = require('../../services/signals/auto-optimizer');
+const { checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth } = require('../../services/signals/health-monitor');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 // ===== MONTE CARLO POSITION SIZER =====
@@ -612,6 +615,9 @@ const tradesPerPair = new Map();
 let totalTradesToday = 0;
 let scanCount = 0;
 let lastScanTime = null;
+let lastScanCompletedAt = 0; // for health monitor
+const recentErrors = []; // { timestamp, error } for health monitoring
+const MAX_ERROR_HISTORY = 100;
 let lastEquity = null; // null means not initialized yet
 let cachedLiveDailyPnL = 0; // updated by status endpoint for circuit breaker
 
@@ -953,6 +959,31 @@ setInterval(() => {
 
 // Detect signal decay every 2 hours (Improvement 4)
 setInterval(() => { detectForexSignalDecay(); }, 2 * 60 * 60 * 1000);
+
+// ===== AUTO-OPTIMIZER STATE =====
+// Walk-forward parameter optimization runs every 4 hours using recent trade evaluations
+let forexOptimizedParams = {
+    committeeThreshold: AUTO_PARAM_BOUNDS.committeeThreshold.default,  // 0.50
+    minRewardRisk:      AUTO_PARAM_BOUNDS.minRewardRisk.default,       // 2.0
+    sizeMultiplier:     AUTO_PARAM_BOUNDS.sizeMultiplier.default,      // 1.0
+    atrStopMultiplier:  AUTO_PARAM_BOUNDS.atrStopMultiplier.default,   // 1.5
+};
+let forexLastOptimizationTime = 0;
+const FOREX_OPTIMIZATION_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
+
+function runForexAutoOptimizer() {
+    const evals = globalThis._forexTradeEvaluations || [];
+    const result = autoOptimize(evals, 30);
+    forexOptimizedParams = result.params;
+    const strategyPerf = autoEvaluateStrategies(evals);
+    console.log(`[AutoOptimizer] Forex params updated — committeeThreshold:${result.params.committeeThreshold} minRR:${result.params.minRewardRisk} | ${result.reason}`);
+    if (Object.keys(strategyPerf).length > 0) {
+        console.log('[AutoOptimizer] Forex strategy performance:', JSON.stringify(
+            Object.fromEntries(Object.entries(strategyPerf).map(([k, v]) => [k, { pf: v.profitFactor.toFixed(2), wr: (v.winRate * 100).toFixed(0) + '%', n: v.trades }]))
+        ));
+    }
+    return result;
+}
 
 // ===== REGISTER WITH MEMORY MANAGER =====
 memoryManager.register('forex_positions', positions, { maxSize: 50, maxAge: 7 * 24 * 60 * 60 * 1000 });
@@ -3212,6 +3243,12 @@ async function tradingLoop() {
     scanCount++;
     lastScanTime = new Date();
 
+    // ── Auto-optimizer: re-run every 4 hours ──────────────────────────────
+    if (Date.now() - forexLastOptimizationTime >= FOREX_OPTIMIZATION_INTERVAL_MS) {
+        forexLastOptimizationTime = Date.now();
+        runForexAutoOptimizer();
+    }
+
     console.log('\n' + '='.repeat(60));
     console.log(`[${lastScanTime.toISOString()}] FOREX SCAN #${scanCount}`);
     console.log('='.repeat(60));
@@ -3386,10 +3423,12 @@ async function tradingLoop() {
                 continue;
             }
             // [v4.7] Reward/Risk quality gate — reject trades below MIN_REWARD_RISK
+            // Uses auto-optimized threshold (floor: static MIN_REWARD_RISK) so optimizer can only tighten, never loosen below the env-var floor
             if (signal.stopLoss && signal.takeProfit && signal.entry) {
                 const rewardRisk = Math.abs(signal.takeProfit - signal.entry) / Math.abs(signal.entry - signal.stopLoss);
-                if (rewardRisk < MIN_REWARD_RISK) {
-                    console.log(`[Guardrail] ${signal.pair} BLOCKED — R:R ${rewardRisk.toFixed(2)} < ${MIN_REWARD_RISK}`);
+                const _forexMinRR = Math.max(MIN_REWARD_RISK, forexOptimizedParams.minRewardRisk);
+                if (rewardRisk < _forexMinRR) {
+                    console.log(`[Guardrail] ${signal.pair} BLOCKED — R:R ${rewardRisk.toFixed(2)} < ${_forexMinRR} (optimizer:${forexOptimizedParams.minRewardRisk} floor:${MIN_REWARD_RISK})`);
                     continue;
                 }
             }
@@ -3400,8 +3439,9 @@ async function tradingLoop() {
             }
             // [Phase 3] Committee aggregator — final quality gate
             const committee = computeForexCommitteeScore(signal);
-            if (committee.confidence < 0.50) {
-                console.log(`[Committee] ${signal.pair} ${signal.direction}: Confidence ${committee.confidence} < 0.50 — ${JSON.stringify(committee.components)}`);
+            const _forexCommitteeThreshold = forexOptimizedParams.committeeThreshold;
+            if (committee.confidence < _forexCommitteeThreshold) {
+                console.log(`[Committee] ${signal.pair} ${signal.direction}: Confidence ${committee.confidence} < ${_forexCommitteeThreshold} — ${JSON.stringify(committee.components)}`);
                 continue;
             }
             // [Improvement 3] Transaction cost EV filter
@@ -3430,12 +3470,28 @@ async function tradingLoop() {
                 console.log(`[QUALITY GATE] ${signal.pair} ${signal.direction}: BLOCKED — ${qualityCheck.reason}`);
                 continue;
             }
+            // [Correlation Guard] Check own-position concentration before executing
+            try {
+                const ownPositions = Array.from(positions.values());
+                const guard = computeCorrelationGuard(ownPositions);
+                if (guard.isConcentrated) {
+                    const signalDir = signal.direction || 'long';
+                    if ((signalDir === 'long' && !guard.canOpenLong) || (signalDir === 'short' && !guard.canOpenShort)) {
+                        console.log(`[CORRELATION] ${signal.pair} ${signalDir} BLOCKED — portfolio ${(guard.exposureRatio * 100).toFixed(0)}% ${guard.directionBias} (${guard.longCount}L/${guard.shortCount}S)`);
+                        continue;
+                    }
+                }
+            } catch (_guardErr) { /* guard is optional — never block trading on error */ }
 
             await executeTrade(signal);
         }
     } catch (err) {
         console.error('❌ Forex trading loop error:', err.message);
+        recentErrors.push({ timestamp: Date.now(), error: err.message });
+        if (recentErrors.length > MAX_ERROR_HISTORY) recentErrors.shift();
     }
+
+    lastScanCompletedAt = Date.now();
 }
 
 // [v6.3] Reset daily counters when UTC date boundary crosses — works on restart at any time
@@ -3469,17 +3525,19 @@ app.get('/api/portfolio/risk', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-    const memoryReport = memoryManager.getReport();
-    res.json({
-        status: 'ok',
-        bot: 'unified-forex-bot',
-        memory: {
-            heapUsedMB: memoryReport.heap.used,
-            heapLimitMB: memoryReport.heap.limit,
-            usagePercent: (memoryReport.heap.used / memoryReport.heap.limit * 100).toFixed(1)
-        },
-        uptime: process.uptime()
+    const health = aggregateHealth({
+        scan: checkScanHealth(lastScanCompletedAt, 300000),
+        errors: checkErrorRate(recentErrors),
+        trading: checkTradingHealth({
+            totalTrades: simTotalTrades || 0,
+            winRate: simTotalTrades > 0 ? (simWinners / simTotalTrades) : 0.5,
+            profitFactor: simProfitFactor || 1.0,
+            maxDrawdownPct: 0,
+            consecutiveLosses: simConsecutiveLosses || 0,
+        }),
+        memory: checkMemoryHealth(),
     });
+    res.json(health);
 });
 
 // [Phase 4] Forex trade evaluation summary endpoint
@@ -4440,6 +4498,18 @@ class UserForexEngine {
                 console.log(`[ForexEngine ${this.userId}][QUALITY GATE] ${signal.pair} ${signal.direction} (flip): BLOCKED — ${flipQC.reason}`);
                 continue;
             }
+            // [Correlation Guard] Flip signals: check concentration after imagined position flip
+            try {
+                const ownPositions = Array.from(this.positions.values());
+                const guard = computeCorrelationGuard(ownPositions);
+                if (guard.isConcentrated) {
+                    const signalDir = signal.direction || 'long';
+                    if ((signalDir === 'long' && !guard.canOpenLong) || (signalDir === 'short' && !guard.canOpenShort)) {
+                        console.log(`[ForexEngine ${this.userId}][CORRELATION] ${signal.pair} ${signalDir} flip BLOCKED — portfolio ${(guard.exposureRatio * 100).toFixed(0)}% ${guard.directionBias} (${guard.longCount}L/${guard.shortCount}S)`);
+                        continue;
+                    }
+                }
+            } catch (_guardErr) { /* guard is optional — never block trading on error */ }
             console.log(`🔄 [ForexEngine ${this.userId}] [FLIP-REVERSAL] Closing ${signal.pair} ${signal.existingDirection} → opening ${signal.direction}`);
             await this.closePositionWithReason(signal.pair, `flip-reversal → ${signal.direction}`);
             this.totalTradesToday++;
@@ -4466,6 +4536,18 @@ class UserForexEngine {
                 }
                 signal.committeeConfidence = committee.confidence;
                 signal.committeeComponents = committee.components;
+                // [Correlation Guard] Check own-position concentration before executing
+                try {
+                    const ownPositions = Array.from(this.positions.values());
+                    const guard = computeCorrelationGuard(ownPositions);
+                    if (guard.isConcentrated) {
+                        const signalDir = signal.direction || 'long';
+                        if ((signalDir === 'long' && !guard.canOpenLong) || (signalDir === 'short' && !guard.canOpenShort)) {
+                            console.log(`[ForexEngine ${this.userId}][CORRELATION] ${signal.pair} ${signalDir} BLOCKED — portfolio ${(guard.exposureRatio * 100).toFixed(0)}% ${guard.directionBias} (${guard.longCount}L/${guard.shortCount}S)`);
+                            continue;
+                        }
+                    }
+                } catch (_guardErr) { /* guard is optional — never block trading on error */ }
                 await this.executeTrade(signal);
             }
         }

@@ -10,6 +10,9 @@ const rateLimit = require('express-rate-limit');
 const { createUserCredentialStore } = require('./userCredentialStore');
 const { createSignalEndpoints } = require('../../services/signals/api-handlers');
 const { BOT_COMPONENTS } = require('../../services/signals/committee-scorer');
+const { computeCorrelationGuard } = require('../../services/signals/exit-manager');
+const { optimize: autoOptimize, evaluateStrategies: autoEvalStrategies, PARAM_BOUNDS: AUTO_PARAM_BOUNDS } = require('../../services/signals/auto-optimizer');
+const { checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth } = require('../../services/signals/health-monitor');
 require('dotenv').config();
 
 // ===== MONTE CARLO POSITION SIZER =====
@@ -1494,6 +1497,11 @@ async function checkPortfolioRisk(localPositionCount) {
     return risks;
 }
 
+// Health monitor state — module-level so the /health endpoint can access them
+let lastScanCompletedAt = 0; // for health monitor
+const recentErrors = []; // { timestamp, error } for health monitoring
+const MAX_ERROR_HISTORY = 100;
+
 class CryptoTradingEngine {
     constructor(config) {
         this.config = config;
@@ -1549,6 +1557,10 @@ class CryptoTradingEngine {
             totalLossesToday: 0,
             totalWinsToday: 0,
         };
+
+        // Auto-optimizer state — updated every 4 hours in tradingLoop
+        this._lastAutoOptimMs = 0;
+        this._optimizedParams = null; // null = use defaults (PARAM_BOUNDS defaults)
     }
 
     // ========================================================================
@@ -2600,15 +2612,16 @@ class CryptoTradingEngine {
     }
 
     // [v10.1] Entry quality gate — every crypto signal must pass before execution
-    isCryptoEntryQualified(signal, committee, btcBullish) {
+    // committeeThreshold: auto-optimized value passed from tradingLoop (default 0.50)
+    isCryptoEntryQualified(signal, committee, btcBullish, committeeThreshold = 0.50) {
         const reasons = [];
         const symbol = signal.symbol;
         const direction = signal.direction || 'long';
 
-        // 1. Committee confidence must be >= 0.50 (raised from 0.45)
+        // 1. Committee confidence must meet threshold (auto-optimized, default 0.50)
         const conf = committee ? committee.confidence : 0;
-        if (conf < 0.50) {
-            reasons.push(`confidence ${conf.toFixed(2)} < 0.50`);
+        if (conf < committeeThreshold) {
+            reasons.push(`confidence ${conf.toFixed(2)} < ${committeeThreshold.toFixed(3)}`);
         }
 
         // 2. BTC correlation check — if BTC is bearish, don't go LONG on altcoins
@@ -3162,6 +3175,34 @@ class CryptoTradingEngine {
 
                 this.scanCount++;
 
+                // ── Auto-optimizer: run every 4 hours ────────────────────────
+                const AUTO_OPTIM_INTERVAL_MS = 4 * 60 * 60 * 1000;
+                if (Date.now() - this._lastAutoOptimMs >= AUTO_OPTIM_INTERVAL_MS) {
+                    const evalTrades = (globalThis._cryptoTradeEvaluations || []).map(e => ({
+                        pnl: e.pnl,
+                        committeeConfidence: e.signals?.committeeConfidence ?? e.signals?.score ?? 0,
+                        rewardRisk: e.signals?.rewardRisk ?? 0,
+                        strategy: e.signals?.regime ?? 'unknown',
+                    }));
+                    const optResult = autoOptimize(evalTrades);
+                    this._optimizedParams = optResult.params;
+                    this._lastAutoOptimMs = Date.now();
+                    console.log(`[AutoOptim] Crypto params updated — committeeThreshold=${optResult.params.committeeThreshold.toFixed(3)}, minRR=${optResult.params.minRewardRisk.toFixed(2)} | ${optResult.reason}`);
+                    if (optResult.improved) {
+                        const strats = autoEvalStrategies(globalThis._cryptoTradeEvaluations || []);
+                        const activeStrats = Object.entries(strats).filter(([, s]) => s.active).map(([k, s]) => `${k}(PF=${s.profitFactor.toFixed(2)})`).join(', ');
+                        if (activeStrats) console.log(`[AutoOptim] Active strategies: ${activeStrats}`);
+                    }
+                }
+                // Effective thresholds — use optimized values when available, else defaults
+                const effectiveCommitteeThreshold = this._optimizedParams
+                    ? this._optimizedParams.committeeThreshold
+                    : AUTO_PARAM_BOUNDS.committeeThreshold.default;
+                const effectiveMinRR = this._optimizedParams
+                    ? this._optimizedParams.minRewardRisk
+                    : AUTO_PARAM_BOUNDS.minRewardRisk.default;
+                // ─────────────────────────────────────────────────────────────
+
                 console.log(`\n${'='.repeat(60)}`);
                 console.log(`🔍 CRYPTO SCAN #${this.scanCount} - ${new Date().toLocaleString()}`);
                 console.log(`${'='.repeat(60)}`);
@@ -3276,12 +3317,12 @@ class CryptoTradingEngine {
                             console.log(`[Guardrail] ${signal.symbol} BLOCKED — confidence ${aiResult.confidence.toFixed(2)} < ${MIN_SIGNAL_CONFIDENCE}`);
                             continue;
                         }
-                        // [v4.7] Reward/risk ratio gate
+                        // [v4.7] Reward/risk ratio gate — uses auto-optimized threshold when available
                         const stopPct = (signal.stopLossPercent || 5) / 100;
                         const tpPct = (signal.profitTargetPercent || 10) / 100;
                         const rewardRisk = tpPct / stopPct;
-                        if (rewardRisk < MIN_REWARD_RISK) {
-                            console.log(`[Guardrail] ${signal.symbol} BLOCKED — R:R ${rewardRisk.toFixed(2)} < ${MIN_REWARD_RISK}`);
+                        if (rewardRisk < effectiveMinRR) {
+                            console.log(`[Guardrail] ${signal.symbol} BLOCKED — R:R ${rewardRisk.toFixed(2)} < ${effectiveMinRR.toFixed(2)} (auto-optim)`);
                             continue;
                         }
                         // [Phase 3] Regime-adjusted score threshold — high vol raises the bar, low vol lowers it
@@ -3296,9 +3337,10 @@ class CryptoTradingEngine {
                             continue;
                         }
                         // [Phase 3] Committee aggregator — unified confidence from all signal sources
+                        // threshold uses auto-optimized value (falls back to 0.50 default)
                         const committee = computeCryptoCommitteeScore(signal);
-                        if (committee.confidence < 0.50) {
-                            console.log(`[Committee] ${signal.symbol}: Confidence ${committee.confidence} < 0.50 threshold — ${JSON.stringify(committee.components)}`);
+                        if (committee.confidence < effectiveCommitteeThreshold) {
+                            console.log(`[Committee] ${signal.symbol}: Confidence ${committee.confidence} < ${effectiveCommitteeThreshold.toFixed(3)} threshold (auto-optim) — ${JSON.stringify(committee.components)}`);
                             continue;
                         }
 
@@ -3356,11 +3398,23 @@ class CryptoTradingEngine {
                         // [v10.1] Entry quality gate — final profitability checklist
                         // btcBullish is not in scope here, so we check BTC trend from signal's sizing hint
                         const btcBullishForGate = signal.sizingFactor >= 1.0; // sizingFactor < 1.0 means BTC was bearish
-                        const qualityCheck = this.isCryptoEntryQualified(signal, committee, btcBullishForGate);
+                        const qualityCheck = this.isCryptoEntryQualified(signal, committee, btcBullishForGate, effectiveCommitteeThreshold);
                         if (!qualityCheck.qualified) {
                             console.log(`[QUALITY GATE] ${signal.symbol}: BLOCKED — ${qualityCheck.reason}`);
                             continue;
                         }
+                        // [Correlation Guard] Check own-position concentration before executing
+                        try {
+                            const ownPositions = Array.from(this.positions.values());
+                            const guard = computeCorrelationGuard(ownPositions);
+                            if (guard.isConcentrated) {
+                                const signalDir = signal.direction || 'long';
+                                if ((signalDir === 'long' && !guard.canOpenLong) || (signalDir === 'short' && !guard.canOpenShort)) {
+                                    console.log(`[CORRELATION] ${signal.symbol} ${signalDir} BLOCKED — portfolio ${(guard.exposureRatio * 100).toFixed(0)}% ${guard.directionBias} (${guard.longCount}L/${guard.shortCount}S)`);
+                                    continue;
+                                }
+                            }
+                        } catch (_guardErr) { /* guard is optional — never block trading on error */ }
                         await this.executeTrade(signal);
                     }
                 }
@@ -3368,11 +3422,14 @@ class CryptoTradingEngine {
 
                 console.log(`${'='.repeat(60)}\n`);
 
+                lastScanCompletedAt = Date.now();
                 // Wait for next scan
                 await new Promise(resolve => setTimeout(resolve, this.config.scanInterval));
 
             } catch (error) {
                 console.error('❌ Error in trading loop:', error);
+                recentErrors.push({ timestamp: Date.now(), error: error.message });
+                if (recentErrors.length > MAX_ERROR_HISTORY) recentErrors.shift();
                 await new Promise(resolve => setTimeout(resolve, 60000)); // Wait 1 min on error
             }
         }
@@ -3936,11 +3993,24 @@ app.get('/api/portfolio/risk', async (req, res) => {
 
 // Health check
 app.get('/health', (req, res) => {
-    res.json({
-        status: 'ok',
-        bot: 'unified-crypto-bot',
-        timestamp: new Date().toISOString()
+    const closedTrades = engine.winningTrades + engine.losingTrades;
+    const winRate = closedTrades > 0 ? engine.winningTrades / closedTrades : 0.5;
+    const profitFactor = engine.totalLoss > 0
+        ? engine.totalProfit / engine.totalLoss
+        : engine.totalProfit > 0 ? 9.99 : 1.0;
+    const health = aggregateHealth({
+        scan: checkScanHealth(lastScanCompletedAt, engine.config ? engine.config.scanInterval : 60000),
+        errors: checkErrorRate(recentErrors),
+        trading: checkTradingHealth({
+            totalTrades: engine.totalTrades || 0,
+            winRate,
+            profitFactor,
+            maxDrawdownPct: 0,
+            consecutiveLosses: engine.guardrails ? engine.guardrails.consecutiveLosses : 0,
+        }),
+        memory: checkMemoryHealth(),
     });
+    res.json(health);
 });
 
 // Get trading status
