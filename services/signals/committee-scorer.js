@@ -1,3 +1,11 @@
+// NOTE: This shared module is currently used only by api-handlers.js for diagnostics.
+// Live trading uses inline committee scorers in each bot file:
+//   - Stock: computeCommitteeScore() in unified-trading-bot.js
+//   - Forex: computeForexCommitteeScore() in unified-forex-bot.js
+//   - Crypto: computeCryptoCommitteeScore() in unified-crypto-bot.js
+// TODO: Consolidate all 3 into this shared module for single source of truth.
+// All bots now use 0.50 committee threshold (raised from 0.45).
+
 /**
  * Registry-based committee scorer.
  * Accepts per-bot component configurations.
@@ -7,7 +15,11 @@
 const BOT_COMPONENTS = {
   stock: {
     components: ['momentum', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'volumeRatio', 'mtfConfluence'],
-    neutralDefaults: { displacement: 0.3, fvg: 0.3, orderFlow: 0.5, mtfConfluence: 0.5 },
+    threshold: 0.50, // raised from 0.45 — matches live inline scorer in unified-trading-bot.js
+    // Neutral defaults aligned with stock bot inline scorer (unified-trading-bot.js ~line 2059-2065):
+    //   displacement/fvg absent → 0.1 (penalising: binary signals rarely fire)
+    //   orderFlow/volumeProfile absent → 0.3 (penalising but less severe)
+    neutralDefaults: { displacement: 0.1, fvg: 0.1, orderFlow: 0.3, volumeProfile: 0.3, mtfConfluence: 0.5 },
     weights: { momentum: 0.25, orderFlow: 0.20, displacement: 0.15, volumeProfile: 0.15, fvg: 0.10, volumeRatio: 0.15, mtfConfluence: 0.0 }
   },
   forex: {

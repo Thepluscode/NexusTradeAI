@@ -173,14 +173,20 @@ function detectReversalCandle(klines, atr, direction) {
 // ─── Main Exit Evaluation ────────────────────────────────────────────────────
 // Combines all three mechanisms into a single recommendation.
 //
+// @param {object} params
+// @param {number} params.partialsCompleted - How many partial exits have been taken (0, 1, or 2).
+//   Pass this from position state; defaults to 0 if omitted.
+//
 // Returns:
 //   {
-//     action: 'hold' | 'tighten' | 'exit',
-//     newStop: number | null,      // suggested stop (only if action is 'tighten')
+//     action: 'hold' | 'tighten' | 'exit' | 'partial_exit',
+//     newStop: number | null,         // suggested stop (only if action is 'tighten')
 //     reason: string | null,
 //     rMultiple: number,
 //     momentumFade: { ... },
-//     reversalCandle: { ... }
+//     reversalCandle: { ... },
+//     partialFraction: number | null, // fraction to close (only if action is 'partial_exit')
+//     partialsCompleted: number | null // updated count (only if action is 'partial_exit')
 //   }
 
 function evaluateExit(params) {
@@ -191,6 +197,7 @@ function evaluateExit(params) {
     direction,
     klines,        // recent price bars (20+ recommended)
     atrPeriod = 14,
+    partialsCompleted = 0,
   } = params;
 
   const isLong = direction === 'long';
@@ -217,6 +224,20 @@ function evaluateExit(params) {
   const ratchetStop = computeRatchetStop(entryPrice, currentStop, currentPrice, atr, direction);
   if (isLong ? ratchetStop > currentStop : (currentStop <= 0 || ratchetStop < currentStop)) {
     result.newStop = ratchetStop;
+  }
+
+  // 1.5. Partial profit taking — scale out in thirds at 1R and 2R
+  if (isProfitable && partialsCompleted < 2) {
+    const partialThresholds = [1.0, 2.0]; // R-multiples for each partial
+    const nextThreshold = partialThresholds[partialsCompleted];
+    if (rMultiple >= nextThreshold) {
+      result.action = 'partial_exit';
+      result.partialFraction = 1/3;
+      result.partialsCompleted = partialsCompleted + 1;
+      result.reason = `Partial exit ${partialsCompleted + 1}/2 at ${result.rMultiple}R (threshold: ${nextThreshold}R)`;
+      // Don't return early — still compute momentum fade and reversal for info
+      // but the primary action is partial_exit
+    }
   }
 
   // 2. Momentum fade — only act on it if trade is profitable
@@ -262,9 +283,84 @@ function evaluateExit(params) {
   return result;
 }
 
+// ─── Portfolio Heat ──────────────────────────────────────────────────────────
+// Total risk across all open positions. If heat exceeds limit, no new trades.
+// Each position's risk = (entry - stop) / entry * positionValue / equity
+//
+// Returns: { heat: number (0-1), positions: number, maxHeat: number, canOpen: bool }
+
+function computePortfolioHeat(openPositions, equity, maxHeat = 0.06) {
+  if (!openPositions || openPositions.length === 0 || !equity || equity <= 0) {
+    return { heat: 0, positions: 0, maxHeat, canOpen: true };
+  }
+
+  let totalRiskDollars = 0;
+
+  for (const pos of openPositions) {
+    const entry = pos.entryPrice || pos.entry || 0;
+    const stop = pos.stopLoss || pos.currentStop || 0;
+    const qty = pos.quantity || pos.shares || pos.units || 0;
+
+    if (entry <= 0 || stop <= 0 || qty <= 0) continue;
+
+    const isLong = (pos.direction || 'long') === 'long';
+    const riskPerUnit = isLong ? (entry - stop) : (stop - entry);
+
+    if (riskPerUnit > 0) {
+      totalRiskDollars += riskPerUnit * qty;
+    }
+  }
+
+  const heat = totalRiskDollars / equity;
+
+  return {
+    heat: Math.round(heat * 10000) / 10000,
+    riskDollars: Math.round(totalRiskDollars * 100) / 100,
+    positions: openPositions.length,
+    maxHeat,
+    canOpen: heat < maxHeat,
+  };
+}
+
+// ─── Equity Curve Trading ───────────────────────────────────────────────────
+// Tracks equity curve vs its moving average.
+// When equity is below the MA → reduce position size (the strategy is underperforming).
+// When equity is above → normal sizing.
+//
+// Returns: { multiplier: number (0.25-1.0), aboveMA: bool, equityMA: number }
+
+function computeEquityCurveMultiplier(equityHistory, lookback = 20) {
+  if (!equityHistory || equityHistory.length < lookback) {
+    return { multiplier: 1.0, aboveMA: true, equityMA: null, reason: 'insufficient data' };
+  }
+
+  const recent = equityHistory.slice(-lookback);
+  const equityMA = recent.reduce((s, v) => s + v, 0) / lookback;
+  const currentEquity = equityHistory[equityHistory.length - 1];
+  const aboveMA = currentEquity >= equityMA;
+
+  if (aboveMA) {
+    return { multiplier: 1.0, aboveMA: true, equityMA: Math.round(equityMA * 100) / 100, reason: 'equity above MA' };
+  }
+
+  // Below MA: scale down proportionally. 5% below = 0.75x, 10% below = 0.50x, etc.
+  const deviation = (equityMA - currentEquity) / equityMA;
+  const multiplier = Math.max(0.25, 1.0 - (deviation * 5)); // 5x sensitivity
+
+  return {
+    multiplier: Math.round(multiplier * 100) / 100,
+    aboveMA: false,
+    equityMA: Math.round(equityMA * 100) / 100,
+    deviation: Math.round(deviation * 10000) / 100, // as percentage
+    reason: `equity ${(deviation * 100).toFixed(1)}% below MA → ${multiplier.toFixed(2)}x sizing`,
+  };
+}
+
 module.exports = {
   evaluateExit,
   computeRatchetStop,
   detectMomentumFade,
   detectReversalCandle,
+  computePortfolioHeat,
+  computeEquityCurveMultiplier,
 };

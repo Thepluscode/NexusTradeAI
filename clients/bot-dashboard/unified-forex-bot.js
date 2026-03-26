@@ -1844,22 +1844,81 @@ function computeForexCommitteeScore(signal) {
 }
 
 // [v3.2] H1 Trend Filter — only trade M15 signals that align with H1 direction
+// [v14.0] Strengthened: 5-candle majority (4/5), linear slope confirmation, ADX > 20 filter
 async function getH1Trend(pair) {
     try {
         const h1Candles = await getCandles(pair, 'H1', 30);
         if (h1Candles.length < 22) return 'neutral';
         const closes = h1Candles.map(c => parseFloat(c.mid.c));
+        const highs  = h1Candles.map(c => parseFloat(c.mid.h));
+        const lows   = h1Candles.map(c => parseFloat(c.mid.l));
         const period = 20;
         const sma20 = closes.slice(-period).reduce((a, b) => a + b, 0) / period;
-        const last3 = closes.slice(-3);
-        // Majority rule: 2-of-3 closes above/below SMA20 + slope confirms direction.
-        // Requiring ALL 3 is too strict — a single hourly dip during a clear uptrend
-        // would mark the pair 'neutral' and block a valid LONG signal.
-        const aboveCount = last3.filter(c => c > sma20).length;
-        const belowCount = last3.filter(c => c < sma20).length;
-        const risingSlope = last3[2] > last3[0];
-        if (aboveCount >= 2 && risingSlope) return 'up';
-        if (belowCount >= 2 && !risingSlope) return 'down';
+
+        // [v14.0] Use last 5 candles instead of 3 — reduces noise from single-candle spikes
+        const last5 = closes.slice(-5);
+
+        // Majority rule: at least 4-of-5 closes must be on the same side of SMA20
+        const aboveCount = last5.filter(c => c > sma20).length;
+        const belowCount = last5.filter(c => c < sma20).length;
+
+        // [v14.0] Linear slope confirmation: compare average of last 2 vs average of first 2
+        // Requires a sustained 0.1% directional move — not just end-to-end comparison
+        const earlyAvg = (last5[0] + last5[1]) / 2;
+        const lateAvg  = (last5[3] + last5[4]) / 2;
+        const slopeUp   = lateAvg > earlyAvg * 1.001; // 0.1% higher (sustained upward drift)
+        const slopeDown = lateAvg < earlyAvg * 0.999; // 0.1% lower  (sustained downward drift)
+
+        // [v14.0] ADX filter: compute 14-period ADX from H1 candles to confirm trend strength
+        // ADX > 20 = trending market; ADX <= 20 = ranging/weak — don't trade trend direction
+        let adx = null;
+        const adxPeriod = 14;
+        if (highs.length >= adxPeriod + 1 && lows.length >= adxPeriod + 1) {
+            // True Range and Directional Movement
+            const tr   = [];
+            const dmPlus  = [];
+            const dmMinus = [];
+            for (let i = 1; i < highs.length; i++) {
+                const trVal = Math.max(
+                    highs[i] - lows[i],
+                    Math.abs(highs[i] - closes[i - 1]),
+                    Math.abs(lows[i]  - closes[i - 1])
+                );
+                tr.push(trVal);
+                const upMove   = highs[i]  - highs[i - 1];
+                const downMove = lows[i - 1] - lows[i];
+                dmPlus.push(upMove > downMove && upMove > 0 ? upMove : 0);
+                dmMinus.push(downMove > upMove && downMove > 0 ? downMove : 0);
+            }
+            // Wilder's smoothed averages (initial sum then rolling)
+            let atr14   = tr.slice(0, adxPeriod).reduce((a, b) => a + b, 0);
+            let diP14   = dmPlus.slice(0, adxPeriod).reduce((a, b) => a + b, 0);
+            let diM14   = dmMinus.slice(0, adxPeriod).reduce((a, b) => a + b, 0);
+            const dxArr = [];
+            // First DX from the initial sums
+            const diPct0 = atr14 > 0 ? (diP14 / atr14) * 100 : 0;
+            const diMct0 = atr14 > 0 ? (diM14 / atr14) * 100 : 0;
+            const dxSum0 = diPct0 + diMct0;
+            if (dxSum0 > 0) dxArr.push(Math.abs(diPct0 - diMct0) / dxSum0 * 100);
+            for (let i = adxPeriod; i < tr.length; i++) {
+                atr14 = atr14 - atr14 / adxPeriod + tr[i];
+                diP14 = diP14 - diP14 / adxPeriod + dmPlus[i];
+                diM14 = diM14 - diM14 / adxPeriod + dmMinus[i];
+                const diPct = atr14 > 0 ? (diP14 / atr14) * 100 : 0;
+                const diMct = atr14 > 0 ? (diM14 / atr14) * 100 : 0;
+                const dxDenom = diPct + diMct;
+                if (dxDenom > 0) dxArr.push(Math.abs(diPct - diMct) / dxDenom * 100);
+            }
+            if (dxArr.length >= adxPeriod) {
+                adx = dxArr.slice(-adxPeriod).reduce((a, b) => a + b, 0) / adxPeriod;
+            }
+        }
+        const adxTrending = adx === null || adx > 20; // pass-through if ADX unavailable
+
+        console.log(`[H1 Trend] ${pair}: SMA20=${sma20.toFixed(5)}, above=${aboveCount}/5, below=${belowCount}/5, slopeUp=${slopeUp}, slopeDown=${slopeDown}, ADX=${adx !== null ? adx.toFixed(1) : 'n/a'}`);
+
+        if (aboveCount >= 4 && slopeUp   && adxTrending) return 'up';
+        if (belowCount >= 4 && slopeDown  && adxTrending) return 'down';
         return 'neutral';
     } catch (e) {
         console.warn(`[H1 Trend] ${pair}: ${e.message}`);
@@ -2338,6 +2397,9 @@ async function scanForSignals(heldPositions = positions) {
         // LONG Signal — [v7.0] Pullback-to-support entry: 4 key filters only
         // 1) H1 trend up  2) Price near SMA20  3) RSI 35-55  4) MACD histogram > 0
         const pullbackToMA = Math.abs(currentPrice - analysis.sma20) / analysis.sma20;
+        // [Tier3 Fix] ATR-adaptive pullback threshold — 0.75 * ATR instead of fixed 0.5%
+        // Floor 0.3% (stable pairs like EUR/USD), cap 1.0% (volatile pairs like GBP/JPY)
+        const maxPullbackToMA = Math.max(0.003, Math.min(atrPct * 0.75, 0.01));
 
         // [v11.0] D1 trend gate — block counter-trend entries
         const d1LongOk = d1Trend !== 'down';
@@ -2354,7 +2416,7 @@ async function scanForSignals(heldPositions = positions) {
             console.log(`[LONG DIAG] ${pair}: d1Long=OK but h1Trend=${h1Trend} (need up) — skipped`);
         } else if (d1LongOk && h1Trend === 'up') {
             const longFails = [];
-            if (pullbackToMA > 0.005) longFails.push(`pullback=${(pullbackToMA*100).toFixed(3)}%>0.5%`);
+            if (pullbackToMA > maxPullbackToMA) longFails.push(`pullback=${(pullbackToMA*100).toFixed(3)}%>${(maxPullbackToMA*100).toFixed(3)}% (ATR-adaptive)`);
             if (rsi < 35 || rsi > 65) longFails.push(`rsi=${rsi.toFixed(1)} outside 35-65`);
             if (!macd) longFails.push('macd=null');
             else if (macd.histogram <= 0) longFails.push(`macdHist=${macd.histogram.toFixed(5)}<=0`);
@@ -2362,7 +2424,7 @@ async function scanForSignals(heldPositions = positions) {
         }
         // [v13.2] RSI range widened: 35-65 for longs (was 35-55)
         // In uptrends, RSI naturally runs 55-65. Old range blocked ALL trending entries.
-        if (d1LongOk && h1Trend === 'up' && pullbackToMA <= 0.005 && rsi >= 35 && rsi <= 65 && macd !== null && macd.histogram > 0) {
+        if (d1LongOk && h1Trend === 'up' && pullbackToMA <= maxPullbackToMA && rsi >= 35 && rsi <= 65 && macd !== null && macd.histogram > 0) {
             // [v3.3] Strategy Bridge advisory — only block if bridge explicitly signals SHORT with high confidence
             const bridgeLong = await queryStrategyBridge(pair, 'long');
             if (bridgeLong !== null && bridgeLong.direction === 'short' && bridgeLong.confidence > 0.7) {
@@ -2453,13 +2515,13 @@ async function scanForSignals(heldPositions = positions) {
             console.log(`[SHORT DIAG] ${pair}: d1Short=OK but h1Trend=${h1Trend} (need down) — skipped`);
         } else if (d1ShortOk && h1Trend === 'down') {
             const shortFails = [];
-            if (pullbackToMA > 0.005) shortFails.push(`pullback=${(pullbackToMA*100).toFixed(3)}%>0.5%`);
+            if (pullbackToMA > maxPullbackToMA) shortFails.push(`pullback=${(pullbackToMA*100).toFixed(3)}%>${(maxPullbackToMA*100).toFixed(3)}% (ATR-adaptive)`);
             if (rsi < 35 || rsi > 65) shortFails.push(`rsi=${rsi.toFixed(1)} outside 35-65`);
             if (!macd) shortFails.push('macd=null');
             else if (macd.histogram >= 0.00005) shortFails.push(`macdHist=${macd.histogram.toFixed(5)}>=0.00005`);
             if (shortFails.length > 0) console.log(`[SHORT DIAG] ${pair}: h1=down d1=OK but ${shortFails.join(', ')}`);
         }
-        if (d1ShortOk && h1Trend === 'down' && pullbackToMA <= 0.005 && rsi >= 35 && rsi <= 65 && macd !== null && macd.histogram < 0.00005) {
+        if (d1ShortOk && h1Trend === 'down' && pullbackToMA <= maxPullbackToMA && rsi >= 35 && rsi <= 65 && macd !== null && macd.histogram < 0.00005) {
             // [v3.3] Strategy Bridge advisory — only block if bridge explicitly signals LONG with high confidence
             const bridgeShort = await queryStrategyBridge(pair, 'short');
             if (bridgeShort !== null && bridgeShort.direction === 'long' && bridgeShort.confidence > 0.7) {

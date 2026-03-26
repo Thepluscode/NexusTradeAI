@@ -624,6 +624,22 @@ let totalTradesToday = 0;
 // [v11.0] SPY Trend Hard Gate — reject all LONG entries when SPY is bearish
 let spyBullish = true; // default true until first update (avoid blocking at startup)
 
+// [Tier3 Fix] Aggregate 1-min SPY bars to 5-min for less noise
+function aggregateTo5Min(bars1m) {
+    const bars5m = [];
+    for (let i = 0; i + 4 < bars1m.length; i += 5) {
+        const chunk = bars1m.slice(i, i + 5);
+        bars5m.push({
+            o: chunk[0].o,
+            h: Math.max(...chunk.map(b => b.h)),
+            l: Math.min(...chunk.map(b => b.l)),
+            c: chunk[chunk.length - 1].c,
+            v: chunk.reduce((s, b) => s + (b.v || 0), 0),
+        });
+    }
+    return bars5m;
+}
+
 // [v11.0] ORB trade limit — max 2 ORB trades per day (focus on best setups)
 let orbTradesToday = 0;
 
@@ -1189,13 +1205,16 @@ function evaluateStockRegimeSignal({ strategy, percentChange, volumeRatio, rsi, 
     const numericBreakoutPct = parseFloat(breakoutPct ?? '0');
     const numericAtrPct = atrPct != null ? parseFloat(atrPct) : null;
 
-    // Hard reject: trend-expansion momentum (14.3% WR historically — not fixable with smooth scoring)
+    // [Tier3 Fix] Trend-expansion: don't hard-block, require pullback to VWAP or EMA9
+    // These are the strongest movers — the edge is in the timing, not in blocking them.
+    // Historical 14.3% WR was from chasing peaks, not from the signal category being bad.
+    let requirePullback = false;
     if (normalizedStrategy === 'openingRangeBreakout') {
         regime = 'opening-range';
     } else if (numericPercentChange >= MOMENTUM_CONFIG.tier2.threshold || numericVolumeRatio >= 3) {
         regime = 'trend-expansion';
         if (normalizedStrategy === 'momentum') {
-            return { tradable: false, regime, quality: 0, reason: 'momentum_blocked_in_trend_expansion' };
+            requirePullback = true; // signal consumer must verify pullback before entry
         }
     }
 
@@ -1230,10 +1249,15 @@ function evaluateStockRegimeSignal({ strategy, percentChange, volumeRatio, rsi, 
     const geoMean = Math.pow(Math.max(quality, 0.01), 1 / factorCount);
     quality = geoMean; // Now in 0.3–1.05 range, matching old quality semantics
 
+    // [Tier3 Fix] For trend-expansion signals, cap quality at 0.65 to reduce position size
+    // relative to standard momentum entries. The signal is valid but entry timing needs refinement.
+    const effectiveQuality = requirePullback ? Math.min(quality, 0.65) : quality;
+
     return {
-        tradable: quality >= (normalizedStrategy === 'openingRangeBreakout' ? 0.70 : 0.65),
+        tradable: effectiveQuality >= (normalizedStrategy === 'openingRangeBreakout' ? 0.70 : 0.65),
         regime,
-        quality: parseFloat(quality.toFixed(3)),
+        quality: parseFloat(effectiveQuality.toFixed(3)),
+        requirePullback,
         // v5.1: Expose component scores for backtest UI
         components: {
             rsi: parseFloat(rsiQuality(numericRsi).toFixed(3)),
@@ -1667,7 +1691,15 @@ function buildOpeningRangeBreakoutCandidate({ symbol, bars, current, rsi, vwap, 
         breakoutPct
     });
     if (!regimeProfile.tradable) return null;
-    const score = (8 + breakoutPct * 1000 + breakoutVolumeRatio * 4) * rsiBonus * regimeProfile.quality;
+    // [Tier3 Fix] Normalized ORB score — prevents chasing the most extended breakouts.
+    // The old formula (8 + breakoutPct*1000 + ...) * rsiBonus * regimeQuality produced unbounded scores
+    // dominated by breakoutPct magnitude. Each component is now capped to [0,1] and combined as a
+    // weighted average. rsiBonus (continuous 1.0–1.15) is mapped to a 0–1 norm via (rsiBonus - 1) / 0.15.
+    const normBreakout = Math.min(breakoutPct / 0.05, 1.0);          // caps at 5% above ORB trigger
+    const normVolume   = Math.min(breakoutVolumeRatio / 4, 1.0);     // caps at 4× opening-range volume
+    const normRsi      = (rsiBonus - 1.0) / 0.15;                    // maps [1.0, 1.15] → [0, 1]
+    const normRegime   = regimeProfile.quality;                        // already [0,1]
+    const score = (normBreakout * 0.35 + normVolume * 0.30 + normRsi * 0.20 + normRegime * 0.15);
 
     return {
         symbol,
@@ -2023,20 +2055,22 @@ function computeCommitteeScore(signal) {
     totalWeight += committeeWeights.momentum;
 
     // 2. Order flow confirmation (weight: dynamic via committeeWeights)
+    // Neutral default 0.1 — absence of confirmation should penalize, not inflate
     const flowScore = signal.orderFlowImbalance !== undefined
         ? Math.max(0, signal.orderFlowImbalance) // 0 to 1 for longs
-        : 0.5; // neutral if unavailable
+        : 0.3; // penalizing default if unavailable
     confirmations += flowScore * committeeWeights.orderFlow;
     totalWeight += committeeWeights.orderFlow;
 
     // 3. Displacement candle (weight: dynamic via committeeWeights)
-    // [v13.1] Neutral default 0.3 when absent — binary 0 was killing scores since displacement is rare
-    const displacementScore = signal.hasDisplacement ? 1.0 : 0.3;
+    // Neutral default 0.1 — absence of confirmation should penalize, not inflate
+    const displacementScore = signal.hasDisplacement ? 1.0 : 0.1;
     confirmations += displacementScore * committeeWeights.displacement;
     totalWeight += committeeWeights.displacement;
 
     // 4. Volume Profile position (weight: dynamic via committeeWeights)
-    let vpScore = 0.5; // neutral default
+    // Neutral default 0.1 — absence of confirmation should penalize, not inflate
+    let vpScore = 0.3; // penalizing default when volume profile unavailable
     if (signal.volumeProfile) {
         const price = parseFloat(signal.price);
         const { vah, val, poc } = signal.volumeProfile;
@@ -2051,8 +2085,8 @@ function computeCommitteeScore(signal) {
     totalWeight += committeeWeights.volumeProfile;
 
     // 5. FVG confirmation (weight: dynamic via committeeWeights)
-    // [v13.1] Neutral default 0.3 when absent — binary 0 was killing scores since FVG is rare
-    const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0.3;
+    // Neutral default 0.1 — absence of confirmation should penalize, not inflate
+    const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0.1;
     confirmations += fvgScore * committeeWeights.fvg;
     totalWeight += committeeWeights.fvg;
 
@@ -2832,31 +2866,50 @@ async function scanMomentumBreakouts() {
         // Applied as position sizing and threshold adjustments throughout the scan
         if (!globalThis._marketRegime || Date.now() - (globalThis._marketRegimeUpdated || 0) > 5 * 60 * 1000) {
             try {
-                const spyBars = await fetchBarsWithCache('SPY', alpacaConfig, {
+                // [Tier3 Fix] Fetch 200 x 1-min bars so we have enough to build 20+ five-min bars
+                const spyBars1m = await fetchBarsWithCache('SPY', alpacaConfig, {
                     start: new Date().toISOString().split('T')[0],
                     timeframe: '1Min',
                     feed: 'sip',
-                    limit: 100
+                    limit: 200
                 });
-                if (spyBars && spyBars.length > 20) {
-                    globalThis._marketRegime = detectMarketRegime(spyBars);
+                if (spyBars1m && spyBars1m.length > 20) {
+                    // Pass 1-min bars to regime detector (ATR-based; fine-grained resolution is OK there)
+                    globalThis._marketRegime = detectMarketRegime(spyBars1m);
                     globalThis._marketRegimeUpdated = Date.now();
-                    console.log(`[Regime] Market: ${globalThis._marketRegime.adjustments.label} (ATR: ${globalThis._marketRegime.atrPct}%) — size:×${globalThis._marketRegime.adjustments.positionSizeMultiplier} threshold:×${globalThis._marketRegime.adjustments.scoreThresholdMultiplier} maxPos:${globalThis._marketRegime.adjustments.maxPositions}`);
+                    console.log(`[Regime] Market: ${globalThis._marketRegime.adjustments.label} (ATR: ${globalThis._marketRegime.atrPct}%) — size:x${globalThis._marketRegime.adjustments.positionSizeMultiplier} threshold:x${globalThis._marketRegime.adjustments.scoreThresholdMultiplier} maxPos:${globalThis._marketRegime.adjustments.maxPositions}`);
 
-                    // [v11.0] SPY Trend Hard Gate — compute spyBullish from SPY bars
-                    const spyCloses = spyBars.map(b => b.c);
-                    const spyPrice = spyCloses[spyCloses.length - 1];
-                    const spySma20 = spyCloses.length >= 20
-                        ? spyCloses.slice(-20).reduce((a, b) => a + b, 0) / 20
-                        : null;
-                    const spyPrice5Ago = spyCloses.length >= 6 ? spyCloses[spyCloses.length - 6] : spyPrice;
-                    const spyRsi = calculateRSI(spyBars);
-                    const spyHasMomentum = spyPrice > spyPrice5Ago;
-                    if (spySma20 !== null) {
+                    // [Tier3 Fix] SPY Trend Hard Gate — aggregate to 5-min bars to reduce noise
+                    // SMA20 on 5-min = 100 minutes of trend context (vs noisy 20-minute SMA on 1-min bars)
+                    // Momentum: 5-bar lookback on 5-min bars = 25-minute comparison window
+                    const spyBars5m = aggregateTo5Min(spyBars1m);
+                    if (spyBars5m.length >= 20) {
+                        const spyCloses5m = spyBars5m.map(b => b.c);
+                        const spyPrice = spyCloses5m[spyCloses5m.length - 1];
+                        const spySma20 = spyCloses5m.slice(-20).reduce((a, b) => a + b, 0) / 20;
+                        // 5-bar lookback on 5-min bars = 25 minutes of momentum context
+                        const spyPrice5Ago = spyCloses5m.length >= 6 ? spyCloses5m[spyCloses5m.length - 6] : spyPrice;
+                        const spyRsi = calculateRSI(spyBars5m);
+                        const spyHasMomentum = spyPrice > spyPrice5Ago;
                         spyBullish = (spyPrice > spySma20) && spyHasMomentum && (spyRsi > 40);
                         // Also mark bearish on extreme weakness
                         if (spyPrice < spySma20 || spyRsi < 35) spyBullish = false;
-                        console.log(`[SPY GATE] SPY $${spyPrice.toFixed(2)} vs SMA20 $${spySma20.toFixed(2)} | RSI ${spyRsi.toFixed(1)} | Momentum ${spyHasMomentum ? '+' : '-'} → ${spyBullish ? 'BULLISH' : 'BEARISH'}`);
+                        console.log(`[SPY GATE][5m] SPY $${spyPrice.toFixed(2)} vs SMA20(5m) $${spySma20.toFixed(2)} | RSI(5m) ${spyRsi.toFixed(1)} | Momentum ${spyHasMomentum ? '+' : '-'} [${spyBars5m.length} 5-min bars] -> ${spyBullish ? 'BULLISH' : 'BEARISH'}`);
+                    } else {
+                        // Not enough 5-min bars yet (early in the session) — fall back gracefully to 1-min
+                        const spyCloses1m = spyBars1m.map(b => b.c);
+                        const spyPrice = spyCloses1m[spyCloses1m.length - 1];
+                        const spySma20 = spyCloses1m.length >= 20
+                            ? spyCloses1m.slice(-20).reduce((a, b) => a + b, 0) / 20
+                            : null;
+                        const spyPrice5Ago = spyCloses1m.length >= 6 ? spyCloses1m[spyCloses1m.length - 6] : spyPrice;
+                        const spyRsi = calculateRSI(spyBars1m);
+                        const spyHasMomentum = spyPrice > spyPrice5Ago;
+                        if (spySma20 !== null) {
+                            spyBullish = (spyPrice > spySma20) && spyHasMomentum && (spyRsi > 40);
+                            if (spyPrice < spySma20 || spyRsi < 35) spyBullish = false;
+                            console.log(`[SPY GATE][1m fallback] SPY $${spyPrice.toFixed(2)} vs SMA20 $${spySma20.toFixed(2)} | RSI ${spyRsi.toFixed(1)} | Momentum ${spyHasMomentum ? '+' : '-'} -> ${spyBullish ? 'BULLISH' : 'BEARISH'}`);
+                        }
                     }
                 }
             } catch (e) {
@@ -2990,8 +3043,8 @@ async function scanMomentumBreakouts() {
                     }
                     // [Phase 3] Committee aggregator — unified confidence from all signal sources
                     const committee = computeCommitteeScore(mover);
-                    if (committee.confidence < 0.45) {
-                        console.log(`[Committee] ${mover.symbol}: Confidence ${committee.confidence} < 0.45 threshold — ${JSON.stringify(committee.components)}`);
+                    if (committee.confidence < 0.50) {
+                        console.log(`[Committee] ${mover.symbol}: Confidence ${committee.confidence} < 0.50 threshold — ${JSON.stringify(committee.components)}`);
                         continue;
                     }
                     // [v11.0] Require 2+ positive components — prevents marginal single-signal entries
@@ -3130,13 +3183,14 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
         }
 
         // [v3.2] EMA 9/21 crossover filter — only enter in confirmed uptrends
+        // Converted to a boolean flag so VWAP reclaim can bypass it.
+        // Reclaim is a mean-reversion setup that fires during EMA compression.
         const closes = bars.map(b => b.c);
         const ema9 = calculateEMA(closes, 9);
         const ema21 = calculateEMA(closes, 21);
-        if (ema9 !== null && ema21 !== null && ema9 <= ema21) {
-            // EMA9 below EMA21 = downtrend or no trend — skip
-            return null;
-        }
+        const emaUptrend = !(ema9 !== null && ema21 !== null && ema9 <= ema21);
+        // Momentum + ORB still require emaUptrend; VWAP reclaim does not.
+        if (!emaUptrend) { /* fall through — only VWAP reclaim built below */ }
 
         const atr = calculateATR(bars);
         const atrPct = atr !== null && current > 0 ? atr / current : null;
@@ -3154,7 +3208,7 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
         });
         if (orbCandidate) candidates.push(orbCandidate);
 
-        let momentumAllowed = true;
+        let momentumAllowed = emaUptrend;  // [VWAP Reclaim] requires emaUptrend; reclaim does not
 
         // v5.0: Tightened from 90% to 82% — data shows buying near daily highs = stop-outs
         // 53% of all trades exit via stop loss; most entered at extended levels
@@ -3291,7 +3345,26 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                                 atrPct
                             });
                             if (regimeProfile.tradable) {
-                                let score = tierMultiplier * parseFloat(percentChange) * parseFloat(volumeRatio.toFixed(2)) * rsiBonus * regimeProfile.quality;
+                                // [Tier3 Fix] Trend-expansion pullback gate: don't chase peaks —
+                                // require price to have pulled back at least 1% from the session high.
+                                if (regimeProfile.requirePullback) {
+                                    const recentHigh = Math.max(...bars.slice(-20).map(b => b.h));
+                                    const pullbackFromHigh = (recentHigh - current) / recentHigh;
+                                    if (pullbackFromHigh < 0.01) {
+                                        console.log(`[REGIME] ${symbol} trend-expansion: waiting for pullback (only ${(pullbackFromHigh * 100).toFixed(2)}% from high)`);
+                                        return null;
+                                    }
+                                }
+                                // [Tier3 Fix] Normalized momentum score — prevents chasing the most extended movers.
+                                // Raw product (percentChange * volumeRatio * ...) was unbounded and dominated by
+                                // percentChange, causing the bot to rank overextended stocks highest. Each core
+                                // component is now capped to [0,1] and combined as a weighted average, then
+                                // scaled by tierMultiplier. Displacement/VP/FVG bonuses remain multiplicative.
+                                const normMomentum = Math.min(Math.abs(parseFloat(percentChange)) / 8, 1.0); // caps at 8% move
+                                const normVolume   = Math.min(parseFloat(volumeRatio.toFixed(2)) / 4, 1.0);  // caps at 4× avg volume
+                                const normRsi      = rsiBonus > 1.0 ? 1.0 : 0.7;                             // goldilocks RSI zone → 1.0, else 0.7
+                                const normRegime   = regimeProfile.quality;                                    // already [0,1]
+                                let score = (normMomentum * 0.30 + normVolume * 0.25 + normRsi * 0.25 + normRegime * 0.20) * tierMultiplier;
                                 // Displacement candle bonus
                                 if (hasDisplacement) {
                                     score *= 1.15; // 15% score bonus for displacement confirmation
@@ -3358,7 +3431,26 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                             atrPct
                         });
                         if (regimeProfile.tradable) {
-                            let score = tierMultiplier * parseFloat(percentChange) * parseFloat(volumeRatio.toFixed(2)) * rsiBonus * regimeProfile.quality;
+                            // [Tier3 Fix] Trend-expansion pullback gate: don't chase peaks —
+                            // require price to have pulled back at least 1% from the session high.
+                            if (regimeProfile.requirePullback) {
+                                const recentHigh = Math.max(...bars.slice(-20).map(b => b.h));
+                                const pullbackFromHigh = (recentHigh - current) / recentHigh;
+                                if (pullbackFromHigh < 0.01) {
+                                    console.log(`[REGIME] ${symbol} trend-expansion: waiting for pullback (only ${(pullbackFromHigh * 100).toFixed(2)}% from high)`);
+                                    return null;
+                                }
+                            }
+                            // [Tier3 Fix] Normalized momentum score — prevents chasing the most extended movers.
+                            // Raw product (percentChange * volumeRatio * ...) was unbounded and dominated by
+                            // percentChange, causing the bot to rank overextended stocks highest. Each core
+                            // component is now capped to [0,1] and combined as a weighted average, then
+                            // scaled by tierMultiplier. Displacement/VP/FVG bonuses remain multiplicative.
+                            const normMomentum = Math.min(Math.abs(parseFloat(percentChange)) / 8, 1.0); // caps at 8% move
+                            const normVolume   = Math.min(parseFloat(volumeRatio.toFixed(2)) / 4, 1.0);  // caps at 4× avg volume
+                            const normRsi      = rsiBonus > 1.0 ? 1.0 : 0.7;                             // goldilocks RSI zone → 1.0, else 0.7
+                            const normRegime   = regimeProfile.quality;                                    // already [0,1]
+                            let score = (normMomentum * 0.30 + normVolume * 0.25 + normRsi * 0.25 + normRegime * 0.20) * tierMultiplier;
                             // Displacement candle bonus
                             if (hasDisplacement) {
                                 score *= 1.15; // 15% score bonus for displacement confirmation
@@ -3416,6 +3508,86 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
             }
         }
 
+
+        // [VWAP Reclaim] — price dropped below VWAP then crossed back above with volume.
+        // Research: VWAP trend strategies achieve 2.1 Sharpe on QQQ (2018-2023).
+        // This is a lower-priority, mean-reversion entry that fires when price reclaims VWAP
+        // with momentum confirmation. It runs even when the EMA uptrend filter fails,
+        // because reclaims often happen as price recovers from a brief dip.
+        if (vwap > 0 && current > vwap) {
+            const vwapDistance = (current - vwap) / vwap;
+            // Must be a fresh reclaim: within 0.5% above VWAP — not an extended chase.
+            if (vwapDistance >= 0 && vwapDistance <= 0.005) {
+                // Confirm price was below VWAP in the last 10 bars (the "dip").
+                const recentBelowVwap = bars.slice(-10).some(b => (b.c) < vwap);
+                // Require volume confirmation (1.2× avg) and RSI not overbought.
+                const numericRsi = parseFloat(rsi);
+                if (recentBelowVwap && volumeRatio >= 1.2 && numericRsi < 68) {
+                    // Use tier1 config — conservative sizing for this lower-conviction setup.
+                    const vwapReclaimConfig = MOMENTUM_CONFIG.tier1;
+
+                    // Check position limit against tier1 cap.
+                    const tier1Positions = Array.from(positions.values())
+                        .filter(p => p.tier === 'tier1').length;
+                    if (tier1Positions < vwapReclaimConfig.maxPositions) {
+                        const regimeProfile = evaluateStockRegimeSignal({
+                            strategy: 'vwapReclaim',
+                            percentChange,
+                            volumeRatio,
+                            rsi,
+                            current,
+                            vwap,
+                            atrPct
+                        });
+
+                        if (regimeProfile.tradable) {
+                            // Score components — weighted toward reclaim quality (vwapDistance proximity)
+                            // and volume confirmation. Momentum weight is lower: this is mean-reversion.
+                            const normVwapProximity = Math.max(0, 1 - vwapDistance / 0.005); // 1.0 at exact VWAP, 0 at 0.5%
+                            const normVolume = Math.min(volumeRatio / 4, 1.0);
+                            const normRsiScore = numericRsi >= 45 && numericRsi <= 65 ? 1.0 : 0.7;
+                            const normRegime = regimeProfile.quality;
+                            let score = (normVwapProximity * 0.35 + normVolume * 0.30 + normRsiScore * 0.20 + normRegime * 0.15);
+
+                            // Displacement candle bonus — confirms institutional buying at VWAP.
+                            if (hasDisplacement) score *= 1.10;
+
+                            // Volume Profile bonus — reclaim near POC is highest-conviction.
+                            if (volumeProfile) {
+                                const distToPOC = Math.abs(current - volumeProfile.poc) / current;
+                                if (distToPOC < 0.005) score *= 1.12; // near point of control
+                            }
+
+                            candidates.push({
+                                symbol,
+                                price: current,
+                                percentChange: percentChange.toFixed(2),
+                                volumeRatio: volumeRatio.toFixed(2),
+                                volume: volumeToday,
+                                rsi: rsi.toFixed(2),
+                                vwap: vwap.toFixed(2),
+                                tier: 'tier1',
+                                score: parseFloat(score.toFixed(3)),
+                                strategy: 'vwapReclaim',
+                                regime: regimeProfile.regime,
+                                regimeScore: regimeProfile.quality,
+                                config: vwapReclaimConfig,
+                                entryVolume: volumeToday,
+                                atrStop,
+                                atrTarget,
+                                atrPct,
+                                orderFlowImbalance,
+                                hasDisplacement,
+                                volumeProfile: volumeProfile ? { vah: volumeProfile.vah, val: volumeProfile.val, poc: volumeProfile.poc } : null,
+                                fvgCount: fvg.bullish.length + fvg.bearish.length,
+                                vwapDistance: parseFloat(vwapDistance.toFixed(5))
+                            });
+                            console.log(`[VWAP Reclaim] ${symbol} — reclaimed VWAP ($${vwap.toFixed(2)}) within ${(vwapDistance * 100).toFixed(3)}%, vol ${volumeRatio.toFixed(2)}x, RSI ${numericRsi.toFixed(1)}, score ${score.toFixed(3)}`);
+                        }
+                    }
+                }
+            }
+        }
         if (candidates.length === 0) return null;
         candidates.sort((a, b) => (b.score || 0) - (a.score || 0));
         return candidates[0];
@@ -3456,13 +3628,19 @@ async function executeTrade(signal, strategy) {
             const avgLoss = perfData.totalLossAmount / Math.max(perfData.losingTrades, 1);
             const b = avgLoss > 0 ? avgWin / avgLoss : 1;
             const fullKelly = (w * b - (1 - w)) / b;        // optimal fraction of equity
-            const fracKelly = Math.max(0, fullKelly) * 0.5;  // 50% Kelly for safety
+            const fracKelly = fullKelly * 0.5;               // 50% Kelly for safety (can be negative)
             // Express as a multiplier: fracKelly / config.positionSize tells us "how many
-            // config-sized units to risk". Clamp to [0.5, 2.0] and guard against NaN/Infinity
-            // (e.g. if avgLoss=0 or winRate=100%).
-            const rawMultiplier = fracKelly > 0 ? fracKelly / config.positionSize : 1.0;
+            // config-sized units to risk". Clamp to [0.0, 2.0] and guard against NaN/Infinity
+            // (e.g. if avgLoss=0 or winRate=100%). Floor is 0.0 so negative expectancy = no trade.
+            const rawMultiplier = fracKelly > 0 ? fracKelly / config.positionSize : 0.0;
             const safeMultiplier = isFinite(rawMultiplier) && !isNaN(rawMultiplier) ? rawMultiplier : 1.0;
-            kellyMultiplier = Math.max(0.5, Math.min(2.0, safeMultiplier));
+            kellyMultiplier = Math.max(0.0, Math.min(2.0, safeMultiplier));
+        }
+
+        // [Tier1 Fix] Kelly says don't trade → don't trade
+        if (kellyMultiplier <= 0) {
+            console.log(`⚠️  [SKIP] ${signal.symbol}: Kelly multiplier ${kellyMultiplier.toFixed(2)} — negative expectancy, skipping trade`);
+            return null;
         }
 
         // Validate price BEFORE any arithmetic that depends on it
@@ -3478,7 +3656,7 @@ async function executeTrade(signal, strategy) {
 
         // [v9.0] Monte Carlo position sizing — override Kelly when we have 20+ trade samples
         let mcMultiplier = 1.0;
-        if (monteCarloSizer.tradeReturns.length >= 20) {
+        if (monteCarloSizer.tradeReturns.length >= 50) {
             const mcResult = monteCarloSizer.optimize();
             const halfKelly = mcResult.halfKelly;
             mcMultiplier = Math.min(halfKelly / 0.01, 2.0); // cap at 2x base
@@ -3486,19 +3664,26 @@ async function executeTrade(signal, strategy) {
             console.log(`[MONTE-CARLO] Using optimized position size: multiplier ${mcMultiplier.toFixed(2)}x (halfKelly: ${(halfKelly * 100).toFixed(1)}%, samples: ${mcResult.sampleSize}, confidence: ${mcResult.confidence})`);
         }
 
-        const positionSize = equity * config.positionSize * kellyMultiplier * mcMultiplier;
-        let shares = Math.floor(positionSize / effectiveEntry);
-
-        // [v4.7] Cap shares by RISK_PER_TRADE — max dollar risk per trade = equity * RISK_PER_TRADE
+        // [Tier1 Fix] Volatility-adaptive position sizing — equal dollar risk per trade
+        // Instead of fixed % of equity, size by: maxRiskDollars / (entryPrice × stopDistance)
+        // This equalizes risk whether the stock has 2% or 8% ATR
         const stopLossPct = config.stopLoss || 0.04;
-        const maxRiskShares = Math.floor((equity * RISK_PER_TRADE) / (effectiveEntry * stopLossPct));
-        if (maxRiskShares > 0 && shares > maxRiskShares) {
-            console.log(`   [RiskCap] ${signal.symbol}: capped ${shares} → ${maxRiskShares} shares (RISK_PER_TRADE=${(RISK_PER_TRADE * 100).toFixed(2)}%, stopLoss=${(stopLossPct * 100).toFixed(1)}%)`);
-            shares = maxRiskShares;
+        const atrPct = signal.atrPct || stopLossPct; // fallback to config stop if no ATR
+        const dollarRiskPerShare = effectiveEntry * atrPct;
+        const maxDollarRisk = equity * RISK_PER_TRADE * kellyMultiplier * mcMultiplier;
+        let shares = dollarRiskPerShare > 0 ? Math.floor(maxDollarRisk / dollarRiskPerShare) : 0;
+        console.log(`   [VolSize] ${signal.symbol}: atrPct=${(atrPct * 100).toFixed(2)}% | dollarRisk/share=$${dollarRiskPerShare.toFixed(2)} | maxDollarRisk=$${maxDollarRisk.toFixed(0)} | shares=${shares}`);
+
+        // Cap by old fixed % method as upper bound — safety backstop to prevent oversizing
+        // (now redundant since we size by risk, but guards against edge cases with tiny ATR)
+        const maxSharesByEquity = Math.floor((equity * config.positionSize * kellyMultiplier * mcMultiplier) / effectiveEntry);
+        if (shares > maxSharesByEquity) {
+            console.log(`   [VolSize] ${signal.symbol}: capped ${shares} → ${maxSharesByEquity} shares (equity % ceiling)`);
+            shares = maxSharesByEquity;
         }
 
         if (shares < 1) {
-            console.log(`⚠️  [SKIP] ${signal.symbol}: position size $${positionSize.toFixed(0)} too small to buy 1 share @ $${signal.price} (need $${Math.ceil(signal.price)} min)`);
+            console.log(`⚠️  [SKIP] ${signal.symbol}: position too small — 0 shares (atrPct=${(atrPct * 100).toFixed(2)}%, maxDollarRisk=$${maxDollarRisk.toFixed(0)}, price=$${signal.price})`);
             return null;
         }
 
@@ -5394,8 +5579,8 @@ class UserTradingEngine {
                 }
                 // [Phase 3] Committee aggregator — unified confidence from all signal sources
                 const committee = computeCommitteeScore(mover);
-                if (committee.confidence < 0.45) {
-                    console.log(`[Engine ${this.userId}][Committee] ${mover.symbol}: Confidence ${committee.confidence} < 0.45 — skipping`);
+                if (committee.confidence < 0.50) {
+                    console.log(`[Engine ${this.userId}][Committee] ${mover.symbol}: Confidence ${committee.confidence} < 0.50 — skipping`);
                     continue;
                 }
                 const positiveComponents = Object.values(committee.components).filter(v => v > 0).length;
@@ -5612,7 +5797,26 @@ async function analyzeMomentumForEngine(symbol, engine) {
                             atrPct
                         });
                         if (regimeProfile.tradable) {
-                            const score = tierMultiplier * parseFloat(percentChange) * parseFloat(volumeRatio.toFixed(2)) * rsiBonus * regimeProfile.quality;
+                            // [Tier3 Fix] Trend-expansion pullback gate: don't chase peaks —
+                            // require price to have pulled back at least 1% from the session high.
+                            if (regimeProfile.requirePullback) {
+                                const recentHigh = Math.max(...bars.slice(-20).map(b => b.h));
+                                const pullbackFromHigh = (recentHigh - current) / recentHigh;
+                                if (pullbackFromHigh < 0.01) {
+                                    console.log(`[REGIME] ${symbol} trend-expansion: waiting for pullback (only ${(pullbackFromHigh * 100).toFixed(2)}% from high)`);
+                                    return null;
+                                }
+                            }
+                            // [Tier3 Fix] Normalized momentum score — prevents chasing the most extended movers.
+                            // Raw product (percentChange * volumeRatio * ...) was unbounded and dominated by
+                            // percentChange, causing the bot to rank overextended stocks highest. Each core
+                            // component is now capped to [0,1] and combined as a weighted average, then
+                            // scaled by tierMultiplier.
+                            const normMomentum = Math.min(Math.abs(parseFloat(percentChange)) / 8, 1.0); // caps at 8% move
+                            const normVolume   = Math.min(parseFloat(volumeRatio.toFixed(2)) / 4, 1.0);  // caps at 4× avg volume
+                            const normRsi      = rsiBonus > 1.0 ? 1.0 : 0.7;                             // goldilocks RSI zone → 1.0, else 0.7
+                            const normRegime   = regimeProfile.quality;                                    // already [0,1]
+                            const score = (normMomentum * 0.30 + normVolume * 0.25 + normRsi * 0.25 + normRegime * 0.20) * tierMultiplier;
                             candidates.push({
                                 symbol, price: current, percentChange: percentChange.toFixed(2), volumeRatio: volumeRatio.toFixed(2),
                                 volume: volumeToday, rsi: rsi.toFixed(2), vwap: vwap ? vwap.toFixed(2) : null,

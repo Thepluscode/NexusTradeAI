@@ -162,8 +162,8 @@ describe('evaluateExit', () => {
       direction: 'long',
       klines: trendingBars,
     });
-    // Should hold or just tighten via ratchet
-    expect(['hold', 'tighten']).toContain(result.action);
+    // Should hold, tighten, or partial_exit (partial exit at 1R+ is expected)
+    expect(['hold', 'tighten', 'partial_exit']).toContain(result.action);
     expect(result.action).not.toBe('exit');
   });
 
