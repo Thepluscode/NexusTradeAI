@@ -38,6 +38,7 @@ import {
   AdminPanelSettings,
   VpnKey,
   MenuBook,
+  Insights,
 } from '@mui/icons-material';
 import darkTheme from './theme';
 import { Toaster } from 'react-hot-toast';
@@ -57,6 +58,7 @@ const AdminPage = lazy(() => import('./pages/AdminPage'));
 const AgentPage = lazy(() => import('./pages/AgentPage'));
 const APIPage = lazy(() => import('./pages/APIPage'));
 const DocsPage = lazy(() => import('./pages/DocsPage'));
+const SignalsPage = lazy(() => import('./pages/SignalsPage'));
 const LandingPage = lazy(() => import('./pages/LandingPage'));
 import ProtectedRoute from './components/ProtectedRoute';
 import { useAuth } from './hooks/useAuth';
@@ -107,6 +109,7 @@ const NAV_ITEMS = [
   { path: '/forex', label: 'Forex Bot', icon: <CurrencyExchange />, color: '#3b82f6' },
   { path: '/crypto', label: 'Crypto Bot', icon: <CurrencyBitcoin />, color: '#f59e0b' },
   { path: '/backtest', label: 'Backtest', icon: <Assessment />, color: '#8b5cf6' },
+  { path: '/signals', label: 'Signals', icon: <Insights />, color: '#06b6d4' },
   { path: '/trades', label: 'Trade History', icon: <Receipt />, color: '#ec4899' },
   { path: '/agent', label: 'Agent AI', icon: <SmartToy />, color: '#8b5cf6' },
   { path: '/api', label: 'API Access', icon: <VpnKey />, color: '#10b981' },
@@ -602,6 +605,7 @@ function RouterSwitch() {
       <Route path="/forex" element={<WithNav><ProtectedRoute><ForexBotPage /></ProtectedRoute></WithNav>} />
       <Route path="/crypto" element={<WithNav><ProtectedRoute><CryptoBotPage /></ProtectedRoute></WithNav>} />
       <Route path="/backtest" element={<WithNav><ProtectedRoute><BacktestPage /></ProtectedRoute></WithNav>} />
+      <Route path="/signals" element={<WithNav><ProtectedRoute><SignalsPage /></ProtectedRoute></WithNav>} />
       <Route path="/trades" element={<WithNav><ProtectedRoute><TradesPage /></ProtectedRoute></WithNav>} />
       <Route path="/settings" element={<WithNav><ProtectedRoute><SettingsPage /></ProtectedRoute></WithNav>} />
       <Route path="/agent" element={<WithNav><ProtectedRoute><AgentPage /></ProtectedRoute></WithNav>} />
