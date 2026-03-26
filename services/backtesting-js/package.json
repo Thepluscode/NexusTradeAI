@@ -1,0 +1,16 @@
+{
+  "name": "@nexus/backtesting",
+  "version": "1.0.0",
+  "description": "Node.js backtesting engine for NexusTradeAI",
+  "main": "cli.js",
+  "scripts": {
+    "test": "jest --verbose",
+    "test:watch": "jest --watch"
+  },
+  "dependencies": {
+    "@nexus/signals": "file:../signals"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}

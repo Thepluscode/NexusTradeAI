@@ -1,0 +1,14 @@
+{
+  "name": "@nexus/signals",
+  "version": "1.0.0",
+  "description": "Canonical signal pipeline for NexusTradeAI",
+  "main": "index.js",
+  "scripts": {
+    "test": "jest --verbose",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}
