@@ -3289,6 +3289,35 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
             // If R:R too low, fall through to tier config defaults (atrStop stays null)
         }
 
+        // [Tier3] Cross-check stops with shared stop-manager module (diagnostic only — no behavior change)
+        // Logs when the shared module's regime-aware stop differs from the inline ATR stop by >0.5%.
+        // Data from these logs will inform whether to migrate to the shared module.
+        if (atrStop !== null && atrPct !== null && current > 0) {
+            try {
+                const { computeStops: sharedComputeStops } = require('../../services/signals/stop-manager');
+                // Derive a lightweight regime hint from available signal vars (same inputs used later
+                // for regimeProfile, but evaluated here so we don't duplicate the full call).
+                const earlyRegimeHint = evaluateStockRegimeSignal({
+                    strategy: 'momentum',
+                    percentChange,
+                    volumeRatio,
+                    rsi,
+                    current,
+                    vwap,
+                    atrPct
+                });
+                const regime = earlyRegimeHint?.regime || 'trending';
+                const sharedStops = sharedComputeStops(bars, regime, 'long', current);
+                if (sharedStops && sharedStops.stopLoss != null) {
+                    const sharedStopPct = (current - sharedStops.stopLoss) / current;
+                    const inlineStopPct = (current - atrStop) / current;
+                    if (Math.abs(sharedStopPct - inlineStopPct) > 0.005) {
+                        console.log(`[STOP CROSS-CHECK] ${symbol}: inline=${(inlineStopPct * 100).toFixed(2)}% vs shared=${(sharedStopPct * 100).toFixed(2)}% (regime: ${regime}, atrPct: ${(atrPct * 100).toFixed(2)}%)`);
+                    }
+                }
+            } catch (e) { /* shared stop-manager is optional — never block signal on its failure */ }
+        }
+
         // [Phase 1] Signal quality filters — order flow imbalance and displacement candle
         const orderFlowImbalance = calculateOrderFlowImbalance(bars, 20);
         const hasDisplacement = isDisplacementCandle(bars, atr, 3);

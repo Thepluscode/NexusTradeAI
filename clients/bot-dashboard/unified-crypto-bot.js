@@ -1177,7 +1177,8 @@ function computeCryptoCommitteeScore(signal) {
     let totalWeight = 0;
 
     // 1. Momentum strength (weight: cryptoCommitteeWeights.momentum)
-    const momentumScore = Math.min(Math.abs(parseFloat(signal.momentum || 0)) / 5, 1.0);
+    // [Tier3 Fix] Wider normalization for crypto — 5% cap flattened differentiation on 10-30% moves
+    const momentumScore = Math.min(Math.abs(parseFloat(signal.momentum || 0)) / 15, 1.0);
     confirmations += momentumScore * cryptoCommitteeWeights.momentum;
     totalWeight += cryptoCommitteeWeights.momentum;
 
@@ -2025,7 +2026,9 @@ class CryptoTradingEngine {
                 ? data.volumes[data.volumes.length - 2]
                 : currentBarVolume;
             const previousClosedBarVolumeRatio = closedAvgVolume > 0 ? previousClosedBarVolume / closedAvgVolume : currentBarVolumeRatio;
-            const volumeRatio = Math.max(currentBarVolumeRatio, previousClosedBarVolumeRatio);
+            // [Tier3 Fix] Use only completed bar for volume — prevents stale volume from prior spike
+            // Old: Math.max(current, previous) — inherited volume from already-passed spikes
+            const volumeRatio = previousClosedBarVolumeRatio;
 
             // Combined sizing factor for this symbol
             const combinedSizingFactor = btcSizingFactor * macdSizingFactor;
