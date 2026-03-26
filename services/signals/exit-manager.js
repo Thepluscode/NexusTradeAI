@@ -356,6 +356,63 @@ function computeEquityCurveMultiplier(equityHistory, lookback = 20) {
   };
 }
 
+// ─── Cross-Bot Correlation Guard ────────────────────────────────────────────
+// Prevents concentrated directional risk when multiple bots are correlated.
+// Computes a directional exposure score: +1 for each long, -1 for each short.
+// If |netExposure| / totalPositions > threshold, new entries in the dominant
+// direction require higher confidence.
+//
+// Returns: { netExposure, totalPositions, exposureRatio, directionBias,
+//            confidenceBoost, canOpenLong, canOpenShort }
+
+function computeCorrelationGuard(allPositions, maxExposureRatio = 0.75) {
+  if (!allPositions || allPositions.length === 0) {
+    return {
+      netExposure: 0, totalPositions: 0, exposureRatio: 0,
+      directionBias: 'neutral', confidenceBoost: 0,
+      canOpenLong: true, canOpenShort: true
+    };
+  }
+
+  let longCount = 0;
+  let shortCount = 0;
+
+  for (const pos of allPositions) {
+    const dir = (pos.direction || pos.side || 'long').toLowerCase();
+    if (dir === 'long' || dir === 'buy') longCount++;
+    else shortCount++;
+  }
+
+  const totalPositions = longCount + shortCount;
+  const netExposure = longCount - shortCount;
+  const exposureRatio = totalPositions > 0 ? Math.abs(netExposure) / totalPositions : 0;
+  const directionBias = netExposure > 0 ? 'long' : netExposure < 0 ? 'short' : 'neutral';
+
+  // When exposure is concentrated, require extra confidence for same-direction trades
+  // and ease requirements for opposite-direction (hedging) trades
+  const isConcentrated = exposureRatio > maxExposureRatio && totalPositions >= 3;
+
+  // Confidence boost: how much extra confidence to require for same-direction
+  // At 100% exposure with 5+ positions: require 0.10 extra confidence
+  const confidenceBoost = isConcentrated
+    ? Math.min(0.10, (exposureRatio - maxExposureRatio) * 0.4)
+    : 0;
+
+  return {
+    netExposure,
+    longCount,
+    shortCount,
+    totalPositions,
+    exposureRatio: Math.round(exposureRatio * 100) / 100,
+    directionBias,
+    isConcentrated,
+    confidenceBoost: Math.round(confidenceBoost * 1000) / 1000,
+    // Can always open opposite direction (hedging), but same-direction needs boost
+    canOpenLong: !isConcentrated || directionBias !== 'long',
+    canOpenShort: !isConcentrated || directionBias !== 'short',
+  };
+}
+
 module.exports = {
   evaluateExit,
   computeRatchetStop,
@@ -363,4 +420,5 @@ module.exports = {
   detectReversalCandle,
   computePortfolioHeat,
   computeEquityCurveMultiplier,
+  computeCorrelationGuard,
 };

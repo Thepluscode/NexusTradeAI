@@ -13,7 +13,8 @@ const { calibrateConfidence, fitPlattScaling } = require('./confidence-calibrato
 const { qualifyEntry } = require('./entry-qualifier');
 const { computeStops, STOP_CONFIG } = require('./stop-manager');
 const { getRoundTripCost, COST_MODELS } = require('./cost-model');
-const { evaluateExit, computeRatchetStop, detectMomentumFade, detectReversalCandle, computePortfolioHeat, computeEquityCurveMultiplier } = require('./exit-manager');
+const { evaluateExit, computeRatchetStop, detectMomentumFade, detectReversalCandle, computePortfolioHeat, computeEquityCurveMultiplier, computeCorrelationGuard } = require('./exit-manager');
+const { checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth } = require('./health-monitor');
 
 module.exports = {
   computeMomentum, computeOrderFlow, computeDisplacement,
@@ -26,5 +27,6 @@ module.exports = {
   computeStops, STOP_CONFIG,
   getRoundTripCost, COST_MODELS,
   evaluateExit, computeRatchetStop, detectMomentumFade, detectReversalCandle,
-  computePortfolioHeat, computeEquityCurveMultiplier
+  computePortfolioHeat, computeEquityCurveMultiplier, computeCorrelationGuard,
+  checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth,
 };

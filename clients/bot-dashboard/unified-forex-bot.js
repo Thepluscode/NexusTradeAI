@@ -1154,8 +1154,18 @@ function scoreForexSignal({ tier, trendStrength, pullback, maxPullback, rsi, dir
     // Map: 0.0000 → 2.0 (best), 0.0015 → 1.0 (threshold), 0.003+ → 0.0 (worst)
     const proximityScore = Math.max(0, 2.0 - (trendStrength / 0.0015) * 1.0);
 
+    // [Tier3 Fix] Normalized forex score — all components 0-1, weighted average
+    // Prevents MACD from dominating the score (was additive up to +3 pts vs multiplicative rest)
+    const normTier      = Math.min(tierWeight / 1.75, 1.0);        // max tierWeight is 1.75
+    const normSession   = Math.min((sessionWeight - 0.95) / 0.40, 1.0); // range ~0.95-1.35 → 0-1
+    const normProximity = Math.min(proximityScore / 2.0, 1.0);     // proximityScore max is 2.0
+    const normPullback  = Math.min(pullbackQuality - 1.0, 0.35) / 0.35; // bonus above 1.0, max 0.35
+    const normRsi       = rsiSweetSpot > 1.0 ? 1.0 : 0.0;         // binary: in sweet spot or not
+    const normMacd      = Math.min(macdStrength / 3, 1.0);         // macdStrength already 0-3
+
     return parseFloat(
-        (tierWeight * sessionWeight * proximityScore * pullbackQuality * rsiSweetSpot + macdStrength)
+        (normTier * 0.15 + normSession * 0.15 + normProximity * 0.20 +
+         normPullback * 0.25 + normRsi * 0.15 + normMacd * 0.10)
             .toFixed(3)
     );
 }

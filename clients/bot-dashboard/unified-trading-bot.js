@@ -3588,6 +3588,95 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                 }
             }
         }
+        // [RSI(2) Mean Reversion] — buy extreme short-term oversold pullbacks in structural uptrends.
+        // Research: 71% win rate on QQQ; works on large-cap stocks trading above their 50-day SMA.
+        // Entry: RSI(2) < 15, price above SMA50 (daily) AND above VWAP (intraday uptrend intact).
+        // Exit: handled by exit manager (ratchet stops + momentum fade detection).
+        // Uses tier1 config for conservative position sizing — this is mean-reversion, not breakout.
+        if (bars.length >= 10) {
+            const rsi2 = calculateRSI(bars, 2);
+
+            // Fetch daily bars to compute SMA50 — needed to confirm structural uptrend.
+            let sma50Daily = null;
+            try {
+                const dailyResp50 = await axios.get(barUrl, {
+                    headers: { 'APCA-API-KEY-ID': alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': alpacaConfig.secretKey },
+                    params: { timeframe: '1Day', limit: 55, feed: 'sip' }
+                });
+                const dBars50 = dailyResp50.data?.bars || [];
+                if (dBars50.length >= 50) {
+                    sma50Daily = dBars50.slice(-50).map(b => b.c).reduce((s, v) => s + v, 0) / 50;
+                }
+            } catch { /* daily bars unavailable — skip RSI(2) for this symbol */ }
+
+            if (rsi2 < 15 && sma50Daily !== null && current > sma50Daily && vwap && current > vwap) {
+                const rsi2Config = MOMENTUM_CONFIG.tier1;
+                const tier1Positions = Array.from(positions.values()).filter(p => p.tier === 'tier1').length;
+
+                if (tier1Positions < rsi2Config.maxPositions) {
+                    const regimeProfile = evaluateStockRegimeSignal({
+                        strategy: 'rsi2MeanReversion',
+                        percentChange,
+                        volumeRatio,
+                        rsi,
+                        current,
+                        vwap,
+                        atrPct
+                    });
+
+                    if (regimeProfile.tradable) {
+                        // Score components — weighted toward how oversold RSI(2) is and structural trend strength.
+                        // Volume weight is lower: mean-reversion entries don't require high volume.
+                        const normOversold  = Math.min((15 - rsi2) / 15, 1.0);                    // 1.0 at RSI(2)=0, 0 at RSI(2)=15
+                        const normTrend     = Math.min((current / sma50Daily - 1) * 10, 1.0);     // % above SMA50, capped at 10%
+                        const normVolume    = Math.min(volumeRatio / 3, 1.0);                      // 3× avg volume = max
+                        const normRegime    = regimeProfile.quality;
+                        let score = normOversold * 0.40 + normTrend * 0.30 + normVolume * 0.15 + normRegime * 0.15;
+
+                        // Volume Profile bonus — price near VAL is a high-conviction mean-reversion entry.
+                        if (volumeProfile) {
+                            const distToVAL = Math.abs(current - volumeProfile.val) / current;
+                            if (distToVAL < 0.01) score *= 1.12; // 12% bonus: buying at value area low
+                        }
+
+                        // FVG confirmation bonus — bullish FVG near current price raises conviction.
+                        if (fvg.bullish.length > 0) {
+                            const nearFVG = fvg.bullish.some(gap =>
+                                current >= gap.gapMid * 0.99 && current <= gap.gapMid * 1.01
+                            );
+                            if (nearFVG) score *= 1.08;
+                        }
+
+                        candidates.push({
+                            symbol,
+                            price: current,
+                            percentChange: percentChange.toFixed(2),
+                            volumeRatio: volumeRatio.toFixed(2),
+                            volume: volumeToday,
+                            rsi: rsi.toFixed(2),
+                            vwap: vwap ? vwap.toFixed(2) : null,
+                            tier: 'tier1',
+                            score: parseFloat(score.toFixed(3)),
+                            strategy: 'rsi2MeanReversion',
+                            regime: regimeProfile.regime,
+                            regimeScore: regimeProfile.quality,
+                            config: rsi2Config,
+                            entryVolume: volumeToday,
+                            atrStop,
+                            atrTarget,
+                            atrPct,
+                            orderFlowImbalance,
+                            hasDisplacement,
+                            volumeProfile: volumeProfile ? { vah: volumeProfile.vah, val: volumeProfile.val, poc: volumeProfile.poc } : null,
+                            fvgCount: fvg.bullish.length + fvg.bearish.length,
+                            rsi2  // expose for logging / monitoring
+                        });
+                        console.log(`[RSI(2) MeanRev] ${symbol} — RSI(2) ${rsi2.toFixed(1)} (oversold), price $${current.toFixed(2)} vs SMA50 $${sma50Daily.toFixed(2)} (+${((current / sma50Daily - 1) * 100).toFixed(1)}%), score ${score.toFixed(3)}`);
+                    }
+                }
+            }
+        }
+
         if (candidates.length === 0) return null;
         candidates.sort((a, b) => (b.score || 0) - (a.score || 0));
         return candidates[0];
@@ -5829,6 +5918,66 @@ async function analyzeMomentumForEngine(symbol, engine) {
                 }
             }
         }
+        // [RSI(2) Mean Reversion] — buy extreme short-term oversold pullbacks in structural uptrends.
+        // Research: 71% win rate on QQQ; works on large-cap stocks trading above their 50-day SMA.
+        // Entry: RSI(2) < 15, price above SMA50 (daily) AND above VWAP (intraday uptrend intact).
+        // Exit: handled by exit manager (ratchet stops + momentum fade detection).
+        // Uses tier1 config for conservative position sizing — this is mean-reversion, not breakout.
+        if (bars.length >= 10) {
+            const rsi2 = calculateRSI(bars, 2);
+
+            // Fetch daily bars to compute SMA50 — needed to confirm structural uptrend.
+            let sma50Daily = null;
+            try {
+                const barUrl50 = `${engine.alpacaConfig.dataURL}/v2/stocks/${symbol}/bars`;
+                const dailyResp50 = await axios.get(barUrl50, {
+                    headers: { 'APCA-API-KEY-ID': engine.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': engine.alpacaConfig.secretKey },
+                    params: { timeframe: '1Day', limit: 55, feed: 'sip' }
+                });
+                const dBars50 = dailyResp50.data?.bars || [];
+                if (dBars50.length >= 50) {
+                    sma50Daily = dBars50.slice(-50).map(b => b.c).reduce((s, v) => s + v, 0) / 50;
+                }
+            } catch { /* daily bars unavailable — skip RSI(2) for this symbol */ }
+
+            if (rsi2 < 15 && sma50Daily !== null && current > sma50Daily && vwap && current > vwap) {
+                const rsi2Config = MOMENTUM_CONFIG.tier1;
+                const tier1Positions = Array.from(engine.positions.values()).filter(p => p.tier === 'tier1').length;
+
+                if (tier1Positions < rsi2Config.maxPositions) {
+                    const regimeProfile = evaluateStockRegimeSignal({
+                        strategy: 'rsi2MeanReversion',
+                        percentChange,
+                        volumeRatio,
+                        rsi,
+                        current,
+                        vwap,
+                        atrPct
+                    });
+
+                    if (regimeProfile.tradable) {
+                        const normOversold = Math.min((15 - rsi2) / 15, 1.0);
+                        const normTrend    = Math.min((current / sma50Daily - 1) * 10, 1.0);
+                        const normVolume   = Math.min(volumeRatio / 3, 1.0);
+                        const normRegime   = regimeProfile.quality;
+                        const score = normOversold * 0.40 + normTrend * 0.30 + normVolume * 0.15 + normRegime * 0.15;
+
+                        candidates.push({
+                            symbol, price: current, percentChange: percentChange.toFixed(2),
+                            volumeRatio: volumeRatio.toFixed(2), volume: volumeToday,
+                            rsi: rsi.toFixed(2), vwap: vwap ? vwap.toFixed(2) : null,
+                            tier: 'tier1', score: parseFloat(score.toFixed(3)),
+                            strategy: 'rsi2MeanReversion', regime: regimeProfile.regime,
+                            regimeScore: regimeProfile.quality, config: rsi2Config,
+                            entryVolume: volumeToday, atrStop, atrTarget, atrPct,
+                            rsi2
+                        });
+                        console.log(`[RSI(2) MeanRev] ${symbol} — RSI(2) ${rsi2.toFixed(1)}, price $${current.toFixed(2)} vs SMA50 $${sma50Daily.toFixed(2)}, score ${score.toFixed(3)}`);
+                    }
+                }
+            }
+        }
+
         if (candidates.length === 0) return null;
         candidates.sort((a, b) => (b.score || 0) - (a.score || 0));
         return candidates[0];
