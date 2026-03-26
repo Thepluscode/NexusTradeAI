@@ -7,6 +7,11 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
 const { createUserCredentialStore } = require('./userCredentialStore');
+const { createSignalEndpoints } = require('../../services/signals/api-handlers');
+const { BOT_COMPONENTS } = require('../../services/signals/committee-scorer');
+const { computeCorrelationGuard } = require('../../services/signals/exit-manager');
+const { optimize: autoOptimize, evaluateStrategies: autoEvaluateStrategies, PARAM_BOUNDS: AUTO_PARAM_BOUNDS } = require('../../services/signals/auto-optimizer');
+const { checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth } = require('../../services/signals/health-monitor');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 // ===== MONTE CARLO POSITION SIZER =====
@@ -610,6 +615,9 @@ const tradesPerPair = new Map();
 let totalTradesToday = 0;
 let scanCount = 0;
 let lastScanTime = null;
+let lastScanCompletedAt = 0; // for health monitor
+const recentErrors = []; // { timestamp, error } for health monitoring
+const MAX_ERROR_HISTORY = 100;
 let lastEquity = null; // null means not initialized yet
 let cachedLiveDailyPnL = 0; // updated by status endpoint for circuit breaker
 
@@ -952,6 +960,31 @@ setInterval(() => {
 // Detect signal decay every 2 hours (Improvement 4)
 setInterval(() => { detectForexSignalDecay(); }, 2 * 60 * 60 * 1000);
 
+// ===== AUTO-OPTIMIZER STATE =====
+// Walk-forward parameter optimization runs every 4 hours using recent trade evaluations
+let forexOptimizedParams = {
+    committeeThreshold: AUTO_PARAM_BOUNDS.committeeThreshold.default,  // 0.50
+    minRewardRisk:      AUTO_PARAM_BOUNDS.minRewardRisk.default,       // 2.0
+    sizeMultiplier:     AUTO_PARAM_BOUNDS.sizeMultiplier.default,      // 1.0
+    atrStopMultiplier:  AUTO_PARAM_BOUNDS.atrStopMultiplier.default,   // 1.5
+};
+let forexLastOptimizationTime = 0;
+const FOREX_OPTIMIZATION_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
+
+function runForexAutoOptimizer() {
+    const evals = globalThis._forexTradeEvaluations || [];
+    const result = autoOptimize(evals, 30);
+    forexOptimizedParams = result.params;
+    const strategyPerf = autoEvaluateStrategies(evals);
+    console.log(`[AutoOptimizer] Forex params updated — committeeThreshold:${result.params.committeeThreshold} minRR:${result.params.minRewardRisk} | ${result.reason}`);
+    if (Object.keys(strategyPerf).length > 0) {
+        console.log('[AutoOptimizer] Forex strategy performance:', JSON.stringify(
+            Object.fromEntries(Object.entries(strategyPerf).map(([k, v]) => [k, { pf: v.profitFactor.toFixed(2), wr: (v.winRate * 100).toFixed(0) + '%', n: v.trades }]))
+        ));
+    }
+    return result;
+}
+
 // ===== REGISTER WITH MEMORY MANAGER =====
 memoryManager.register('forex_positions', positions, { maxSize: 50, maxAge: 7 * 24 * 60 * 60 * 1000 });
 memoryManager.register('forex_recentTrades', recentTrades, { maxSize: 500, maxAge: 24 * 60 * 60 * 1000 });
@@ -1152,8 +1185,18 @@ function scoreForexSignal({ tier, trendStrength, pullback, maxPullback, rsi, dir
     // Map: 0.0000 → 2.0 (best), 0.0015 → 1.0 (threshold), 0.003+ → 0.0 (worst)
     const proximityScore = Math.max(0, 2.0 - (trendStrength / 0.0015) * 1.0);
 
+    // [Tier3 Fix] Normalized forex score — all components 0-1, weighted average
+    // Prevents MACD from dominating the score (was additive up to +3 pts vs multiplicative rest)
+    const normTier      = Math.min(tierWeight / 1.75, 1.0);        // max tierWeight is 1.75
+    const normSession   = Math.min((sessionWeight - 0.95) / 0.40, 1.0); // range ~0.95-1.35 → 0-1
+    const normProximity = Math.min(proximityScore / 2.0, 1.0);     // proximityScore max is 2.0
+    const normPullback  = Math.min(pullbackQuality - 1.0, 0.35) / 0.35; // bonus above 1.0, max 0.35
+    const normRsi       = rsiSweetSpot > 1.0 ? 1.0 : 0.0;         // binary: in sweet spot or not
+    const normMacd      = Math.min(macdStrength / 3, 1.0);         // macdStrength already 0-3
+
     return parseFloat(
-        (tierWeight * sessionWeight * proximityScore * pullbackQuality * rsiSweetSpot + macdStrength)
+        (normTier * 0.15 + normSession * 0.15 + normProximity * 0.20 +
+         normPullback * 0.25 + normRsi * 0.15 + normMacd * 0.10)
             .toFixed(3)
     );
 }
@@ -1887,22 +1930,81 @@ function computeForexCommitteeScore(signal) {
 }
 
 // [v3.2] H1 Trend Filter — only trade M15 signals that align with H1 direction
+// [v14.0] Strengthened: 5-candle majority (4/5), linear slope confirmation, ADX > 20 filter
 async function getH1Trend(pair) {
     try {
         const h1Candles = await getCandles(pair, 'H1', 30);
         if (h1Candles.length < 22) return 'neutral';
         const closes = h1Candles.map(c => parseFloat(c.mid.c));
+        const highs  = h1Candles.map(c => parseFloat(c.mid.h));
+        const lows   = h1Candles.map(c => parseFloat(c.mid.l));
         const period = 20;
         const sma20 = closes.slice(-period).reduce((a, b) => a + b, 0) / period;
-        const last3 = closes.slice(-3);
-        // Majority rule: 2-of-3 closes above/below SMA20 + slope confirms direction.
-        // Requiring ALL 3 is too strict — a single hourly dip during a clear uptrend
-        // would mark the pair 'neutral' and block a valid LONG signal.
-        const aboveCount = last3.filter(c => c > sma20).length;
-        const belowCount = last3.filter(c => c < sma20).length;
-        const risingSlope = last3[2] > last3[0];
-        if (aboveCount >= 2 && risingSlope) return 'up';
-        if (belowCount >= 2 && !risingSlope) return 'down';
+
+        // [v14.0] Use last 5 candles instead of 3 — reduces noise from single-candle spikes
+        const last5 = closes.slice(-5);
+
+        // Majority rule: at least 4-of-5 closes must be on the same side of SMA20
+        const aboveCount = last5.filter(c => c > sma20).length;
+        const belowCount = last5.filter(c => c < sma20).length;
+
+        // [v14.0] Linear slope confirmation: compare average of last 2 vs average of first 2
+        // Requires a sustained 0.1% directional move — not just end-to-end comparison
+        const earlyAvg = (last5[0] + last5[1]) / 2;
+        const lateAvg  = (last5[3] + last5[4]) / 2;
+        const slopeUp   = lateAvg > earlyAvg * 1.001; // 0.1% higher (sustained upward drift)
+        const slopeDown = lateAvg < earlyAvg * 0.999; // 0.1% lower  (sustained downward drift)
+
+        // [v14.0] ADX filter: compute 14-period ADX from H1 candles to confirm trend strength
+        // ADX > 20 = trending market; ADX <= 20 = ranging/weak — don't trade trend direction
+        let adx = null;
+        const adxPeriod = 14;
+        if (highs.length >= adxPeriod + 1 && lows.length >= adxPeriod + 1) {
+            // True Range and Directional Movement
+            const tr   = [];
+            const dmPlus  = [];
+            const dmMinus = [];
+            for (let i = 1; i < highs.length; i++) {
+                const trVal = Math.max(
+                    highs[i] - lows[i],
+                    Math.abs(highs[i] - closes[i - 1]),
+                    Math.abs(lows[i]  - closes[i - 1])
+                );
+                tr.push(trVal);
+                const upMove   = highs[i]  - highs[i - 1];
+                const downMove = lows[i - 1] - lows[i];
+                dmPlus.push(upMove > downMove && upMove > 0 ? upMove : 0);
+                dmMinus.push(downMove > upMove && downMove > 0 ? downMove : 0);
+            }
+            // Wilder's smoothed averages (initial sum then rolling)
+            let atr14   = tr.slice(0, adxPeriod).reduce((a, b) => a + b, 0);
+            let diP14   = dmPlus.slice(0, adxPeriod).reduce((a, b) => a + b, 0);
+            let diM14   = dmMinus.slice(0, adxPeriod).reduce((a, b) => a + b, 0);
+            const dxArr = [];
+            // First DX from the initial sums
+            const diPct0 = atr14 > 0 ? (diP14 / atr14) * 100 : 0;
+            const diMct0 = atr14 > 0 ? (diM14 / atr14) * 100 : 0;
+            const dxSum0 = diPct0 + diMct0;
+            if (dxSum0 > 0) dxArr.push(Math.abs(diPct0 - diMct0) / dxSum0 * 100);
+            for (let i = adxPeriod; i < tr.length; i++) {
+                atr14 = atr14 - atr14 / adxPeriod + tr[i];
+                diP14 = diP14 - diP14 / adxPeriod + dmPlus[i];
+                diM14 = diM14 - diM14 / adxPeriod + dmMinus[i];
+                const diPct = atr14 > 0 ? (diP14 / atr14) * 100 : 0;
+                const diMct = atr14 > 0 ? (diM14 / atr14) * 100 : 0;
+                const dxDenom = diPct + diMct;
+                if (dxDenom > 0) dxArr.push(Math.abs(diPct - diMct) / dxDenom * 100);
+            }
+            if (dxArr.length >= adxPeriod) {
+                adx = dxArr.slice(-adxPeriod).reduce((a, b) => a + b, 0) / adxPeriod;
+            }
+        }
+        const adxTrending = adx === null || adx > 20; // pass-through if ADX unavailable
+
+        console.log(`[H1 Trend] ${pair}: SMA20=${sma20.toFixed(5)}, above=${aboveCount}/5, below=${belowCount}/5, slopeUp=${slopeUp}, slopeDown=${slopeDown}, ADX=${adx !== null ? adx.toFixed(1) : 'n/a'}`);
+
+        if (aboveCount >= 4 && slopeUp   && adxTrending) return 'up';
+        if (belowCount >= 4 && slopeDown  && adxTrending) return 'down';
         return 'neutral';
     } catch (e) {
         console.warn(`[H1 Trend] ${pair}: ${e.message}`);
@@ -2066,6 +2168,23 @@ async function queryAIAdvisor(signal) {
         const response = await axios.post(`${BRIDGE_URL}/agent/evaluate`, payload, { timeout: 15000 });
         const result = response.data;
         console.log(`[Agent] ${signal.pair}: ${result.approved ? 'APPROVED' : 'REJECTED'} (source: ${result.source}, conf: ${(result.confidence || 0).toFixed(2)}) — ${result.reason}`);
+
+        // [v15.0] Detect rubber-stamp pass-through: bridge returning "Rule-based: signals look clean"
+        // at 100% confidence means NO real AI filtering happened (bridge is a pass-through or using
+        // a trivial fallback). Re-compute the committee score here so the MIN_SIGNAL_CONFIDENCE
+        // guardrail actually filters based on real signal quality rather than trusting the bridge blindly.
+        const isRubberStamp = result.approved === true
+            && result.confidence >= 1.0
+            && typeof result.reason === 'string'
+            && result.reason.toLowerCase().includes('rule-based');
+        if (isRubberStamp) {
+            // Compute real committee score — signal has orderFlow, displacement, fvg, etc. already set
+            const freshCommittee = computeForexCommitteeScore(signal);
+            result.confidence = freshCommittee.confidence;
+            result.reason = `${result.reason} [rubber-stamp: replaced 1.0 with committee ${freshCommittee.confidence.toFixed(2)}]`;
+            result.source = 'rule_based_downgraded';
+            console.log(`[Agent] ${signal.pair}: rubber-stamp detected — confidence downgraded to committee:${freshCommittee.confidence.toFixed(2)} (trend:${freshCommittee.components.trend} flow:${freshCommittee.components.orderFlow} disp:${freshCommittee.components.displacement})`);
+        }
 
         // Cache the result
         _forexAgentCache.set(signal.pair, {
@@ -2381,6 +2500,9 @@ async function scanForSignals(heldPositions = positions) {
         // LONG Signal — [v7.0] Pullback-to-support entry: 4 key filters only
         // 1) H1 trend up  2) Price near SMA20  3) RSI 35-55  4) MACD histogram > 0
         const pullbackToMA = Math.abs(currentPrice - analysis.sma20) / analysis.sma20;
+        // [Tier3 Fix] ATR-adaptive pullback threshold — 0.75 * ATR instead of fixed 0.5%
+        // Floor 0.3% (stable pairs like EUR/USD), cap 1.0% (volatile pairs like GBP/JPY)
+        const maxPullbackToMA = Math.max(0.003, Math.min(atrPct * 0.75, 0.01));
 
         // [v11.0] D1 trend gate — block counter-trend entries
         const d1LongOk = d1Trend !== 'down';
@@ -2397,7 +2519,7 @@ async function scanForSignals(heldPositions = positions) {
             console.log(`[LONG DIAG] ${pair}: d1Long=OK but h1Trend=${h1Trend} (need up) — skipped`);
         } else if (d1LongOk && h1Trend === 'up') {
             const longFails = [];
-            if (pullbackToMA > 0.005) longFails.push(`pullback=${(pullbackToMA*100).toFixed(3)}%>0.5%`);
+            if (pullbackToMA > maxPullbackToMA) longFails.push(`pullback=${(pullbackToMA*100).toFixed(3)}%>${(maxPullbackToMA*100).toFixed(3)}% (ATR-adaptive)`);
             if (rsi < 35 || rsi > 65) longFails.push(`rsi=${rsi.toFixed(1)} outside 35-65`);
             if (!macd) longFails.push('macd=null');
             else if (macd.histogram <= 0) longFails.push(`macdHist=${macd.histogram.toFixed(5)}<=0`);
@@ -2405,7 +2527,7 @@ async function scanForSignals(heldPositions = positions) {
         }
         // [v13.2] RSI range widened: 35-65 for longs (was 35-55)
         // In uptrends, RSI naturally runs 55-65. Old range blocked ALL trending entries.
-        if (d1LongOk && h1Trend === 'up' && pullbackToMA <= 0.005 && rsi >= 35 && rsi <= 65 && macd !== null && macd.histogram > 0) {
+        if (d1LongOk && h1Trend === 'up' && pullbackToMA <= maxPullbackToMA && rsi >= 35 && rsi <= 65 && macd !== null && macd.histogram > 0) {
             // [v3.3] Strategy Bridge advisory — only block if bridge explicitly signals SHORT with high confidence
             const bridgeLong = await queryStrategyBridge(pair, 'long');
             if (bridgeLong !== null && bridgeLong.direction === 'short' && bridgeLong.confidence > 0.7) {
@@ -2496,13 +2618,13 @@ async function scanForSignals(heldPositions = positions) {
             console.log(`[SHORT DIAG] ${pair}: d1Short=OK but h1Trend=${h1Trend} (need down) — skipped`);
         } else if (d1ShortOk && h1Trend === 'down') {
             const shortFails = [];
-            if (pullbackToMA > 0.005) shortFails.push(`pullback=${(pullbackToMA*100).toFixed(3)}%>0.5%`);
+            if (pullbackToMA > maxPullbackToMA) shortFails.push(`pullback=${(pullbackToMA*100).toFixed(3)}%>${(maxPullbackToMA*100).toFixed(3)}% (ATR-adaptive)`);
             if (rsi < 35 || rsi > 65) shortFails.push(`rsi=${rsi.toFixed(1)} outside 35-65`);
             if (!macd) shortFails.push('macd=null');
             else if (macd.histogram >= 0.00005) shortFails.push(`macdHist=${macd.histogram.toFixed(5)}>=0.00005`);
             if (shortFails.length > 0) console.log(`[SHORT DIAG] ${pair}: h1=down d1=OK but ${shortFails.join(', ')}`);
         }
-        if (d1ShortOk && h1Trend === 'down' && pullbackToMA <= 0.005 && rsi >= 35 && rsi <= 65 && macd !== null && macd.histogram < 0.00005) {
+        if (d1ShortOk && h1Trend === 'down' && pullbackToMA <= maxPullbackToMA && rsi >= 35 && rsi <= 65 && macd !== null && macd.histogram < 0.00005) {
             // [v3.3] Strategy Bridge advisory — only block if bridge explicitly signals LONG with high confidence
             const bridgeShort = await queryStrategyBridge(pair, 'short');
             if (bridgeShort !== null && bridgeShort.direction === 'long' && bridgeShort.confidence > 0.7) {
@@ -2681,6 +2803,13 @@ async function executeTrade(signal) {
             ? Math.floor(Math.abs(units) * signal.agentSizeMultiplier)
             : -Math.floor(Math.abs(units) * signal.agentSizeMultiplier);
         console.log(`   [AgentSize] Units adjusted: ${prevUnits} → ${units} (multiplier=${signal.agentSizeMultiplier.toFixed(2)})`);
+    }
+
+    // [v15.0] Safety guard: never submit an order with 0 units — would be accepted by OANDA
+    // but creates a 0-unit position entry that corrupts the dashboard display.
+    if (Math.abs(units) < 1) {
+        console.log(`❌ [SafetyCheck] ${_pair} computed 0 units (balance=${balance.toFixed(2)}, posValue=${positionValue.toFixed(2)}, multiplier=${signal.agentSizeMultiplier || 1}) — skipping trade`);
+        return false;
     }
 
     console.log(`\n🎯 EXECUTING ${signal.direction.toUpperCase()} ${signal.pair} (${signal.tier})`);
@@ -2985,8 +3114,12 @@ async function managePositions() {
 
         if (!localPos) continue;
 
-        const isLong = oandaPos.long?.units > 0;
-        const units = Math.abs(parseInt(oandaPos.long?.units || oandaPos.short?.units || 0));
+        const isLong = parseInt(oandaPos.long?.units || '0') > 0;
+        // [v15.0] FIX: OANDA always returns both long.units and short.units — for shorts, long.units = "0"
+        // The string "0" is truthy in JS, so `"0" || "-741"` returns "0". Must use parseInt first.
+        const longUnitsRaw = parseInt(oandaPos.long?.units || '0');
+        const shortUnitsRaw = parseInt(oandaPos.short?.units || '0');
+        const units = isLong ? Math.abs(longUnitsRaw) : Math.abs(shortUnitsRaw);
         const entryPrice = parseFloat((isLong ? oandaPos.long?.averagePrice : oandaPos.short?.averagePrice) || 0);
         const unrealizedPL = parseFloat(oandaPos.unrealizedPL || 0);
         // Derive current price from unrealizedPL so trailing stops use real market movement
@@ -3054,10 +3187,38 @@ async function managePositions() {
             }
         }
 
-        const atrExitReason = getForexAtrExitReason(localPos, currentPrice);
-        if (atrExitReason) {
-            await closePositionWithReason(pair, atrExitReason);
-            continue;
+        // [EXIT-MGR] Smart exit: momentum fade + reversal candle detection
+        try {
+            const { evaluateExit } = require('../../services/signals/exit-manager');
+            const rawCandles = await getCandles(pair, 'M15', 30);
+            if (rawCandles.length >= 20) {
+                const klines = rawCandles.filter(c => c.complete !== false).map(c => ({
+                    open: parseFloat(c.mid.o), high: parseFloat(c.mid.h),
+                    low: parseFloat(c.mid.l), close: parseFloat(c.mid.c),
+                    volume: c.volume || 0,
+                }));
+                if (klines.length >= 20) {
+                    const exitEval = evaluateExit({
+                        entryPrice, currentPrice, currentStop: localPos.stopLoss || 0,
+                        direction: localPos.direction || (isLong ? 'long' : 'short'),
+                        klines,
+                    });
+                    if (exitEval.action === 'exit') {
+                        console.log(`[EXIT-MGR] ${pair}: ${exitEval.reason}`);
+                        profitProtectReentryPairs.set(pair, { timestamp: Date.now(), direction: localPos.direction || (isLong ? 'long' : 'short'), entry: entryPrice });
+                        await closePositionWithReason(pair, `Smart Exit: ${exitEval.reason}`);
+                        continue;
+                    } else if (exitEval.action === 'tighten' && localPos.stopLoss) {
+                        const betterStop = isLong ? exitEval.newStop > localPos.stopLoss : exitEval.newStop < localPos.stopLoss;
+                        if (betterStop) {
+                            console.log(`[EXIT-MGR] ${pair}: ${exitEval.reason} — stop moved to ${exitEval.newStop.toFixed(5)}`);
+                            localPos.stopLoss = exitEval.newStop;
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            // Non-critical — don't block position management if candle fetch fails
         }
 
         // Check time-based exit
@@ -3154,6 +3315,12 @@ async function tradingLoop() {
 
     scanCount++;
     lastScanTime = new Date();
+
+    // ── Auto-optimizer: re-run every 4 hours ──────────────────────────────
+    if (Date.now() - forexLastOptimizationTime >= FOREX_OPTIMIZATION_INTERVAL_MS) {
+        forexLastOptimizationTime = Date.now();
+        runForexAutoOptimizer();
+    }
 
     console.log('\n' + '='.repeat(60));
     console.log(`[${lastScanTime.toISOString()}] FOREX SCAN #${scanCount}`);
@@ -3329,10 +3496,12 @@ async function tradingLoop() {
                 continue;
             }
             // [v4.7] Reward/Risk quality gate — reject trades below MIN_REWARD_RISK
+            // Uses auto-optimized threshold (floor: static MIN_REWARD_RISK) so optimizer can only tighten, never loosen below the env-var floor
             if (signal.stopLoss && signal.takeProfit && signal.entry) {
                 const rewardRisk = Math.abs(signal.takeProfit - signal.entry) / Math.abs(signal.entry - signal.stopLoss);
-                if (rewardRisk < MIN_REWARD_RISK) {
-                    console.log(`[Guardrail] ${signal.pair} BLOCKED — R:R ${rewardRisk.toFixed(2)} < ${MIN_REWARD_RISK}`);
+                const _forexMinRR = Math.max(MIN_REWARD_RISK, forexOptimizedParams.minRewardRisk);
+                if (rewardRisk < _forexMinRR) {
+                    console.log(`[Guardrail] ${signal.pair} BLOCKED — R:R ${rewardRisk.toFixed(2)} < ${_forexMinRR} (optimizer:${forexOptimizedParams.minRewardRisk} floor:${MIN_REWARD_RISK})`);
                     continue;
                 }
             }
@@ -3343,8 +3512,9 @@ async function tradingLoop() {
             }
             // [Phase 3] Committee aggregator — final quality gate
             const committee = computeForexCommitteeScore(signal);
-            if (committee.confidence < 0.50) {
-                console.log(`[Committee] ${signal.pair} ${signal.direction}: Confidence ${committee.confidence} < 0.50 — ${JSON.stringify(committee.components)}`);
+            const _forexCommitteeThreshold = forexOptimizedParams.committeeThreshold;
+            if (committee.confidence < _forexCommitteeThreshold) {
+                console.log(`[Committee] ${signal.pair} ${signal.direction}: Confidence ${committee.confidence} < ${_forexCommitteeThreshold} — ${JSON.stringify(committee.components)}`);
                 continue;
             }
             // [Improvement 3] Transaction cost EV filter
@@ -3373,12 +3543,28 @@ async function tradingLoop() {
                 console.log(`[QUALITY GATE] ${signal.pair} ${signal.direction}: BLOCKED — ${qualityCheck.reason}`);
                 continue;
             }
+            // [Correlation Guard] Check own-position concentration before executing
+            try {
+                const ownPositions = Array.from(positions.values());
+                const guard = computeCorrelationGuard(ownPositions);
+                if (guard.isConcentrated) {
+                    const signalDir = signal.direction || 'long';
+                    if ((signalDir === 'long' && !guard.canOpenLong) || (signalDir === 'short' && !guard.canOpenShort)) {
+                        console.log(`[CORRELATION] ${signal.pair} ${signalDir} BLOCKED — portfolio ${(guard.exposureRatio * 100).toFixed(0)}% ${guard.directionBias} (${guard.longCount}L/${guard.shortCount}S)`);
+                        continue;
+                    }
+                }
+            } catch (_guardErr) { /* guard is optional — never block trading on error */ }
 
             await executeTrade(signal);
         }
     } catch (err) {
         console.error('❌ Forex trading loop error:', err.message);
+        recentErrors.push({ timestamp: Date.now(), error: err.message });
+        if (recentErrors.length > MAX_ERROR_HISTORY) recentErrors.shift();
     }
+
+    lastScanCompletedAt = Date.now();
 }
 
 // [v6.3] Reset daily counters when UTC date boundary crosses — works on restart at any time
@@ -3412,17 +3598,19 @@ app.get('/api/portfolio/risk', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-    const memoryReport = memoryManager.getReport();
-    res.json({
-        status: 'ok',
-        bot: 'unified-forex-bot',
-        memory: {
-            heapUsedMB: memoryReport.heap.used,
-            heapLimitMB: memoryReport.heap.limit,
-            usagePercent: (memoryReport.heap.used / memoryReport.heap.limit * 100).toFixed(1)
-        },
-        uptime: process.uptime()
+    const health = aggregateHealth({
+        scan: checkScanHealth(lastScanCompletedAt, 300000),
+        errors: checkErrorRate(recentErrors),
+        trading: checkTradingHealth({
+            totalTrades: simTotalTrades || 0,
+            winRate: simTotalTrades > 0 ? (simWinners / simTotalTrades) : 0.5,
+            profitFactor: simProfitFactor || 1.0,
+            maxDrawdownPct: 0,
+            consecutiveLosses: simConsecutiveLosses || 0,
+        }),
+        memory: checkMemoryHealth(),
     });
+    res.json(health);
 });
 
 // [Phase 4] Forex trade evaluation summary endpoint
@@ -3436,8 +3624,8 @@ app.get('/api/forex/evaluations', (req, res) => {
     const losses = evals.filter(e => e.pnl <= 0);
 
     // Signal effectiveness: average P&L when signal was present vs absent
-    // [FIX] orderFlow check uses Math.abs — SHORT trades store negative imbalance (e.g. -0.3).
-    // Old check `> 0.1` always returned false for shorts, making "0 trades with orderFlow".
+    // [v15.0] FIX: orderFlow check must use Math.abs — SHORT trades have negative orderFlowImbalance
+    // (e.g. -0.3 means strong sell pressure). Old check `> 0.1` returned 0 for ALL short trades.
     const signalEffectiveness = {};
     const signals = ['orderFlow', 'displacement', 'fvgCount'];
     for (const sig of signals) {
@@ -3476,6 +3664,12 @@ app.get('/api/forex/evaluations', (req, res) => {
         }
     });
 });
+
+// [Signal Intelligence] Noise report, signal timeline, regime heatmap, threshold curve
+createSignalEndpoints(app, 'forex', 'forex',
+  () => globalThis._forexTradeEvaluations || [],
+  () => BOT_COMPONENTS.forex.components
+);
 
 app.get('/api/forex/status', async (req, res) => {
     try {
@@ -3556,8 +3750,12 @@ app.get('/api/forex/status', async (req, res) => {
         cachedLiveDailyPnL = dailyPnL; // update circuit breaker cache
 
         const positionsData = oandaPositions.map(pos => {
-            const isLong = pos.long?.units > 0;
-            const units = Math.abs(parseInt(pos.long?.units || pos.short?.units || 0));
+            // [v15.0] FIX: OANDA returns long.units="0" for short positions — "0" is truthy so
+            // `"0" || "-741"` evaluates to "0". Must parseInt first before using || fallback.
+            const isLong = parseInt(pos.long?.units || '0') > 0;
+            const posLongUnits = parseInt(pos.long?.units || '0');
+            const posShortUnits = parseInt(pos.short?.units || '0');
+            const units = isLong ? Math.abs(posLongUnits) : Math.abs(posShortUnits);
             const entryPrice = parseFloat(isLong ? pos.long?.averagePrice : pos.short?.averagePrice || 0);
             const unrealizedPL = parseFloat(pos.unrealizedPL || 0);
             // Derive approximate current price from unrealized P/L
@@ -4379,6 +4577,18 @@ class UserForexEngine {
                 console.log(`[ForexEngine ${this.userId}][QUALITY GATE] ${signal.pair} ${signal.direction} (flip): BLOCKED — ${flipQC.reason}`);
                 continue;
             }
+            // [Correlation Guard] Flip signals: check concentration after imagined position flip
+            try {
+                const ownPositions = Array.from(this.positions.values());
+                const guard = computeCorrelationGuard(ownPositions);
+                if (guard.isConcentrated) {
+                    const signalDir = signal.direction || 'long';
+                    if ((signalDir === 'long' && !guard.canOpenLong) || (signalDir === 'short' && !guard.canOpenShort)) {
+                        console.log(`[ForexEngine ${this.userId}][CORRELATION] ${signal.pair} ${signalDir} flip BLOCKED — portfolio ${(guard.exposureRatio * 100).toFixed(0)}% ${guard.directionBias} (${guard.longCount}L/${guard.shortCount}S)`);
+                        continue;
+                    }
+                }
+            } catch (_guardErr) { /* guard is optional — never block trading on error */ }
             console.log(`🔄 [ForexEngine ${this.userId}] [FLIP-REVERSAL] Closing ${signal.pair} ${signal.existingDirection} → opening ${signal.direction}`);
             await this.closePositionWithReason(signal.pair, `flip-reversal → ${signal.direction}`);
             this.totalTradesToday++;
@@ -4405,6 +4615,18 @@ class UserForexEngine {
                 }
                 signal.committeeConfidence = committee.confidence;
                 signal.committeeComponents = committee.components;
+                // [Correlation Guard] Check own-position concentration before executing
+                try {
+                    const ownPositions = Array.from(this.positions.values());
+                    const guard = computeCorrelationGuard(ownPositions);
+                    if (guard.isConcentrated) {
+                        const signalDir = signal.direction || 'long';
+                        if ((signalDir === 'long' && !guard.canOpenLong) || (signalDir === 'short' && !guard.canOpenShort)) {
+                            console.log(`[ForexEngine ${this.userId}][CORRELATION] ${signal.pair} ${signalDir} BLOCKED — portfolio ${(guard.exposureRatio * 100).toFixed(0)}% ${guard.directionBias} (${guard.longCount}L/${guard.shortCount}S)`);
+                            continue;
+                        }
+                    }
+                } catch (_guardErr) { /* guard is optional — never block trading on error */ }
                 await this.executeTrade(signal);
             }
         }

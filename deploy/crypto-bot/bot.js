@@ -8,6 +8,11 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
 const { createUserCredentialStore } = require('./userCredentialStore');
+const { createSignalEndpoints } = require('../../services/signals/api-handlers');
+const { BOT_COMPONENTS } = require('../../services/signals/committee-scorer');
+const { computeCorrelationGuard } = require('../../services/signals/exit-manager');
+const { optimize: autoOptimize, evaluateStrategies: autoEvalStrategies, PARAM_BOUNDS: AUTO_PARAM_BOUNDS } = require('../../services/signals/auto-optimizer');
+const { checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth } = require('../../services/signals/health-monitor');
 require('dotenv').config();
 
 // ===== MONTE CARLO POSITION SIZER =====
@@ -853,7 +858,7 @@ const CRYPTO_CONFIG = {
     meanReversionStrategy: {
         bollingerPeriod: 20,
         bollingerStdDev: 2,
-        rsiOversold: 30,         // Buy when RSI < 30
+        rsiOversold: 20,         // Buy when RSI < 20 — RSI < 20 filters noise; on 5-min crypto candles, RSI < 30 triggers too frequently during normal corrections
         rsiOverbought: 70,       // Short when RSI > 70 (future)
         stopLossPercent: 0.025,  // 2.5% stop (tighter than momentum)
         profitTargetPercent: 0.04, // 4% target (reversion to mean)
@@ -874,12 +879,14 @@ const CRYPTO_CONFIG = {
         avoidWeekend: false     // Crypto trades 24/7 even weekends
     },
 
-    // Trailing Stops — v3.2: tighter stops to capture more profit before reversal
+    // Trailing Stops — v3.3: start at 1x risk (5% stop → trail from +5%)
+    // v3.2 started at +8% — too late, trades reversed from +7% back to stop loss
     trailingStops: [
-        { profit: 0.08, stopDistance: 0.04 }, // At +8%, trail by 4% (was +5%/3% — let winners run longer)
-        { profit: 0.12, stopDistance: 0.06 }, // At +12%, trail by 6% (was +10%/6%)
-        { profit: 0.20, stopDistance: 0.10 }, // At +20%, trail by 10% (was 12% — tighter lock-in)
-        { profit: 0.30, stopDistance: 0.15 }  // At +30%, trail by 15% (was 18% — tighter lock-in)
+        { profit: 0.05, stopDistance: 0.035 }, // At +5% (1x risk): trail by 3.5% → lock ~1.5%
+        { profit: 0.08, stopDistance: 0.04 },  // At +8%: trail by 4% → lock ~4%
+        { profit: 0.12, stopDistance: 0.05 },  // At +12%: trail by 5% → lock ~7%
+        { profit: 0.20, stopDistance: 0.08 },  // At +20%: trail by 8% → lock ~12%
+        { profit: 0.30, stopDistance: 0.12 }   // At +30%: trail by 12% → lock ~18%
     ],
 
     // Scan Interval (5 min for crypto)
@@ -1167,31 +1174,32 @@ function detectFairValueGaps(klines, lookback = 20) {
 // ============================================================================
 
 // [Phase 3] Committee Aggregator for Crypto — combines multiple signal confirmations
-// 6 weighted components; minimum threshold: 0.45 confidence required to trade
+// 6 weighted components; minimum threshold: 0.50 confidence required to trade
 function computeCryptoCommitteeScore(signal) {
     let confirmations = 0;
     let totalWeight = 0;
 
     // 1. Momentum strength (weight: cryptoCommitteeWeights.momentum)
-    const momentumScore = Math.min(Math.abs(parseFloat(signal.momentum || 0)) / 5, 1.0);
+    // [Tier3 Fix] Wider normalization for crypto — 5% cap flattened differentiation on 10-30% moves
+    const momentumScore = Math.min(Math.abs(parseFloat(signal.momentum || 0)) / 15, 1.0);
     confirmations += momentumScore * cryptoCommitteeWeights.momentum;
     totalWeight += cryptoCommitteeWeights.momentum;
 
     // 2. Order flow confirmation (weight: cryptoCommitteeWeights.orderFlow)
     const flowScore = signal.orderFlowImbalance !== undefined
         ? Math.max(0, signal.orderFlowImbalance) // 0 to 1 for longs
-        : 0.5; // neutral if unavailable
+        : 0.3; // neutral-low if unavailable — 0.5 was inflating scores when data absent
     confirmations += flowScore * cryptoCommitteeWeights.orderFlow;
     totalWeight += cryptoCommitteeWeights.orderFlow;
 
     // 3. Displacement candle (weight: cryptoCommitteeWeights.displacement)
-    // [v14.1] Neutral 0.3 when absent — binary 0 killed scores (same fix as stock bot)
-    const displacementScore = signal.hasDisplacement ? 1.0 : 0.3;
+    // [v14.2] 0.1 when absent — 0.3 was too generous; absent means no confirmation
+    const displacementScore = signal.hasDisplacement ? 1.0 : 0.1;
     confirmations += displacementScore * cryptoCommitteeWeights.displacement;
     totalWeight += cryptoCommitteeWeights.displacement;
 
     // 4. Volume Profile position (weight: cryptoCommitteeWeights.volumeProfile)
-    let vpScore = 0.5; // neutral default
+    let vpScore = 0.3; // neutral-low default — 0.5 inflated score when data absent
     if (signal.volumeProfileData) {
         const price = parseFloat(signal.price);
         const { vah, val } = signal.volumeProfileData;
@@ -1206,8 +1214,8 @@ function computeCryptoCommitteeScore(signal) {
     totalWeight += cryptoCommitteeWeights.volumeProfile;
 
     // 5. FVG confirmation (weight: cryptoCommitteeWeights.fvg)
-    // [v14.1] Neutral 0.3 when absent — binary 0 killed scores (same fix as stock bot)
-    const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0.3;
+    // [v14.2] 0.1 when absent — 0.3 was too generous; absent means no confirmation
+    const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0.1;
     confirmations += fvgScore * cryptoCommitteeWeights.fvg;
     totalWeight += cryptoCommitteeWeights.fvg;
 
@@ -1489,6 +1497,11 @@ async function checkPortfolioRisk(localPositionCount) {
     return risks;
 }
 
+// Health monitor state — module-level so the /health endpoint can access them
+let lastScanCompletedAt = 0; // for health monitor
+const recentErrors = []; // { timestamp, error } for health monitoring
+const MAX_ERROR_HISTORY = 100;
+
 class CryptoTradingEngine {
     constructor(config) {
         this.config = config;
@@ -1506,6 +1519,11 @@ class CryptoTradingEngine {
         this.isRunning = false;
         this.isPaused = false;
         this.scanCount = 0;
+
+        // [v3.4] BTC hourly price buffer for structural trend gate
+        // SMA50 on hourly data = 50 hours (~2 days) vs only 4 hours on 5-min data
+        this.btcHourlyPrices = [];
+        this.lastBtcHourlyUpdate = 0;
 
         // Anti-churning tracking
         this.tradesToday = [];
@@ -1539,6 +1557,10 @@ class CryptoTradingEngine {
             totalLossesToday: 0,
             totalWinsToday: 0,
         };
+
+        // Auto-optimizer state — updated every 4 hours in tradingLoop
+        this._lastAutoOptimMs = 0;
+        this._optimizedParams = null; // null = use defaults (PARAM_BOUNDS defaults)
     }
 
     // ========================================================================
@@ -1795,9 +1817,22 @@ class CryptoTradingEngine {
 
     // [v3.3] Strict BTC filter — SMA50 trend, tight RSI band, 24h sensitivity, 4h momentum gate
     // Prevents entering altcoin trades when BTC is not in a CLEAR uptrend
+    // [v3.4] Uses hourly price buffer (SMA50 = 50h ≈ 2 days) instead of 5-min candles (SMA50 = 4h)
     async isBTCBullish() {
-        const btcPrices = this.priceHistory.get('XBTUSD') || [];
-        if (btcPrices.length < 50) return true; // Default allow when insufficient data (need 50 for SMA50)
+        // Use hourly prices for structural trend — falls back to 5-min if buffer is still warming up
+        const btcPrices = this.btcHourlyPrices.length >= 50
+            ? this.btcHourlyPrices
+            : this.priceHistory.get('XBTUSD') || [];
+
+        if (btcPrices.length < 50) {
+            console.log(`[BTC Filter] Insufficient hourly data (${this.btcHourlyPrices.length}/50) — defaulting to bearish`);
+            return false;
+        }
+
+        const usingHourly = btcPrices === this.btcHourlyPrices;
+        if (!usingHourly) {
+            console.log(`[BTC Filter] Hourly buffer warming up (${this.btcHourlyPrices.length}/50) — using 5-min fallback`);
+        }
 
         const sma50 = this.calculateSMA(btcPrices, 50);
         const sma20 = this.calculateSMA(btcPrices, 20);
@@ -1811,19 +1846,19 @@ class CryptoTradingEngine {
             return false;
         }
 
-        // [v3.3] Tighter RSI band: 48-68 (was 45-70) — requires healthier momentum
+        // [v3.3] RSI band: 45-72 — wide enough for healthy uptrends (RSI often runs 45-72 in bull moves)
         const btcRsi = this.calculateRSI(btcPrices, 14);
-        if (btcRsi < 48 || btcRsi > 68) {
-            console.log(`[BTC Filter] RSI ${btcRsi.toFixed(1)} outside healthy range 48-68`);
+        if (btcRsi < 45 || btcRsi > 72) {
+            console.log(`[BTC Filter] RSI ${btcRsi.toFixed(1)} outside healthy range 45-72`);
             return false;
         }
 
-        // [v3.3] 24h change check: tightened to -1% (was -2%) — more sensitive to drops
+        // [v3.3] 24h change check: relaxed to -2% — normal daily volatility
         try {
             const ticker = await this.kraken.get24hTicker('XBTUSD');
             if (ticker) {
                 const change24h = parseFloat(ticker.priceChangePercent);
-                if (change24h < -1) {
+                if (change24h < -2) {
                     console.log(`[BTC Filter] 24h change ${change24h.toFixed(1)}% too negative — holding off altcoins`);
                     return false;
                 }
@@ -1832,13 +1867,13 @@ class CryptoTradingEngine {
             // Non-critical — proceed if ticker fetch fails
         }
 
-        // [v3.3] 4-hour momentum gate: catches BTC rolling over from a peak
-        // Even if price is still above SMA50, a fast drop signals danger for altcoins
-        // 100 candles × 5min = 500min; 4h = 48 candles back
-        if (btcPrices.length >= 48) {
-            const price4hAgo = btcPrices[btcPrices.length - 48];
+        // [v3.4] 4-hour momentum gate: 4 hourly candles back (was 48 × 5-min candles)
+        // Catches BTC rolling over from a peak even when price is still above SMA50
+        const lookback = usingHourly ? 4 : 48;
+        if (btcPrices.length >= lookback) {
+            const price4hAgo = btcPrices[btcPrices.length - lookback];
             const momentum4h = (currentPrice - price4hAgo) / price4hAgo;
-            if (momentum4h < -0.01) {
+            if (momentum4h < -0.015) {
                 console.log(`[BTC MOMENTUM] BTC dropping ${(momentum4h * 100).toFixed(2)}% in 4h — pausing altcoin entries`);
                 return false;
             }
@@ -1863,6 +1898,23 @@ class CryptoTradingEngine {
 
             // Store in history
             this.priceHistory.set(symbol, prices);
+
+            // [v3.4] Populate BTC hourly buffer — only for XBTUSD, once per 60 minutes
+            if (symbol === 'XBTUSD') {
+                const now = Date.now();
+                const minutesSinceLastUpdate = (now - this.lastBtcHourlyUpdate) / 60000;
+                if (minutesSinceLastUpdate >= 60) {
+                    const latestPrice = prices[prices.length - 1];
+                    if (latestPrice && isFinite(latestPrice)) {
+                        this.btcHourlyPrices.push(latestPrice);
+                        if (this.btcHourlyPrices.length > 200) {
+                            this.btcHourlyPrices = this.btcHourlyPrices.slice(-200);
+                        }
+                        this.lastBtcHourlyUpdate = now;
+                        console.log(`[BTC HOURLY] Recorded $${latestPrice.toFixed(0)} — buffer: ${this.btcHourlyPrices.length}/200`);
+                    }
+                }
+            }
 
             // Get 24h ticker for volatility check
             const ticker24h = await this.kraken.get24hTicker(symbol);
@@ -1986,7 +2038,9 @@ class CryptoTradingEngine {
                 ? data.volumes[data.volumes.length - 2]
                 : currentBarVolume;
             const previousClosedBarVolumeRatio = closedAvgVolume > 0 ? previousClosedBarVolume / closedAvgVolume : currentBarVolumeRatio;
-            const volumeRatio = Math.max(currentBarVolumeRatio, previousClosedBarVolumeRatio);
+            // [Tier3 Fix] Use only completed bar for volume — prevents stale volume from prior spike
+            // Old: Math.max(current, previous) — inherited volume from already-passed spikes
+            const volumeRatio = previousClosedBarVolumeRatio;
 
             // Combined sizing factor for this symbol
             const combinedSizingFactor = btcSizingFactor * macdSizingFactor;
@@ -2126,7 +2180,7 @@ class CryptoTradingEngine {
                 if (bb && bb.bandwidth >= mrConfig.minBandwidth && bb.bandwidth <= mrConfig.maxBandwidth) {
                     const mrPositions = Array.from(this.positions.values()).filter(p => p.strategy === 'meanReversion').length;
                     // LONG mean reversion: price at/below lower band + RSI oversold
-                    if (mrPositions < mrConfig.maxPositions && bb.percentB <= 0.15 && rsi < mrConfig.rsiOversold) {
+                    if (mrPositions < mrConfig.maxPositions && bb.percentB <= 0.10 && rsi < mrConfig.rsiOversold) {
                         const mrRegimeProfile = evaluateCryptoRegimeSignal({
                             strategy: 'meanReversion', btcBullish, trendStrength: 0, volumeRatio, rsi, pullbackPct: 0, tier: 'meanRevert', cryptoRegime
                         });
@@ -2175,9 +2229,124 @@ class CryptoTradingEngine {
                 }
             }
 
+            // [Tier3 Fix] True momentum breakout — Donchian channel breakout
+            // Captures genuine breakouts that the pullback strategy misses.
+            // The existing "momentum" tiers require price NEAR SMA20 (pullback entry);
+            // this block fires when price BREAKS ABOVE the prior N-bar high with volume.
+            // Research: 15-day Donchian on crypto is profitable across all lookbacks (5-100 days).
+            if (!bestSignal && btcBullish) {
+                const lookbackPeriods = Math.min(data.prices.length - 1, 240); // 240 x 5min = 20 hours
+                if (lookbackPeriods >= 60) { // need at least 5 hours of data
+                    const priorPrices = data.prices.slice(-(lookbackPeriods + 1), -1); // exclude current bar
+                    const channelHigh = Math.max(...priorPrices);
+                    const channelLow = Math.min(...priorPrices);
+                    const channelRange = channelHigh - channelLow;
+
+                    // Breakout: price > channel high AND volume confirmation AND RSI not overbought
+                    if (
+                        data.currentPrice > channelHigh &&
+                        volumeRatio >= 1.5 &&
+                        rsi >= 50 && rsi <= 75 &&
+                        channelRange > 0
+                    ) {
+                        const breakoutStrength = (data.currentPrice - channelHigh) / channelHigh;
+
+                        // Only take clean breakouts (not too extended — max 3% above channel high)
+                        if (breakoutStrength <= 0.03) {
+                            const breakoutRegimeProfile = evaluateCryptoRegimeSignal({
+                                strategy: 'momentumBreakout',
+                                btcBullish,
+                                trendStrength: trendStrength * 100,
+                                volumeRatio,
+                                rsi,
+                                pullbackPct: 0,
+                                tier: 'breakout'
+                            });
+
+                            if (breakoutRegimeProfile.tradable) {
+                                const atrRisk = buildAtrRisk(0.025, 0.05, 2.0); // 2.5% stop, 5% target fallback; 2:1 R:R
+                                const breakoutSignal = {
+                                    symbol,
+                                    tier: 'breakout',
+                                    strategy: 'momentumBreakout',
+                                    marketRegime: breakoutRegimeProfile.regime,
+                                    regime: breakoutRegimeProfile.regime,
+                                    regimeQuality: breakoutRegimeProfile.quality,
+                                    price: data.currentPrice,
+                                    momentum: momentum * 100,
+                                    trendStrength: trendStrength * 100,
+                                    pullbackPct: 0,
+                                    atrPct,
+                                    rsi,
+                                    volume24h: data.volume24h,
+                                    volumeRatio,
+                                    sizingFactor: combinedSizingFactor,
+                                    // Slippage-adjusted entry (0.3% fill slippage consistent with other strategies)
+                                    stopLoss: data.currentPrice * (1 + 0.003) * (1 - atrRisk.stopPct),
+                                    takeProfit: data.currentPrice * (1 + 0.003) * (1 + atrRisk.targetPct),
+                                    stopLossPercent: atrRisk.stopPct * 100,
+                                    profitTargetPercent: atrRisk.targetPct * 100,
+                                    // Breakout-specific metadata
+                                    channelHigh,
+                                    channelLow,
+                                    breakoutStrength: breakoutStrength * 100,
+                                    // [Phase 1/2] Attach analysis data for committee scoring
+                                    orderFlowImbalance,
+                                    hasDisplacement,
+                                    volumeProfileData: volumeProfile ? { vah: volumeProfile.vah, val: volumeProfile.val, poc: volumeProfile.poc } : null,
+                                    fvgCount: fvg.bullish.length + fvg.bearish.length,
+                                    score: 0 // computed below
+                                };
+
+                                // Score: breakout strength + volume + RSI sweet-spot
+                                const normBreakout = Math.min(breakoutStrength / 0.03, 1.0);
+                                const normVol = Math.min(volumeRatio / 4, 1.0);
+                                const normRsi = (rsi >= 55 && rsi <= 70) ? 1.0 : 0.7;
+                                let breakoutScore = (normBreakout * 0.35 + normVol * 0.35 + normRsi * 0.30)
+                                    * breakoutRegimeProfile.quality;
+
+                                // [Phase 1] Displacement candle bonus — breakouts with displacement are higher quality
+                                if (hasDisplacement) {
+                                    breakoutScore *= 1.15;
+                                }
+
+                                // [Phase 2] Volume Profile bonus — breaking above VAH is a strong continuation signal
+                                if (volumeProfile) {
+                                    const distToVAH = Math.abs(data.currentPrice - volumeProfile.vah) / data.currentPrice;
+                                    if (distToVAH < 0.005) {
+                                        breakoutScore *= 1.10; // 10% bonus: breaking out of value area
+                                    }
+                                }
+
+                                // [Phase 2] FVG confirmation bonus
+                                if (fvg.bullish.length > 0 && volumeProfile && volumeProfile.lowVolumeNodes.length > 0) {
+                                    const hasConfirmedFVG = fvg.bullish.some(gap =>
+                                        volumeProfile.lowVolumeNodes.some(node =>
+                                            gap.gapMid >= node.priceLow && gap.gapMid <= node.priceHigh
+                                        )
+                                    );
+                                    if (hasConfirmedFVG) {
+                                        breakoutScore *= 1.12; // 12% bonus: FVG at low-volume node
+                                    }
+                                }
+
+                                // [v14.0] Apply strategy-regime weight from learning system
+                                // Uses 'momentum' weight bucket — breakout is a momentum-type signal
+                                breakoutScore *= (strategyRegimeWeights.momentum || 1.0);
+                                if (cryptoRegime && cryptoRegime.strategyRouting) breakoutScore *= (cryptoRegime.strategyRouting.momentumWeight || 1.0);
+
+                                breakoutSignal.score = parseFloat(breakoutScore.toFixed(3));
+                                console.log(`🚀 ${symbol} (breakout): Price broke ${lookbackPeriods}-bar high by ${(breakoutStrength * 100).toFixed(2)}%, Vol ${volumeRatio.toFixed(2)}x, RSI ${rsi.toFixed(1)}, score ${breakoutSignal.score}`);
+                                bestSignal = breakoutSignal;
+                            }
+                        }
+                    }
+                }
+            }
+
             if (volumeRatio < minMomentumVolumeRatio) {
                 if (bestSignal) {
-                    opportunities.push(bestSignal);
+                    console.log(`[Volume Gate] ${symbol} signal BLOCKED — volumeRatio ${volumeRatio.toFixed(2)} < ${minMomentumVolumeRatio} (${bestSignal.strategy})`);
                 }
                 continue;
             }
@@ -2363,6 +2532,12 @@ class CryptoTradingEngine {
     // ========================================================================
 
     canTrade(symbol) {
+        // Prevent re-entry on a symbol that already has an open position
+        if (this.positions.has(symbol)) {
+            console.log(`❌ ${symbol}: Already have an open position — skipping`);
+            return { allowed: false, reason: 'Already have open position' };
+        }
+
         // Check daily trade limit
         if (this.dailyTradeCount >= this.config.maxTradesPerDay) {
             console.log(`❌ Daily trade limit reached (${this.dailyTradeCount}/${this.config.maxTradesPerDay})`);
@@ -2443,15 +2618,16 @@ class CryptoTradingEngine {
     }
 
     // [v10.1] Entry quality gate — every crypto signal must pass before execution
-    isCryptoEntryQualified(signal, committee, btcBullish) {
+    // committeeThreshold: auto-optimized value passed from tradingLoop (default 0.50)
+    isCryptoEntryQualified(signal, committee, btcBullish, committeeThreshold = 0.50) {
         const reasons = [];
         const symbol = signal.symbol;
         const direction = signal.direction || 'long';
 
-        // 1. Committee confidence must be >= 0.50 (raised from 0.45)
+        // 1. Committee confidence must meet threshold (auto-optimized, default 0.50)
         const conf = committee ? committee.confidence : 0;
-        if (conf < 0.50) {
-            reasons.push(`confidence ${conf.toFixed(2)} < 0.50`);
+        if (conf < committeeThreshold) {
+            reasons.push(`confidence ${conf.toFixed(2)} < ${committeeThreshold.toFixed(3)}`);
         }
 
         // 2. BTC correlation check — if BTC is bearish, don't go LONG on altcoins
@@ -2470,7 +2646,7 @@ class CryptoTradingEngine {
             reasons.push(`rsi=${rsi.toFixed(1)} outside ${rsiLow}-${rsiHigh}`);
         }
 
-        // 4. At least 2 committee components must be positive
+        // 4. At least 3 committee components must be positive (raised from 2)
         let positiveCount = 0;
         if (committee && committee.components) {
             const comps = committee.components;
@@ -2478,8 +2654,8 @@ class CryptoTradingEngine {
                 if (typeof comps[key] === 'number' && comps[key] > 0) positiveCount++;
             }
         }
-        if (positiveCount < 2) {
-            reasons.push(`components=${positiveCount} positive (need 2+)`);
+        if (positiveCount < 3) {
+            reasons.push(`components=${positiveCount} positive (need 3+)`);
         }
 
         // 5. ATR regime must not be "extreme volatility" (too risky)
@@ -2512,7 +2688,11 @@ class CryptoTradingEngine {
             const runningWinRate = totalClosedTrades >= 10
                 ? this.winningTrades / totalClosedTrades
                 : 0.5;
-            const sizingMultiplier = Math.max(0.25, Math.min(2.0, runningWinRate / 0.5));
+            const sizingMultiplier = Math.max(0.0, Math.min(2.0, runningWinRate / 0.5));
+            if (sizingMultiplier <= 0) {
+                console.log(`⚠️  [SKIP] ${signal.symbol}: Kelly sizing ${sizingMultiplier.toFixed(2)}x — win rate too low (${(runningWinRate * 100).toFixed(1)}%), skipping trade`);
+                return null;
+            }
             const signalSizingFactor = signal.sizingFactor ?? 1.0;
             // [v4.7] Risk-based position cap: max position = equity * RISK_PER_TRADE / stopLossPct
             const stopPctDecimal = (signal.stopLossPercent || 5) / 100; // e.g. 5.0% → 0.05
@@ -2526,11 +2706,15 @@ class CryptoTradingEngine {
 
             // [v9.0] Monte Carlo position sizing — override Kelly when 20+ trade samples available
             let mcMultiplier = 1.0;
-            if (this.monteCarloSizer.tradeReturns.length >= 20) {
+            if (this.monteCarloSizer.tradeReturns.length >= 50) {
                 const mcResult = this.monteCarloSizer.optimize();
                 const halfKelly = mcResult.halfKelly;
                 mcMultiplier = Math.min(halfKelly / 0.01, 2.0); // cap at 2x base
-                mcMultiplier = Math.max(mcMultiplier, 0.25);     // floor at 0.25x
+                mcMultiplier = Math.max(mcMultiplier, 0.0);      // floor at 0.0x
+                if (mcMultiplier <= 0) {
+                    console.log(`⚠️  [SKIP] ${signal.symbol}: Monte Carlo sizing 0x — negative expectancy detected`);
+                    return null;
+                }
                 console.log(`[MONTE-CARLO] Using optimized position size: multiplier ${mcMultiplier.toFixed(2)}x (halfKelly: ${(halfKelly * 100).toFixed(1)}%, samples: ${mcResult.sampleSize}, confidence: ${mcResult.confidence})`);
             }
 
@@ -2785,6 +2969,39 @@ class CryptoTradingEngine {
             //     }
             // }
 
+            // [EXIT-MGR] Smart exit: momentum fade + reversal candle detection
+            try {
+                const { evaluateExit } = require('../../services/signals/exit-manager');
+                const rawKlines = await this.kraken.getKlines(symbol, '5m', 30);
+                if (rawKlines && rawKlines.length >= 20) {
+                    const klines = rawKlines.map(c => ({
+                        open: parseFloat(c[1]), high: parseFloat(c[2]),
+                        low: parseFloat(c[3]), close: parseFloat(c[4]),
+                        volume: parseFloat(c[5]) || 0,
+                    }));
+                    const exitEval = evaluateExit({
+                        entryPrice: position.entry, currentPrice,
+                        currentStop: position.stopLoss || 0,
+                        direction: position.direction || 'long',
+                        klines,
+                    });
+                    if (exitEval.action === 'exit') {
+                        console.log(`[EXIT-MGR] ${symbol}: ${exitEval.reason}`);
+                        this.profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: position.direction || 'long', entry: position.entry });
+                        await this.closePosition(symbol, currentPrice, `Smart Exit: ${exitEval.reason}`);
+                        (this._userTelegram || telegramAlerts).send(
+                            `🧠 *CRYPTO SMART EXIT* — ${symbol}\n${exitEval.reason}\nP&L: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%`
+                        ).catch(() => {});
+                        continue;
+                    } else if (exitEval.action === 'tighten' && exitEval.newStop > position.stopLoss) {
+                        console.log(`[EXIT-MGR] ${symbol}: ${exitEval.reason} — stop raised to $${exitEval.newStop.toFixed(2)}`);
+                        position.stopLoss = exitEval.newStop;
+                    }
+                }
+            } catch (e) {
+                // Non-critical — don't block position management if kline fetch fails
+            }
+
             // Check stop loss
             if (currentPrice <= position.stopLoss) {
                 console.log(`🚨 ${symbol}: STOP LOSS HIT at $${currentPrice.toFixed(2)} (${pnlPercent.toFixed(2)}%)`);
@@ -2881,8 +3098,11 @@ class CryptoTradingEngine {
             this.monteCarloSizer.addTrade(pnlPercent / 100);
 
             // Persist close to DB (fire-and-forget)
+            // pnlPercent is already *100 (e.g. 5.77 for +5.77%), so store it as-is.
+            // loadCryptoEvaluationsFromDB reads pnl_pct back and uses it as a decimal (pnlPct),
+            // so we store the decimal form (pnlPercent / 100) to avoid a 100x inflation on reload.
             const closeTrade = this._dbClose ? this._dbClose.bind(this) : dbCryptoClose;
-            closeTrade(position.dbTradeId, adjustedExitPrice, pnlUSD, pnlPercent, reason).catch(e => console.warn(`⚠️  DB trade close failed: ${e.message}`));
+            closeTrade(position.dbTradeId, adjustedExitPrice, pnlUSD, pnlPercent / 100, reason).catch(e => console.warn(`⚠️  DB trade close failed: ${e.message}`));
 
             // [v14.0] Strategy-regime performance tracking
             const tradeStrategy = position.strategy || 'momentum';
@@ -2963,6 +3183,34 @@ class CryptoTradingEngine {
                 }
 
                 this.scanCount++;
+
+                // ── Auto-optimizer: run every 4 hours ────────────────────────
+                const AUTO_OPTIM_INTERVAL_MS = 4 * 60 * 60 * 1000;
+                if (Date.now() - this._lastAutoOptimMs >= AUTO_OPTIM_INTERVAL_MS) {
+                    const evalTrades = (globalThis._cryptoTradeEvaluations || []).map(e => ({
+                        pnl: e.pnl,
+                        committeeConfidence: e.signals?.committeeConfidence ?? e.signals?.score ?? 0,
+                        rewardRisk: e.signals?.rewardRisk ?? 0,
+                        strategy: e.signals?.regime ?? 'unknown',
+                    }));
+                    const optResult = autoOptimize(evalTrades);
+                    this._optimizedParams = optResult.params;
+                    this._lastAutoOptimMs = Date.now();
+                    console.log(`[AutoOptim] Crypto params updated — committeeThreshold=${optResult.params.committeeThreshold.toFixed(3)}, minRR=${optResult.params.minRewardRisk.toFixed(2)} | ${optResult.reason}`);
+                    if (optResult.improved) {
+                        const strats = autoEvalStrategies(globalThis._cryptoTradeEvaluations || []);
+                        const activeStrats = Object.entries(strats).filter(([, s]) => s.active).map(([k, s]) => `${k}(PF=${s.profitFactor.toFixed(2)})`).join(', ');
+                        if (activeStrats) console.log(`[AutoOptim] Active strategies: ${activeStrats}`);
+                    }
+                }
+                // Effective thresholds — use optimized values when available, else defaults
+                const effectiveCommitteeThreshold = this._optimizedParams
+                    ? this._optimizedParams.committeeThreshold
+                    : AUTO_PARAM_BOUNDS.committeeThreshold.default;
+                const effectiveMinRR = this._optimizedParams
+                    ? this._optimizedParams.minRewardRisk
+                    : AUTO_PARAM_BOUNDS.minRewardRisk.default;
+                // ─────────────────────────────────────────────────────────────
 
                 console.log(`\n${'='.repeat(60)}`);
                 console.log(`🔍 CRYPTO SCAN #${this.scanCount} - ${new Date().toLocaleString()}`);
@@ -3078,12 +3326,12 @@ class CryptoTradingEngine {
                             console.log(`[Guardrail] ${signal.symbol} BLOCKED — confidence ${aiResult.confidence.toFixed(2)} < ${MIN_SIGNAL_CONFIDENCE}`);
                             continue;
                         }
-                        // [v4.7] Reward/risk ratio gate
+                        // [v4.7] Reward/risk ratio gate — uses auto-optimized threshold when available
                         const stopPct = (signal.stopLossPercent || 5) / 100;
                         const tpPct = (signal.profitTargetPercent || 10) / 100;
                         const rewardRisk = tpPct / stopPct;
-                        if (rewardRisk < MIN_REWARD_RISK) {
-                            console.log(`[Guardrail] ${signal.symbol} BLOCKED — R:R ${rewardRisk.toFixed(2)} < ${MIN_REWARD_RISK}`);
+                        if (rewardRisk < effectiveMinRR) {
+                            console.log(`[Guardrail] ${signal.symbol} BLOCKED — R:R ${rewardRisk.toFixed(2)} < ${effectiveMinRR.toFixed(2)} (auto-optim)`);
                             continue;
                         }
                         // [Phase 3] Regime-adjusted score threshold — high vol raises the bar, low vol lowers it
@@ -3098,9 +3346,10 @@ class CryptoTradingEngine {
                             continue;
                         }
                         // [Phase 3] Committee aggregator — unified confidence from all signal sources
+                        // threshold uses auto-optimized value (falls back to 0.50 default)
                         const committee = computeCryptoCommitteeScore(signal);
-                        if (committee.confidence < 0.45) {
-                            console.log(`[Committee] ${signal.symbol}: Confidence ${committee.confidence} < 0.45 threshold — ${JSON.stringify(committee.components)}`);
+                        if (committee.confidence < effectiveCommitteeThreshold) {
+                            console.log(`[Committee] ${signal.symbol}: Confidence ${committee.confidence} < ${effectiveCommitteeThreshold.toFixed(3)} threshold (auto-optim) — ${JSON.stringify(committee.components)}`);
                             continue;
                         }
 
@@ -3158,11 +3407,23 @@ class CryptoTradingEngine {
                         // [v10.1] Entry quality gate — final profitability checklist
                         // btcBullish is not in scope here, so we check BTC trend from signal's sizing hint
                         const btcBullishForGate = signal.sizingFactor >= 1.0; // sizingFactor < 1.0 means BTC was bearish
-                        const qualityCheck = this.isCryptoEntryQualified(signal, committee, btcBullishForGate);
+                        const qualityCheck = this.isCryptoEntryQualified(signal, committee, btcBullishForGate, effectiveCommitteeThreshold);
                         if (!qualityCheck.qualified) {
                             console.log(`[QUALITY GATE] ${signal.symbol}: BLOCKED — ${qualityCheck.reason}`);
                             continue;
                         }
+                        // [Correlation Guard] Check own-position concentration before executing
+                        try {
+                            const ownPositions = Array.from(this.positions.values());
+                            const guard = computeCorrelationGuard(ownPositions);
+                            if (guard.isConcentrated) {
+                                const signalDir = signal.direction || 'long';
+                                if ((signalDir === 'long' && !guard.canOpenLong) || (signalDir === 'short' && !guard.canOpenShort)) {
+                                    console.log(`[CORRELATION] ${signal.symbol} ${signalDir} BLOCKED — portfolio ${(guard.exposureRatio * 100).toFixed(0)}% ${guard.directionBias} (${guard.longCount}L/${guard.shortCount}S)`);
+                                    continue;
+                                }
+                            }
+                        } catch (_guardErr) { /* guard is optional — never block trading on error */ }
                         await this.executeTrade(signal);
                     }
                 }
@@ -3170,11 +3431,14 @@ class CryptoTradingEngine {
 
                 console.log(`${'='.repeat(60)}\n`);
 
+                lastScanCompletedAt = Date.now();
                 // Wait for next scan
                 await new Promise(resolve => setTimeout(resolve, this.config.scanInterval));
 
             } catch (error) {
                 console.error('❌ Error in trading loop:', error);
+                recentErrors.push({ timestamp: Date.now(), error: error.message });
+                if (recentErrors.length > MAX_ERROR_HISTORY) recentErrors.shift();
                 await new Promise(resolve => setTimeout(resolve, 60000)); // Wait 1 min on error
             }
         }
@@ -3738,11 +4002,24 @@ app.get('/api/portfolio/risk', async (req, res) => {
 
 // Health check
 app.get('/health', (req, res) => {
-    res.json({
-        status: 'ok',
-        bot: 'unified-crypto-bot',
-        timestamp: new Date().toISOString()
+    const closedTrades = engine.winningTrades + engine.losingTrades;
+    const winRate = closedTrades > 0 ? engine.winningTrades / closedTrades : 0.5;
+    const profitFactor = engine.totalLoss > 0
+        ? engine.totalProfit / engine.totalLoss
+        : engine.totalProfit > 0 ? 9.99 : 1.0;
+    const health = aggregateHealth({
+        scan: checkScanHealth(lastScanCompletedAt, engine.config ? engine.config.scanInterval : 60000),
+        errors: checkErrorRate(recentErrors),
+        trading: checkTradingHealth({
+            totalTrades: engine.totalTrades || 0,
+            winRate,
+            profitFactor,
+            maxDrawdownPct: 0,
+            consecutiveLosses: engine.guardrails ? engine.guardrails.consecutiveLosses : 0,
+        }),
+        memory: checkMemoryHealth(),
     });
+    res.json(health);
 });
 
 // Get trading status
@@ -4419,6 +4696,12 @@ app.get('/api/crypto/evaluations', (req, res) => {
     });
 });
 
+// [Signal Intelligence] Noise report, signal timeline, regime heatmap, threshold curve
+createSignalEndpoints(app, 'crypto', 'crypto',
+  () => globalThis._cryptoTradeEvaluations || [],
+  () => BOT_COMPONENTS.crypto.components
+);
+
 // [Alpha] Portfolio allocation signal — exposes bot's current edge for capital allocation
 app.get('/api/crypto/alpha-signal', (req, res) => {
     const evals = globalThis._cryptoTradeEvaluations || [];
@@ -4804,6 +5087,10 @@ setInterval(() => {
                 engine.priceHistory.set(symbol, prices.slice(-200));
             }
         }
+    }
+    // Prune BTC hourly buffer to last 200 entries (200 hours = 8+ days)
+    if (engine && engine.btcHourlyPrices && engine.btcHourlyPrices.length > 200) {
+        engine.btcHourlyPrices = engine.btcHourlyPrices.slice(-200);
     }
     // Prune agent cache — remove entries older than 10 minutes
     if (engine && engine._agentCache) {
