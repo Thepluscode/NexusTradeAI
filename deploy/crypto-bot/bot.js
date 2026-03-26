@@ -12,6 +12,7 @@ const { createUserCredentialStore } = require('./userCredentialStore');
 let createSignalEndpoints = () => {};
 let BOT_COMPONENTS = { crypto: { components: ['momentum','orderFlow','displacement','volumeProfile','fvg','volumeRatio','mtfConfluence'] } };
 let computeCorrelationGuard = (positions) => {
+  // Inline fallback — real guard when services/ unavailable (Railway)
   const longs = positions.filter(p => (p.direction || 'long') === 'long').length;
   const shorts = positions.filter(p => (p.direction || 'long') === 'short').length;
   const total = positions.length;
@@ -1879,7 +1880,7 @@ class CryptoTradingEngine {
         // [v16.0] Faster trend check: price above SMA20 AND EMA9 above SMA20
         const isTrending = currentPrice > sma20 && ema9 > sma20;
         if (!isTrending) {
-            console.log(`[BTC Filter] Trend fail — price ${currentPrice > sma20 ? '>' : '<'} SMA20, EMA9 ${ema9 > sma20 ? '>' : '<'} SMA20`);
+            console.log(`[BTC Filter] Trend fail — price ${currentPrice > sma50 ? '>' : '<'} SMA50, EMA9 ${ema9 > sma20 ? '>' : '<'} SMA20`);
             return false;
         }
 

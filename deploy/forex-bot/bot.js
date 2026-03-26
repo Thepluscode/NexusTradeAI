@@ -1085,6 +1085,7 @@ const EXIT_CONFIG = {
 
     // [v16.0] Patient profit targets — old Day-2 target (0.6%) closed trades before trailing
     // stop even activated (0.8% threshold). Must let trailing stops manage winners.
+    // Day targets now only serve as "take what you can get" backstop for aging trades.
     profitTargetByDay: {
         0: 0.012,  // Day 0: 1.2% (aggressive intraday — rare but possible)
         1: 0.012,  // Day 1: 1.2% (same as OANDA server-side TP)
@@ -1095,6 +1096,7 @@ const EXIT_CONFIG = {
     },
 
     // [v16.0] Trailing stops — start at 1x risk (now 1.0% with wider stops)
+    // Previous 0.8% start was too tight with 0.8% stops — barely 1:1 R:R before trailing
     trailingStopLevels: [
         { gainThreshold: 0.010, lockPercent: 0.30 },  // +1.0% (1x risk): lock 30% → stop at +0.30%
         { gainThreshold: 0.015, lockPercent: 0.45 },  // +1.5% (1.5x risk): lock 45% → stop at +0.68%
@@ -2497,14 +2499,10 @@ async function scanForSignals(heldPositions = positions) {
         // [v7.0] Removed v3.9 MIN_TREND_STRENGTH multiplier — it required price to be MORE extended
         // from SMA, which is the opposite of what we want (pullback entries near SMA20)
 
-        // [v6.1] ATR-based stops/targets — adapts to each pair's volatility
-        // v3.2 had 2.0x ATR for BOTH stop and target (1:1 R:R) → 0% win rate.
-        // Fix: 2.5x ATR stop (wider to avoid noise sweep) + 5.0x ATR target (2:1 R:R minimum)
-        // [v12.0] ATR-based stops: FLOOR at 1.5x ATR, never tighter than volatility demands
-        // Old logic used Math.min which CAPPED stops — made them tighter than ATR, causing premature stop-outs
-        // New: stop = max(config, 1.5x ATR), target = max(config, 3x ATR) for 2:1 R:R minimum
-        // Cap at 3% stop / 5% target to prevent absurd stops on extreme volatility
-        // [v16.0] ATR multipliers: 6x stop, 12x target (was 1.5x/3x — useless for M15 forex)
+        // [v16.0] ATR-based stops/targets — M15 ATR for EUR/USD is ~0.09%, so 1.5x = 0.14%
+        // which is always less than config stop (0.8%). Old multiplier was useless.
+        // New: 6x ATR for stop (~0.54% EUR/USD, ~0.78% GBP/JPY), 12x ATR for target (2:1 R:R)
+        // This gives ATR-adaptive stops for volatile pairs while config is the floor for calm ones
         const atrStop   = atrPct > 0 ? Math.min(Math.max(atrPct * 6, config.stopLoss), 0.03) : config.stopLoss;
         const atrTarget = atrPct > 0 ? Math.min(Math.max(atrPct * 12, config.profitTarget), 0.05) : config.profitTarget;
         if (atrPct > 0) console.log(`   [ATR Stops] ${pair}: atrPct=${(atrPct*100).toFixed(3)}% | Stop: ${(atrStop*100).toFixed(3)}% | Target: ${(atrTarget*100).toFixed(3)}%`);
@@ -3136,14 +3134,19 @@ async function managePositions() {
         const unrealizedPL = parseFloat(oandaPos.unrealizedPL || 0);
         // Derive current price from unrealizedPL so trailing stops use real market movement
         // [v16.0] FIX: For JPY-quote pairs, unrealizedPL is in USD but price is in JPY
+        // Formula: P&L(USD) = (current - entry) * units / currentJPYRate ≈ (current - entry) * units / current
+        // Rearranging: current = entry / (1 - PL_USD / units) for longs, entry / (1 + PL_USD / units) for shorts
+        // For USD-quote pairs (EUR_USD), the simple formula works: current = entry ± PL/units
         const isJPYQuote = pair.includes('JPY') || pair.includes('CHF');
         let currentPrice;
         if (entryPrice > 0 && units > 0) {
             if (isJPYQuote) {
+                // JPY/CHF quote: PL is converted to USD by OANDA; must invert the conversion
                 const plPerUnit = unrealizedPL / units;
                 const denom = isLong ? (1 - plPerUnit / entryPrice) : (1 + plPerUnit / entryPrice);
                 currentPrice = denom !== 0 ? entryPrice / denom : entryPrice;
             } else {
+                // USD quote: PL = (current - entry) * units
                 currentPrice = entryPrice + (isLong ? 1 : -1) * (unrealizedPL / units);
             }
         } else {
@@ -3281,7 +3284,8 @@ async function managePositions() {
                     const realPnl   = parseFloat(trade.realizedPL ?? 0);
                     const exitEntry = localPos.entry ?? 0;
                     const exitUnits = Math.abs(localPos.units ?? 1);
-                    // [v16.0] FIX: Use price-based pnl% instead of dollar-based (broken for JPY pairs)
+                    // [v16.0] FIX: For USD-base pairs (USD_JPY), entry*units = JPY notional, not USD
+                    // Use exitPrice to compute price-based pnl% instead of dollar-based
                     const exitPct = exitEntry > 0 && exitPrice > 0
                         ? ((localPos.direction === 'long'
                             ? (exitPrice - exitEntry) / exitEntry
