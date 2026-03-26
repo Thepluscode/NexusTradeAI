@@ -2532,6 +2532,12 @@ class CryptoTradingEngine {
     // ========================================================================
 
     canTrade(symbol) {
+        // Prevent re-entry on a symbol that already has an open position
+        if (this.positions.has(symbol)) {
+            console.log(`❌ ${symbol}: Already have an open position — skipping`);
+            return { allowed: false, reason: 'Already have open position' };
+        }
+
         // Check daily trade limit
         if (this.dailyTradeCount >= this.config.maxTradesPerDay) {
             console.log(`❌ Daily trade limit reached (${this.dailyTradeCount}/${this.config.maxTradesPerDay})`);
@@ -3092,8 +3098,11 @@ class CryptoTradingEngine {
             this.monteCarloSizer.addTrade(pnlPercent / 100);
 
             // Persist close to DB (fire-and-forget)
+            // pnlPercent is already *100 (e.g. 5.77 for +5.77%), so store it as-is.
+            // loadCryptoEvaluationsFromDB reads pnl_pct back and uses it as a decimal (pnlPct),
+            // so we store the decimal form (pnlPercent / 100) to avoid a 100x inflation on reload.
             const closeTrade = this._dbClose ? this._dbClose.bind(this) : dbCryptoClose;
-            closeTrade(position.dbTradeId, adjustedExitPrice, pnlUSD, pnlPercent, reason).catch(e => console.warn(`⚠️  DB trade close failed: ${e.message}`));
+            closeTrade(position.dbTradeId, adjustedExitPrice, pnlUSD, pnlPercent / 100, reason).catch(e => console.warn(`⚠️  DB trade close failed: ${e.message}`));
 
             // [v14.0] Strategy-regime performance tracking
             const tradeStrategy = position.strategy || 'momentum';

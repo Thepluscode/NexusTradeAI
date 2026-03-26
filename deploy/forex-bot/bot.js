@@ -1726,6 +1726,12 @@ function calculateVolumeProfile(candles, numBuckets = 40) {
 }
 
 // [Phase 2] Fair Value Gap Detection — forex candle format (candle.mid.o/h/l/c)
+// Forex-adapted: literal price gaps (next.low > prev.high) are extremely rare in
+// continuous 24/5 trading. We additionally detect body-based imbalance zones:
+// a strong directional candle whose open is beyond adjacent candle closes —
+// an unfilled institutional imbalance zone.
+// Classic FVG: next.low > prev.high (kept for weekend gaps / news spikes)
+// Relaxed FVG: middle candle opens beyond prev close AND next opens inside imbalance zone
 function detectFairValueGaps(candles, lookback = 20) {
     if (!candles || candles.length < 3) return { bullish: [], bearish: [] };
 
@@ -1740,27 +1746,66 @@ function detectFairValueGaps(candles, lookback = 20) {
 
         const prevHigh = parseFloat(prev.mid.h);
         const prevLow = parseFloat(prev.mid.l);
+        const prevClose = parseFloat(prev.mid.c);
         const nextHigh = parseFloat(next.mid.h);
         const nextLow = parseFloat(next.mid.l);
+        const nextOpen = parseFloat(next.mid.o);
         const currClose = parseFloat(curr.mid.c);
         const currOpen = parseFloat(curr.mid.o);
+        const currHigh = parseFloat(curr.mid.h);
+        const currLow = parseFloat(curr.mid.l);
+        const currBody = Math.abs(currClose - currOpen);
+        const currRange = currHigh - currLow;
 
-        if (nextLow > prevHigh && currClose > currOpen) {
-            bullishGaps.push({
-                gapLow: prevHigh,
-                gapHigh: nextLow,
-                gapMid: (prevHigh + nextLow) / 2,
-                gapSize: nextLow - prevHigh
-            });
+        // Require middle candle to have a meaningful body (>50% of range) — filters doji/spinners
+        if (currRange <= 0 || currBody / currRange < 0.5) continue;
+
+        if (currClose > currOpen) {
+            // Classic bullish FVG: next bar's low > prev bar's high (true price gap)
+            if (nextLow > prevHigh) {
+                bullishGaps.push({
+                    gapLow: prevHigh,
+                    gapHigh: nextLow,
+                    gapMid: (prevHigh + nextLow) / 2,
+                    gapSize: nextLow - prevHigh
+                });
+            // Relaxed forex bullish FVG: strong up-candle opens above prev close, next opens above prev close
+            } else if (currOpen > prevClose && nextOpen > prevClose) {
+                const gapLow = prevClose;
+                const gapHigh = Math.min(currOpen, nextOpen);
+                if (gapHigh > gapLow) {
+                    bullishGaps.push({
+                        gapLow,
+                        gapHigh,
+                        gapMid: (gapLow + gapHigh) / 2,
+                        gapSize: gapHigh - gapLow
+                    });
+                }
+            }
         }
 
-        if (nextHigh < prevLow && currClose < currOpen) {
-            bearishGaps.push({
-                gapLow: nextHigh,
-                gapHigh: prevLow,
-                gapMid: (nextHigh + prevLow) / 2,
-                gapSize: prevLow - nextHigh
-            });
+        if (currClose < currOpen) {
+            // Classic bearish FVG: next bar's high < prev bar's low (true price gap)
+            if (nextHigh < prevLow) {
+                bearishGaps.push({
+                    gapLow: nextHigh,
+                    gapHigh: prevLow,
+                    gapMid: (nextHigh + prevLow) / 2,
+                    gapSize: prevLow - nextHigh
+                });
+            // Relaxed forex bearish FVG: strong down-candle opens below prev close, next opens below prev close
+            } else if (currOpen < prevClose && nextOpen < prevClose) {
+                const gapLow = Math.max(currOpen, nextOpen);
+                const gapHigh = prevClose;
+                if (gapHigh > gapLow) {
+                    bearishGaps.push({
+                        gapLow,
+                        gapHigh,
+                        gapMid: (gapLow + gapHigh) / 2,
+                        gapSize: gapHigh - gapLow
+                    });
+                }
+            }
         }
     }
 
@@ -3391,17 +3436,19 @@ app.get('/api/forex/evaluations', (req, res) => {
     const losses = evals.filter(e => e.pnl <= 0);
 
     // Signal effectiveness: average P&L when signal was present vs absent
+    // [FIX] orderFlow check uses Math.abs — SHORT trades store negative imbalance (e.g. -0.3).
+    // Old check `> 0.1` always returned false for shorts, making "0 trades with orderFlow".
     const signalEffectiveness = {};
     const signals = ['orderFlow', 'displacement', 'fvgCount'];
     for (const sig of signals) {
         const withSignal = evals.filter(e => {
-            if (sig === 'orderFlow') return (e.signals.orderFlow || 0) > 0.1;
+            if (sig === 'orderFlow') return Math.abs(e.signals.orderFlow || 0) > 0.1;
             if (sig === 'displacement') return e.signals.displacement === true;
             if (sig === 'fvgCount') return (e.signals.fvgCount || 0) > 0;
             return false;
         });
         const withoutSignal = evals.filter(e => {
-            if (sig === 'orderFlow') return (e.signals.orderFlow || 0) <= 0.1;
+            if (sig === 'orderFlow') return Math.abs(e.signals.orderFlow || 0) <= 0.1;
             if (sig === 'displacement') return e.signals.displacement !== true;
             if (sig === 'fvgCount') return (e.signals.fvgCount || 0) === 0;
             return false;

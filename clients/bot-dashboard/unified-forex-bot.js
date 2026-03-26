@@ -1769,6 +1769,12 @@ function calculateVolumeProfile(candles, numBuckets = 40) {
 }
 
 // [Phase 2] Fair Value Gap Detection — forex candle format (candle.mid.o/h/l/c)
+// Forex-adapted: literal price gaps (next.low > prev.high) are extremely rare in
+// continuous 24/5 trading. We additionally detect body-based imbalance zones:
+// a strong directional candle whose open is beyond adjacent candle closes —
+// an unfilled institutional imbalance zone.
+// Classic FVG: next.low > prev.high (kept for weekend gaps / news spikes)
+// Relaxed FVG: middle candle opens beyond prev close AND next opens inside imbalance zone
 function detectFairValueGaps(candles, lookback = 20) {
     if (!candles || candles.length < 3) return { bullish: [], bearish: [] };
 
@@ -1783,27 +1789,66 @@ function detectFairValueGaps(candles, lookback = 20) {
 
         const prevHigh = parseFloat(prev.mid.h);
         const prevLow = parseFloat(prev.mid.l);
+        const prevClose = parseFloat(prev.mid.c);
         const nextHigh = parseFloat(next.mid.h);
         const nextLow = parseFloat(next.mid.l);
+        const nextOpen = parseFloat(next.mid.o);
         const currClose = parseFloat(curr.mid.c);
         const currOpen = parseFloat(curr.mid.o);
+        const currHigh = parseFloat(curr.mid.h);
+        const currLow = parseFloat(curr.mid.l);
+        const currBody = Math.abs(currClose - currOpen);
+        const currRange = currHigh - currLow;
 
-        if (nextLow > prevHigh && currClose > currOpen) {
-            bullishGaps.push({
-                gapLow: prevHigh,
-                gapHigh: nextLow,
-                gapMid: (prevHigh + nextLow) / 2,
-                gapSize: nextLow - prevHigh
-            });
+        // Require middle candle to have a meaningful body (>50% of range) — filters doji/spinners
+        if (currRange <= 0 || currBody / currRange < 0.5) continue;
+
+        if (currClose > currOpen) {
+            // Classic bullish FVG: next bar's low > prev bar's high (true price gap)
+            if (nextLow > prevHigh) {
+                bullishGaps.push({
+                    gapLow: prevHigh,
+                    gapHigh: nextLow,
+                    gapMid: (prevHigh + nextLow) / 2,
+                    gapSize: nextLow - prevHigh
+                });
+            // Relaxed forex bullish FVG: strong up-candle opens above prev close, next opens above prev close
+            } else if (currOpen > prevClose && nextOpen > prevClose) {
+                const gapLow = prevClose;
+                const gapHigh = Math.min(currOpen, nextOpen);
+                if (gapHigh > gapLow) {
+                    bullishGaps.push({
+                        gapLow,
+                        gapHigh,
+                        gapMid: (gapLow + gapHigh) / 2,
+                        gapSize: gapHigh - gapLow
+                    });
+                }
+            }
         }
 
-        if (nextHigh < prevLow && currClose < currOpen) {
-            bearishGaps.push({
-                gapLow: nextHigh,
-                gapHigh: prevLow,
-                gapMid: (nextHigh + prevLow) / 2,
-                gapSize: prevLow - nextHigh
-            });
+        if (currClose < currOpen) {
+            // Classic bearish FVG: next bar's high < prev bar's low (true price gap)
+            if (nextHigh < prevLow) {
+                bearishGaps.push({
+                    gapLow: nextHigh,
+                    gapHigh: prevLow,
+                    gapMid: (nextHigh + prevLow) / 2,
+                    gapSize: prevLow - nextHigh
+                });
+            // Relaxed forex bearish FVG: strong down-candle opens below prev close, next opens below prev close
+            } else if (currOpen < prevClose && nextOpen < prevClose) {
+                const gapLow = Math.max(currOpen, nextOpen);
+                const gapHigh = prevClose;
+                if (gapHigh > gapLow) {
+                    bearishGaps.push({
+                        gapLow,
+                        gapHigh,
+                        gapMid: (gapLow + gapHigh) / 2,
+                        gapSize: gapHigh - gapLow
+                    });
+                }
+            }
         }
     }
 
@@ -2123,6 +2168,23 @@ async function queryAIAdvisor(signal) {
         const response = await axios.post(`${BRIDGE_URL}/agent/evaluate`, payload, { timeout: 15000 });
         const result = response.data;
         console.log(`[Agent] ${signal.pair}: ${result.approved ? 'APPROVED' : 'REJECTED'} (source: ${result.source}, conf: ${(result.confidence || 0).toFixed(2)}) — ${result.reason}`);
+
+        // [v15.0] Detect rubber-stamp pass-through: bridge returning "Rule-based: signals look clean"
+        // at 100% confidence means NO real AI filtering happened (bridge is a pass-through or using
+        // a trivial fallback). Re-compute the committee score here so the MIN_SIGNAL_CONFIDENCE
+        // guardrail actually filters based on real signal quality rather than trusting the bridge blindly.
+        const isRubberStamp = result.approved === true
+            && result.confidence >= 1.0
+            && typeof result.reason === 'string'
+            && result.reason.toLowerCase().includes('rule-based');
+        if (isRubberStamp) {
+            // Compute real committee score — signal has orderFlow, displacement, fvg, etc. already set
+            const freshCommittee = computeForexCommitteeScore(signal);
+            result.confidence = freshCommittee.confidence;
+            result.reason = `${result.reason} [rubber-stamp: replaced 1.0 with committee ${freshCommittee.confidence.toFixed(2)}]`;
+            result.source = 'rule_based_downgraded';
+            console.log(`[Agent] ${signal.pair}: rubber-stamp detected — confidence downgraded to committee:${freshCommittee.confidence.toFixed(2)} (trend:${freshCommittee.components.trend} flow:${freshCommittee.components.orderFlow} disp:${freshCommittee.components.displacement})`);
+        }
 
         // Cache the result
         _forexAgentCache.set(signal.pair, {
@@ -2743,6 +2805,13 @@ async function executeTrade(signal) {
         console.log(`   [AgentSize] Units adjusted: ${prevUnits} → ${units} (multiplier=${signal.agentSizeMultiplier.toFixed(2)})`);
     }
 
+    // [v15.0] Safety guard: never submit an order with 0 units — would be accepted by OANDA
+    // but creates a 0-unit position entry that corrupts the dashboard display.
+    if (Math.abs(units) < 1) {
+        console.log(`❌ [SafetyCheck] ${_pair} computed 0 units (balance=${balance.toFixed(2)}, posValue=${positionValue.toFixed(2)}, multiplier=${signal.agentSizeMultiplier || 1}) — skipping trade`);
+        return false;
+    }
+
     console.log(`\n🎯 EXECUTING ${signal.direction.toUpperCase()} ${signal.pair} (${signal.tier})`);
     console.log(`   Entry: ${signal.entry.toFixed(5)}, Stop: ${signal.stopLoss.toFixed(5)}, Target: ${signal.takeProfit.toFixed(5)}`);
     console.log(`   Units: ${units}, Session: ${signal.session}`);
@@ -3045,8 +3114,12 @@ async function managePositions() {
 
         if (!localPos) continue;
 
-        const isLong = oandaPos.long?.units > 0;
-        const units = Math.abs(parseInt(oandaPos.long?.units || oandaPos.short?.units || 0));
+        const isLong = parseInt(oandaPos.long?.units || '0') > 0;
+        // [v15.0] FIX: OANDA always returns both long.units and short.units — for shorts, long.units = "0"
+        // The string "0" is truthy in JS, so `"0" || "-741"` returns "0". Must use parseInt first.
+        const longUnitsRaw = parseInt(oandaPos.long?.units || '0');
+        const shortUnitsRaw = parseInt(oandaPos.short?.units || '0');
+        const units = isLong ? Math.abs(longUnitsRaw) : Math.abs(shortUnitsRaw);
         const entryPrice = parseFloat((isLong ? oandaPos.long?.averagePrice : oandaPos.short?.averagePrice) || 0);
         const unrealizedPL = parseFloat(oandaPos.unrealizedPL || 0);
         // Derive current price from unrealizedPL so trailing stops use real market movement
@@ -3551,17 +3624,19 @@ app.get('/api/forex/evaluations', (req, res) => {
     const losses = evals.filter(e => e.pnl <= 0);
 
     // Signal effectiveness: average P&L when signal was present vs absent
+    // [v15.0] FIX: orderFlow check must use Math.abs — SHORT trades have negative orderFlowImbalance
+    // (e.g. -0.3 means strong sell pressure). Old check `> 0.1` returned 0 for ALL short trades.
     const signalEffectiveness = {};
     const signals = ['orderFlow', 'displacement', 'fvgCount'];
     for (const sig of signals) {
         const withSignal = evals.filter(e => {
-            if (sig === 'orderFlow') return (e.signals.orderFlow || 0) > 0.1;
+            if (sig === 'orderFlow') return Math.abs(e.signals.orderFlow || 0) > 0.1;
             if (sig === 'displacement') return e.signals.displacement === true;
             if (sig === 'fvgCount') return (e.signals.fvgCount || 0) > 0;
             return false;
         });
         const withoutSignal = evals.filter(e => {
-            if (sig === 'orderFlow') return (e.signals.orderFlow || 0) <= 0.1;
+            if (sig === 'orderFlow') return Math.abs(e.signals.orderFlow || 0) <= 0.1;
             if (sig === 'displacement') return e.signals.displacement !== true;
             if (sig === 'fvgCount') return (e.signals.fvgCount || 0) === 0;
             return false;
@@ -3675,8 +3750,12 @@ app.get('/api/forex/status', async (req, res) => {
         cachedLiveDailyPnL = dailyPnL; // update circuit breaker cache
 
         const positionsData = oandaPositions.map(pos => {
-            const isLong = pos.long?.units > 0;
-            const units = Math.abs(parseInt(pos.long?.units || pos.short?.units || 0));
+            // [v15.0] FIX: OANDA returns long.units="0" for short positions — "0" is truthy so
+            // `"0" || "-741"` evaluates to "0". Must parseInt first before using || fallback.
+            const isLong = parseInt(pos.long?.units || '0') > 0;
+            const posLongUnits = parseInt(pos.long?.units || '0');
+            const posShortUnits = parseInt(pos.short?.units || '0');
+            const units = isLong ? Math.abs(posLongUnits) : Math.abs(posShortUnits);
             const entryPrice = parseFloat(isLong ? pos.long?.averagePrice : pos.short?.averagePrice || 0);
             const unrealizedPL = parseFloat(pos.unrealizedPL || 0);
             // Derive approximate current price from unrealized P/L
