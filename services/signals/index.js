@@ -13,6 +13,7 @@ const { calibrateConfidence, fitPlattScaling } = require('./confidence-calibrato
 const { qualifyEntry } = require('./entry-qualifier');
 const { computeStops, STOP_CONFIG } = require('./stop-manager');
 const { getRoundTripCost, COST_MODELS } = require('./cost-model');
+const { evaluateExit, computeRatchetStop, detectMomentumFade, detectReversalCandle } = require('./exit-manager');
 
 module.exports = {
   computeMomentum, computeOrderFlow, computeDisplacement,
@@ -23,5 +24,6 @@ module.exports = {
   calibrateConfidence, fitPlattScaling,
   qualifyEntry,
   computeStops, STOP_CONFIG,
-  getRoundTripCost, COST_MODELS
+  getRoundTripCost, COST_MODELS,
+  evaluateExit, computeRatchetStop, detectMomentumFade, detectReversalCandle
 };

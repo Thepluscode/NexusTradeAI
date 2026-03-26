@@ -2557,6 +2557,25 @@ async function shouldExitPosition(position, currentPrice, alpacaPos, overrideAlp
                 exitReason = `Reversed ${dropFromHighPct.toFixed(2)}% from daily high with ${unrealizedPL.toFixed(2)}% profit`;
             }
         }
+
+        // 6. EXIT MANAGER — momentum fade + reversal candle detection
+        if (!exitReason && marketData.bars && marketData.bars.length >= 20) {
+            const { evaluateExit } = require('../../services/signals/exit-manager');
+            const klines = marketData.bars.map(b => ({ open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v }));
+            const exitEval = evaluateExit({
+                entryPrice: position.entry,
+                currentPrice,
+                currentStop: position.stopLoss,
+                direction: 'long',
+                klines,
+            });
+            if (exitEval.action === 'exit') {
+                exitReason = `Smart Exit: ${exitEval.reason}`;
+            } else if (exitEval.action === 'tighten' && exitEval.newStop > position.stopLoss) {
+                console.log(`[EXIT-MGR] ${position.symbol}: ${exitEval.reason} — stop raised to $${exitEval.newStop.toFixed(2)}`);
+                position.stopLoss = exitEval.newStop;
+            }
+        }
     }
 
     return exitReason;

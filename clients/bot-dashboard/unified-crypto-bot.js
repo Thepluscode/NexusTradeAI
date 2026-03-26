@@ -876,12 +876,14 @@ const CRYPTO_CONFIG = {
         avoidWeekend: false     // Crypto trades 24/7 even weekends
     },
 
-    // Trailing Stops — v3.2: tighter stops to capture more profit before reversal
+    // Trailing Stops — v3.3: start at 1x risk (5% stop → trail from +5%)
+    // v3.2 started at +8% — too late, trades reversed from +7% back to stop loss
     trailingStops: [
-        { profit: 0.08, stopDistance: 0.04 }, // At +8%, trail by 4% (was +5%/3% — let winners run longer)
-        { profit: 0.12, stopDistance: 0.06 }, // At +12%, trail by 6% (was +10%/6%)
-        { profit: 0.20, stopDistance: 0.10 }, // At +20%, trail by 10% (was 12% — tighter lock-in)
-        { profit: 0.30, stopDistance: 0.15 }  // At +30%, trail by 15% (was 18% — tighter lock-in)
+        { profit: 0.05, stopDistance: 0.035 }, // At +5% (1x risk): trail by 3.5% → lock ~1.5%
+        { profit: 0.08, stopDistance: 0.04 },  // At +8%: trail by 4% → lock ~4%
+        { profit: 0.12, stopDistance: 0.05 },  // At +12%: trail by 5% → lock ~7%
+        { profit: 0.20, stopDistance: 0.08 },  // At +20%: trail by 8% → lock ~12%
+        { profit: 0.30, stopDistance: 0.12 }   // At +30%: trail by 12% → lock ~18%
     ],
 
     // Scan Interval (5 min for crypto)
@@ -2786,6 +2788,39 @@ class CryptoTradingEngine {
             //         continue;
             //     }
             // }
+
+            // [EXIT-MGR] Smart exit: momentum fade + reversal candle detection
+            try {
+                const { evaluateExit } = require('../../services/signals/exit-manager');
+                const rawKlines = await this.kraken.getKlines(symbol, '5m', 30);
+                if (rawKlines && rawKlines.length >= 20) {
+                    const klines = rawKlines.map(c => ({
+                        open: parseFloat(c[1]), high: parseFloat(c[2]),
+                        low: parseFloat(c[3]), close: parseFloat(c[4]),
+                        volume: parseFloat(c[5]) || 0,
+                    }));
+                    const exitEval = evaluateExit({
+                        entryPrice: position.entry, currentPrice,
+                        currentStop: position.stopLoss || 0,
+                        direction: position.direction || 'long',
+                        klines,
+                    });
+                    if (exitEval.action === 'exit') {
+                        console.log(`[EXIT-MGR] ${symbol}: ${exitEval.reason}`);
+                        this.profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: position.direction || 'long', entry: position.entry });
+                        await this.closePosition(symbol, currentPrice, `Smart Exit: ${exitEval.reason}`);
+                        (this._userTelegram || telegramAlerts).send(
+                            `🧠 *CRYPTO SMART EXIT* — ${symbol}\n${exitEval.reason}\nP&L: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%`
+                        ).catch(() => {});
+                        continue;
+                    } else if (exitEval.action === 'tighten' && exitEval.newStop > position.stopLoss) {
+                        console.log(`[EXIT-MGR] ${symbol}: ${exitEval.reason} — stop raised to $${exitEval.newStop.toFixed(2)}`);
+                        position.stopLoss = exitEval.newStop;
+                    }
+                }
+            } catch (e) {
+                // Non-critical — don't block position management if kline fetch fails
+            }
 
             // Check stop loss
             if (currentPrice <= position.stopLoss) {

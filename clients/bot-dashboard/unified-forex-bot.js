@@ -3011,10 +3011,38 @@ async function managePositions() {
             }
         }
 
-        const atrExitReason = getForexAtrExitReason(localPos, currentPrice);
-        if (atrExitReason) {
-            await closePositionWithReason(pair, atrExitReason);
-            continue;
+        // [EXIT-MGR] Smart exit: momentum fade + reversal candle detection
+        try {
+            const { evaluateExit } = require('../../services/signals/exit-manager');
+            const rawCandles = await getCandles(pair, 'M15', 30);
+            if (rawCandles.length >= 20) {
+                const klines = rawCandles.filter(c => c.complete !== false).map(c => ({
+                    open: parseFloat(c.mid.o), high: parseFloat(c.mid.h),
+                    low: parseFloat(c.mid.l), close: parseFloat(c.mid.c),
+                    volume: c.volume || 0,
+                }));
+                if (klines.length >= 20) {
+                    const exitEval = evaluateExit({
+                        entryPrice, currentPrice, currentStop: localPos.stopLoss || 0,
+                        direction: localPos.direction || (isLong ? 'long' : 'short'),
+                        klines,
+                    });
+                    if (exitEval.action === 'exit') {
+                        console.log(`[EXIT-MGR] ${pair}: ${exitEval.reason}`);
+                        profitProtectReentryPairs.set(pair, { timestamp: Date.now(), direction: localPos.direction || (isLong ? 'long' : 'short'), entry: entryPrice });
+                        await closePositionWithReason(pair, `Smart Exit: ${exitEval.reason}`);
+                        continue;
+                    } else if (exitEval.action === 'tighten' && localPos.stopLoss) {
+                        const betterStop = isLong ? exitEval.newStop > localPos.stopLoss : exitEval.newStop < localPos.stopLoss;
+                        if (betterStop) {
+                            console.log(`[EXIT-MGR] ${pair}: ${exitEval.reason} — stop moved to ${exitEval.newStop.toFixed(5)}`);
+                            localPos.stopLoss = exitEval.newStop;
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            // Non-critical — don't block position management if candle fetch fails
         }
 
         // Check time-based exit
