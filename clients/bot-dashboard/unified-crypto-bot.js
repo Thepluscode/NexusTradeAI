@@ -3234,10 +3234,10 @@ class CryptoTradingEngine {
                 // Effective thresholds — use optimized values when available, else defaults
                 const effectiveCommitteeThreshold = this._optimizedParams
                     ? this._optimizedParams.committeeThreshold
-                    : AUTO_PARAM_BOUNDS.committeeThreshold.default;
+                    : (AUTO_PARAM_BOUNDS.committeeThreshold || {}).default || 0.50;
                 const effectiveMinRR = this._optimizedParams
                     ? this._optimizedParams.minRewardRisk
-                    : AUTO_PARAM_BOUNDS.minRewardRisk.default;
+                    : (AUTO_PARAM_BOUNDS.minRewardRisk || {}).default || 2.0;
                 // ─────────────────────────────────────────────────────────────
 
                 console.log(`\n${'='.repeat(60)}`);

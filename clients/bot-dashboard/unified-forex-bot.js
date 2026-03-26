@@ -977,10 +977,10 @@ setInterval(() => { detectForexSignalDecay(); }, 2 * 60 * 60 * 1000);
 // ===== AUTO-OPTIMIZER STATE =====
 // Walk-forward parameter optimization runs every 4 hours using recent trade evaluations
 let forexOptimizedParams = {
-    committeeThreshold: AUTO_PARAM_BOUNDS.committeeThreshold.default,  // 0.50
-    minRewardRisk:      AUTO_PARAM_BOUNDS.minRewardRisk.default,       // 2.0
-    sizeMultiplier:     AUTO_PARAM_BOUNDS.sizeMultiplier.default,      // 1.0
-    atrStopMultiplier:  AUTO_PARAM_BOUNDS.atrStopMultiplier.default,   // 1.5
+    committeeThreshold: (AUTO_PARAM_BOUNDS.committeeThreshold || {}).default || 0.50,
+    minRewardRisk:      (AUTO_PARAM_BOUNDS.minRewardRisk || {}).default      || 2.0,
+    sizeMultiplier:     (AUTO_PARAM_BOUNDS.sizeMultiplier || {}).default     || 1.0,
+    atrStopMultiplier:  (AUTO_PARAM_BOUNDS.atrStopMultiplier || {}).default  || 1.5,
 };
 let forexLastOptimizationTime = 0;
 const FOREX_OPTIMIZATION_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
