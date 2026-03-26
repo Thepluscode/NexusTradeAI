@@ -1771,7 +1771,8 @@ class CryptoTradingEngine {
             const result = response.data;
             console.log(`[Agent] ${signal.symbol}: ${result.approved ? 'APPROVED' : 'REJECTED'} (source: ${result.source}, conf: ${(result.confidence || 0).toFixed(2)}) — ${result.reason}`);
 
-            // [v15.0] Detect rubber-stamp pass-through from strategy bridge
+            // [v15.0] Detect rubber-stamp pass-through: bridge returning "Rule-based: signals look clean"
+            // at >=1.0 confidence means NO real AI filtering happened. Re-compute committee score.
             const isRubberStamp = result.approved === true
                 && result.confidence >= 1.0
                 && typeof result.reason === 'string'
@@ -4688,19 +4689,23 @@ app.get('/api/crypto/evaluations', (req, res) => {
         return res.json({ success: true, data: { totalTrades: 0, message: 'No evaluations yet' } });
     }
 
-    // Normalize pnlPct: old data stored as percentage (5.77), new as decimal (0.0577)
+    // Normalize pnlPct to decimal form (0.0577 = +5.77%)
+    // Old data stored as percentage (5.77), new data stores as decimal (0.0577)
     const evals = rawEvals.map(e => {
         let pnlPct = e.pnlPct || 0;
-        if (Math.abs(pnlPct) > 1) pnlPct = pnlPct / 100;
+        if (Math.abs(pnlPct) > 1) pnlPct = pnlPct / 100; // was stored as percentage, normalize to decimal
         return { ...e, pnlPct };
     });
 
     const wins = evals.filter(e => e.pnl > 0);
     const losses = evals.filter(e => e.pnl <= 0);
 
+    // Signal effectiveness — use Math.abs for orderFlow (shorts have negative flow)
+    // Only include trades that have signal data populated (skip old trades without components)
     const signalEffectiveness = {};
     const signals = ['orderFlow', 'displacement', 'fvgCount'];
     for (const sig of signals) {
+        const hasSignalData = evals.filter(e => e.signals && e.signals[sig] !== undefined && e.signals[sig] !== null && e.signals[sig] !== 0 && e.signals[sig] !== false);
         const withSignal = evals.filter(e => {
             if (!e.signals) return false;
             if (sig === 'orderFlow') return Math.abs(e.signals.orderFlow || 0) > 0.1;
@@ -4720,7 +4725,8 @@ app.get('/api/crypto/evaluations', (req, res) => {
         signalEffectiveness[sig] = {
             withSignal: { count: withSignal.length, avgPnlPct: parseFloat((avgWith * 100).toFixed(3)) },
             withoutSignal: { count: withoutSignal.length, avgPnlPct: parseFloat((avgWithout * 100).toFixed(3)) },
-            edge: parseFloat(((avgWith - avgWithout) * 100).toFixed(3))
+            edge: parseFloat(((avgWith - avgWithout) * 100).toFixed(3)),
+            dataAvailable: hasSignalData.length
         };
     }
 
