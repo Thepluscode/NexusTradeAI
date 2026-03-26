@@ -1083,25 +1083,24 @@ const EXIT_CONFIG = {
     idealHoldDays: 2,            // 2-day swings
     stalePositionDays: 7,        // Force close
 
-    // [v9.0] Realistic forex profit targets — EUR/USD moves ~0.3-0.5%/day
-    // Previous 4% targets were stock-calibrated and never hit (0W/19L)
+    // [v16.0] Patient profit targets — old Day-2 target (0.6%) closed trades before trailing
+    // stop even activated (0.8% threshold). Must let trailing stops manage winners.
+    // Day targets now only serve as "take what you can get" backstop for aging trades.
     profitTargetByDay: {
         0: 0.012,  // Day 0: 1.2% (aggressive intraday — rare but possible)
-        1: 0.008,  // Day 1: 0.8% (typical good swing)
-        2: 0.006,  // Day 2: 0.6% (take what the market gives)
-        3: 0.004,  // Day 3: 0.4%
-        4: 0.003,  // Day 4: 0.3% (just get out green)
-        5: 0.002   // Day 5+: 0.2% (any profit is a win)
+        1: 0.012,  // Day 1: 1.2% (same as OANDA server-side TP)
+        2: 0.010,  // Day 2: 1.0% (still above trailing threshold)
+        3: 0.008,  // Day 3: 0.8% (matches trailing start threshold)
+        4: 0.005,  // Day 4: 0.5% (take what the market gives)
+        5: 0.003   // Day 5+: 0.3% (any profit is a win)
     },
 
-    // [v13.0] Trailing stops — MUST give trades room to breathe
-    // Previous 0.2% start caused noise-triggered stops converting winners into -0.06% to -0.1% losers
-    // Research: trailing should start only after 1x risk (0.8% stop → trail from 0.8% gain)
-    // This ensures 1:1 R:R minimum before any trailing tightens the stop
+    // [v16.0] Trailing stops — start at 1x risk (now 1.0% with wider stops)
+    // Previous 0.8% start was too tight with 0.8% stops — barely 1:1 R:R before trailing
     trailingStopLevels: [
-        { gainThreshold: 0.008, lockPercent: 0.30 },  // +0.8% (1x risk): lock 30% → stop at +0.24%
-        { gainThreshold: 0.012, lockPercent: 0.45 },  // +1.2% (1.5x risk): lock 45% → stop at +0.54%
-        { gainThreshold: 0.020, lockPercent: 0.60 },  // +2.0%: lock 60%
+        { gainThreshold: 0.010, lockPercent: 0.30 },  // +1.0% (1x risk): lock 30% → stop at +0.30%
+        { gainThreshold: 0.015, lockPercent: 0.45 },  // +1.5% (1.5x risk): lock 45% → stop at +0.68%
+        { gainThreshold: 0.020, lockPercent: 0.60 },  // +2.0%: lock 60% → stop at +1.20%
         { gainThreshold: 0.030, lockPercent: 0.75 },  // +3.0%: lock 75%
         { gainThreshold: 0.040, lockPercent: 0.85 },  // +4.0%: lock 85%
     ],
@@ -1115,16 +1114,16 @@ const EXIT_CONFIG = {
 };
 
 // ===== TIERED MOMENTUM CONFIG (Forex) =====
-// [v9.0] Recalibrated for realistic forex moves (EUR/USD ~50-80 pips/day)
-// Old targets (4-6%) were stock-calibrated and never hit → 0% win rate
+// [v16.0] Wider stops + targets — old 0.8% stops hit by normal M15 noise (14-pip ATR),
+// causing 0% win rate. New: 1.0-1.5% stops (8-12x M15 ATR) with 2:1 R:R targets.
 const MOMENTUM_CONFIG = {
     tier1: {
-        threshold: 0.003,       // 0.3% (30 pips) — lowered to catch more setups
+        threshold: 0.003,       // 0.3% (30 pips)
         rsiMax: 65,
         rsiMin: 35,
         positionSize: 0.008,    // 0.8% of account
-        stopLoss: 0.008,        // 0.8% (80 pips) — tighter stop, was 2%
-        profitTarget: 0.012,    // 1.2% (1.5:1 R/R) — realistic forex target
+        stopLoss: 0.010,        // 1.0% (was 0.8% — too tight for M15 noise)
+        profitTarget: 0.020,    // 2.0% target (2:1 R:R — lets winners run)
         maxPositions: 3
     },
     tier2: {
@@ -1132,8 +1131,8 @@ const MOMENTUM_CONFIG = {
         rsiMax: 68,
         rsiMin: 32,
         positionSize: 0.012,    // 1.2%
-        stopLoss: 0.010,        // 1.0% (100 pips)
-        profitTarget: 0.015,    // 1.5% (1.5:1 R/R)
+        stopLoss: 0.012,        // 1.2% (was 1.0%)
+        profitTarget: 0.024,    // 2.4% (2:1 R:R)
         maxPositions: 2
     },
     tier3: {
@@ -1141,8 +1140,8 @@ const MOMENTUM_CONFIG = {
         rsiMax: 72,
         rsiMin: 28,
         positionSize: 0.015,    // 1.5%
-        stopLoss: 0.012,        // 1.2%
-        profitTarget: 0.020,    // 2.0% (1.67:1 R/R)
+        stopLoss: 0.015,        // 1.5% (was 1.2%)
+        profitTarget: 0.030,    // 3.0% (2:1 R:R)
         maxPositions: 1
     }
 };
@@ -2500,15 +2499,12 @@ async function scanForSignals(heldPositions = positions) {
         // [v7.0] Removed v3.9 MIN_TREND_STRENGTH multiplier — it required price to be MORE extended
         // from SMA, which is the opposite of what we want (pullback entries near SMA20)
 
-        // [v6.1] ATR-based stops/targets — adapts to each pair's volatility
-        // v3.2 had 2.0x ATR for BOTH stop and target (1:1 R:R) → 0% win rate.
-        // Fix: 2.5x ATR stop (wider to avoid noise sweep) + 5.0x ATR target (2:1 R:R minimum)
-        // [v12.0] ATR-based stops: FLOOR at 1.5x ATR, never tighter than volatility demands
-        // Old logic used Math.min which CAPPED stops — made them tighter than ATR, causing premature stop-outs
-        // New: stop = max(config, 1.5x ATR), target = max(config, 3x ATR) for 2:1 R:R minimum
-        // Cap at 3% stop / 5% target to prevent absurd stops on extreme volatility
-        const atrStop   = atrPct > 0 ? Math.min(Math.max(atrPct * 1.5, config.stopLoss), 0.03) : config.stopLoss;
-        const atrTarget = atrPct > 0 ? Math.min(Math.max(atrPct * 3.0, config.profitTarget), 0.05) : config.profitTarget;
+        // [v16.0] ATR-based stops/targets — M15 ATR for EUR/USD is ~0.09%, so 1.5x = 0.14%
+        // which is always less than config stop (0.8%). Old multiplier was useless.
+        // New: 6x ATR for stop (~0.54% EUR/USD, ~0.78% GBP/JPY), 12x ATR for target (2:1 R:R)
+        // This gives ATR-adaptive stops for volatile pairs while config is the floor for calm ones
+        const atrStop   = atrPct > 0 ? Math.min(Math.max(atrPct * 6, config.stopLoss), 0.03) : config.stopLoss;
+        const atrTarget = atrPct > 0 ? Math.min(Math.max(atrPct * 12, config.profitTarget), 0.05) : config.profitTarget;
         if (atrPct > 0) console.log(`   [ATR Stops] ${pair}: atrPct=${(atrPct*100).toFixed(3)}% | Stop: ${(atrStop*100).toFixed(3)}% | Target: ${(atrTarget*100).toFixed(3)}%`);
 
         // LONG Signal — [v7.0] Pullback-to-support entry: 4 key filters only
@@ -3137,9 +3133,25 @@ async function managePositions() {
         const entryPrice = parseFloat((isLong ? oandaPos.long?.averagePrice : oandaPos.short?.averagePrice) || 0);
         const unrealizedPL = parseFloat(oandaPos.unrealizedPL || 0);
         // Derive current price from unrealizedPL so trailing stops use real market movement
-        const currentPrice = (entryPrice > 0 && units > 0)
-            ? entryPrice + (isLong ? 1 : -1) * (unrealizedPL / units)
-            : entryPrice;
+        // [v16.0] FIX: For JPY-quote pairs, unrealizedPL is in USD but price is in JPY
+        // Formula: P&L(USD) = (current - entry) * units / currentJPYRate ≈ (current - entry) * units / current
+        // Rearranging: current = entry / (1 - PL_USD / units) for longs, entry / (1 + PL_USD / units) for shorts
+        // For USD-quote pairs (EUR_USD), the simple formula works: current = entry ± PL/units
+        const isJPYQuote = pair.includes('JPY') || pair.includes('CHF');
+        let currentPrice;
+        if (entryPrice > 0 && units > 0) {
+            if (isJPYQuote) {
+                // JPY/CHF quote: PL is converted to USD by OANDA; must invert the conversion
+                const plPerUnit = unrealizedPL / units;
+                const denom = isLong ? (1 - plPerUnit / entryPrice) : (1 + plPerUnit / entryPrice);
+                currentPrice = denom !== 0 ? entryPrice / denom : entryPrice;
+            } else {
+                // USD quote: PL = (current - entry) * units
+                currentPrice = entryPrice + (isLong ? 1 : -1) * (unrealizedPL / units);
+            }
+        } else {
+            currentPrice = entryPrice;
+        }
         const holdDays = (Date.now() - new Date(localPos.entryTime).getTime()) / (1000 * 60 * 60 * 24);
 
         // Write live market values back so status endpoint returns them for demo positions
@@ -3272,7 +3284,13 @@ async function managePositions() {
                     const realPnl   = parseFloat(trade.realizedPL ?? 0);
                     const exitEntry = localPos.entry ?? 0;
                     const exitUnits = Math.abs(localPos.units ?? 1);
-                    const exitPct   = exitEntry > 0 ? (realPnl / (exitEntry * exitUnits)) * 100 : 0;
+                    // [v16.0] FIX: For USD-base pairs (USD_JPY), entry*units = JPY notional, not USD
+                    // Use exitPrice to compute price-based pnl% instead of dollar-based
+                    const exitPct = exitEntry > 0 && exitPrice > 0
+                        ? ((localPos.direction === 'long'
+                            ? (exitPrice - exitEntry) / exitEntry
+                            : (exitEntry - exitPrice) / exitEntry) * 100)
+                        : 0;
                     const reason    = trade.closingTransactionIDs?.length
                         ? (realPnl < 0 ? 'Stop Loss' : 'Take Profit')
                         : 'Broker Closed';
@@ -3779,14 +3797,22 @@ app.get('/api/forex/status', async (req, res) => {
             const units = isLong ? Math.abs(posLongUnits) : Math.abs(posShortUnits);
             const entryPrice = parseFloat(isLong ? pos.long?.averagePrice : pos.short?.averagePrice || 0);
             const unrealizedPL = parseFloat(pos.unrealizedPL || 0);
-            // Derive approximate current price from unrealized P/L
-            // For long:  currentPrice = entryPrice + (unrealizedPL / units)
-            // For short: currentPrice = entryPrice - (unrealizedPL / units)
-            const currentPrice = (entryPrice > 0 && units > 0)
-                ? entryPrice + (isLong ? 1 : -1) * (unrealizedPL / units)
-                : entryPrice;
-            const unrealizedPLPct = (entryPrice > 0 && units > 0)
-                ? unrealizedPL / (entryPrice * units)
+            // [v16.0] JPY-aware current price derivation
+            const _isJPYQuote = pos.pair && (pos.pair.includes('JPY') || pos.pair.includes('CHF'));
+            let currentPrice;
+            if (entryPrice > 0 && units > 0) {
+                if (_isJPYQuote) {
+                    const _plPerUnit = unrealizedPL / units;
+                    const _denom = isLong ? (1 - _plPerUnit / entryPrice) : (1 + _plPerUnit / entryPrice);
+                    currentPrice = _denom !== 0 ? entryPrice / _denom : entryPrice;
+                } else {
+                    currentPrice = entryPrice + (isLong ? 1 : -1) * (unrealizedPL / units);
+                }
+            } else {
+                currentPrice = entryPrice;
+            }
+            const unrealizedPLPct = entryPrice > 0
+                ? (isLong ? (currentPrice - entryPrice) / entryPrice : (entryPrice - currentPrice) / entryPrice)
                 : 0;
             return {
                 symbol: pos.pair,

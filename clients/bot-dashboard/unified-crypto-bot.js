@@ -11,7 +11,16 @@ const { createUserCredentialStore } = require('./userCredentialStore');
 // Signal modules — try/catch for Railway deploy where services/ may not exist
 let createSignalEndpoints = () => {};
 let BOT_COMPONENTS = { crypto: { components: ['momentum','orderFlow','displacement','volumeProfile','fvg','volumeRatio','mtfConfluence'] } };
-let computeCorrelationGuard = () => ({ blocked: false });
+let computeCorrelationGuard = (positions) => {
+  // Inline fallback — real guard when services/ unavailable (Railway)
+  const longs = positions.filter(p => (p.direction || 'long') === 'long').length;
+  const shorts = positions.filter(p => (p.direction || 'long') === 'short').length;
+  const total = positions.length;
+  const exposureRatio = total > 0 ? Math.max(longs, shorts) / total : 0;
+  const isConcentrated = exposureRatio > 0.75 && total >= 2;
+  const bias = longs >= shorts ? 'long' : 'short';
+  return { isConcentrated, canOpenLong: !isConcentrated || bias !== 'long', canOpenShort: !isConcentrated || bias !== 'short', exposureRatio, directionBias: bias, longCount: longs, shortCount: shorts };
+};
 let autoOptimize = () => ({ improved: false });
 let autoEvalStrategies = () => ({});
 let AUTO_PARAM_BOUNDS = {};
@@ -811,7 +820,7 @@ const CRYPTO_CONFIG = {
     ],
 
     // Risk Management
-    maxTotalPositions: 4,  // 4 positions max
+    maxTotalPositions: 3,  // 3 positions max (was 4 — 4 correlated LONGs wiped together)
     maxPositionsPerSymbol: 1,
     maxTradesPerDay: 10,
     maxTradesPerSymbol: 2,
@@ -825,21 +834,23 @@ const CRYPTO_CONFIG = {
     // [v6.1] 3-Tier Strategy — realistic targets for 5-min candles
     // Old: 15/20/30% targets → 0% win rate (unreachable on 5-min timeframe)
     // New: 3/5/8% targets with tighter stops → achievable 2:1 R:R
+    // [v16.0] Wider stops — crypto moves 3-5% daily; 5% stops were hitting on normal pullbacks
+    // Reduced max positions to 2 per tier (was 4) — prevents correlated wipeout
     tiers: {
         tier1: {
             name: 'Standard Crypto',
             momentumThreshold: 0.005, // 0.5% momentum (was 0.3% — too noisy)
-            stopLoss: 0.05,          // 5% stop (was 3.5% — still too tight; 1.70:1 R/R after slippage, needs 37% WR)
-            profitTarget: 0.10,      // 10% target (was 5% — wider target lets winners run)
-            rsiLower: 30,            // Tighter RSI (was 20 — too oversold)
-            rsiUpper: 70,            // Tighter RSI (was 80 — too overbought)
-            maxPositions: 4
+            stopLoss: 0.07,          // 7% stop (was 5% — too tight for daily crypto vol)
+            profitTarget: 0.14,      // 14% target (2:1 R:R)
+            rsiLower: 30,
+            rsiUpper: 70,
+            maxPositions: 2          // was 4 — max 2 to limit correlated LONG exposure
         },
         tier2: {
             name: 'High Momentum',
             momentumThreshold: 0.015, // 1.5% momentum (was 1.2%)
-            stopLoss: 0.06,          // 6% stop (was 4.5% — wider for crypto vol)
-            profitTarget: 0.12,      // 12% target (was 7% — better R/R after slippage)
+            stopLoss: 0.08,          // 8% stop (was 6%)
+            profitTarget: 0.16,      // 16% target (2:1 R:R)
             rsiLower: 35,
             rsiUpper: 75,
             maxPositions: 2
@@ -847,8 +858,8 @@ const CRYPTO_CONFIG = {
         tier3: {
             name: 'Extreme Momentum',
             momentumThreshold: 0.03,  // 3% momentum (was 2.5%)
-            stopLoss: 0.06,          // 6% stop (was 4% — too tight)
-            profitTarget: 0.10,      // 10% target (~1.7:1 R/R after slippage)
+            stopLoss: 0.08,          // 8% stop (was 6%)
+            profitTarget: 0.16,      // 16% target (2:1 R:R)
             rsiLower: 35,
             rsiUpper: 80,
             maxPositions: 1
@@ -861,8 +872,8 @@ const CRYPTO_CONFIG = {
         rsiLower: 38,
         rsiUpper: 64,
         minVolumeRatio: 0.75,
-        stopLoss: 0.04,
-        profitTarget: 0.10,
+        stopLoss: 0.06,             // was 4% — too tight
+        profitTarget: 0.12,         // 2:1 R:R
         maxPositions: 2,
         sizingFactor: 0.85
     },
@@ -893,10 +904,11 @@ const CRYPTO_CONFIG = {
         avoidWeekend: false     // Crypto trades 24/7 even weekends
     },
 
-    // Trailing Stops — v3.3: start at 1x risk (5% stop → trail from +5%)
-    // v3.2 started at +8% — too late, trades reversed from +7% back to stop loss
+    // [v16.0] Trailing Stops — start earlier at +3% to protect gains before reversal
+    // v3.3 started at +5% (1x risk) — trades reversed from +4% back to stop loss
     trailingStops: [
-        { profit: 0.05, stopDistance: 0.035 }, // At +5% (1x risk): trail by 3.5% → lock ~1.5%
+        { profit: 0.03, stopDistance: 0.025 }, // At +3%: trail by 2.5% → lock ~0.5% (breakeven protection)
+        { profit: 0.05, stopDistance: 0.035 }, // At +5%: trail by 3.5% → lock ~1.5%
         { profit: 0.08, stopDistance: 0.04 },  // At +8%: trail by 4% → lock ~4%
         { profit: 0.12, stopDistance: 0.05 },  // At +12%: trail by 5% → lock ~7%
         { profit: 0.20, stopDistance: 0.08 },  // At +20%: trail by 8% → lock ~12%
@@ -1843,32 +1855,30 @@ class CryptoTradingEngine {
     // BTC CORRELATION STRATEGY
     // ========================================================================
 
-    // [v3.3] Strict BTC filter — SMA50 trend, tight RSI band, 24h sensitivity, 4h momentum gate
-    // Prevents entering altcoin trades when BTC is not in a CLEAR uptrend
-    // [v3.4] Uses hourly price buffer (SMA50 = 50h ≈ 2 days) instead of 5-min candles (SMA50 = 4h)
+    // [v16.0] Strict BTC filter — faster detection with SMA20 (20h ≈ 1 day) instead of SMA50 (2 days)
+    // v3.4 used SMA50 hourly → 2-day lag; BTC could drop 5% before gate triggers
     async isBTCBullish() {
         // Use hourly prices for structural trend — falls back to 5-min if buffer is still warming up
-        const btcPrices = this.btcHourlyPrices.length >= 50
+        const btcPrices = this.btcHourlyPrices.length >= 20
             ? this.btcHourlyPrices
             : this.priceHistory.get('XBTUSD') || [];
 
-        if (btcPrices.length < 50) {
-            console.log(`[BTC Filter] Insufficient hourly data (${this.btcHourlyPrices.length}/50) — defaulting to bearish`);
+        if (btcPrices.length < 20) {
+            console.log(`[BTC Filter] Insufficient hourly data (${this.btcHourlyPrices.length}/20) — defaulting to bearish`);
             return false;
         }
 
         const usingHourly = btcPrices === this.btcHourlyPrices;
         if (!usingHourly) {
-            console.log(`[BTC Filter] Hourly buffer warming up (${this.btcHourlyPrices.length}/50) — using 5-min fallback`);
+            console.log(`[BTC Filter] Hourly buffer warming up (${this.btcHourlyPrices.length}/20) — using 5-min fallback`);
         }
 
-        const sma50 = this.calculateSMA(btcPrices, 50);
         const sma20 = this.calculateSMA(btcPrices, 20);
         const currentPrice = btcPrices[btcPrices.length - 1];
         const ema9 = this.calculateEMA(btcPrices, 9);
 
-        // [v3.3] Stricter trend check: price above SMA50 (not just SMA20) AND EMA9 above SMA20
-        const isTrending = currentPrice > sma50 && ema9 > sma20;
+        // [v16.0] Faster trend check: price above SMA20 AND EMA9 above SMA20
+        const isTrending = currentPrice > sma20 && ema9 > sma20;
         if (!isTrending) {
             console.log(`[BTC Filter] Trend fail — price ${currentPrice > sma50 ? '>' : '<'} SMA50, EMA9 ${ema9 > sma20 ? '>' : '<'} SMA20`);
             return false;
