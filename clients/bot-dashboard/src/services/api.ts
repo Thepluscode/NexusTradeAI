@@ -370,6 +370,61 @@ class APIClient {
     }
   }
 
+  // ── Signal Intelligence ──────────────────────────────────────────────────
+
+  private _getBotInstance(bot: 'stock' | 'forex' | 'crypto'): { instance: AxiosInstance; prefix: string } {
+    switch (bot) {
+      case 'stock':  return { instance: this.tradingEngine, prefix: 'trading' };
+      case 'forex':  return { instance: this.forexService,  prefix: 'forex' };
+      case 'crypto': return { instance: this.cryptoService, prefix: 'crypto' };
+    }
+  }
+
+  async getNoiseReport(bot: 'stock' | 'forex' | 'crypto'): Promise<Record<string, unknown> | null> {
+    try {
+      const { instance, prefix } = this._getBotInstance(bot);
+      const response = await instance.get(`/api/${prefix}/noise-report`);
+      return response.data?.data || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async refreshNoiseReport(bot: 'stock' | 'forex' | 'crypto'): Promise<void> {
+    const { instance, prefix } = this._getBotInstance(bot);
+    await instance.post(`/api/${prefix}/noise-report/refresh`);
+  }
+
+  async getSignalTimeline(bot: 'stock' | 'forex' | 'crypto', limit = 50): Promise<Record<string, unknown>[]> {
+    try {
+      const { instance, prefix } = this._getBotInstance(bot);
+      const response = await instance.get(`/api/${prefix}/signal-timeline`, { params: { limit } });
+      return response.data?.data || [];
+    } catch {
+      return [];
+    }
+  }
+
+  async getRegimeHeatmap(bot: 'stock' | 'forex' | 'crypto'): Promise<Record<string, unknown> | null> {
+    try {
+      const { instance, prefix } = this._getBotInstance(bot);
+      const response = await instance.get(`/api/${prefix}/regime-heatmap`);
+      return response.data?.data || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async getThresholdCurve(bot: 'stock' | 'forex' | 'crypto'): Promise<Record<string, unknown> | null> {
+    try {
+      const { instance, prefix } = this._getBotInstance(bot);
+      const response = await instance.get(`/api/${prefix}/threshold-curve`);
+      return response.data?.data || null;
+    } catch {
+      return null;
+    }
+  }
+
   // ── Forex Bot (port 3005) ─────────────────────────────────────────────────
 
   async getForexStatus(): Promise<Record<string, unknown>> {
