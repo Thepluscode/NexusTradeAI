@@ -8,6 +8,8 @@ const jwt = require('jsonwebtoken');
 const { Pool } = require('pg');
 const rateLimit = require('express-rate-limit');
 const { createUserCredentialStore } = require('./userCredentialStore');
+const { createSignalEndpoints } = require('../../services/signals/api-handlers');
+const { BOT_COMPONENTS } = require('../../services/signals/committee-scorer');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 // ===== MONTE CARLO POSITION SIZER =====
@@ -3782,6 +3784,12 @@ app.get('/api/trading/evaluations', (req, res) => {
         }
     });
 });
+
+// [Signal Intelligence] Noise report, signal timeline, regime heatmap, threshold curve
+createSignalEndpoints(app, 'trading', 'stock',
+  () => globalThis._tradeEvaluations || [],
+  () => BOT_COMPONENTS.stock.components
+);
 
 // [Improvement 2] Committee weights endpoint
 app.get('/api/trading/weights', (req, res) => {

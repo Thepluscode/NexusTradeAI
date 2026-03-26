@@ -7,6 +7,8 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
 const { createUserCredentialStore } = require('./userCredentialStore');
+const { createSignalEndpoints } = require('../../services/signals/api-handlers');
+const { BOT_COMPONENTS } = require('../../services/signals/committee-scorer');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 // ===== MONTE CARLO POSITION SIZER =====
@@ -3429,6 +3431,12 @@ app.get('/api/forex/evaluations', (req, res) => {
         }
     });
 });
+
+// [Signal Intelligence] Noise report, signal timeline, regime heatmap, threshold curve
+createSignalEndpoints(app, 'forex', 'forex',
+  () => globalThis._forexTradeEvaluations || [],
+  () => BOT_COMPONENTS.forex.components
+);
 
 app.get('/api/forex/status', async (req, res) => {
     try {

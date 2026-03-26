@@ -8,6 +8,8 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
 const { createUserCredentialStore } = require('./userCredentialStore');
+const { createSignalEndpoints } = require('../../services/signals/api-handlers');
+const { BOT_COMPONENTS } = require('../../services/signals/committee-scorer');
 require('dotenv').config();
 
 // ===== MONTE CARLO POSITION SIZER =====
@@ -4418,6 +4420,12 @@ app.get('/api/crypto/evaluations', (req, res) => {
         }
     });
 });
+
+// [Signal Intelligence] Noise report, signal timeline, regime heatmap, threshold curve
+createSignalEndpoints(app, 'crypto', 'crypto',
+  () => globalThis._cryptoTradeEvaluations || [],
+  () => BOT_COMPONENTS.crypto.components
+);
 
 // [Alpha] Portfolio allocation signal — exposes bot's current edge for capital allocation
 app.get('/api/crypto/alpha-signal', (req, res) => {
