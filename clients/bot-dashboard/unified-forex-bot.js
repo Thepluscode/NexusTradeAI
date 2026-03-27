@@ -26,7 +26,8 @@ try {
   ({ optimize: autoOptimize, evaluateStrategies: autoEvaluateStrategies, PARAM_BOUNDS: AUTO_PARAM_BOUNDS } = require('../../services/signals/auto-optimizer'));
   ({ checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth } = require('../../services/signals/health-monitor'));
 } catch (e) { console.log('[INIT] Signal modules not available (Railway deploy) — using inline fallbacks'); }
-require('dotenv').config({ path: path.join(__dirname, '.env') });
+// Load .env from project root (Railway injects env vars directly, so dotenv is a no-op there)
+require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
 // ===== MONTE CARLO POSITION SIZER =====
 // Try external module, fallback to inline Kelly-based sizer for Railway deploy
