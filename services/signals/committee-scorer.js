@@ -29,7 +29,8 @@ const BOT_COMPONENTS = {
   },
   crypto: {
     components: ['momentum', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'volumeRatio', 'mtfConfluence'],
-    neutralDefaults: { displacement: 0.3, fvg: 0.3, orderFlow: 0.5, mtfConfluence: 0.5 },
+    // [v14.0] Aligned with inline crypto scorer: absent = penalize, not inflate
+    neutralDefaults: { displacement: 0.1, fvg: 0.1, orderFlow: 0.1, volumeProfile: 0.1, mtfConfluence: 0.5 },
     weights: { momentum: 0.25, orderFlow: 0.20, displacement: 0.15, volumeProfile: 0.15, fvg: 0.10, volumeRatio: 0.15, mtfConfluence: 0.0 }
   }
 };

@@ -905,13 +905,13 @@ const CRYPTO_CONFIG = {
         avoidWeekend: false     // Crypto trades 24/7 even weekends
     },
 
-    // [v16.0] Trailing Stops — start earlier at +3% to protect gains before reversal
-    // v3.3 started at +5% (1x risk) — trades reversed from +4% back to stop loss
+    // [v14.0] Trailing Stops — widened activation from +3% to +5% for crypto volatility
+    // v16.0 started at +3% (0.6x risk) → locked 0.5% then got stopped on normal retraces
+    // Crypto 5-min candles routinely pull back 2-3%; starting at +3% = too many premature exits
     trailingStops: [
-        { profit: 0.03, stopDistance: 0.025 }, // At +3%: trail by 2.5% → lock ~0.5% (breakeven protection)
-        { profit: 0.05, stopDistance: 0.035 }, // At +5%: trail by 3.5% → lock ~1.5%
-        { profit: 0.08, stopDistance: 0.04 },  // At +8%: trail by 4% → lock ~4%
-        { profit: 0.12, stopDistance: 0.05 },  // At +12%: trail by 5% → lock ~7%
+        { profit: 0.05, stopDistance: 0.035 }, // At +5%: trail by 3.5% → lock ~1.5% (breakeven+)
+        { profit: 0.08, stopDistance: 0.045 }, // At +8%: trail by 4.5% → lock ~3.5%
+        { profit: 0.12, stopDistance: 0.055 }, // At +12%: trail by 5.5% → lock ~6.5%
         { profit: 0.20, stopDistance: 0.08 },  // At +20%: trail by 8% → lock ~12%
         { profit: 0.30, stopDistance: 0.12 }   // At +30%: trail by 12% → lock ~18%
     ],
@@ -1215,7 +1215,7 @@ function computeCryptoCommitteeScore(signal) {
     // 2. Order flow confirmation (weight: cryptoCommitteeWeights.orderFlow)
     const flowScore = signal.orderFlowImbalance !== undefined
         ? Math.max(0, signal.orderFlowImbalance) // 0 to 1 for longs
-        : 0.3; // neutral-low if unavailable — 0.5 was inflating scores when data absent
+        : 0.1; // [v14.0] 0.3→0.1: absent flow = no confirmation, should penalize not inflate
     confirmations += flowScore * cryptoCommitteeWeights.orderFlow;
     totalWeight += cryptoCommitteeWeights.orderFlow;
 
@@ -1226,7 +1226,7 @@ function computeCryptoCommitteeScore(signal) {
     totalWeight += cryptoCommitteeWeights.displacement;
 
     // 4. Volume Profile position (weight: cryptoCommitteeWeights.volumeProfile)
-    let vpScore = 0.3; // neutral-low default — 0.5 inflated score when data absent
+    let vpScore = 0.1; // [v14.0] 0.3→0.1: absent VP = no confirmation, should penalize not inflate
     if (signal.volumeProfileData) {
         const price = parseFloat(signal.price);
         const { vah, val } = signal.volumeProfileData;
@@ -1321,7 +1321,8 @@ function detectCryptoRegime(klines) {
     // [v14.0] Strategy-regime routing: which strategy class to prefer
     const strategyPreference = {
         low:    { preferred: 'meanReversion', momentumWeight: 0.3, meanReversionWeight: 1.0, pullbackWeight: 0.5 },
-        medium: { preferred: 'blended',       momentumWeight: 0.7, meanReversionWeight: 0.5, pullbackWeight: 0.8 },
+        // [v14.0] meanReversionWeight raised 0.5→0.8 — was disabled 70% of the time; need diversified alpha
+        medium: { preferred: 'blended',       momentumWeight: 0.7, meanReversionWeight: 0.8, pullbackWeight: 0.8 },
         high:   { preferred: 'momentum',      momentumWeight: 1.0, meanReversionWeight: 0.0, pullbackWeight: 0.6 }
     };
 
@@ -1864,9 +1865,11 @@ class CryptoTradingEngine {
             ? this.btcHourlyPrices
             : this.priceHistory.get('XBTUSD') || [];
 
+        // [v14.0] FIX: was defaulting to bearish during warmup, blocking ALL altcoin trades.
+        // Now default to neutral (allowed) — gate only blocks on confirmed bearish data.
         if (btcPrices.length < 20) {
-            console.log(`[BTC Filter] Insufficient hourly data (${this.btcHourlyPrices.length}/20) — defaulting to bearish`);
-            return false;
+            console.log(`[BTC Filter] Insufficient hourly data (${this.btcHourlyPrices.length}/20) — defaulting to NEUTRAL (allowed)`);
+            return true;
         }
 
         const usingHourly = btcPrices === this.btcHourlyPrices;
@@ -1879,10 +1882,17 @@ class CryptoTradingEngine {
         const ema9 = this.calculateEMA(btcPrices, 9);
 
         // [v16.0] Faster trend check: price above SMA20 AND EMA9 above SMA20
+        // [v14.0] FIX: Don't hard-fail on trend. Instead, only block when CLEARLY bearish.
+        //   Neutral/sideways markets should still allow trades (just BTC itself, not blocked entirely).
         const isTrending = currentPrice > sma20 && ema9 > sma20;
-        if (!isTrending) {
-            console.log(`[BTC Filter] Trend fail — price ${currentPrice > sma50 ? '>' : '<'} SMA50, EMA9 ${ema9 > sma20 ? '>' : '<'} SMA20`);
+        const isBearish = currentPrice < sma20 * 0.98; // 2% below SMA20 = confirmed downtrend
+        if (isBearish) {
+            console.log(`[BTC Filter] Confirmed bearish — price ${currentPrice.toFixed(0)} < SMA20*0.98 ${(sma20*0.98).toFixed(0)}`);
             return false;
+        }
+        if (!isTrending) {
+            console.log(`[BTC Filter] Neutral — price ${currentPrice > sma20 ? '>' : '<'} SMA20, EMA9 ${ema9 > sma20 ? '>' : '<'} SMA20 (allowing trades)`);
+            // Don't return false — neutral is OK
         }
 
         // [v3.3] RSI band: 45-72 — wide enough for healthy uptrends (RSI often runs 45-72 in bull moves)
@@ -1892,12 +1902,12 @@ class CryptoTradingEngine {
             return false;
         }
 
-        // [v3.3] 24h change check: relaxed to -2% — normal daily volatility
+        // [v3.3] 24h change check; [v14.0] relaxed to -4% (BTC ±3% daily is normal)
         try {
             const ticker = await this.kraken.get24hTicker('XBTUSD');
             if (ticker) {
                 const change24h = parseFloat(ticker.priceChangePercent);
-                if (change24h < -2) {
+                if (change24h < -4) {
                     console.log(`[BTC Filter] 24h change ${change24h.toFixed(1)}% too negative — holding off altcoins`);
                     return false;
                 }
@@ -2403,8 +2413,10 @@ class CryptoTradingEngine {
                 // Old: required momentum > threshold (price far above SMA20 = chasing).
                 // New: require price NEAR SMA20 (pulled back to support in uptrend).
                 // momentum = (price - sma20) / sma20; near SMA20 means momentum close to 0.
-                if (momentum > 0.03) continue;  // Price >3% above SMA20 = already moved, skip (was 1% — too narrow for crypto volatility)
-                if (momentum < -0.03) continue;  // Price >3% below SMA20 = broken support, skip (was 2% — too narrow for crypto volatility)
+                // [v14.0] Widened from ±3% to -5%/+8% — crypto has wider swings than equities
+                // ±3% capped tier3 (3% threshold) from ever firing; 8% allows strong breakouts
+                if (momentum > 0.08) continue;  // Price >8% above SMA20 = over-extended, skip
+                if (momentum < -0.05) continue;  // Price >5% below SMA20 = broken support, skip
 
                 // Check position limits for this tier
                 const tierPositions = Array.from(this.positions.values())
