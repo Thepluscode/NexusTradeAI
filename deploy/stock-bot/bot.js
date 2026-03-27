@@ -26,7 +26,8 @@ try {
   ({ checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth } = require('../../services/signals/health-monitor'));
   ({ optimize, evaluateStrategies } = require('../../services/signals/auto-optimizer'));
 } catch (e) { console.log('[INIT] Signal modules not available (Railway deploy) — using inline fallbacks'); }
-require('dotenv').config({ path: path.join(__dirname, '.env') });
+// Load .env from project root (Railway injects env vars directly, so dotenv is a no-op there)
+require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
 // ===== MONTE CARLO POSITION SIZER =====
 // Try external module, fallback to inline Kelly-based sizer for Railway deploy
@@ -3081,7 +3082,8 @@ async function scanMomentumBreakouts() {
                     }
                     // [Phase 3] Committee aggregator — unified confidence from all signal sources
                     const committee = computeCommitteeScore(mover);
-                    const committeeThreshold = optimizedParams?.committeeThreshold || 0.50;
+                    // [v14.0] Raised default from 0.50 → 0.60 — 0.50 passed too many low-conviction signals (36% WR)
+                    const committeeThreshold = optimizedParams?.committeeThreshold || 0.60;
                     if (committee.confidence < committeeThreshold) {
                         console.log(`[Committee] ${mover.symbol}: Confidence ${committee.confidence} < ${committeeThreshold} threshold — ${JSON.stringify(committee.components)}`);
                         continue;
@@ -3261,14 +3263,14 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
 
         let momentumAllowed = emaUptrend;  // [VWAP Reclaim] requires emaUptrend; reclaim does not
 
-        // v5.0: Tightened from 90% to 82% — data shows buying near daily highs = stop-outs
-        // 53% of all trades exit via stop loss; most entered at extended levels
+        // v5.0: Tightened from 90% to 82%; v14.0: further to 65%
+        // Data: 36% WR with 82% filter. Entries above 65% of daily range are chasing extended moves.
         const dailyHigh = Math.max(...bars.map(b => b.h));
         const dailyLow = Math.min(...bars.map(b => b.l));
         const dailyRange = dailyHigh - dailyLow;
         if (dailyRange > 0) {
             const positionInRange = (current - dailyLow) / dailyRange;
-            if (positionInRange > 0.82) {
+            if (positionInRange > 0.65) {
                 momentumAllowed = false;
             }
         }
@@ -5758,7 +5760,8 @@ class UserTradingEngine {
                 }
                 // [Phase 3] Committee aggregator — unified confidence from all signal sources
                 const committee = computeCommitteeScore(mover);
-                const committeeThreshold = optimizedParams?.committeeThreshold || 0.50;
+                // [v14.0] Raised default from 0.50 → 0.60 — 0.50 passed too many low-conviction signals
+                const committeeThreshold = optimizedParams?.committeeThreshold || 0.60;
                 if (committee.confidence < committeeThreshold) {
                     console.log(`[Engine ${this.userId}][Committee] ${mover.symbol}: Confidence ${committee.confidence} < ${committeeThreshold} — skipping`);
                     continue;
@@ -5919,10 +5922,12 @@ async function analyzeMomentumForEngine(symbol, engine) {
         const dailyHigh = Math.max(...bars.map(b => b.h));
         const dailyLow = Math.min(...bars.map(b => b.l));
         const dailyRange = dailyHigh - dailyLow;
-        if (dailyRange > 0 && (current - dailyLow) / dailyRange > 0.90) momentumAllowed = false;
+        // [v14.0] Tightened from 0.90 → 0.65 — don't chase extended moves (matches global loop)
+        if (dailyRange > 0 && (current - dailyLow) / dailyRange > 0.65) momentumAllowed = false;
 
         const adx = calculateADX(bars);
-        if (momentumAllowed && adx !== null && adx < 15) momentumAllowed = false;
+        // [v14.0] Raised from 15 → 20 — align with global loop; ADX < 20 = noise
+        if (momentumAllowed && adx !== null && adx < 20) momentumAllowed = false;
 
         const macd = calculateMACD(bars);
         if (momentumAllowed && macd !== null && !macd.bullish) {

@@ -26,7 +26,8 @@ try {
   ({ optimize: autoOptimize, evaluateStrategies: autoEvaluateStrategies, PARAM_BOUNDS: AUTO_PARAM_BOUNDS } = require('../../services/signals/auto-optimizer'));
   ({ checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth } = require('../../services/signals/health-monitor'));
 } catch (e) { console.log('[INIT] Signal modules not available (Railway deploy) — using inline fallbacks'); }
-require('dotenv').config({ path: path.join(__dirname, '.env') });
+// Load .env from project root (Railway injects env vars directly, so dotenv is a no-op there)
+require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
 // ===== MONTE CARLO POSITION SIZER =====
 // Try external module, fallback to inline Kelly-based sizer for Railway deploy
@@ -2515,11 +2516,13 @@ async function scanForSignals(heldPositions = positions) {
         const maxPullbackToMA = Math.max(0.003, Math.min(atrPct * 0.75, 0.01));
 
         // [v11.0] D1 trend gate — block counter-trend entries
-        const d1LongOk = d1Trend !== 'down';
+        // [v14.0] FIX: was inverted (!== allowed counter-trend). Now requires alignment.
+        //   Allow neutral D1 for both directions (sideways markets still tradeable)
+        const d1LongOk = d1Trend === 'up' || d1Trend === 'neutral';
         if (!d1LongOk) {
             console.log(`[D1 FILTER] ${pair} long: D1 trend=${d1Trend} — REJECTED (counter-trend)`);
         }
-        const d1ShortOk = d1Trend !== 'up';
+        const d1ShortOk = d1Trend === 'down' || d1Trend === 'neutral';
         if (!d1ShortOk && h1Trend === 'down') {
             console.log(`[D1 FILTER] ${pair} short: D1 trend=${d1Trend} — REJECTED (counter-trend)`);
         }
@@ -2548,8 +2551,9 @@ async function scanForSignals(heldPositions = positions) {
                     console.log(`[Bridge] ${pair} LONG advisory: ${bridgeLong.direction} conf:${(bridgeLong.confidence || 0).toFixed(2)}`);
                 }
                 // [Phase 1] Order flow must confirm buying pressure for longs
-                if (analysis.orderFlowImbalance < 0.05) {
-                    console.log(`[Order Flow] ${pair} LONG skipped — imbalance ${analysis.orderFlowImbalance.toFixed(3)} < 0.05 (no buy pressure)`);
+                // [v14.0] FIX: threshold 0.05 → 0.02 (forex liquidity makes ±5% imbalance rare)
+                if (analysis.orderFlowImbalance < 0.02) {
+                    console.log(`[Order Flow] ${pair} LONG skipped — imbalance ${analysis.orderFlowImbalance.toFixed(3)} < 0.02 (no buy pressure)`);
                     continue;
                 }
                 const score = scoreForexSignal({
@@ -2631,10 +2635,12 @@ async function scanForSignals(heldPositions = positions) {
             if (pullbackToMA > maxPullbackToMA) shortFails.push(`pullback=${(pullbackToMA*100).toFixed(3)}%>${(maxPullbackToMA*100).toFixed(3)}% (ATR-adaptive)`);
             if (rsi < 35 || rsi > 65) shortFails.push(`rsi=${rsi.toFixed(1)} outside 35-65`);
             if (!macd) shortFails.push('macd=null');
-            else if (macd.histogram >= 0.00005) shortFails.push(`macdHist=${macd.histogram.toFixed(5)}>=0.00005`);
+            // [v14.0] FIX: MACD short threshold aligned with long (was 0.00005, now < 0)
+            else if (macd.histogram >= 0) shortFails.push(`macdHist=${macd.histogram.toFixed(5)}>=0`);
             if (shortFails.length > 0) console.log(`[SHORT DIAG] ${pair}: h1=down d1=OK but ${shortFails.join(', ')}`);
         }
-        if (d1ShortOk && h1Trend === 'down' && pullbackToMA <= maxPullbackToMA && rsi >= 35 && rsi <= 65 && macd !== null && macd.histogram < 0.00005) {
+        // [v14.0] FIX: MACD threshold for shorts was < 0.00005 (nearly impossible). Now < 0 to match longs' > 0
+        if (d1ShortOk && h1Trend === 'down' && pullbackToMA <= maxPullbackToMA && rsi >= 35 && rsi <= 65 && macd !== null && macd.histogram < 0) {
             // [v3.3] Strategy Bridge advisory — only block if bridge explicitly signals LONG with high confidence
             const bridgeShort = await queryStrategyBridge(pair, 'short');
             if (bridgeShort !== null && bridgeShort.direction === 'long' && bridgeShort.confidence > 0.7) {
@@ -2644,8 +2650,9 @@ async function scanForSignals(heldPositions = positions) {
                     console.log(`[Bridge] ${pair} SHORT advisory: ${bridgeShort.direction} conf:${(bridgeShort.confidence || 0).toFixed(2)}`);
                 }
                 // [Phase 1] Order flow must confirm selling pressure for shorts
-                if (analysis.orderFlowImbalance > -0.05) {
-                    console.log(`[Order Flow] ${pair} SHORT skipped — imbalance ${analysis.orderFlowImbalance.toFixed(3)} > -0.05 (no sell pressure)`);
+                // [v14.0] FIX: threshold -0.05 → -0.02 (forex liquidity makes ±5% imbalance rare)
+                if (analysis.orderFlowImbalance > -0.02) {
+                    console.log(`[Order Flow] ${pair} SHORT skipped — imbalance ${analysis.orderFlowImbalance.toFixed(3)} > -0.02 (no sell pressure)`);
                     continue;
                 }
                 const score = scoreForexSignal({
