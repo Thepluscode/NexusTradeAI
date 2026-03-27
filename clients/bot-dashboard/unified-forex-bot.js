@@ -989,9 +989,9 @@ const FOREX_OPTIMIZATION_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
 function runForexAutoOptimizer() {
     const evals = globalThis._forexTradeEvaluations || [];
     const result = autoOptimize(evals, 30);
-    forexOptimizedParams = result.params;
+    if (result.params) forexOptimizedParams = result.params;
     const strategyPerf = autoEvaluateStrategies(evals);
-    console.log(`[AutoOptimizer] Forex params updated — committeeThreshold:${result.params.committeeThreshold} minRR:${result.params.minRewardRisk} | ${result.reason}`);
+    console.log(`[AutoOptimizer] Forex params updated — committeeThreshold:${forexOptimizedParams.committeeThreshold} minRR:${forexOptimizedParams.minRewardRisk} | ${result.reason}`);
     if (Object.keys(strategyPerf).length > 0) {
         console.log('[AutoOptimizer] Forex strategy performance:', JSON.stringify(
             Object.fromEntries(Object.entries(strategyPerf).map(([k, v]) => [k, { pf: v.profitFactor.toFixed(2), wr: (v.winRate * 100).toFixed(0) + '%', n: v.trades }]))

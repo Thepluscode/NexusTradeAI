@@ -3245,9 +3245,10 @@ class CryptoTradingEngine {
                         strategy: e.signals?.regime ?? 'unknown',
                     }));
                     const optResult = autoOptimize(evalTrades);
-                    this._optimizedParams = optResult.params;
+                    if (optResult.params) this._optimizedParams = optResult.params;
                     this._lastAutoOptimMs = Date.now();
-                    console.log(`[AutoOptim] Crypto params updated — committeeThreshold=${optResult.params.committeeThreshold.toFixed(3)}, minRR=${optResult.params.minRewardRisk.toFixed(2)} | ${optResult.reason}`);
+                    const _cp = this._optimizedParams || {};
+                    console.log(`[AutoOptim] Crypto params updated — committeeThreshold=${(_cp.committeeThreshold || 0.50).toFixed(3)}, minRR=${(_cp.minRewardRisk || 2.0).toFixed(2)} | ${optResult.reason}`);
                     if (optResult.improved) {
                         const strats = autoEvalStrategies(globalThis._cryptoTradeEvaluations || []);
                         const activeStrats = Object.entries(strats).filter(([, s]) => s.active).map(([k, s]) => `${k}(PF=${s.profitFactor.toFixed(2)})`).join(', ');
