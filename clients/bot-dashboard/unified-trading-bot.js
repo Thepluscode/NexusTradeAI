@@ -14,6 +14,7 @@ let BOT_COMPONENTS = { stock: { components: ['momentum','orderFlow','displacemen
 let computeCorrelationGuard = () => ({ blocked: false });
 let optimize = () => ({ improved: false });
 let evaluateStrategies = () => ({});
+let lastStrategyPerf = {}; // [v14.1] Stores latest evaluateStrategies() output for INACTIVE enforcement
 let checkScanHealth = () => ({ healthy: true });
 let checkErrorRate = () => ({ healthy: true });
 let checkTradingHealth = () => ({ healthy: true });
@@ -3011,6 +3012,13 @@ async function scanMomentumBreakouts() {
                 // ORB window gets 2 signals/cycle; otherwise 1 (data: ORB = 59% WR, +$85)
                 const effectiveMaxSignals = isOpeningRangeBreakoutWindow() ? 2 : MAX_SIGNALS_PER_CYCLE;
                 for (const mover of ranked.slice(0, Math.min(available, effectiveMaxSignals))) {
+                    // [v14.1] Strategy INACTIVE gate — skip strategies that evaluateStrategies() marked as underperforming
+                    const moverStrategy = mover.strategy || (mover.tier === 'orb' ? 'openingRangeBreakout' : 'momentum');
+                    const stratStatus = lastStrategyPerf[moverStrategy];
+                    if (stratStatus && !stratStatus.active && stratStatus.trades >= 10) {
+                        console.log(`[STRATEGY GATE] ${mover.symbol}: ${moverStrategy} is INACTIVE (WR ${(stratStatus.winRate*100).toFixed(0)}%, PF ${stratStatus.profitFactor.toFixed(2)}, ${stratStatus.trades} trades) — skipping`);
+                        continue;
+                    }
                     // [v11.0] SPY Trend Hard Gate — reject all LONG entries when SPY is bearish
                     if (!spyBullish) {
                         console.log(`[SPY GATE] ${mover.symbol}: Market bearish — skipping LONG entry`);
@@ -5743,6 +5751,13 @@ class UserTradingEngine {
                 .sort((a, b) => (b.score || 0) - (a.score || 0));
             const engineMaxSignals = isOpeningRangeBreakoutWindow() ? 2 : MAX_SIGNALS_PER_CYCLE;
             for (const mover of ranked.slice(0, Math.min(available, engineMaxSignals))) {
+                // [v14.1] Strategy INACTIVE gate — skip strategies that evaluateStrategies() marked as underperforming
+                const moverStrategy = mover.strategy || (mover.tier === 'orb' ? 'openingRangeBreakout' : 'momentum');
+                const stratStatus = lastStrategyPerf[moverStrategy];
+                if (stratStatus && !stratStatus.active && stratStatus.trades >= 10) {
+                    console.log(`[Engine ${this.userId}][STRATEGY GATE] ${mover.symbol}: ${moverStrategy} is INACTIVE (WR ${(stratStatus.winRate*100).toFixed(0)}%, PF ${stratStatus.profitFactor.toFixed(2)}) — skipping`);
+                    continue;
+                }
                 // [v11.0] SPY Trend Hard Gate — reject all LONG entries when SPY is bearish
                 if (!spyBullish) {
                     console.log(`[Engine ${this.userId}][SPY GATE] ${mover.symbol}: Market bearish — skipping LONG entry`);
@@ -6173,6 +6188,7 @@ async function tradingLoop() {
             }
             // Log strategy performance
             const stratPerf = evaluateStrategies(trades);
+            lastStrategyPerf = stratPerf; // [v14.1] Store globally for INACTIVE enforcement in trading loop
             for (const [strat, perf] of Object.entries(stratPerf)) {
                 console.log(`[STRATEGY] ${strat}: ${perf.trades} trades, WR ${(perf.winRate*100).toFixed(0)}%, PF ${perf.profitFactor.toFixed(2)}, ${perf.active ? 'ACTIVE' : 'INACTIVE'}`);
             }
