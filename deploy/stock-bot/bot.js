@@ -8,8 +8,9 @@ const jwt = require('jsonwebtoken');
 const { Pool } = require('pg');
 const rateLimit = require('express-rate-limit');
 const { createUserCredentialStore } = require('./userCredentialStore');
-// Signal modules — try local signal-analytics first (works on Railway), then services/
-let createSignalEndpoints = require('./signal-analytics').createSignalEndpoints;
+// Signal modules — try local signal-analytics (ships with deploy), fall back to no-op
+let createSignalEndpoints;
+try { createSignalEndpoints = require('./signal-analytics').createSignalEndpoints; } catch (_) { createSignalEndpoints = () => {}; }
 let BOT_COMPONENTS = { stock: { components: ['momentum','orderFlow','displacement','volumeProfile','fvg','volumeRatio','mtfConfluence'] } };
 let computeCorrelationGuard = () => ({ blocked: false });
 let optimize = () => ({ improved: false });
