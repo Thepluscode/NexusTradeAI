@@ -2940,8 +2940,9 @@ class CryptoTradingEngine {
                 console.log(`[PROFIT-PROTECT] ${symbol}: entered profit zone (+$${pnlUSD.toFixed(2)}, threshold $${profitThreshold.toFixed(2)}) — breakeven lock ACTIVE`);
             }
 
-            // Breakeven lock: if was in profit and now dropped below -$2, close immediately
-            if (position.wasInProfit && pnlUSD < -2) {
+            // Breakeven lock: if was in profit and now dropped back to breakeven, close immediately
+            // [v14.1] FIX: was -$2 (a loss), now $0 (true breakeven protection)
+            if (position.wasInProfit && pnlUSD <= 0) {
                 console.log(`[PROFIT-PROTECT] ${symbol}: was +$${position.peakUnrealizedPL.toFixed(2)}, now $${pnlUSD.toFixed(2)} — closing to protect capital`);
                 // Set re-entry flag before closing (crypto bot is long-only)
                 this.profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: position.direction || 'long', entry: position.entry || currentPrice });
@@ -2997,8 +2998,8 @@ class CryptoTradingEngine {
                     `P&L: ${pnlPercent.toFixed(2)}%`
                 ).catch(e => console.warn(`⚠️  Telegram max-hold-loss alert failed: ${e.message}`));
                 continue;
-            }
-            if (holdDays >= this.config.maxHoldDays && pnlPercent < 2) {
+            // [v14.1] FIX: was separate `if` (overlapped with loss condition above), now `else if`
+            } else if (holdDays >= this.config.maxHoldDays && pnlPercent < 2) {
                 console.log(`⏰ ${symbol}: MAX HOLD EXIT after ${holdDays.toFixed(1)} days (flat/marginal winner: ${pnlPercent.toFixed(2)}%)`);
                 await this.closePosition(symbol, currentPrice, 'Max Hold Days - Flat Exit');
                 (this._userTelegram || telegramAlerts).send(

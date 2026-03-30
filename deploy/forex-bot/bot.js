@@ -4556,9 +4556,24 @@ class UserForexEngine {
             mcMult = Math.max(mcMult, 0.25);
         }
         const positionValue = balance * config.positionSize * sessionMultiplier * mcMult;
-        const units = signal.direction === 'long'
-            ? Math.floor(positionValue / effectiveEntry * 7000)
-            : -Math.floor(positionValue / effectiveEntry * 7000);
+
+        // [v14.1] FIX: was `positionValue / entry * 7000` — the `* 7000` multiplier created
+        // massively oversized positions (155K units on EUR_USD). Now matches global engine logic.
+        const _pair = signal.pair;
+        const _baseCurrency = _pair.split('_')[0];
+        let rawUnits;
+        if (_baseCurrency === 'USD') {
+            rawUnits = Math.round(positionValue);
+        } else {
+            rawUnits = Math.round(positionValue / effectiveEntry);
+        }
+        // Cap at 100K units (1 standard lot) for safety
+        const maxUnits = 100000;
+        if (rawUnits > maxUnits) {
+            console.log(`[ForexEngine ${this.userId}][SafetyCheck] ${_pair} units ${rawUnits} exceeds max ${maxUnits}, capping`);
+            rawUnits = maxUnits;
+        }
+        const units = signal.direction === 'long' ? rawUnits : -rawUnits;
         const result = await this.createOrder(signal.pair, units, signal.stopLoss, signal.takeProfit);
         if (result?.orderFillTransaction) {
             const tags = buildForexTradeTags(signal, signal.tier, signal.direction, signal.session);
