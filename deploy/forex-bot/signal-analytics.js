@@ -33,21 +33,35 @@ class Analytics {
     return { ic: Math.round(ic * 1000) / 1000, pValue: Math.round(pValue * 1000) / 1000, significant: pValue < 0.05, classification, n, ci95 };
   }
 
-  correlationMatrix(trades) {
-    const components = Object.keys(trades[0]?.components || {});
+  // [v17.1] Accept componentNames parameter — don't infer from trades[0] which may be empty.
+  // Filter to trades that actually have component data to avoid false r=1 from || 0 fallback.
+  correlationMatrix(trades, componentNames) {
+    // Only use trades that have at least 1 non-empty component key
+    const validTrades = trades.filter(t => t.components && Object.keys(t.components).length > 0);
+    const components = componentNames || Object.keys(validTrades[0]?.components || {});
     const n = components.length;
+    if (n === 0 || validTrades.length < 10) return { matrix: [], components, redundantPairs: [] };
+
     const matrix = Array.from({ length: n }, () => new Array(n).fill(0));
     const redundantPairs = [];
     for (let i = 0; i < n; i++) {
       for (let j = i; j < n; j++) {
         if (i === j) { matrix[i][j] = 1; continue; }
-        const a = trades.map(t => t.components[components[i]] || 0);
-        const b = trades.map(t => t.components[components[j]] || 0);
+        // Only include trades where BOTH components are defined (not undefined/null)
+        const pairTrades = validTrades.filter(t =>
+          t.components[components[i]] !== undefined && t.components[components[j]] !== undefined);
+        if (pairTrades.length < 10) { matrix[i][j] = 0; matrix[j][i] = 0; continue; }
+        const a = pairTrades.map(t => t.components[components[i]]);
+        const b = pairTrades.map(t => t.components[components[j]]);
+        // Skip if all values are identical (e.g. binary components with no variance)
+        const aUnique = new Set(a).size;
+        const bUnique = new Set(b).size;
+        if (aUnique < 2 || bUnique < 2) { matrix[i][j] = 0; matrix[j][i] = 0; continue; }
         const r = this._spearman(a, b);
         matrix[i][j] = r; matrix[j][i] = r;
         if (Math.abs(r) > 0.6) {
-          const icA = this.computeIC(trades, components[i]);
-          const icB = this.computeIC(trades, components[j]);
+          const icA = this.computeIC(validTrades, components[i]);
+          const icB = this.computeIC(validTrades, components[j]);
           const keep = Math.abs(icA.ic) >= Math.abs(icB.ic) ? components[i] : components[j];
           const drop = keep === components[i] ? components[j] : components[i];
           redundantPairs.push({ a: components[i], b: components[j], r: Math.round(r * 1000) / 1000, recommendation: `Keep ${keep} (higher IC), reduce ${drop} weight` });
@@ -57,8 +71,10 @@ class Analytics {
     return { matrix, components, redundantPairs };
   }
 
-  regimeConditionalIC(trades) {
-    const components = Object.keys(trades[0]?.components || {});
+  // [v17.1] Accept componentNames parameter and filter trades with actual data
+  regimeConditionalIC(trades, componentNames) {
+    const validTrades = trades.filter(t => t.components && Object.keys(t.components).length > 0);
+    const components = componentNames || Object.keys(validTrades[0]?.components || {});
     const regimes = ['trending', 'ranging', 'volatile'];
     const matrix = {};
     const recommendations = [];
@@ -66,7 +82,7 @@ class Analytics {
       matrix[comp] = {};
       const results = [];
       for (const regime of regimes) {
-        const regimeTrades = trades.filter(t => t.regime === regime);
+        const regimeTrades = validTrades.filter(t => t.regime === regime);
         if (regimeTrades.length < 30) {
           matrix[comp][regime] = { ic: 0, pValue: 1, n: regimeTrades.length, classification: 'insufficient_data' };
         } else {
@@ -108,8 +124,9 @@ class Analytics {
       return { name, ...ic };
     }).sort((a, b) => Math.abs(b.ic) - Math.abs(a.ic));
 
-    const corr = this.correlationMatrix(trades);
-    const regimeMatrix = this.regimeConditionalIC(trades);
+    // [v17.1] Pass componentNames to correlation/regime so they don't rely on trades[0]
+    const corr = this.correlationMatrix(trades, componentNames);
+    const regimeMatrix = this.regimeConditionalIC(trades, componentNames);
     const decayEstimates = {};
     for (const name of componentNames) decayEstimates[name] = this.estimateDecay(trades, name);
 
@@ -124,14 +141,20 @@ class Analytics {
       if (decay.halfLife && decay.halfLife < 100) recommendations.push(`SHORTEN LOOKBACK: ${name} half-life ~${decay.halfLife} trades`);
     }
 
+    // [v17.1] Count trades with actual component data vs total
+    const tradesWithComponents = trades.filter(t => t.components && Object.keys(t.components).length > 0).length;
+
     const warnings = [];
     if (trades.length < 100) warnings.push(`LOW TRADE COUNT: Only ${trades.length} trades. Results may not be reliable.`);
+    if (tradesWithComponents < trades.length) {
+      warnings.push(`MISSING COMPONENTS: ${trades.length - tradesWithComponents}/${trades.length} trades have no committee data (pre-v14). IC/correlation computed on ${tradesWithComponents} trades only.`);
+    }
     if (rankings.every(r => r.classification !== 'signal')) warnings.push('ALL COMPONENTS WEAK: No component shows strong IC. Review data quality or signal logic.');
 
     const timestamps = trades.map(t => t.timestamp || t.entryTime).filter(Boolean).sort();
     const dateRange = timestamps.length > 0 ? { from: timestamps[0], to: timestamps[timestamps.length - 1] } : { from: null, to: null };
 
-    return { bot: trades[0]?.bot || 'unknown', tradeCount: trades.length, dateRange, optimalThreshold: null, componentRankings: rankings, redundantPairs: corr.redundantPairs, regimeMatrix: regimeMatrix.matrix, decayEstimates, recommendations, warnings };
+    return { bot: trades[0]?.bot || 'unknown', tradeCount: trades.length, tradesWithComponents, dateRange, optimalThreshold: null, componentRankings: rankings, redundantPairs: corr.redundantPairs, regimeMatrix: regimeMatrix.matrix, decayEstimates, recommendations, warnings };
   }
 
   // ── Statistical helpers ──
@@ -220,6 +243,14 @@ class Analytics {
   }
 }
 
+// ── Helper: normalize pnlPct to decimal (0.05 = 5%) ─────────────────────────
+// DB may store as decimal (0.05) or percentage (5.0). Normalize to decimal.
+function normalizePnlPct(val) {
+  if (val == null) return 0;
+  // If absolute value > 1, likely stored as percentage — convert to decimal
+  return Math.abs(val) > 1 ? val / 100 : val;
+}
+
 // ── Endpoint factory ─────────────────────────────────────────────────────────
 
 const analytics = new Analytics();
@@ -239,10 +270,11 @@ function createSignalEndpoints(app, routePrefix, bot, getEvaluations, getBotComp
         return res.json({ success: true, data: null, message: 'Insufficient trade data for analysis' });
       }
       const trades = evaluations.map(ev => ({
-        netPnlPct: (ev.pnlPct || ev.pnl || 0) * 100,
+        netPnlPct: normalizePnlPct(ev.pnlPct) * 100, // always percentage for IC computation
         components: ev.signals?.components || {},
         regime: ev.signals?.regime || ev.regime || 'trending',
         committeeScore: ev.signals?.committeeConfidence || ev.committeeScore || 0.5,
+        timestamp: ev.timestamp || ev.entryTime,
         bot
       }));
       const report = analytics.generateNoiseReport(trades, components);
@@ -269,7 +301,7 @@ function createSignalEndpoints(app, routePrefix, bot, getEvaluations, getBotComp
         symbol: ev.symbol,
         direction: ev.direction,
         pnl: ev.pnl,
-        pnlPct: ev.pnlPct,
+        pnlPct: normalizePnlPct(ev.pnlPct), // [v17.1] normalize to decimal
         committeeScore: ev.signals?.committeeConfidence || 0,
         components: ev.signals?.components || {},
         regime: ev.signals?.regime || ev.regime || 'unknown',
@@ -285,15 +317,17 @@ function createSignalEndpoints(app, routePrefix, bot, getEvaluations, getBotComp
   app.get(`/api/${routePrefix}/regime-heatmap`, (req, res) => {
     try {
       const evaluations = getEvaluations();
+      const components = getBotComponents();
       if (!evaluations || evaluations.length < 30) {
         return res.json({ success: true, data: null, message: 'Insufficient data' });
       }
       const trades = evaluations.map(ev => ({
-        netPnlPct: (ev.pnlPct || ev.pnl || 0) * 100,
+        netPnlPct: normalizePnlPct(ev.pnlPct) * 100,
         components: ev.signals?.components || {},
         regime: ev.signals?.regime || ev.regime || 'trending'
       }));
-      const result = analytics.regimeConditionalIC(trades);
+      // [v17.1] Pass componentNames so regime heatmap doesn't rely on trades[0]
+      const result = analytics.regimeConditionalIC(trades, components);
       res.json({ success: true, data: result });
     } catch (error) {
       res.status(500).json({ success: false, error: error.message });
@@ -317,7 +351,7 @@ function createSignalEndpoints(app, routePrefix, bot, getEvaluations, getBotComp
         const losses = filtered.filter(e => (e.pnl || 0) <= 0);
         const totalWin = wins.reduce((s, e) => s + Math.abs(e.pnl || 0), 0);
         const totalLoss = losses.reduce((s, e) => s + Math.abs(e.pnl || 0), 0);
-        const pnls = filtered.map(e => e.pnlPct || 0);
+        const pnls = filtered.map(e => normalizePnlPct(e.pnlPct));
         const mean = pnls.reduce((s, v) => s + v, 0) / pnls.length;
         const std = Math.sqrt(pnls.reduce((s, v) => s + (v - mean) ** 2, 0) / pnls.length) || 1;
         results.push({

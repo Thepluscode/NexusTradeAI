@@ -721,7 +721,8 @@ async function loadEvaluationsFromDB() {
                     displacement: ctx.hasDisplacement ?? false,
                     vpPosition: ctx.volumeProfile ?? null,
                     fvgCount: ctx.fvgCount ?? 0,
-                    committeeConfidence: ctx.committeeConfidence ?? (parseFloat(row.signal_score) || 0),
+                    // [v17.1] Don't fall back to signal_score — that's raw momentum score (100+), not committee confidence (0-1)
+                    committeeConfidence: ctx.committeeConfidence ?? 0,
                     components: ctx.committeeComponents || {},
                     regime: row.regime || ctx.marketRegime || 'unknown',
                     score: parseFloat(row.signal_score) || 0
