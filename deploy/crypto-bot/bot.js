@@ -135,7 +135,7 @@ globalThis._cryptoTradeEvaluations = [];
 // [Improvement 2] WEIGHT AUTO-LEARNING
 // ============================================================================
 const WEIGHTS_FILE = path.join(__dirname, 'data', 'crypto-weights.json');
-const DEFAULT_CRYPTO_WEIGHTS = { momentum: 0.25, orderFlow: 0.20, displacement: 0.15, volumeProfile: 0.15, fvg: 0.10, volumeRatio: 0.15 };
+const DEFAULT_CRYPTO_WEIGHTS = { momentum: 0.25, orderFlow: 0.20, displacement: 0.15, volumeProfile: 0.20, fvg: 0.15, volumeRatio: 0.05 }; // [v17.0] volumeRatio IC=-0.424 (hurting), weight 0.15→0.05; redistributed to volumeProfile (IC=+0.366) and fvg
 
 function loadCryptoWeights() {
     try {
@@ -2670,8 +2670,8 @@ class CryptoTradingEngine {
     }
 
     // [v10.1] Entry quality gate — every crypto signal must pass before execution
-    // committeeThreshold: auto-optimized value passed from tradingLoop (default 0.50)
-    isCryptoEntryQualified(signal, committee, btcBullish, committeeThreshold = 0.50) {
+    // committeeThreshold: auto-optimized value passed from tradingLoop (default 0.55)
+    isCryptoEntryQualified(signal, committee, btcBullish, committeeThreshold = 0.55) { // [v17.0] was 0.50
         const reasons = [];
         const symbol = signal.symbol;
         const direction = signal.direction || 'long';
@@ -3260,7 +3260,7 @@ class CryptoTradingEngine {
                 // Effective thresholds — use optimized values when available, else defaults
                 const effectiveCommitteeThreshold = this._optimizedParams
                     ? this._optimizedParams.committeeThreshold
-                    : (AUTO_PARAM_BOUNDS.committeeThreshold || {}).default || 0.50;
+                    : (AUTO_PARAM_BOUNDS.committeeThreshold || {}).default || 0.55; // [v17.0] threshold sweep: PF jumps from 1.20→2.74 at 0.55
                 const effectiveMinRR = this._optimizedParams
                     ? this._optimizedParams.minRewardRisk
                     : (AUTO_PARAM_BOUNDS.minRewardRisk || {}).default || 2.0;
