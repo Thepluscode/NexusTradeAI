@@ -8,27 +8,8 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
 const { createUserCredentialStore } = require('./userCredentialStore');
-// Signal modules — try/catch for Railway deploy where services/ may not exist
-let createSignalEndpoints = function inlineFallback(app, routePrefix, _bot, getEvaluations) {
-  app.get(`/api/${routePrefix}/signal-timeline`, (req, res) => {
-    try {
-      const evals = getEvaluations();
-      const limit = parseInt(req.query.limit) || 50;
-      const timeline = evals.slice(-limit).reverse().map(ev => ({
-        time: ev.timestamp || ev.entryTime, symbol: ev.symbol, direction: ev.direction,
-        pnl: ev.pnl, pnlPct: ev.pnlPct,
-        committeeScore: ev.signals?.committeeConfidence || 0,
-        regime: ev.signals?.regime || ev.regime || 'unknown',
-        exitReason: ev.exitReason || 'unknown'
-      }));
-      res.json({ success: true, data: timeline });
-    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-  });
-  app.get(`/api/${routePrefix}/noise-report`, (_req, res) => res.json({ success: true, data: null, message: 'Analytics module not available' }));
-  app.post(`/api/${routePrefix}/noise-report/refresh`, (_req, res) => res.json({ success: true }));
-  app.get(`/api/${routePrefix}/regime-heatmap`, (_req, res) => res.json({ success: true, data: null, message: 'Analytics module not available' }));
-  app.get(`/api/${routePrefix}/threshold-curve`, (_req, res) => res.json({ success: true, data: null, message: 'No threshold sweep data' }));
-};
+// Signal modules — try local signal-analytics first (works on Railway), then services/
+let createSignalEndpoints = require('./signal-analytics').createSignalEndpoints;
 let BOT_COMPONENTS = { crypto: { components: ['momentum','orderFlow','displacement','volumeProfile','fvg','volumeRatio','mtfConfluence'] } };
 let computeCorrelationGuard = (positions) => {
   // Inline fallback — real guard when services/ unavailable (Railway)
