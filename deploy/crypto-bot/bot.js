@@ -36,7 +36,11 @@ try {
   ({ computeCorrelationGuard } = require('../../services/signals/exit-manager'));
   ({ optimize: autoOptimize, evaluateStrategies: autoEvalStrategies, PARAM_BOUNDS: AUTO_PARAM_BOUNDS } = require('../../services/signals/auto-optimizer'));
   ({ checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth } = require('../../services/signals/health-monitor'));
-} catch (e) { console.log('[INIT] Signal modules not available (Railway deploy) — using inline fallbacks'); }
+} catch (e) {
+  console.log('[INIT] Signal modules not available — trying local fallbacks');
+  // [v17.1] On Railway, auto-optimizer ships alongside bot.js
+  try { ({ optimize: autoOptimize, evaluateStrategies: autoEvalStrategies, PARAM_BOUNDS: AUTO_PARAM_BOUNDS } = require('./auto-optimizer')); console.log('[INIT] auto-optimizer loaded from local'); } catch (_) {}
+}
 // Load .env from project root (Railway injects env vars directly, so dotenv is a no-op there)
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
