@@ -4716,11 +4716,10 @@ app.get('/api/crypto/evaluations', (req, res) => {
         return res.json({ success: true, data: { totalTrades: 0, message: 'No evaluations yet' } });
     }
 
-    // Normalize pnlPct to decimal form (0.0577 = +5.77%)
-    // Old data stored as percentage (5.77), new data stores as decimal (0.0577)
+    // [v17.1] After DB migration, pnl_pct is decimal. Safety guard for any stragglers.
     const evals = rawEvals.map(e => {
         let pnlPct = e.pnlPct || 0;
-        if (Math.abs(pnlPct) > 1) pnlPct = pnlPct / 100; // was stored as percentage, normalize to decimal
+        if (Math.abs(pnlPct) > 2) pnlPct = pnlPct / 100; // >200% per trade = clearly percentage not decimal
         return { ...e, pnlPct };
     });
 

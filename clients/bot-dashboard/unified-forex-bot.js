@@ -3050,7 +3050,8 @@ async function closePositionWithReason(pair, reason) {
                 const exitPct = exitEntry > 0
                     ? ((exitPrice - exitEntry) / exitEntry) * (posCopy.direction === 'short' ? -100 : 100)
                     : 0;
-                dbForexClose(posCopy.dbTradeId, exitPrice, exitPnl, exitPct, reason).catch(() => {});
+                // [v17.1] Store decimal pnlPct in DB (0.05 = 5%), not percentage (5.0)
+                dbForexClose(posCopy.dbTradeId, exitPrice, exitPnl, exitPct / 100, reason).catch(() => {});
                 // [v4.1] Report to Agentic AI learning loop — Scan AI pattern tracking
                 reportForexTradeOutcome(posCopy, exitPrice, exitPnl, exitPct / 100, reason).catch(() => {});
                 // [v4.6] Record outcome into adaptive guardrails
@@ -3303,7 +3304,8 @@ async function managePositions() {
                     const reason    = trade.closingTransactionIDs?.length
                         ? (realPnl < 0 ? 'Stop Loss' : 'Take Profit')
                         : 'Broker Closed';
-                    dbForexClose(localPos.dbTradeId, exitPrice, realPnl, exitPct, reason).catch(() => {});
+                    // [v17.1] Store decimal pnlPct in DB (0.05 = 5%), not percentage (5.0)
+                    dbForexClose(localPos.dbTradeId, exitPrice, realPnl, exitPct / 100, reason).catch(() => {});
                     // Update in-memory perf counters
                     simTotalTrades++;
                     simDailyPnL += realPnl;
@@ -3661,10 +3663,10 @@ app.get('/api/forex/evaluations', (req, res) => {
         return res.json({ success: true, data: { totalTrades: 0, message: 'No evaluations yet' } });
     }
 
-    // Normalize pnlPct: old data stored as percentage (5.77), new as decimal (0.0577)
+    // [v17.1] After DB migration, pnl_pct is decimal. Safety guard for any stragglers.
     const evals = rawEvals.map(e => {
         let pnlPct = e.pnlPct || 0;
-        if (Math.abs(pnlPct) > 1) pnlPct = pnlPct / 100;
+        if (Math.abs(pnlPct) > 2) pnlPct = pnlPct / 100; // >200% per trade = clearly percentage not decimal
         return { ...e, pnlPct };
     });
 

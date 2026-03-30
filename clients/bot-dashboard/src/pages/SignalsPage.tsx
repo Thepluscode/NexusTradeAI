@@ -260,9 +260,9 @@ function SignalTimeline({ bot }: { bot: Bot }) {
                 <TableCell align="right" sx={{
                   fontVariantNumeric: 'tabular-nums',
                   fontWeight: 600,
-                  color: (entry.pnlPct || entry.pnl || 0) > 0 ? '#10b981' : (entry.pnlPct || entry.pnl || 0) < 0 ? '#ef4444' : '#6b7280',
+                  color: (entry.pnlPct || 0) > 0 ? '#10b981' : (entry.pnlPct || 0) < 0 ? '#ef4444' : '#6b7280',
                 }}>
-                  {((entry.pnlPct || entry.pnl || 0) * 100).toFixed(2)}%
+                  {((entry.pnlPct || 0) * 100).toFixed(2)}%
                 </TableCell>
                 <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums' }}>
                   {(entry.committeeScore || 0).toFixed(2)}

@@ -244,11 +244,13 @@ class Analytics {
 }
 
 // ── Helper: normalize pnlPct to decimal (0.05 = 5%) ─────────────────────────
-// DB may store as decimal (0.05) or percentage (5.0). Normalize to decimal.
+// [v17.1] After DB migration, all pnl_pct values are decimal. This guard
+// catches any remaining historical data that slipped through migration.
 function normalizePnlPct(val) {
   if (val == null) return 0;
-  // If absolute value > 1, likely stored as percentage — convert to decimal
-  return Math.abs(val) > 1 ? val / 100 : val;
+  // Safety: absolute value > 2 is almost certainly a percentage, not decimal
+  // (a >200% return per trade doesn't happen with our position sizes)
+  return Math.abs(val) > 2 ? val / 100 : val;
 }
 
 // ── Endpoint factory ─────────────────────────────────────────────────────────

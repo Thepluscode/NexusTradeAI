@@ -1095,12 +1095,12 @@ async function repairInvalidTradePnL({ limit = 1000 } = {}) {
                     WHEN t.entry_price > 0 THEN
                         CASE
                             WHEN LOWER(COALESCE(t.direction, 'long')) = 'short'
-                                THEN ((t.entry_price - t.exit_price) / t.entry_price) * 100
-                            ELSE ((t.exit_price - t.entry_price) / t.entry_price) * 100
+                                THEN (t.entry_price - t.exit_price) / t.entry_price
+                            ELSE (t.exit_price - t.entry_price) / t.entry_price
                         END
                     ELSE 0
                 END
-            )::numeric, 4)
+            )::numeric, 6)
         FROM invalid
         WHERE t.id = invalid.id
         RETURNING t.id, t.bot, t.symbol, t.pnl_usd, t.pnl_pct`,
@@ -1111,6 +1111,30 @@ async function repairInvalidTradePnL({ limit = 1000 } = {}) {
         repaired: result.rows.length,
         rows: result.rows,
     };
+}
+
+// [v17.1] One-time migration: normalize pnl_pct from percentage (5.0) to decimal (0.05)
+// Historical stock/forex trades stored pnl_pct as percentage. Crypto was already decimal.
+// Any row with |pnl_pct| > 1 is almost certainly a percentage (a real >100% decimal return is
+// extremely unlikely for these position sizes). Safe because no trade should have pnl_pct > 1.0
+// as a decimal (100%+ return on a single momentum/ORB trade doesn't happen with our position sizes).
+async function migratePnlPctToDecimal() {
+    if (!dbPool) return;
+    try {
+        const result = await dbPool.query(`
+            UPDATE trades
+            SET pnl_pct = pnl_pct / 100
+            WHERE status = 'closed'
+              AND pnl_pct IS NOT NULL
+              AND ABS(pnl_pct) > 1
+            RETURNING id, bot, symbol, pnl_pct
+        `);
+        if (result.rows.length > 0) {
+            console.log(`[Migration] Normalized ${result.rows.length} trades from percentage to decimal pnl_pct`);
+        }
+    } catch (e) {
+        console.warn('[Migration] pnl_pct normalization failed:', e.message);
+    }
 }
 
 function buildStockTradeTags(signal = {}, strategy, tier) {
@@ -4055,9 +4079,12 @@ async function closePosition(symbol, qty, reason = 'Manual') {
                 const closeMetrics = resolveClosedTradeMetrics(positionCopy, qty, adjustedExitPrice);
                 if (closeMetrics) {
                     recordTradeClose(symbol, closeMetrics.entryPrice, closeMetrics.exitPrice, closeMetrics.shares, reason);
-                    dbTradeClose(positionCopy?.dbTradeId, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct, reason).catch(e => console.warn('⚠️  DB operation failed:', e?.message || String(e)));
+                    // [v17.1] Store decimal pnlPct in DB (0.05 = 5%), not percentage (5.0)
+                    // resolveClosedTradeMetrics returns percentage (*100), divide back to decimal
+                    const pnlPctDecimal = closeMetrics.pnlPct / 100;
+                    dbTradeClose(positionCopy?.dbTradeId, closeMetrics.exitPrice, closeMetrics.pnlUsd, pnlPctDecimal, reason).catch(e => console.warn('⚠️  DB operation failed:', e?.message || String(e)));
                     // [v4.1] Report to Agentic AI learning loop — Scan AI pattern tracking
-                    reportTradeOutcome(positionCopy, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct / 100, reason).catch(e => console.warn('⚠️  DB operation failed:', e?.message || String(e)));
+                    reportTradeOutcome(positionCopy, closeMetrics.exitPrice, closeMetrics.pnlUsd, pnlPctDecimal, reason).catch(e => console.warn('⚠️  DB operation failed:', e?.message || String(e)));
                         // [v4.6] Feed outcome into adaptive guardrails
                         guardrails.recordOutcome(closeMetrics.pnlUsd > 0);
                 } else {
@@ -4069,9 +4096,10 @@ async function closePosition(symbol, qty, reason = 'Manual') {
             // FIX 2: Uses pre-captured snapshot so evaluation works even if position was
             // already removed from the Map (e.g. race condition or re-entrant close).
             if (snapshot) {
-                const evalExitPrice = currentPrice || 0;
-                const evalPnl = currentPrice ? (currentPrice - positionCopy.entry) * parseFloat(qty) : 0;
-                const evalPnlPct = (currentPrice && positionCopy.entry) ? (currentPrice - positionCopy.entry) / positionCopy.entry : 0;
+                // [v17.1] Use closeMetrics when available for consistent pnl values
+                const evalExitPrice = closeMetrics ? closeMetrics.exitPrice : (currentPrice || 0);
+                const evalPnl = closeMetrics ? closeMetrics.pnlUsd : (currentPrice ? (currentPrice - positionCopy.entry) * parseFloat(qty) : 0);
+                const evalPnlPct = closeMetrics ? closeMetrics.pnlPct / 100 : ((currentPrice && positionCopy.entry) ? (currentPrice - positionCopy.entry) / positionCopy.entry : 0);
                 const outcome = {
                     symbol: positionCopy.symbol || symbol,
                     direction: positionCopy.direction || 'long',
@@ -4129,10 +4157,10 @@ app.get('/api/trading/evaluations', (req, res) => {
         return res.json({ success: true, data: { totalTrades: 0, message: 'No evaluations yet' } });
     }
 
-    // Normalize pnlPct: old data stored as percentage (5.77), new as decimal (0.0577)
+    // [v17.1] After DB migration, pnl_pct is decimal. Safety guard for any stragglers.
     const evals = rawEvals.map(e => {
         let pnlPct = e.pnlPct || 0;
-        if (Math.abs(pnlPct) > 1) pnlPct = pnlPct / 100;
+        if (Math.abs(pnlPct) > 2) pnlPct = pnlPct / 100; // >200% per trade = clearly percentage not decimal
         return { ...e, pnlPct };
     });
 
@@ -5555,7 +5583,8 @@ class UserTradingEngine {
             const closeMetrics = resolveClosedTradeMetrics(position, qty, adjustedExitPrice);
             if (closeMetrics) {
                 this.recordTradeClose(symbol, closeMetrics.entryPrice, closeMetrics.exitPrice, closeMetrics.shares, reason);
-                this.dbTradeClose(position?.dbTradeId, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct, reason).catch(e => console.warn('⚠️  DB operation failed:', e?.message || String(e)));
+                // [v17.1] Store decimal pnlPct in DB (0.05 = 5%), not percentage (5.0)
+                this.dbTradeClose(position?.dbTradeId, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct / 100, reason).catch(e => console.warn('⚠️  DB operation failed:', e?.message || String(e)));
             } else {
                 console.warn(`⚠️ [Engine ${this.userId}] Skipping DB close write for ${symbol}: unresolved close metrics`);
             }
@@ -7033,6 +7062,8 @@ app.listen(PORT, async () => {
     if (process.env.AUTO_REPAIR_TRADE_PNL !== 'false') {
         setTimeout(async () => {
             try {
+                // [v17.1] First normalize percentage pnl_pct to decimal across all bots
+                await migratePnlPctToDecimal();
                 const repaired = await repairInvalidTradePnL({ limit: 5000 });
                 if (repaired.repaired > 0) {
                     console.log(`🩹 Repaired ${repaired.repaired} trade(s) with invalid stored P&L`);
