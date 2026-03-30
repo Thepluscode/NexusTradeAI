@@ -1028,8 +1028,8 @@ const MIN_TIME_AFTER_STOP = 2 * 60 * 60 * 1000;  // 2 hours after stop-out
 
 // ===== ADAPTIVE GUARDRAILS (v4.6) =====
 const RISK_PER_TRADE = parseFloat(process.env.RISK_PER_TRADE || '0.0035');      // 0.35% per trade — forex is worst lane
-const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.74');
-const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.74');
+const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.65'); // [v17.0] was 0.74, too restrictive with 12 pairs
+const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.65'); // [v17.0] was 0.74, committee provides quality filtering
 const MIN_REWARD_RISK = parseFloat(process.env.FOREX_MIN_REWARD_RISK || process.env.MIN_REWARD_RISK || '1.4');  // [v13.2] forex-specific: 1.4 (TP/SL is 1.2%/0.8% = 1.5 R:R by design)
 const MAX_SIGNALS_PER_CYCLE = parseInt(process.env.MAX_SIGNALS_PER_CYCLE || '1');
 const MAX_CONSECUTIVE_LOSSES = parseInt(process.env.MAX_CONSECUTIVE_LOSSES || '5');  // [v7.1] forex has more frequent small losses; 3 caused death spiral
@@ -1100,7 +1100,7 @@ const EXIT_CONFIG = {
     // [v16.0] Trailing stops — start at 1x risk (now 1.0% with wider stops)
     // Previous 0.8% start was too tight with 0.8% stops — barely 1:1 R:R before trailing
     trailingStopLevels: [
-        { gainThreshold: 0.010, lockPercent: 0.30 },  // +1.0% (1x risk): lock 30% → stop at +0.30%
+        { gainThreshold: 0.012, lockPercent: 0.25 },  // +1.2% (1.2x risk): lock 25% → stop at +0.30% (v17.0: delayed activation)
         { gainThreshold: 0.015, lockPercent: 0.45 },  // +1.5% (1.5x risk): lock 45% → stop at +0.68%
         { gainThreshold: 0.020, lockPercent: 0.60 },  // +2.0%: lock 60% → stop at +1.20%
         { gainThreshold: 0.030, lockPercent: 0.75 },  // +3.0%: lock 75%
@@ -3179,12 +3179,12 @@ async function managePositions() {
         // For USD-base pairs (USD_JPY), units ARE the USD value. For crosses, divide by JPY rate.
         const rawPosValue = Math.abs(localPos.units || 0) * currentPrice;
         const forexPosValue = pair.includes('JPY') ? rawPosValue / currentPrice : rawPosValue;
-        const forexProfitThreshold = Math.max(6, forexPosValue * 0.003); // 0.3% of position or $6
+        const forexProfitThreshold = Math.max(15, forexPosValue * 0.008); // [v17.0] was $6/0.3% — primary cause of 0% WR, armed on noise
         if (unrealizedPL > forexProfitThreshold) {
             if (!localPos.wasPositive) console.log(`[PROFIT-PROTECT] ${pair}: entered profit zone (+$${unrealizedPL.toFixed(2)}, threshold $${forexProfitThreshold.toFixed(2)}) — breakeven lock ACTIVE`);
             localPos.wasPositive = true;
         }
-        if (localPos.wasPositive && unrealizedPL < -2) {
+        if (localPos.wasPositive && unrealizedPL < -4) { // [v17.0] was -$2, 1-2 pips of noise on forex
             console.log(`[PROFIT-PROTECT] ${pair}: was +$${localPos.peakUnrealizedPL.toFixed(2)}, now $${unrealizedPL.toFixed(2)} — closing to protect capital`);
             profitProtectReentryPairs.set(pair, { timestamp: Date.now(), direction: localPos.direction || (isLong ? 'long' : 'short'), entry: entryPrice });
             console.log(`[RE-ENTRY] ${pair} eligible for re-entry (direction: ${localPos.direction || (isLong ? 'long' : 'short')}) after profit-protect close`);
@@ -3196,7 +3196,7 @@ async function managePositions() {
         if (localPos.peakUnrealizedPL > 10 && unrealizedPL > 0) {
             const dropFromPeak = localPos.peakUnrealizedPL - unrealizedPL;
             const dropPct = (dropFromPeak / localPos.peakUnrealizedPL) * 100;
-            if (dropPct > 40) {
+            if (dropPct > 55) { // [v17.0] was 40% — normal consolidation, let winners run
                 console.log(`[PROFIT-PROTECT] ${pair}: peak +$${localPos.peakUnrealizedPL.toFixed(2)}, now +$${unrealizedPL.toFixed(2)} (${dropPct.toFixed(1)}% drawback) — taking profit`);
                 profitProtectReentryPairs.set(pair, { timestamp: Date.now(), direction: localPos.direction || (isLong ? 'long' : 'short'), entry: entryPrice });
                 console.log(`[RE-ENTRY] ${pair} eligible for re-entry (direction: ${localPos.direction || (isLong ? 'long' : 'short')}) after profit-protect close`);
@@ -4497,19 +4497,19 @@ class UserForexEngine {
 
             const rawEngPosVal = Math.abs(position.units || 0) * currentPrice;
             const engPosValue = instrument.includes('JPY') ? rawEngPosVal / currentPrice : rawEngPosVal;
-            const engProfitThreshold = Math.max(6, engPosValue * 0.003);
+            const engProfitThreshold = Math.max(15, engPosValue * 0.008); // [v17.0] match main engine
             if (unrealizedPL > engProfitThreshold) {
                 if (!position.wasPositive) console.log(`[ForexEngine ${this.userId}][PROFIT-PROTECT] ${instrument}: breakeven lock ACTIVE (+$${unrealizedPL.toFixed(2)})`);
                 position.wasPositive = true;
             }
-            if (position.wasPositive && unrealizedPL < -2) {
+            if (position.wasPositive && unrealizedPL < -4) { // [v17.0] was -$2
                 console.log(`[ForexEngine ${this.userId}][PROFIT-PROTECT] ${instrument}: was +$${position.peakUnrealizedPL.toFixed(2)}, now $${unrealizedPL.toFixed(2)} — closing`);
                 await this.closePositionWithReason(instrument, `Profit-Protect breakeven lock`);
                 continue;
             }
             if (position.peakUnrealizedPL > 10 && unrealizedPL > 0) {
                 const dropPct = ((position.peakUnrealizedPL - unrealizedPL) / position.peakUnrealizedPL) * 100;
-                if (dropPct > 40) {
+                if (dropPct > 55) { // [v17.0] was 40% — normal consolidation, let winners run
                     await this.closePositionWithReason(instrument, `Profit-Protect drawback (${dropPct.toFixed(1)}% drop from peak)`);
                     continue;
                 }

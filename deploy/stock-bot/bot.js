@@ -1416,7 +1416,7 @@ let MAX_DRAWDOWN_PCT = parseFloat(process.env.MAX_DRAWDOWN_PCT || '10'); // perc
 // Env-overridable thresholds — stricter than legacy defaults
 const RISK_PER_TRADE = parseFloat(process.env.RISK_PER_TRADE || '0.0075');      // 0.75% per trade (was 2%)
 const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.68');
-const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.75');  // v5.0: raised from 0.68 — filter out low-conviction entries
+const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.65');  // v17.0: lowered from 0.75 — committee provides quality filtering, this gate was too restrictive
 const MIN_REWARD_RISK = parseFloat(process.env.MIN_REWARD_RISK || '1.75');
 
 // Auto-optimizer state — runs every 4 hours
@@ -1494,7 +1494,7 @@ const EXIT_CONFIG = {
     // [v9.0] Profit targets aligned with new tier configs (3.5-6% targets)
     // Old 8% day-0 target was never hit — winners closed end-of-day at +1.4%
     profitTargetByDay: {
-        0: 0.035, // Day 0: 3.5% — match tier1 target
+        0: 0.06,  // Day 0: 6% — match new tier1 profitTarget (v17.0)
         1: 0.03,  // Day 1: 3%
         2: 0.025, // Day 2: 2.5%
         3: 0.02,  // Day 3: 2%
@@ -1509,7 +1509,7 @@ const EXIT_CONFIG = {
     // [v13.0] Trailing starts at 1x risk (2% stop → trail from +2%)
     // Old +0.5% start was 0.25x risk — too tight, noise-triggered exits
     trailingStopLevels: [
-        { gainThreshold: 0.02,  lockPercent: 0.30 },   // +2.0% (1x risk): lock 30% → stop at +0.6%
+        { gainThreshold: 0.03,  lockPercent: 0.30 },   // +3.0% (1.2x risk): lock 30% → stop at +0.9% (v17.0: was +2%, too tight)
         { gainThreshold: 0.035, lockPercent: 0.45 },   // +3.5% (1.75x): lock 45%
         { gainThreshold: 0.05,  lockPercent: 0.60 },   // +5.0%: lock 60%
         { gainThreshold: 0.08,  lockPercent: 0.75 },   // +8.0%: lock 75%
@@ -1536,8 +1536,8 @@ const MOMENTUM_CONFIG = {
         rsiMax: 66,
         rsiMin: 40,
         positionSize: 0.005,
-        stopLoss: 0.02,        // [v9.0] 2% stop (was 4%) — cut losers faster
-        profitTarget: 0.035,   // [v9.0] 3.5% target (was 8%) — achievable, 1.75:1 R:R
+        stopLoss: 0.025,       // [v17.0] 2.5% stop (was 2%) — wider to reduce noise stops
+        profitTarget: 0.06,    // [v17.0] 6% target (was 3.5%) — 2.4:1 R:R, profitable at 33% WR
         maxPositions: 4
     },
     tier2: {
@@ -1547,8 +1547,8 @@ const MOMENTUM_CONFIG = {
         rsiMax: 66,
         rsiMin: 40,
         positionSize: 0.0075,
-        stopLoss: 0.025,       // [v9.0] 2.5% stop (was 5%)
-        profitTarget: 0.045,   // [v9.0] 4.5% target (was 10%) — 1.8:1 R:R
+        stopLoss: 0.03,        // [v17.0] 3% stop (was 2.5%) — 5%+ movers need wider stops
+        profitTarget: 0.07,    // [v17.0] 7% target (was 4.5%) — 2.33:1 R:R, profitable at 33% WR
         maxPositions: 3
     },
     tier3: {
@@ -1577,8 +1577,8 @@ const OPENING_RANGE_BREAKOUT_CONFIG = {
     rsiMax: 68,             // [v9.0] tightened from 72 — reject overbought entries
     maxBreakoutPct: 0.03,
     positionSize: 0.004,
-    stopLoss: 0.020,        // [v13.2] 2.0% stop (was 1.2%) — opening vol needs room, matches tier1
-    profitTarget: 0.035,    // [v13.2] 3.5% target (was 2.0%) — 1.75:1 R:R, ORB winners run further
+    stopLoss: 0.025,        // [v17.0] 2.5% stop (was 2.0%) — opening range has 2-3x normal volatility
+    profitTarget: 0.050,    // [v17.0] 5.0% target (was 3.5%) — 2:1 R:R, profitable at 33% WR
     maxPositions: 2
 };
 
@@ -2755,14 +2755,14 @@ async function managePositions() {
 
             // Mark position as "was positive" once it exceeds meaningful threshold (0.5% of position or $8 min)
             const stockPosValue = (position.shares || 1) * currentPrice;
-            const stockProfitThreshold = Math.max(8, stockPosValue * 0.005);
+            const stockProfitThreshold = Math.max(20, stockPosValue * 0.015); // [v17.0] was $8/0.5% — too tight, armed on noise
             if (unrealizedPLDollar > stockProfitThreshold && !position.wasPositive) {
                 position.wasPositive = true;
                 console.log(`[PROFIT-PROTECT] ${symbol}: position now profitable (+$${unrealizedPLDollar.toFixed(2)}, threshold $${stockProfitThreshold.toFixed(2)}) — breakeven lock ARMED`);
             }
 
             // Breakeven lock: if was profitable but now losing, close immediately
-            if (position.wasPositive && unrealizedPLDollar < -3) {
+            if (position.wasPositive && unrealizedPLDollar < -5) { // [v17.0] was -$3, too tight for bid-ask noise
                 console.log(`[PROFIT-PROTECT] ${symbol}: was +$${position.peakUnrealizedPL.toFixed(2)}, now $${unrealizedPLDollar.toFixed(2)} — closing to protect capital`);
                 // Set re-entry flag before closing (stock bot is long-only)
                 profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: 'long', entry: position.entryPrice || currentPrice });
@@ -2775,7 +2775,7 @@ async function managePositions() {
             if (position.peakUnrealizedPL > 15 && unrealizedPLDollar > 0) {
                 const dropFromPeak = position.peakUnrealizedPL - unrealizedPLDollar;
                 const dropPct = (dropFromPeak / position.peakUnrealizedPL) * 100;
-                if (dropPct > 40) {
+                if (dropPct > 55) { // [v17.0] was 40% — normal consolidation, let winners run
                     console.log(`[PROFIT-PROTECT] ${symbol}: peak +$${position.peakUnrealizedPL.toFixed(2)}, now +$${unrealizedPLDollar.toFixed(2)} (${dropPct.toFixed(1)}% drawback) — taking profit`);
                     // Set re-entry flag before closing (stock bot is long-only)
                     profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: 'long', entry: position.entryPrice || currentPrice });
@@ -3092,7 +3092,7 @@ async function scanMomentumBreakouts() {
                     // [Phase 3] Committee aggregator — unified confidence from all signal sources
                     const committee = computeCommitteeScore(mover);
                     // [v14.0] Raised default from 0.50 → 0.60 — 0.50 passed too many low-conviction signals (36% WR)
-                    const committeeThreshold = optimizedParams?.committeeThreshold || 0.60;
+                    const committeeThreshold = optimizedParams?.committeeThreshold || 0.50; // [v17.0] was 0.60, too few trades with binary components
                     if (committee.confidence < committeeThreshold) {
                         console.log(`[Committee] ${mover.symbol}: Confidence ${committee.confidence} < ${committeeThreshold} threshold — ${JSON.stringify(committee.components)}`);
                         continue;
@@ -5603,12 +5603,12 @@ class UserTradingEngine {
                 }
                 if (unrealizedPLDollar > position.peakUnrealizedPL) position.peakUnrealizedPL = unrealizedPLDollar;
                 const enginePosValue = (parseInt(alpacaPos.qty) || 1) * currentPrice;
-                const engineProfitThreshold = Math.max(8, enginePosValue * 0.005);
+                const engineProfitThreshold = Math.max(20, enginePosValue * 0.015); // [v17.0] match main engine
                 if (unrealizedPLDollar > engineProfitThreshold && !position.wasPositive) {
                     position.wasPositive = true;
                     console.log(`[PROFIT-PROTECT] [Engine ${this.userId}] ${symbol}: breakeven lock ARMED (+$${unrealizedPLDollar.toFixed(2)}, threshold $${engineProfitThreshold.toFixed(2)})`);
                 }
-                if (position.wasPositive && unrealizedPLDollar < -3) {
+                if (position.wasPositive && unrealizedPLDollar < -5) { // [v17.0] was -$3, too tight for bid-ask noise
                     console.log(`[PROFIT-PROTECT] [Engine ${this.userId}] ${symbol}: was +$${position.peakUnrealizedPL.toFixed(2)}, now $${unrealizedPLDollar.toFixed(2)} — closing to protect capital`);
                     this.profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: 'long', entry: position.entryPrice || currentPrice });
                     console.log(`[RE-ENTRY] [Engine ${this.userId}] ${symbol} eligible for re-entry (direction: long) after profit-protect close`);
@@ -5617,7 +5617,7 @@ class UserTradingEngine {
                 }
                 if (position.peakUnrealizedPL > 15 && unrealizedPLDollar > 0) {
                     const dropPct = ((position.peakUnrealizedPL - unrealizedPLDollar) / position.peakUnrealizedPL) * 100;
-                    if (dropPct > 40) {
+                    if (dropPct > 55) { // [v17.0] was 40% — normal consolidation, let winners run
                         console.log(`[PROFIT-PROTECT] [Engine ${this.userId}] ${symbol}: peak +$${position.peakUnrealizedPL.toFixed(2)}, now +$${unrealizedPLDollar.toFixed(2)} (${dropPct.toFixed(1)}% drawback) — taking profit`);
                         this.profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: 'long', entry: position.entryPrice || currentPrice });
                         console.log(`[RE-ENTRY] [Engine ${this.userId}] ${symbol} eligible for re-entry (direction: long) after profit-protect close`);
@@ -5779,7 +5779,7 @@ class UserTradingEngine {
                 // [Phase 3] Committee aggregator — unified confidence from all signal sources
                 const committee = computeCommitteeScore(mover);
                 // [v14.0] Raised default from 0.50 → 0.60 — 0.50 passed too many low-conviction signals
-                const committeeThreshold = optimizedParams?.committeeThreshold || 0.60;
+                const committeeThreshold = optimizedParams?.committeeThreshold || 0.50; // [v17.0] was 0.60, too few trades with binary components
                 if (committee.confidence < committeeThreshold) {
                     console.log(`[Engine ${this.userId}][Committee] ${mover.symbol}: Confidence ${committee.confidence} < ${committeeThreshold} — skipping`);
                     continue;

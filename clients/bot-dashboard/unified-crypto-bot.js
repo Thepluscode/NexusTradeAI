@@ -910,7 +910,7 @@ const CRYPTO_CONFIG = {
     // v16.0 started at +3% (0.6x risk) → locked 0.5% then got stopped on normal retraces
     // Crypto 5-min candles routinely pull back 2-3%; starting at +3% = too many premature exits
     trailingStops: [
-        { profit: 0.05, stopDistance: 0.035 }, // At +5%: trail by 3.5% → lock ~1.5% (breakeven+)
+        { profit: 0.035, stopDistance: 0.03 }, // [v17.0] At +3.5%: trail by 3% → lock ~0.5% (was +5%, too late with fixed breakeven lock)
         { profit: 0.08, stopDistance: 0.045 }, // At +8%: trail by 4.5% → lock ~3.5%
         { profit: 0.12, stopDistance: 0.055 }, // At +12%: trail by 5.5% → lock ~6.5%
         { profit: 0.20, stopDistance: 0.08 },  // At +20%: trail by 8% → lock ~12%
@@ -2935,15 +2935,15 @@ class CryptoTradingEngine {
 
             // Mark as "was in profit" once we exceed meaningful threshold (0.5% of position or $8 min)
             const posValue = (position.quantity || 0) * currentPrice;
-            const profitThreshold = Math.max(8, posValue * 0.005); // 0.5% of position or $8
+            const profitThreshold = Math.max(25, posValue * 0.02); // [v17.0] was $8/0.5% — crypto needs 2% before breakeven lock arms
             if (pnlUSD > profitThreshold && !position.wasInProfit) {
                 position.wasInProfit = true;
                 console.log(`[PROFIT-PROTECT] ${symbol}: entered profit zone (+$${pnlUSD.toFixed(2)}, threshold $${profitThreshold.toFixed(2)}) — breakeven lock ACTIVE`);
             }
 
-            // Breakeven lock: if was in profit and now dropped back to breakeven, close immediately
-            // [v14.1] FIX: was -$2 (a loss), now $0 (true breakeven protection)
-            if (position.wasInProfit && pnlUSD <= 0) {
+            // Breakeven lock: if was in profit and now dropped significantly, close
+            // [v17.0] FIX: was <= $0 (instant exit at breakeven), now -$5 to allow normal noise
+            if (position.wasInProfit && pnlUSD < -5) {
                 console.log(`[PROFIT-PROTECT] ${symbol}: was +$${position.peakUnrealizedPL.toFixed(2)}, now $${pnlUSD.toFixed(2)} — closing to protect capital`);
                 // Set re-entry flag before closing (crypto bot is long-only)
                 this.profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: position.direction || 'long', entry: position.entry || currentPrice });
@@ -2961,7 +2961,7 @@ class CryptoTradingEngine {
             if (position.peakUnrealizedPL > 10 && pnlUSD > 0) {
                 const dropFromPeak = position.peakUnrealizedPL - pnlUSD;
                 const dropPct = (dropFromPeak / position.peakUnrealizedPL) * 100;
-                if (dropPct > 40) {
+                if (dropPct > 55) { // [v17.0] was 40% — normal crypto consolidation, let winners run
                     console.log(`[PROFIT-PROTECT] ${symbol}: peak +$${position.peakUnrealizedPL.toFixed(2)}, now +$${pnlUSD.toFixed(2)} (${dropPct.toFixed(1)}% drawback) — taking profit`);
                     // Set re-entry flag before closing
                     this.profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: position.direction || 'long', entry: position.entry || currentPrice });
