@@ -144,11 +144,14 @@ jobs:
           cp infrastructure/notifications/telegram-alerts.js deploy/stock-bot/infrastructure/notifications/telegram-alerts.js
           cp infrastructure/notifications/telegram-alerts.js deploy/forex-bot/infrastructure/notifications/telegram-alerts.js
           cp infrastructure/notifications/telegram-alerts.js deploy/crypto-bot/infrastructure/notifications/telegram-alerts.js
+          cp clients/bot-dashboard/signal-analytics.js       deploy/stock-bot/signal-analytics.js
+          cp clients/bot-dashboard/signal-analytics.js       deploy/forex-bot/signal-analytics.js
+          cp clients/bot-dashboard/signal-analytics.js       deploy/crypto-bot/signal-analytics.js
           echo "Bot files synced:"
           wc -l \
-            deploy/stock-bot/bot.js deploy/stock-bot/userCredentialStore.js \
-            deploy/forex-bot/bot.js deploy/forex-bot/userCredentialStore.js \
-            deploy/crypto-bot/bot.js deploy/crypto-bot/userCredentialStore.js
+            deploy/stock-bot/bot.js deploy/stock-bot/userCredentialStore.js deploy/stock-bot/signal-analytics.js \
+            deploy/forex-bot/bot.js deploy/forex-bot/userCredentialStore.js deploy/forex-bot/signal-analytics.js \
+            deploy/crypto-bot/bot.js deploy/crypto-bot/userCredentialStore.js deploy/crypto-bot/signal-analytics.js
 
       - name: Check if bundle changed
         id: check

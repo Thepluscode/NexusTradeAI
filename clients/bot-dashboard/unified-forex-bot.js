@@ -7,8 +7,9 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
 const { createUserCredentialStore } = require('./userCredentialStore');
-// Signal modules — try local signal-analytics first (works on Railway), then services/
-let createSignalEndpoints = require('./signal-analytics').createSignalEndpoints;
+// Signal modules — try local signal-analytics (ships with deploy), fall back to no-op
+let createSignalEndpoints;
+try { createSignalEndpoints = require('./signal-analytics').createSignalEndpoints; } catch (_) { createSignalEndpoints = () => {}; }
 let BOT_COMPONENTS = { forex: { components: ['trend','orderFlow','displacement','volumeProfile','fvg','macd','mtfConfluence'] } };
 let computeCorrelationGuard = () => ({ blocked: false });
 let autoOptimize = () => ({ improved: false });
