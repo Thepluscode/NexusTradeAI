@@ -4073,6 +4073,8 @@ async function closePosition(symbol, qty, reason = 'Manual') {
                 const outcome = {
                     symbol: positionCopy.symbol || symbol,
                     direction: positionCopy.direction || 'long',
+                    strategy: positionCopy.strategy || (positionCopy.tier === 'orb' ? 'openingRangeBreakout' : 'momentum'),
+                    tier: positionCopy.tier || 'tier1',
                     entryPrice: positionCopy.entry,
                     exitPrice: evalExitPrice,
                     pnl: evalPnl,
