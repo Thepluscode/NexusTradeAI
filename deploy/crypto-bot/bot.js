@@ -2966,7 +2966,7 @@ class CryptoTradingEngine {
             if (position.peakUnrealizedPL > 10 && pnlUSD > 0) {
                 const dropFromPeak = position.peakUnrealizedPL - pnlUSD;
                 const dropPct = (dropFromPeak / position.peakUnrealizedPL) * 100;
-                if (dropPct > 55) { // [v17.0] was 40% — normal crypto consolidation, let winners run
+                if (dropPct > 40) { // [v18.0] was 55% — too loose. Now protects 60% of peak
                     console.log(`[PROFIT-PROTECT] ${symbol}: peak +$${position.peakUnrealizedPL.toFixed(2)}, now +$${pnlUSD.toFixed(2)} (${dropPct.toFixed(1)}% drawback) — taking profit`);
                     // Set re-entry flag before closing
                     this.profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: position.direction || 'long', entry: position.entry || currentPrice });

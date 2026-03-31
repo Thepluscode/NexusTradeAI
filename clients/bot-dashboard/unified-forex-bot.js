@@ -3185,7 +3185,7 @@ async function managePositions() {
         // For USD-base pairs (USD_JPY), units ARE the USD value. For crosses, divide by JPY rate.
         const rawPosValue = Math.abs(localPos.units || 0) * currentPrice;
         const forexPosValue = pair.includes('JPY') ? rawPosValue / currentPrice : rawPosValue;
-        const forexProfitThreshold = Math.max(15, forexPosValue * 0.008); // [v17.0] was $6/0.3% — primary cause of 0% WR, armed on noise
+        const forexProfitThreshold = Math.max(15, Math.min(50, forexPosValue * 0.0003)); // [v18.0] was 0.8% of notional ($1,426 for 155K) — never armed. Now caps at $50
         if (unrealizedPL > forexProfitThreshold) {
             if (!localPos.wasPositive) console.log(`[PROFIT-PROTECT] ${pair}: entered profit zone (+$${unrealizedPL.toFixed(2)}, threshold $${forexProfitThreshold.toFixed(2)}) — breakeven lock ACTIVE`);
             localPos.wasPositive = true;
@@ -3202,7 +3202,7 @@ async function managePositions() {
         if (localPos.peakUnrealizedPL > 10 && unrealizedPL > 0) {
             const dropFromPeak = localPos.peakUnrealizedPL - unrealizedPL;
             const dropPct = (dropFromPeak / localPos.peakUnrealizedPL) * 100;
-            if (dropPct > 55) { // [v17.0] was 40% — normal consolidation, let winners run
+            if (dropPct > 40) { // [v18.0] was 55% — too loose, $500 peak only triggered at $225. Now triggers at $300
                 console.log(`[PROFIT-PROTECT] ${pair}: peak +$${localPos.peakUnrealizedPL.toFixed(2)}, now +$${unrealizedPL.toFixed(2)} (${dropPct.toFixed(1)}% drawback) — taking profit`);
                 profitProtectReentryPairs.set(pair, { timestamp: Date.now(), direction: localPos.direction || (isLong ? 'long' : 'short'), entry: entryPrice });
                 console.log(`[RE-ENTRY] ${pair} eligible for re-entry (direction: ${localPos.direction || (isLong ? 'long' : 'short')}) after profit-protect close`);
@@ -4504,7 +4504,7 @@ class UserForexEngine {
 
             const rawEngPosVal = Math.abs(position.units || 0) * currentPrice;
             const engPosValue = instrument.includes('JPY') ? rawEngPosVal / currentPrice : rawEngPosVal;
-            const engProfitThreshold = Math.max(15, engPosValue * 0.008); // [v17.0] match main engine
+            const engProfitThreshold = Math.max(15, Math.min(50, engPosValue * 0.0003)); // [v18.0] match main engine — cap at $50
             if (unrealizedPL > engProfitThreshold) {
                 if (!position.wasPositive) console.log(`[ForexEngine ${this.userId}][PROFIT-PROTECT] ${instrument}: breakeven lock ACTIVE (+$${unrealizedPL.toFixed(2)})`);
                 position.wasPositive = true;
@@ -4516,7 +4516,7 @@ class UserForexEngine {
             }
             if (position.peakUnrealizedPL > 10 && unrealizedPL > 0) {
                 const dropPct = ((position.peakUnrealizedPL - unrealizedPL) / position.peakUnrealizedPL) * 100;
-                if (dropPct > 55) { // [v17.0] was 40% — normal consolidation, let winners run
+                if (dropPct > 40) { // [v18.0] was 55% — too loose. Now triggers at 40% drop from peak
                     await this.closePositionWithReason(instrument, `Profit-Protect drawback (${dropPct.toFixed(1)}% drop from peak)`);
                     continue;
                 }
@@ -4962,10 +4962,10 @@ app.listen(PORT, async () => {
                     entry: avgPrice, stopLoss: stopLong, takeProfit: tpLong,
                     units: longUnits, entryTime: new Date(), session: 'restored',
                     peakUnrealizedPL: Math.max(0, hydratedPL),
-                    wasPositive: hydratedPL > 2
+                    wasPositive: hydratedPL > 15 // [v18.0] arm breakeven if currently profitable (peak lost on restart)
                 });
                 tradesPerPair.set(instrument, MAX_TRADES_PER_PAIR); // block further entries
-                console.log(`🔄 Restored position: ${instrument} LONG ${longUnits} units @ ${avgPrice} (peakPL: $${Math.max(0, hydratedPL).toFixed(2)})`);
+                console.log(`🔄 Restored position: ${instrument} LONG ${longUnits} units @ ${avgPrice} (peakPL: $${Math.max(0, hydratedPL).toFixed(2)}, wasPositive: ${hydratedPL > 15})`);
                 // Ensure restored position has a DB trade row
                 if (dbPool) {
                     const existing = await dbPool.query(`SELECT id FROM trades WHERE bot='forex' AND symbol=$1 AND status='open' AND user_id IS NULL`, [instrument]);
@@ -4988,10 +4988,10 @@ app.listen(PORT, async () => {
                     entry: avgPrice, stopLoss: stopShort, takeProfit: tpShort,
                     units: shortUnits, entryTime: new Date(), session: 'restored',
                     peakUnrealizedPL: Math.max(0, hydratedPL),
-                    wasPositive: hydratedPL > 2
+                    wasPositive: hydratedPL > 15 // [v18.0] arm breakeven if currently profitable
                 });
                 tradesPerPair.set(instrument, MAX_TRADES_PER_PAIR);
-                console.log(`🔄 Restored position: ${instrument} SHORT ${Math.abs(shortUnits)} units @ ${avgPrice}`);
+                console.log(`🔄 Restored position: ${instrument} SHORT ${Math.abs(shortUnits)} units @ ${avgPrice} (peakPL: $${Math.max(0, hydratedPL).toFixed(2)}, wasPositive: ${hydratedPL > 15})`);
                 // Ensure restored position has a DB trade row
                 if (dbPool) {
                     const existing = await dbPool.query(`SELECT id FROM trades WHERE bot='forex' AND symbol=$1 AND status='open' AND user_id IS NULL`, [instrument]);

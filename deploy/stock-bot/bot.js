@@ -2804,7 +2804,7 @@ async function managePositions() {
             if (position.peakUnrealizedPL > 15 && unrealizedPLDollar > 0) {
                 const dropFromPeak = position.peakUnrealizedPL - unrealizedPLDollar;
                 const dropPct = (dropFromPeak / position.peakUnrealizedPL) * 100;
-                if (dropPct > 55) { // [v17.0] was 40% — normal consolidation, let winners run
+                if (dropPct > 40) { // [v18.0] was 55% — too loose, let profits bleed. Now protects 60% of peak
                     console.log(`[PROFIT-PROTECT] ${symbol}: peak +$${position.peakUnrealizedPL.toFixed(2)}, now +$${unrealizedPLDollar.toFixed(2)} (${dropPct.toFixed(1)}% drawback) — taking profit`);
                     // Set re-entry flag before closing (stock bot is long-only)
                     profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: 'long', entry: position.entryPrice || currentPrice });
@@ -5651,7 +5651,7 @@ class UserTradingEngine {
                 }
                 if (position.peakUnrealizedPL > 15 && unrealizedPLDollar > 0) {
                     const dropPct = ((position.peakUnrealizedPL - unrealizedPLDollar) / position.peakUnrealizedPL) * 100;
-                    if (dropPct > 55) { // [v17.0] was 40% — normal consolidation, let winners run
+                    if (dropPct > 40) { // [v18.0] was 55% — too loose, let profits bleed. Now protects 60% of peak
                         console.log(`[PROFIT-PROTECT] [Engine ${this.userId}] ${symbol}: peak +$${position.peakUnrealizedPL.toFixed(2)}, now +$${unrealizedPLDollar.toFixed(2)} (${dropPct.toFixed(1)}% drawback) — taking profit`);
                         this.profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: 'long', entry: position.entryPrice || currentPrice });
                         console.log(`[RE-ENTRY] [Engine ${this.userId}] ${symbol} eligible for re-entry (direction: long) after profit-protect close`);
