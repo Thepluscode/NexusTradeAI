@@ -962,10 +962,14 @@ function scoreCryptoSignal({ strategy, tier, momentum, trendStrength, volumeRati
 
 function evaluateCryptoRegimeSignal({ strategy, btcBullish, trendStrength, volumeRatio, rsi, pullbackPct, tier, cryptoRegime }) {
     // [v14.0] Mean reversion: only tradable in low/medium vol regimes
+    // [v18.0] Also blocked when market is trending (directional move > 40% of ATR range)
     if (strategy === 'meanReversion') {
         const regimeLabel = cryptoRegime ? cryptoRegime.regime : 'medium';
         if (regimeLabel === 'high') {
-            return { tradable: false, regime: 'mean-revert-blocked', quality: 0 };
+            return { tradable: false, regime: 'mean-revert-blocked-vol', quality: 0 };
+        }
+        if (cryptoRegime && cryptoRegime.isTrending) {
+            return { tradable: false, regime: 'mean-revert-blocked-trend', quality: 0 };
         }
         let quality = regimeLabel === 'low' ? 1.15 : 1.0; // Bonus in low vol (ideal for mean reversion)
         if (rsi < 25 || rsi > 75) quality *= 1.10; // Extreme RSI = stronger mean reversion signal
@@ -1324,6 +1328,14 @@ function detectCryptoRegime(klines) {
         regime = 'medium';
     }
 
+    // [v18.0] Trend strength detection — blocks mean-reversion in trending markets
+    // Ratio of directional price change to ATR: high ratio = strong trend
+    const firstClose = parseFloat(recent[0][4]);
+    const dirMove = Math.abs(lastClose - firstClose);
+    const trendRatio = avgTR > 0 ? dirMove / (avgTR * recent.length) : 0;
+    // trendRatio > 0.4 = strong directional trend (price moved >40% of total possible ATR range)
+    const isTrending = trendRatio > 0.4;
+
     // [v14.0] Strategy-regime routing: which strategy class to prefer
     const strategyPreference = {
         low:    { preferred: 'meanReversion', momentumWeight: 0.3, meanReversionWeight: 1.0, pullbackWeight: 0.5 },
@@ -1332,10 +1344,17 @@ function detectCryptoRegime(klines) {
         high:   { preferred: 'momentum',      momentumWeight: 1.0, meanReversionWeight: 0.0, pullbackWeight: 0.6 }
     };
 
+    // [v18.0] Override mean-reversion weight when trending (even in medium vol)
+    if (isTrending && regime !== 'low') {
+        strategyPreference[regime] = { ...strategyPreference[regime], meanReversionWeight: 0.0 };
+    }
+
     return {
         regime,
         adjustments: CRYPTO_REGIME_ADJUSTMENTS[regime],
         atrPct: parseFloat(atrPct.toFixed(6)),
+        trendRatio: parseFloat(trendRatio.toFixed(3)),
+        isTrending,
         strategyRouting: strategyPreference[regime] || strategyPreference.medium
     };
 }
@@ -2851,6 +2870,10 @@ class CryptoTradingEngine {
                 // [v10.0] Aggressive Profit Protection tracking
                 peakUnrealizedPL: 0,
                 wasInProfit: false,
+                // [v18.0] Time stop tracking (replicates theplus-bot)
+                entryBars: 0,
+                timeStopTrailed: false,
+                initialRisk: Math.abs(signal.price - signal.stopLoss),
                 // [v8.0] Decision linkage for bandit learning
                 decisionRunId: signal.decisionRunId || null,
                 banditArm: signal.banditArm || null,
@@ -2980,6 +3003,43 @@ class CryptoTradingEngine {
                     continue;
                 }
             }
+
+            // ===== [v18.0] TWO-PHASE TIME STOP (replicates theplus-bot) =====
+            // Crypto: Phase 1 at 2 hours (trail to BE), Phase 2 at 4 hours (hard close)
+            // Crypto moves faster than forex/stocks — shorter windows
+            if (position.entryBars === undefined) position.entryBars = 0;
+            position.entryBars++;
+            const minutesHeld = position.entryBars;
+
+            // Phase 1: Soft time stop at 120 min (2 hours) — trail to breakeven
+            if (minutesHeld >= 120 && !position.timeStopTrailed) {
+                position.timeStopTrailed = true;
+                if (pnlUSD > 0) {
+                    const beStop = position.entry;
+                    const isLong = position.direction === 'long';
+                    const shouldTrail = isLong ? (beStop > position.stopLoss) : (beStop < position.stopLoss);
+                    if (shouldTrail) {
+                        position.stopLoss = beStop;
+                        console.log(`⏰ [TIME-STOP] ${symbol}: 2h elapsed — stop trailed to BREAKEVEN ($${beStop.toFixed(2)}), P&L +$${pnlUSD.toFixed(2)}`);
+                    }
+                } else {
+                    console.log(`⏰ [TIME-STOP] ${symbol}: 2h elapsed — P&L $${pnlUSD.toFixed(2)} (negative), stop unchanged`);
+                }
+            }
+
+            // Phase 2: Hard time stop at 240 min (4 hours)
+            if (minutesHeld >= 240) {
+                console.log(`⏰ [TIME-STOP] ${symbol}: 4h HARD CLOSE — held ${minutesHeld} min, P&L $${pnlUSD.toFixed(2)}`);
+                this.profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: position.direction || 'long', entry: position.entry || currentPrice });
+                await this.closePosition(symbol, currentPrice, `Time Stop (${minutesHeld} min, P&L $${pnlUSD.toFixed(2)})`);
+                (this._userTelegram || telegramAlerts).send(
+                    `⏰ *CRYPTO TIME STOP* — ${symbol}\n` +
+                    `Held ${minutesHeld} min (4h limit)\n` +
+                    `P&L: $${pnlUSD.toFixed(2)}`
+                ).catch(() => {});
+                continue;
+            }
+            // ===== END TIME STOP =====
 
             // Time-based exit: close stale or overdue positions
             const holdDays = (Date.now() - (position.openTime?.getTime?.() ?? Date.now())) / (1000 * 60 * 60 * 24);
@@ -3321,8 +3381,8 @@ class CryptoTradingEngine {
                 // [Phase 3] Detect crypto regime from BTC klines — refreshes every scan cycle
                 const btcKlines = await this.kraken.getKlines('XBTUSD', '5m', 100).catch(() => null);
                 const cryptoRegime = detectCryptoRegime(btcKlines);
-                if (cryptoRegime.regime !== 'medium') {
-                    console.log(`[Regime] Crypto market: ${cryptoRegime.adjustments.label} (ATR%: ${(cryptoRegime.atrPct * 100).toFixed(3)}%, size: x${cryptoRegime.adjustments.positionSizeMultiplier}, threshold: x${cryptoRegime.adjustments.scoreThresholdMultiplier})`);
+                if (cryptoRegime.regime !== 'medium' || cryptoRegime.isTrending) {
+                    console.log(`[Regime] Crypto market: ${cryptoRegime.adjustments.label}${cryptoRegime.isTrending ? ' TRENDING' : ''} (ATR%: ${(cryptoRegime.atrPct * 100).toFixed(3)}%, trend: ${cryptoRegime.trendRatio}, size: x${cryptoRegime.adjustments.positionSizeMultiplier}, threshold: x${cryptoRegime.adjustments.scoreThresholdMultiplier}${cryptoRegime.isTrending ? ', meanRev: BLOCKED' : ''})`);
                 }
 
                 // [Phase 3.5] Portfolio-level risk check (cross-bot)

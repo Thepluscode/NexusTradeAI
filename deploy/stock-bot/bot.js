@@ -1256,6 +1256,20 @@ function evaluateStockRegimeSignal({ strategy, percentChange, volumeRatio, rsi, 
     const numericBreakoutPct = parseFloat(breakoutPct ?? '0');
     const numericAtrPct = atrPct != null ? parseFloat(atrPct) : null;
 
+    // [v18.0] Block mean-reversion entries in trending or high-volatility markets
+    // Mean reversion loses money when the market is directionally moving — trades get stopped out
+    if (normalizedStrategy === 'rsi2MeanReversion') {
+        const marketRegime = globalThis._marketRegime;
+        if (marketRegime) {
+            if (marketRegime.regime === 'high') {
+                return { tradable: false, regime: 'mean-revert-blocked-vol', quality: 0, requirePullback: false, components: {} };
+            }
+            if (marketRegime.isTrending) {
+                return { tradable: false, regime: 'mean-revert-blocked-trend', quality: 0, requirePullback: false, components: {} };
+            }
+        }
+    }
+
     // [Tier3 Fix] Trend-expansion: don't hard-block, require pullback to VWAP or EMA9
     // These are the strongest movers — the edge is in the timing, not in blocking them.
     // Historical 14.3% WR was from chasing peaks, not from the signal category being bad.
@@ -2218,9 +2232,17 @@ function detectMarketRegime(bars) {
         regime = 'medium';
     }
 
+    // [v18.0] Trend strength detection — blocks mean-reversion in trending markets
+    const firstClose = parseFloat(recent[0].c);
+    const dirMove = Math.abs(lastClose - firstClose);
+    const trendRatio = avgTR > 0 ? dirMove / (avgTR * recent.length) : 0;
+    const isTrending = trendRatio > 0.4;
+
     return {
         regime,
         atrPct: parseFloat((atrPct * 100).toFixed(3)),
+        trendRatio: parseFloat(trendRatio.toFixed(3)),
+        isTrending,
         adjustments: REGIME_ADJUSTMENTS[regime]
     };
 }
@@ -2815,6 +2837,35 @@ async function managePositions() {
             }
             // ===== END PROFIT PROTECTION =====
 
+            // ===== [v18.0] TWO-PHASE TIME STOP (replicates theplus-bot) =====
+            // Stock market: Phase 1 at 4 hours (trail to breakeven), Phase 2 at 6.5 hours (full session hard close)
+            if (position.entryBars === undefined) position.entryBars = 0;
+            position.entryBars++;
+            const minutesHeld = position.entryBars;
+
+            // Phase 1: Soft time stop at 240 min (4 hours) — trail to breakeven
+            if (minutesHeld >= 240 && !position.timeStopTrailed) {
+                position.timeStopTrailed = true;
+                if (unrealizedPLDollar > 0) {
+                    const beStop = position.entry || (currentPrice - unrealizedPLDollar / (position.shares || 1));
+                    if (beStop > position.stopLoss) {
+                        position.stopLoss = beStop;
+                        console.log(`⏰ [TIME-STOP] ${symbol}: 4h elapsed — stop trailed to BREAKEVEN ($${beStop.toFixed(2)}), P&L +$${unrealizedPLDollar.toFixed(2)}`);
+                    }
+                } else {
+                    console.log(`⏰ [TIME-STOP] ${symbol}: 4h elapsed — P&L $${unrealizedPLDollar.toFixed(2)} (negative), stop unchanged`);
+                }
+            }
+
+            // Phase 2: Hard time stop at 390 min (6.5 hours = full trading session)
+            if (minutesHeld >= 390) {
+                console.log(`⏰ [TIME-STOP] ${symbol}: FULL SESSION HARD CLOSE — held ${minutesHeld} min, P&L $${unrealizedPLDollar.toFixed(2)}`);
+                profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: 'long', entry: position.entryPrice || currentPrice });
+                await closePosition(symbol, alpacaPos.qty, `Time Stop (${minutesHeld} min, P&L $${unrealizedPLDollar.toFixed(2)})`);
+                continue;
+            }
+            // ===== END TIME STOP =====
+
             console.log(`   ${symbol}: $${currentPrice.toFixed(2)} (${unrealizedPL >= 0 ? '+' : ''}${unrealizedPL.toFixed(2)}%) | Stop: $${position.stopLoss.toFixed(2)} | Hold: ${holdDays.toFixed(1)}d | Peak: +$${position.peakUnrealizedPL.toFixed(2)}${position.wasPositive ? ' [BEL]' : ''}`);
 
             // NEW: Check multiple exit conditions
@@ -3003,7 +3054,7 @@ async function scanMomentumBreakouts() {
         }
 
         const symbols = popularStocks.getAllSymbols();
-        console.log(`\n🔍 Momentum Scan: Checking ${symbols.length} stocks... [Regime: ${regime.adjustments.label}] [SPY: ${spyBullish ? 'BULLISH' : 'BEARISH'}]`);
+        console.log(`\n🔍 Momentum Scan: Checking ${symbols.length} stocks... [Regime: ${regime.adjustments.label}${regime.isTrending ? ' TRENDING' : ''}] [SPY: ${spyBullish ? 'BULLISH' : 'BEARISH'}]${regime.isTrending ? ' [MeanRev: BLOCKED]' : ''}`);
 
         const movers = [];
         const batchSize = 20;
@@ -3744,6 +3795,9 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                         atrPct
                     });
 
+                    if (!regimeProfile.tradable) {
+                        console.log(`[Regime] ${symbol} RSI(2) MeanRev BLOCKED — ${regimeProfile.regime} (RSI2: ${rsi2.toFixed(1)})`);
+                    }
                     if (regimeProfile.tradable) {
                         // Score components — weighted toward how oversold RSI(2) is and structural trend strength.
                         // Volume weight is lower: mean-reversion entries don't require high volume.
@@ -3963,6 +4017,10 @@ async function executeTrade(signal, strategy) {
             // [Profit Protection] Track peak unrealized P&L for breakeven lock + drawback protection
             peakUnrealizedPL: 0,
             wasPositive: false,
+            // [v18.0] Time stop tracking (replicates theplus-bot)
+            entryBars: 0,
+            timeStopTrailed: false,
+            initialRisk: Math.abs(effectiveEntry - parseFloat(stopPrice)),
             entryVolume: signal.entryVolume,
             rsi: signal.rsi,
             vwap: signal.vwap,
@@ -6112,6 +6170,9 @@ async function analyzeMomentumForEngine(symbol, engine) {
                         atrPct
                     });
 
+                    if (!regimeProfile.tradable) {
+                        console.log(`[Regime] ${symbol} RSI(2) MeanRev BLOCKED — ${regimeProfile.regime} (RSI2: ${rsi2.toFixed(1)})`);
+                    }
                     if (regimeProfile.tradable) {
                         const normOversold = Math.min((15 - rsi2) / 15, 1.0);
                         const normTrend    = Math.min((current / sma50Daily - 1) * 10, 1.0);
