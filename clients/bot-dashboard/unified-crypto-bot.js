@@ -961,6 +961,27 @@ function scoreCryptoSignal({ strategy, tier, momentum, trendStrength, volumeRati
 }
 
 function evaluateCryptoRegimeSignal({ strategy, btcBullish, trendStrength, volumeRatio, rsi, pullbackPct, tier, cryptoRegime }) {
+    // [v19.1] Box breakout is mean-reversion at session box edges — same regime rules as meanReversion
+    // Without this, trendStrength=0 (correct for box trades) caused quality < 0.9 → all boxes blocked
+    if (strategy === 'boxBreakout') {
+        const regimeLabel = cryptoRegime ? cryptoRegime.regime : 'medium';
+        if (regimeLabel === 'high') {
+            return { tradable: false, regime: 'box-blocked-vol', quality: 0 };
+        }
+        if (cryptoRegime && cryptoRegime.isTrending) {
+            return { tradable: false, regime: 'box-blocked-trend', quality: 0 };
+        }
+        let quality = regimeLabel === 'low' ? 1.15 : 1.0;
+        if (volumeRatio >= 1.2) quality *= 1.05;
+        // BTC trend: slight penalty for shorts when BTC bullish, longs when BTC bearish
+        if (!btcBullish) quality *= 0.95;
+        return {
+            tradable: quality >= 0.9,
+            regime: `box-${regimeLabel}`,
+            quality: parseFloat(quality.toFixed(3))
+        };
+    }
+
     // [v14.0] Mean reversion: only tradable in low/medium vol regimes
     // [v18.0] Also blocked when market is trending (directional move > 40% of ATR range)
     if (strategy === 'meanReversion') {
@@ -2775,7 +2796,7 @@ class CryptoTradingEngine {
         // 3. RSI between 25-75 (crypto gets wider range due to volatility)
         // [v14.0] Mean reversion specifically targets RSI extremes — widen range for it
         const rsi = signal.rsi || 50;
-        const isMeanReversion = signal.strategy === 'meanReversion';
+        const isMeanReversion = signal.strategy === 'meanReversion' || signal.strategy === 'boxBreakout';
         const rsiLow = isMeanReversion ? 15 : 25;
         const rsiHigh = isMeanReversion ? 85 : 75;
         if (rsi < rsiLow || rsi > rsiHigh) {
