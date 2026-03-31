@@ -1550,6 +1550,33 @@ async function closePosition(instrument) {
     return await oandaRequest('put', `/v3/accounts/${oandaConfig.accountId}/positions/${instrument}/close`, body);
 }
 
+// [v18.0] Partial close — reduce position by a fraction (e.g. 0.33 = close 33%)
+// Replicates theplus-bot partial_tp system for locking profits incrementally
+async function reducePosition(instrument, fraction) {
+    const pos = positions.get(instrument);
+    if (!pos || !pos.units) return null;
+    const totalUnits = Math.abs(pos.units);
+    const closeUnits = Math.max(1, Math.round(totalUnits * fraction));
+    const remainingUnits = totalUnits - closeUnits;
+    if (remainingUnits < 1) {
+        // If closing nearly all, just close everything
+        return await closePosition(instrument);
+    }
+    const body = {};
+    if (pos.direction === 'short') {
+        body.shortUnits = String(closeUnits);
+    } else {
+        body.longUnits = String(closeUnits);
+    }
+    const result = await oandaRequest('put', `/v3/accounts/${oandaConfig.accountId}/positions/${instrument}/close`, body);
+    if (result) {
+        // Update tracked units
+        pos.units = pos.direction === 'short' ? -remainingUnits : remainingUnits;
+        console.log(`📉 [PARTIAL] ${instrument}: closed ${closeUnits} units (${(fraction * 100).toFixed(0)}%), ${remainingUnits} remaining`);
+    }
+    return result;
+}
+
 // ===== INDICATORS =====
 
 // [v3.2] Wilder's Smoothed RSI — matches broker platform values, eliminates simple-average drift
@@ -2867,6 +2894,11 @@ async function executeTrade(signal) {
             agentSizeMultiplier: signal.agentSizeMultiplier || 1.0,
             peakUnrealizedPL: 0, // [Profit-Protect] track highest unrealized P&L
             wasPositive: false,  // [Profit-Protect] breakeven lock flag
+            // [v18.0] Partial TP tracking (replicates theplus-bot 1R/2R system)
+            partialTP1Hit: false,  // Closed 33% at 1R
+            partialTP2Hit: false,  // Closed 33% at 2R
+            initialRisk: Math.abs(signal.entry - signal.stopLoss), // R = entry-to-stop distance
+            entryBars: 0, // [v18.0] Time stop: bar counter (incremented each scan cycle)
             // [Phase 4] Signal snapshot for trade evaluation loop
             signalSnapshot: {
                 orderFlowImbalance: signal.orderFlowImbalance || 0,
@@ -3212,6 +3244,88 @@ async function managePositions() {
         }
 
         // ===== END PROFIT PROTECTION =====
+
+        // ===== [v18.0] PARTIAL TAKE-PROFIT (replicates theplus-bot 1R/2R system) =====
+        // At 1R profit: close 33%, move stop to breakeven
+        // At 2R profit: close 33%, move stop to +1R (lock 1R profit)
+        // Remaining 34% rides trailing stop or time stop
+        const initialRisk = localPos.initialRisk || Math.abs(entryPrice - localPos.stopLoss);
+        if (initialRisk > 0) {
+            const pricePnL = isLong ? (currentPrice - entryPrice) : (entryPrice - currentPrice);
+            const rMultiple = pricePnL / initialRisk;
+
+            // Partial TP at 1R: close 33%, move stop to breakeven
+            if (rMultiple >= 1.0 && !localPos.partialTP1Hit) {
+                localPos.partialTP1Hit = true;
+                const beStop = entryPrice; // breakeven
+                const shouldMoveToBE = isLong ? (beStop > localPos.stopLoss) : (beStop < localPos.stopLoss);
+                if (shouldMoveToBE) {
+                    localPos.stopLoss = beStop;
+                    console.log(`🔒 [PARTIAL-TP] ${pair}: +${rMultiple.toFixed(2)}R — stop moved to BREAKEVEN (${beStop.toFixed(5)})`);
+                }
+                try {
+                    await reducePosition(pair, 0.33);
+                    console.log(`💰 [PARTIAL-TP] ${pair}: closed 33% at +1R (+${(pricePnL / entryPrice * 100).toFixed(2)}%)`);
+                    telegramAlerts.send(`💰 *PARTIAL TP 1R* — ${pair}\nClosed 33% at +${rMultiple.toFixed(1)}R\nStop → breakeven`)
+                        .catch(() => {});
+                } catch (e) {
+                    console.warn(`⚠️  [PARTIAL-TP] ${pair}: reduce failed: ${e.message}`);
+                }
+            }
+
+            // Partial TP at 2R: close another 33%, lock 1R profit
+            if (rMultiple >= 2.0 && !localPos.partialTP2Hit) {
+                localPos.partialTP2Hit = true;
+                const lockStop = isLong ? (entryPrice + initialRisk) : (entryPrice - initialRisk); // +1R
+                const shouldLock = isLong ? (lockStop > localPos.stopLoss) : (lockStop < localPos.stopLoss);
+                if (shouldLock) {
+                    localPos.stopLoss = lockStop;
+                    console.log(`🔒 [PARTIAL-TP] ${pair}: +${rMultiple.toFixed(2)}R — stop locked at +1R (${lockStop.toFixed(5)})`);
+                }
+                try {
+                    await reducePosition(pair, 0.50); // 50% of remaining (≈33% of original)
+                    console.log(`💰 [PARTIAL-TP] ${pair}: closed another 33% at +2R (+${(pricePnL / entryPrice * 100).toFixed(2)}%)`);
+                    telegramAlerts.send(`💰 *PARTIAL TP 2R* — ${pair}\nClosed 33% at +${rMultiple.toFixed(1)}R\nStop → +1R locked`)
+                        .catch(() => {});
+                } catch (e) {
+                    console.warn(`⚠️  [PARTIAL-TP] ${pair}: reduce failed: ${e.message}`);
+                }
+            }
+        }
+        // ===== END PARTIAL TAKE-PROFIT =====
+
+        // ===== [v18.0] TWO-PHASE TIME STOP (replicates theplus-bot time_stop logic) =====
+        // Phase 1: After 3 hours (soft) — trail stop to breakeven if profitable
+        // Phase 2: After 6 hours (hard) — force close regardless of P&L
+        // Bot scans every 60s, so entryBars ≈ minutes held
+        if (localPos.entryBars === undefined) localPos.entryBars = 0;
+        localPos.entryBars++;
+        const minutesHeld = localPos.entryBars; // ~1 bar per minute (60s scan)
+
+        // Phase 1: Soft time stop at 180 min (3 hours) — trail to breakeven
+        if (minutesHeld >= 180 && !localPos.timeStopTrailed) {
+            localPos.timeStopTrailed = true;
+            if (unrealizedPL > 0) {
+                // Trail to breakeven
+                const beStop = entryPrice;
+                const shouldTrailBE = isLong ? (beStop > localPos.stopLoss) : (beStop < localPos.stopLoss);
+                if (shouldTrailBE) {
+                    localPos.stopLoss = beStop;
+                    console.log(`⏰ [TIME-STOP] ${pair}: 3h elapsed — trailing stop to BREAKEVEN (${beStop.toFixed(5)}), P&L +$${unrealizedPL.toFixed(2)}`);
+                }
+            } else {
+                console.log(`⏰ [TIME-STOP] ${pair}: 3h elapsed — P&L $${unrealizedPL.toFixed(2)} (negative), leaving stop at ${localPos.stopLoss?.toFixed(5)}`);
+            }
+        }
+
+        // Phase 2: Hard time stop at 360 min (6 hours) — force close
+        if (minutesHeld >= 360) {
+            console.log(`⏰ [TIME-STOP] ${pair}: 6h HARD CLOSE — held ${minutesHeld} min, P&L $${unrealizedPL.toFixed(2)}`);
+            profitProtectReentryPairs.set(pair, { timestamp: Date.now(), direction: localPos.direction || (isLong ? 'long' : 'short'), entry: entryPrice });
+            await closePositionWithReason(pair, `Time Stop (${minutesHeld} min, P&L $${unrealizedPL.toFixed(2)})`);
+            continue;
+        }
+        // ===== END TIME STOP =====
 
         // Update trailing stop
         updateTrailingStop(localPos, currentPrice);
@@ -4962,7 +5076,11 @@ app.listen(PORT, async () => {
                     entry: avgPrice, stopLoss: stopLong, takeProfit: tpLong,
                     units: longUnits, entryTime: new Date(), session: 'restored',
                     peakUnrealizedPL: Math.max(0, hydratedPL),
-                    wasPositive: hydratedPL > 15 // [v18.0] arm breakeven if currently profitable (peak lost on restart)
+                    wasPositive: hydratedPL > 15, // [v18.0] arm breakeven if currently profitable (peak lost on restart)
+                    // [v18.0] Partial TP & time stop — conservatively assume already past phase 1 on restore
+                    partialTP1Hit: false, partialTP2Hit: false,
+                    initialRisk: avgPrice * 0.015, // fallback: 1.5% of entry
+                    entryBars: 0, timeStopTrailed: false
                 });
                 tradesPerPair.set(instrument, MAX_TRADES_PER_PAIR); // block further entries
                 console.log(`🔄 Restored position: ${instrument} LONG ${longUnits} units @ ${avgPrice} (peakPL: $${Math.max(0, hydratedPL).toFixed(2)}, wasPositive: ${hydratedPL > 15})`);
@@ -4988,7 +5106,10 @@ app.listen(PORT, async () => {
                     entry: avgPrice, stopLoss: stopShort, takeProfit: tpShort,
                     units: shortUnits, entryTime: new Date(), session: 'restored',
                     peakUnrealizedPL: Math.max(0, hydratedPL),
-                    wasPositive: hydratedPL > 15 // [v18.0] arm breakeven if currently profitable
+                    wasPositive: hydratedPL > 15, // [v18.0] arm breakeven if currently profitable
+                    partialTP1Hit: false, partialTP2Hit: false,
+                    initialRisk: avgPrice * 0.015,
+                    entryBars: 0, timeStopTrailed: false
                 });
                 tradesPerPair.set(instrument, MAX_TRADES_PER_PAIR);
                 console.log(`🔄 Restored position: ${instrument} SHORT ${Math.abs(shortUnits)} units @ ${avgPrice} (peakPL: $${Math.max(0, hydratedPL).toFixed(2)}, wasPositive: ${hydratedPL > 15})`);
