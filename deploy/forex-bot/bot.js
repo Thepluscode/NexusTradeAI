@@ -2726,95 +2726,11 @@ async function scanForSignals(heldPositions = positions) {
             }
         }
 
-        // ===== [v19.0] STRATEGY 2: BOLLINGER BAND REVERSAL (secondary) =====
-        // Replaces old pullback-to-SMA20 logic. Uses BB bands for mean-reversion entries.
-        // Only fires when no box signal was generated (box breakout is primary).
-        // Entry at lower BB + RSI oversold (long) or upper BB + RSI overbought (short)
-        const hasBoxSignal = signals.some(s => s.pair === pair && s.strategy === 'boxBreakout');
-        if (!hasBoxSignal && bb) {
-            const bandwidth = (bb.upper - bb.lower) / bb.middle;
-            // Only trade BB reversal in low-medium bandwidth (ranging markets)
-            if (bandwidth < 0.015) {
-                // BB LONG: price at or below lower band + RSI oversold
-                if (d1LongOk && currentPrice <= bb.lower * 1.001 && rsi < 40) {
-                    const atrVal = analysis.atr || (atrPct * currentPrice);
-                    const stopLoss = currentPrice - (atrVal * 2.0);
-                    const takeProfit = bb.middle; // Mean reversion target: Bollinger midline
-                    const risk = currentPrice - stopLoss;
-                    if (risk > 0 && (takeProfit - currentPrice) / risk >= 1.5) {
-                        const confirmation = calculateConfirmationScore({
-                            rsi, direction: 'long', macd,
-                            orderFlowImbalance: analysis.orderFlowImbalance,
-                            bb, currentPrice
-                        });
-                        if (confirmation >= 0.55) {
-                            console.log(`📊 [BB LONG] ${pair}: price ${currentPrice.toFixed(5)} at lower BB ${bb.lower.toFixed(5)} | RSI ${rsi.toFixed(1)} | BW ${(bandwidth*100).toFixed(2)}% | conf:${confirmation}`);
-                            const isFlipLong = isFlipCandidate && existingPos?.direction === 'short';
-                            if (!isFlipCandidate || isFlipLong) {
-                                signals.push({
-                                    pair, direction: 'long', tier,
-                                    entry: currentPrice, stopLoss, takeProfit,
-                                    rsi, trendStrength, atrPct, h1Trend, d1Trend, pullback,
-                                    score: parseFloat((confirmation * 0.90).toFixed(3)), // Slightly lower score than box
-                                    strategy: 'bbReversal',
-                                    regime: 'bb-oversold',
-                                    regimeQuality: confirmation,
-                                    marketRegime: forexRegime.regime,
-                                    macdHistogram: macd ? macd.histogram : null,
-                                    orderFlowImbalance: analysis.orderFlowImbalance,
-                                    hasDisplacement: analysis.hasDisplacement,
-                                    volumeProfile: analysis.volumeProfile ? { vah: analysis.volumeProfile.vah, val: analysis.volumeProfile.val, poc: analysis.volumeProfile.poc } : null,
-                                    fvgCount: analysis.fvg ? analysis.fvg.bullish.length + analysis.fvg.bearish.length : 0,
-                                    session: session.name,
-                                    confirmationScore: confirmation,
-                                    isFlipReversal: isFlipLong || false,
-                                    existingDirection: isFlipLong ? 'short' : null
-                                });
-                            }
-                        }
-                    }
-                }
-                // BB SHORT: price at or above upper band + RSI overbought
-                if (d1ShortOk && currentPrice >= bb.upper * 0.999 && rsi > 60) {
-                    const atrVal = analysis.atr || (atrPct * currentPrice);
-                    const stopLoss = currentPrice + (atrVal * 2.0);
-                    const takeProfit = bb.middle;
-                    const risk = stopLoss - currentPrice;
-                    if (risk > 0 && (currentPrice - takeProfit) / risk >= 1.5) {
-                        const confirmation = calculateConfirmationScore({
-                            rsi, direction: 'short', macd,
-                            orderFlowImbalance: analysis.orderFlowImbalance,
-                            bb, currentPrice
-                        });
-                        if (confirmation >= 0.55) {
-                            console.log(`📊 [BB SHORT] ${pair}: price ${currentPrice.toFixed(5)} at upper BB ${bb.upper.toFixed(5)} | RSI ${rsi.toFixed(1)} | BW ${(bandwidth*100).toFixed(2)}% | conf:${confirmation}`);
-                            const isFlipShort = isFlipCandidate && existingPos?.direction === 'long';
-                            if (!isFlipCandidate || isFlipShort) {
-                                signals.push({
-                                    pair, direction: 'short', tier,
-                                    entry: currentPrice, stopLoss, takeProfit,
-                                    rsi, trendStrength, atrPct, h1Trend, d1Trend, pullback,
-                                    score: parseFloat((confirmation * 0.90).toFixed(3)),
-                                    strategy: 'bbReversal',
-                                    regime: 'bb-overbought',
-                                    regimeQuality: confirmation,
-                                    marketRegime: forexRegime.regime,
-                                    macdHistogram: macd ? macd.histogram : null,
-                                    orderFlowImbalance: analysis.orderFlowImbalance,
-                                    hasDisplacement: analysis.hasDisplacement,
-                                    volumeProfile: analysis.volumeProfile ? { vah: analysis.volumeProfile.vah, val: analysis.volumeProfile.val, poc: analysis.volumeProfile.poc } : null,
-                                    fvgCount: analysis.fvg ? analysis.fvg.bullish.length + analysis.fvg.bearish.length : 0,
-                                    session: session.name,
-                                    confirmationScore: confirmation,
-                                    isFlipReversal: isFlipShort || false,
-                                    existingDirection: isFlipShort ? 'long' : null
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // [v19.1] BB Reversal strategy REMOVED — 0% win rate in production (4 trades, 4 losses).
+        // Root cause: ATR x 2.0 stops too tight for JPY volatility, BB midline targets too close.
+        // Rule 11: no production claim without measured evidence. BB reversal had negative evidence.
+        // The bot now ONLY uses box breakout (backtested 31.59% CAGR, Sharpe 2.38).
+        // If no box signal fires, the bot waits — better to miss a trade than take a bad one.
     }
 
     signals.sort((a, b) => (b.score || 0) - (a.score || 0));
