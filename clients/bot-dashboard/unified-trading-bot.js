@@ -1457,7 +1457,7 @@ let MAX_DRAWDOWN_PCT = parseFloat(process.env.MAX_DRAWDOWN_PCT || '10'); // perc
 
 // ===== ADAPTIVE GUARDRAILS (v4.6) =====
 // Env-overridable thresholds — stricter than legacy defaults
-const RISK_PER_TRADE = parseFloat(process.env.RISK_PER_TRADE || '0.0075');      // 0.75% per trade (was 2%)
+const RISK_PER_TRADE = parseFloat(process.env.RISK_PER_TRADE || '0.0025');      // [v19.0] 0.25% per trade (was 0.75% — theplus-bot proven sizing)
 const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.68');
 const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.65');  // v17.0: lowered from 0.75 — committee provides quality filtering, this gate was too restrictive
 const MIN_REWARD_RISK = parseFloat(process.env.MIN_REWARD_RISK || '1.75');
@@ -2288,12 +2288,24 @@ function calculateVWAP(bars) {
         if (!bars || bars.length === 0) return null;
         let cumulativeTPV = 0;
         let cumulativeVolume = 0;
+        let cumulativeTPV2 = 0; // for variance calculation
         for (const bar of bars) {
             const typicalPrice = (bar.h + bar.l + bar.c) / 3;
             cumulativeTPV += typicalPrice * bar.v;
+            cumulativeTPV2 += typicalPrice * typicalPrice * bar.v;
             cumulativeVolume += bar.v;
         }
-        return cumulativeVolume > 0 ? cumulativeTPV / cumulativeVolume : null;
+        if (cumulativeVolume <= 0) return null;
+        const vwap = cumulativeTPV / cumulativeVolume;
+        // [v19.0] VWAP with sigma bands for mean-reversion entries
+        const variance = (cumulativeTPV2 / cumulativeVolume) - (vwap * vwap);
+        const stdDev = Math.sqrt(Math.max(variance, 0));
+        return {
+            vwap,
+            upperBand: vwap + 1.5 * stdDev,
+            lowerBand: vwap - 1.5 * stdDev,
+            stdDev
+        };
     } catch {
         return null;
     }
@@ -3318,11 +3330,12 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
         if (current > 1000) return null;
         if (volumeToday < 500000) return null;
 
-        // VWAP filter: price must be at or above VWAP — only buy strength, not weakness
-        const vwap = calculateVWAP(bars);
-        if (vwap && current < vwap) {
-            return null;
-        }
+        // [v19.0] VWAP with sigma bands — used for mean-reversion entries
+        const vwapData = calculateVWAP(bars);
+        const vwap = vwapData ? vwapData.vwap : null;
+        // Relaxed: allow below-VWAP entries for VWAP Reversal strategy (mean-reversion)
+        // Old: hard-block all below-VWAP. New: flag it, let individual strategies decide.
+        const belowVwap = vwap && current < vwap;
 
         // [v3.2] EMA 9/21 crossover filter — only enter in confirmed uptrends
         // Converted to a boolean flag so VWAP reclaim can bypass it.
@@ -3468,7 +3481,79 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
         const volumeProfile = calculateVolumeProfile(bars, 50);
         const fvg = detectFairValueGaps(bars, 20);
 
-        if (momentumAllowed) {
+        // ===== [v19.0] VWAP REVERSAL — PRIMARY STRATEGY (backtested 52.69% CAGR, Sharpe 3.48) =====
+        // Mean-reversion: buy when price drops below VWAP lower band (1.5σ) with RSI oversold
+        // Target: VWAP midline. This is the highest-Sharpe strategy from theplus-bot backtesting.
+        let vwapReversalCandidate = null;
+        if (vwapData && vwapData.lowerBand && belowVwap && spyBullish) {
+            if (current < vwapData.lowerBand && rsi < 40 && volumeRatio >= 0.8) {
+                // Need to be above daily SMA50 to confirm structural uptrend (not catching falling knives)
+                let aboveSma50 = false;
+                try {
+                    const dailyResp50 = await axios.get(barUrl, {
+                        headers: { 'APCA-API-KEY-ID': alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': alpacaConfig.secretKey },
+                        params: { timeframe: '1Day', limit: 55, feed: 'sip' }
+                    });
+                    const dBars = dailyResp50.data?.bars || [];
+                    if (dBars.length >= 50) {
+                        const sma50 = dBars.slice(-50).map(b => b.c).reduce((s, v) => s + v, 0) / 50;
+                        aboveSma50 = current > sma50;
+                    }
+                } catch { /* skip if daily bars unavailable */ }
+
+                if (aboveSma50) {
+                    const stopLoss = current - (atr * 2.0);
+                    const takeProfit = vwap; // Mean reversion target: VWAP midline
+                    const risk = current - stopLoss;
+                    const reward = takeProfit - current;
+                    if (risk > 0 && reward / risk >= 1.5) {
+                        const regimeProfile = evaluateStockRegimeSignal({
+                            strategy: 'vwapReversal', percentChange, volumeRatio, rsi, current, vwap, atrPct
+                        });
+                        if (regimeProfile.tradable) {
+                            const normOversold = Math.min((40 - rsi) / 20, 1.0);        // RSI distance from 40
+                            const normVwapDist = Math.min(Math.abs(current - vwapData.lowerBand) / vwapData.stdDev, 1.0);
+                            const normVolume = Math.min(volumeRatio / 2, 1.0);
+                            const normRegime = regimeProfile.quality;
+                            let score = normOversold * 0.35 + normVwapDist * 0.25 + normVolume * 0.20 + normRegime * 0.20;
+                            // VP/FVG bonuses
+                            if (volumeProfile) {
+                                const distToVAL = Math.abs(current - volumeProfile.val) / current;
+                                if (distToVAL < 0.01) score *= 1.12;
+                            }
+                            if (fvg.bullish.length > 0) score *= 1.08;
+                            score *= 1.10; // Priority boost over momentum entries
+                            vwapReversalCandidate = {
+                                symbol, price: current,
+                                percentChange: percentChange.toFixed(2),
+                                volumeRatio: volumeRatio.toFixed(2),
+                                volume: volumeToday,
+                                rsi: rsi.toFixed(2),
+                                vwap: vwap ? vwap.toFixed(2) : null,
+                                tier: 'tier1',
+                                score: parseFloat(score.toFixed(3)),
+                                strategy: 'vwapReversal',
+                                regime: regimeProfile.regime,
+                                regimeScore: regimeProfile.quality,
+                                config: MOMENTUM_CONFIG.tier1,
+                                entryVolume: volumeToday,
+                                atrStop: stopLoss, atrTarget: takeProfit, atrPct,
+                                orderFlowImbalance, hasDisplacement,
+                                volumeProfile: volumeProfile ? { vah: volumeProfile.vah, val: volumeProfile.val, poc: volumeProfile.poc } : null,
+                                fvgCount: fvg.bullish.length + fvg.bearish.length,
+                                vwapLowerBand: vwapData.lowerBand,
+                                vwapUpperBand: vwapData.upperBand
+                            };
+                            candidates.push(vwapReversalCandidate);
+                            console.log(`📊 [VWAP REV] ${symbol}: $${current.toFixed(2)} below VWAP lower band $${vwapData.lowerBand.toFixed(2)} | RSI ${rsi.toFixed(1)} | target: VWAP $${vwap.toFixed(2)} | R:R ${(reward/risk).toFixed(1)} | score ${score.toFixed(3)}`);
+                        }
+                    }
+                }
+            }
+        }
+
+        // ===== MOMENTUM ENTRIES (demoted — only fires when VWAP Reversal has no signal) =====
+        if (momentumAllowed && !vwapReversalCandidate && !belowVwap) {
             // Tier assignment with fallback: start at the highest qualifying tier,
             // fall back to lower tiers if secondary filters (volume ratio, RSI) fail.
             // Prevents a strong Tier3 move from being rejected just because ADX is 16 not 20.
