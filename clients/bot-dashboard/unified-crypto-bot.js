@@ -3545,7 +3545,10 @@ class CryptoTradingEngine {
                         const srcTag = aiResult.source === 'cache' ? ' (cached)' : '';
                         const regime = aiResult.market_regime ? ` [${aiResult.market_regime}]` : '';
                         console.log(`[Agent] ${signal.symbol} APPROVED${srcTag}${regime} (conf: ${(aiResult.confidence || 0).toFixed(2)}, size: ${(aiResult.position_size_multiplier || 1).toFixed(2)}x) — ${aiResult.reason}`);
-                        (this._userTelegram || telegramAlerts).sendAgentApproval('Crypto Bot', signal.symbol, 'long', aiResult.confidence || 0, aiResult.position_size_multiplier || 1, aiResult.market_regime).catch(() => {});
+                        const tg = this._userTelegram || telegramAlerts;
+                        if (typeof tg.sendAgentApproval === 'function') {
+                            tg.sendAgentApproval('Crypto Bot', signal.symbol, 'long', aiResult.confidence || 0, aiResult.position_size_multiplier || 1, aiResult.market_regime).catch(() => {});
+                        }
                         signal.agentApproved = true;
                         signal.agentConfidence = aiResult.confidence;
                         signal.agentReason = aiResult.reason;

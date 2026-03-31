@@ -4470,6 +4470,44 @@ class UserForexEngine {
         this.simTotalTrades = 0;
         this.simWinners = 0;
         this.simLosers = 0;
+        // [v19.0 fix] Per-engine guardrails — prevents crash on resetDaily()
+        this.guardrails = {
+            consecutiveLosses: 0,
+            recentResults: [],
+            lanePausedUntil: 0,
+            totalLossesToday: 0,
+            totalWinsToday: 0,
+            get recentWinRate() {
+                if (this.recentResults.length < 5) return 0.5;
+                return this.recentResults.filter(Boolean).length / this.recentResults.length;
+            },
+            get isPaused() { return Date.now() < this.lanePausedUntil; },
+            recordOutcome(isWin) {
+                this.recentResults.push(isWin);
+                if (this.recentResults.length > 20) this.recentResults.shift();
+                if (isWin) { this.consecutiveLosses = 0; this.totalWinsToday++; }
+                else {
+                    this.consecutiveLosses++;
+                    this.totalLossesToday++;
+                    if (this.consecutiveLosses >= MAX_CONSECUTIVE_LOSSES) {
+                        const escalation = Math.min(8, Math.ceil(this.consecutiveLosses / MAX_CONSECUTIVE_LOSSES));
+                        const pauseMs = LOSS_PAUSE_MS * escalation;
+                        this.lanePausedUntil = Date.now() + pauseMs;
+                    }
+                }
+            },
+            resetDaily() {
+                this.consecutiveLosses = 0;
+                this.recentResults = [];
+                this.lanePausedUntil = 0;
+                this.totalLossesToday = 0;
+                this.totalWinsToday = 0;
+            },
+            get lossSizeMultiplier() {
+                if (this.consecutiveLosses <= 1) return 1.0;
+                return Math.max(0.25, 1.0 - (this.consecutiveLosses - 1) * 0.15);
+            }
+        };
         console.log(`🔧 [ForexEngine] Created engine for user ${userId}`);
     }
 
