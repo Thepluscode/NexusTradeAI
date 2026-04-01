@@ -1286,7 +1286,7 @@ async function reportForexTradeOutcome(position, exitPrice, pnl, pnlPct, exitRea
         await axios.post(`${BRIDGE_URL}/agent/trade-outcome`, payload, { timeout: 5000 });
         console.log(`[Learn] ${position.pair} outcome reported: ${pnl > 0 ? 'WIN' : 'LOSS'} ${(pnlPct * 100).toFixed(2)}%`);
     } catch (e) {
-        // Non-blocking
+        console.warn(`[Learn] ${position.pair} outcome report FAILED: ${e.message}`);
     }
 }
 

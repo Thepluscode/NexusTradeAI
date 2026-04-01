@@ -16,11 +16,26 @@ let computeCorrelationGuard = () => ({ blocked: false });
 let optimize = () => ({ improved: false });
 let evaluateStrategies = () => ({});
 let lastStrategyPerf = {}; // [v14.1] Stores latest evaluateStrategies() output for INACTIVE enforcement
-let checkScanHealth = () => ({ healthy: true });
-let checkErrorRate = () => ({ healthy: true });
-let checkTradingHealth = () => ({ healthy: true });
-let checkMemoryHealth = () => ({ healthy: true });
-let aggregateHealth = () => ({ status: 'ok' });
+let checkScanHealth = (lastScanAt, intervalMs) => {
+    const elapsed = Date.now() - (lastScanAt || 0);
+    return { healthy: elapsed < intervalMs * 3, lastScanMs: elapsed, threshold: intervalMs * 3 };
+};
+let checkErrorRate = (errors) => {
+    const recent = (errors || []).filter(e => Date.now() - e.timestamp < 300000);
+    return { healthy: recent.length < 10, recentErrors: recent.length, window: '5m' };
+};
+let checkTradingHealth = (opts) => {
+    return { healthy: true, positions: opts?.positionCount || 0, tradesToday: opts?.tradesToday || 0 };
+};
+let checkMemoryHealth = () => {
+    const mem = process.memoryUsage();
+    const heapMB = Math.round(mem.heapUsed / 1024 / 1024);
+    return { healthy: heapMB < 512, heapUsedMB: heapMB, rss: Math.round(mem.rss / 1024 / 1024) };
+};
+let aggregateHealth = (checks) => {
+    const allHealthy = Object.values(checks).every(c => c.healthy !== false);
+    return { status: allHealthy ? 'ok' : 'degraded', checks, timestamp: new Date().toISOString() };
+};
 try {
   ({ createSignalEndpoints } = require('../../services/signals/api-handlers'));
   ({ BOT_COMPONENTS } = require('../../services/signals/committee-scorer'));
@@ -1047,7 +1062,7 @@ async function dbTradeClose(id, exitPrice, pnlUsd, pnlPct, reason) {
         );
         await client.query('COMMIT');
     } catch (e) {
-        await client.query('ROLLBACK').catch(() => {});
+        await client.query('ROLLBACK').catch(err => console.warn('[ALERT]', err.message));
         console.warn('DB close failed (rolled back):', e.message);
     } finally {
         client.release();
@@ -2357,8 +2372,10 @@ const _STOCK_AGENT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const _STOCK_AGENT_CACHE_PRICE_DRIFT = 0.01; // 1% price change invalidates
 
 async function queryAIAdvisor(signal) {
+    // Cache key includes direction+tier to prevent collisions between different signal paths
+    const cacheKey = `${signal.symbol}:${signal.direction || 'long'}:${signal.tier || 'tier1'}`;
     // Check cache first
-    const cached = _stockAgentCache.get(signal.symbol);
+    const cached = _stockAgentCache.get(cacheKey);
     if (cached && cached.price > 0) {
         const age = Date.now() - cached.timestamp;
         const priceDrift = Math.abs(signal.price - cached.price) / cached.price;
@@ -2366,7 +2383,7 @@ async function queryAIAdvisor(signal) {
             console.log(`[Agent] ${signal.symbol}: using cached decision (${(age / 1000).toFixed(0)}s old, drift ${(priceDrift * 100).toFixed(2)}%)`);
             return { ...cached.result, source: 'cache' };
         }
-        _stockAgentCache.delete(signal.symbol);
+        _stockAgentCache.delete(cacheKey);
     }
 
     try {
@@ -2404,7 +2421,7 @@ async function queryAIAdvisor(signal) {
         }
 
         // Cache the result
-        _stockAgentCache.set(signal.symbol, {
+        _stockAgentCache.set(cacheKey, {
             result,
             price: signal.price,
             timestamp: Date.now(),
@@ -2463,7 +2480,7 @@ async function reportTradeOutcome(position, exitPrice, pnl, pnlPct, exitReason) 
         await axios.post(`${BRIDGE_URL}/agent/trade-outcome`, payload, { timeout: 5000 });
         console.log(`[Learn] ${position.symbol} outcome reported: ${pnlPct > 0 ? 'WIN' : 'LOSS'} ${(pnlPct * 100).toFixed(1)}%`);
     } catch (e) {
-        // Non-blocking — learning is best-effort
+        console.warn(`[Learn] ${position.symbol} outcome report FAILED: ${e.message}`);
     }
 }
 
@@ -3132,10 +3149,10 @@ async function scanMomentumBreakouts() {
                         if (aiResult.lessons_applied?.length) console.log(`[Agent]   Lessons: ${aiResult.lessons_applied.slice(0, 2).join('; ')}`);
                         // Telegram alerts for rejections
                         if (aiResult.confidence > 0.8 || aiResult.source === 'kill_switch') {
-                            telegramAlerts.sendAgentRejection('Stock Bot', mover.symbol, 'long', aiResult.reason, aiResult.confidence, aiResult.risk_flags).catch(() => {});
+                            telegramAlerts.sendAgentRejection('Stock Bot', mover.symbol, 'long', aiResult.reason, aiResult.confidence, aiResult.risk_flags).catch(err => console.warn('[ALERT]', err.message));
                         }
                         if (aiResult.source === 'kill_switch') {
-                            telegramAlerts.sendKillSwitchAlert('Stock Bot', aiResult.reason).catch(() => {});
+                            telegramAlerts.sendKillSwitchAlert('Stock Bot', aiResult.reason).catch(err => console.warn('[ALERT]', err.message));
                         }
                         continue;
                     }
@@ -3144,7 +3161,7 @@ async function scanMomentumBreakouts() {
                     const srcTag = aiResult.source === 'cache' ? ' (cached)' : '';
                     const regime = aiResult.market_regime ? ` [${aiResult.market_regime}]` : '';
                     console.log(`[Agent] ${mover.symbol} APPROVED${srcTag}${regime} (conf: ${(aiResult.confidence || 0).toFixed(2)}, size: ${(aiResult.position_size_multiplier || 1).toFixed(2)}x) — ${aiResult.reason}`);
-                    telegramAlerts.sendAgentApproval('Stock Bot', mover.symbol, 'long', aiResult.confidence || 0, aiResult.position_size_multiplier || 1, aiResult.market_regime).catch(() => {});
+                    telegramAlerts.sendAgentApproval('Stock Bot', mover.symbol, 'long', aiResult.confidence || 0, aiResult.position_size_multiplier || 1, aiResult.market_regime).catch(err => console.warn('[ALERT]', err.message));
                     mover.agentApproved = true;
                     mover.agentConfidence = aiResult.confidence;
                     mover.agentReason = aiResult.reason;
@@ -5156,7 +5173,7 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
                     // Create engine in background — don't block the response
                     getOrCreateEngine(userId).then(engine => {
                         if (engine) console.log(`🔧 [Engine ${userId}] Engine created after credential save`);
-                    }).catch(() => {});
+                    }).catch(err => console.warn('[ALERT]', err.message));
                 }
             }
         }
@@ -5481,11 +5498,11 @@ class UserTradingEngine {
                 const bot = new TelegramBot(tgToken, { polling: false });
                 this._telegram = {
                     sendStockEntry:     (sym, ep, sl, tp, qty, tier) =>
-                        bot.sendMessage(tgChatId, `✅ *STOCK ENTRY* [${tier}]\n📛 ${sym} x${qty}\n💰 Entry: $${ep.toFixed(2)}\n🛑 SL: $${sl.toFixed(2)}  🎯 TP: $${tp.toFixed(2)}`, { parse_mode: 'Markdown' }).catch(() => {}),
+                        bot.sendMessage(tgChatId, `✅ *STOCK ENTRY* [${tier}]\n📛 ${sym} x${qty}\n💰 Entry: $${ep.toFixed(2)}\n🛑 SL: $${sl.toFixed(2)}  🎯 TP: $${tp.toFixed(2)}`, { parse_mode: 'Markdown' }).catch(err => console.warn('[ALERT]', err.message)),
                     sendStockStopLoss:  (sym, ep, cp, pnl, sl) =>
-                        bot.sendMessage(tgChatId, `🚨 *STOP LOSS* ${sym}\n💰 Entry $${ep.toFixed(2)} → $${cp.toFixed(2)}\n💸 P&L: ${pnl.toFixed(2)}%`, { parse_mode: 'Markdown' }).catch(() => {}),
+                        bot.sendMessage(tgChatId, `🚨 *STOP LOSS* ${sym}\n💰 Entry $${ep.toFixed(2)} → $${cp.toFixed(2)}\n💸 P&L: ${pnl.toFixed(2)}%`, { parse_mode: 'Markdown' }).catch(err => console.warn('[ALERT]', err.message)),
                     sendStockTakeProfit:(sym, ep, cp, pnl, tp) =>
-                        bot.sendMessage(tgChatId, `🎯 *TAKE PROFIT* ${sym}\n💰 Entry $${ep.toFixed(2)} → $${cp.toFixed(2)}\n💵 P&L: +${pnl.toFixed(2)}%`, { parse_mode: 'Markdown' }).catch(() => {}),
+                        bot.sendMessage(tgChatId, `🎯 *TAKE PROFIT* ${sym}\n💰 Entry $${ep.toFixed(2)} → $${cp.toFixed(2)}\n💵 P&L: +${pnl.toFixed(2)}%`, { parse_mode: 'Markdown' }).catch(err => console.warn('[ALERT]', err.message)),
                 };
                 console.log(`📱 [Engine ${this.userId}] Per-user Telegram alerts configured`);
             } catch (e) {
@@ -5509,7 +5526,7 @@ class UserTradingEngine {
                 [this.userId, JSON.stringify({ perfData: this.perfData,
                     totalTradesToday: this.totalTradesToday, botRunning: this.botRunning,
                     botPaused: this.botPaused, lastResetDate: this.lastResetDate })]
-            ).catch(() => {});
+            ).catch(err => console.warn('[ALERT]', err.message));
         }
     }
 
@@ -5634,7 +5651,7 @@ class UserTradingEngine {
             );
             await client.query('COMMIT');
         } catch (e) {
-            await client.query('ROLLBACK').catch(() => {});
+            await client.query('ROLLBACK').catch(err => console.warn('[ALERT]', err.message));
             console.warn('DB close failed (rolled back):', e.message);
         } finally {
             client.release();
@@ -5807,10 +5824,10 @@ class UserTradingEngine {
                 const exitReason = await shouldExitPosition(position, currentPrice, alpacaPos, this.alpacaConfig);
                 if (exitReason) { await this.closePosition(symbol, alpacaPos.qty, exitReason); continue; }
                 if (currentPrice <= position.stopLoss) {
-                    (this._telegram || telegramAlerts).sendStockStopLoss(symbol, position.entry, currentPrice, unrealizedPL, position.stopLoss).catch(() => {});
+                    (this._telegram || telegramAlerts).sendStockStopLoss(symbol, position.entry, currentPrice, unrealizedPL, position.stopLoss).catch(err => console.warn('[ALERT]', err.message));
                     await this.closePosition(symbol, alpacaPos.qty, 'Stop Loss');
                 } else if (currentPrice >= position.target) {
-                    (this._telegram || telegramAlerts).sendStockTakeProfit(symbol, position.entry, currentPrice, unrealizedPL, position.target).catch(() => {});
+                    (this._telegram || telegramAlerts).sendStockTakeProfit(symbol, position.entry, currentPrice, unrealizedPL, position.target).catch(err => console.warn('[ALERT]', err.message));
                     await this.closePosition(symbol, alpacaPos.qty, 'Profit Target');
                 }
             }
@@ -5897,7 +5914,7 @@ class UserTradingEngine {
             this.tradesPerSymbol.set(signal.symbol, (this.tradesPerSymbol.get(signal.symbol) || 0) + 1);
             this.totalTradesToday++;
             if (tier === 'orb' || strategy === 'openingRangeBreakout') this.orbTradesToday++;
-            (this._telegram || telegramAlerts).sendStockEntry(signal.symbol, signal.price, parseFloat(stopPrice), parseFloat(targetPrice), shares, tier).catch(() => {});
+            (this._telegram || telegramAlerts).sendStockEntry(signal.symbol, signal.price, parseFloat(stopPrice), parseFloat(targetPrice), shares, tier).catch(err => console.warn('[ALERT]', err.message));
             console.log(`✅ [Engine ${this.userId}] TRADE: ${signal.symbol} [${tier}] x${shares} @ $${signal.price}`);
             return orderResponse.data;
         } catch (error) {
@@ -5987,10 +6004,10 @@ class UserTradingEngine {
                     if (aiResult.risk_flags?.length) console.log(`[Engine ${this.userId}][Agent]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
                     if (aiResult.lessons_applied?.length) console.log(`[Engine ${this.userId}][Agent]   Lessons: ${aiResult.lessons_applied.slice(0, 2).join('; ')}`);
                     if (aiResult.confidence > 0.8 || aiResult.source === 'kill_switch') {
-                        (this._telegram || telegramAlerts).sendAgentRejection('Stock Bot', mover.symbol, 'long', aiResult.reason, aiResult.confidence, aiResult.risk_flags).catch(() => {});
+                        (this._telegram || telegramAlerts).sendAgentRejection('Stock Bot', mover.symbol, 'long', aiResult.reason, aiResult.confidence, aiResult.risk_flags).catch(err => console.warn('[ALERT]', err.message));
                     }
                     if (aiResult.source === 'kill_switch') {
-                        (this._telegram || telegramAlerts).sendKillSwitchAlert('Stock Bot', aiResult.reason).catch(() => {});
+                        (this._telegram || telegramAlerts).sendKillSwitchAlert('Stock Bot', aiResult.reason).catch(err => console.warn('[ALERT]', err.message));
                     }
                     continue;
                 }
@@ -5999,7 +6016,7 @@ class UserTradingEngine {
                 const srcTag = aiResult.source === 'cache' ? ' (cached)' : '';
                 const regime = aiResult.market_regime ? ` [${aiResult.market_regime}]` : '';
                 console.log(`[Engine ${this.userId}][Agent] ${mover.symbol} APPROVED${srcTag}${regime} (conf: ${(aiResult.confidence || 0).toFixed(2)}, size: ${(aiResult.position_size_multiplier || 1).toFixed(2)}x) — ${aiResult.reason}`);
-                (this._telegram || telegramAlerts).sendAgentApproval('Stock Bot', mover.symbol, 'long', aiResult.confidence || 0, aiResult.position_size_multiplier || 1, aiResult.market_regime).catch(() => {});
+                (this._telegram || telegramAlerts).sendAgentApproval('Stock Bot', mover.symbol, 'long', aiResult.confidence || 0, aiResult.position_size_multiplier || 1, aiResult.market_regime).catch(err => console.warn('[ALERT]', err.message));
                 mover.agentApproved = true;
                 mover.agentConfidence = aiResult.confidence;
                 mover.agentReason = aiResult.reason;
@@ -7331,7 +7348,7 @@ app.listen(PORT, async () => {
         const silentMinutes = Math.floor((Date.now() - _lastHeartbeatScanTime) / 60000);
         if (silentMinutes >= 120 && !_heartbeatAlertSent) {
             _heartbeatAlertSent = true;
-            telegramAlerts.sendHeartbeatAlert('Stock Bot', silentMinutes).catch(() => {});
+            telegramAlerts.sendHeartbeatAlert('Stock Bot', silentMinutes).catch(err => console.warn('[ALERT]', err.message));
         }
     }, 30 * 60 * 1000);
 

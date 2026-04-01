@@ -673,7 +673,7 @@ async function dbCryptoClose(id, exitPrice, pnlUsd, pnlPct, reason) {
         );
         await client.query('COMMIT');
     } catch (e) {
-        await client.query('ROLLBACK').catch(() => {});
+        await client.query('ROLLBACK').catch(err => console.warn('[ALERT] ROLLBACK failed:', err.message));
         console.warn('DB crypto close failed (rolled back):', e.message);
     } finally {
         client.release();
@@ -1875,8 +1875,10 @@ class CryptoTradingEngine {
     _AGENT_CACHE_PRICE_DRIFT = 0.01; // 1% price change invalidates cache
 
     async queryAIAdvisor(signal) {
+        // Cache key includes direction+tier to prevent collisions between different signal paths
+        const cacheKey = `${signal.symbol}:${signal.direction || 'long'}:${signal.tier || 'tier1'}`;
         // Check cache first
-        const cached = this._agentCache.get(signal.symbol);
+        const cached = this._agentCache.get(cacheKey);
         if (cached && cached.price > 0) {
             const age = Date.now() - cached.timestamp;
             const priceDrift = Math.abs(signal.price - cached.price) / cached.price;
@@ -1884,7 +1886,7 @@ class CryptoTradingEngine {
                 console.log(`[Agent] ${signal.symbol}: using cached decision (${(age / 1000).toFixed(0)}s old, drift ${(priceDrift * 100).toFixed(2)}%)`);
                 return { ...cached.result, source: 'cache' };
             }
-            this._agentCache.delete(signal.symbol);
+            this._agentCache.delete(cacheKey);
         }
 
         try {
@@ -1923,7 +1925,7 @@ class CryptoTradingEngine {
             }
 
             // Cache the result
-            this._agentCache.set(signal.symbol, {
+            this._agentCache.set(cacheKey, {
                 result,
                 price: signal.price,
                 timestamp: Date.now(),
@@ -1972,7 +1974,7 @@ class CryptoTradingEngine {
             await axios.post(`${bridgeUrl}/agent/trade-outcome`, payload, { timeout: 5000 });
             console.log(`[Learn] ${position.symbol} outcome reported: ${pnl > 0 ? 'WIN' : 'LOSS'} ${(pnlPct * 100).toFixed(2)}%`);
         } catch (e) {
-            // Non-blocking
+            console.warn(`[Learn] ${position.symbol} outcome report FAILED: ${e.message}`);
         }
     }
 
@@ -2061,6 +2063,7 @@ class CryptoTradingEngine {
     async fetchMarketData(symbol) {
         try {
             // Get klines (5-min candles, last 100)
+            // TODO: Add timeout wrapper (10s) — getKlines can hang if Kraken API is slow
             const klines = await this.kraken.getKlines(symbol, '5m', 100);
             if (!klines || klines.length === 0) return null;
 
@@ -2350,7 +2353,7 @@ class CryptoTradingEngine {
             const bb = this.calculateBollingerBands(data.prices, mrConfig.bollingerPeriod, mrConfig.bollingerStdDev);
             // [v19.0] OBV divergence — confirms mean-reversion and box entries
             const klines5m = await this.kraken.getKlines(symbol, '5m', 30).catch(() => null);
-            const obvData = calculateOBV(klines5m, 20);
+            const obvData = klines5m ? calculateOBV(klines5m, 20) : null;
             if (routing.meanReversionWeight > 0) {
                 if (bb && bb.bandwidth >= mrConfig.minBandwidth && bb.bandwidth <= mrConfig.maxBandwidth) {
                     const mrPositions = Array.from(this.positions.values()).filter(p => p.strategy === 'meanReversion').length;
@@ -3126,7 +3129,7 @@ class CryptoTradingEngine {
                     `⏰ *CRYPTO TIME STOP* — ${symbol}\n` +
                     `Held ${minutesHeld} min (4h limit)\n` +
                     `P&L: $${pnlUSD.toFixed(2)}`
-                ).catch(() => {});
+                ).catch(err => console.warn('[ALERT] Telegram time-stop send failed:', err.message));
                 continue;
             }
             // ===== END TIME STOP =====
@@ -3180,6 +3183,7 @@ class CryptoTradingEngine {
             // [EXIT-MGR] Smart exit: momentum fade + reversal candle detection
             try {
                 const { evaluateExit } = require('../../services/signals/exit-manager');
+                // TODO: Add timeout wrapper (10s) — getKlines can hang if Kraken API is slow
                 const rawKlines = await this.kraken.getKlines(symbol, '5m', 30);
                 if (rawKlines && rawKlines.length >= 20) {
                     const klines = rawKlines.map(c => ({
@@ -3199,7 +3203,7 @@ class CryptoTradingEngine {
                         await this.closePosition(symbol, currentPrice, `Smart Exit: ${exitEval.reason}`);
                         (this._userTelegram || telegramAlerts).send(
                             `🧠 *CRYPTO SMART EXIT* — ${symbol}\n${exitEval.reason}\nP&L: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%`
-                        ).catch(() => {});
+                        ).catch(err => console.warn('[ALERT] Telegram smart-exit send failed:', err.message));
                         continue;
                     } else if (exitEval.action === 'tighten' && exitEval.newStop > position.stopLoss) {
                         console.log(`[EXIT-MGR] ${symbol}: ${exitEval.reason} — stop raised to $${exitEval.newStop.toFixed(2)}`);
@@ -3319,7 +3323,7 @@ class CryptoTradingEngine {
                 .catch(e => console.warn('[StrategyPerf] Update failed:', e.message));
 
             // [v4.1] Report to Agentic AI learning loop — Scan AI pattern tracking
-            this.reportTradeOutcome(position, adjustedExitPrice, pnlUSD, pnlPercent / 100, reason).catch(() => {});
+            this.reportTradeOutcome(position, adjustedExitPrice, pnlUSD, pnlPercent / 100, reason).catch(err => console.warn('[ALERT] reportTradeOutcome failed:', err.message));
 
             // [v4.6] Record outcome for adaptive guardrails
             this.recordGuardrailOutcome(pnlUSD > 0);
@@ -3426,11 +3430,28 @@ class CryptoTradingEngine {
                 console.log(`${'='.repeat(60)}`);
                 console.log(`📊 Positions: ${this.positions.size}/${this.config.maxTotalPositions} | Trades today: ${this.dailyTradeCount}/${this.config.maxTradesPerDay}`);
 
-                // In demo mode, skip all exchange calls
+                // In demo mode, periodically retry credentials (user may save them via settings UI)
                 if (this.demoMode) {
-                    console.log('📊 DEMO MODE - No exchange connection. Add CRYPTO_API_KEY to .env to enable live trading.');
-                    await new Promise(resolve => setTimeout(resolve, this.config.scanInterval));
-                    continue;
+                    const retryInterval = 5 * 60 * 1000; // Retry every 5 minutes
+                    const timeSinceLastCheck = Date.now() - (this.lastCredentialCheckAt || 0);
+                    if (timeSinceLastCheck >= retryInterval) {
+                        console.log('🔄 DEMO MODE - Checking if credentials have been configured...');
+                        const reconnected = await this.refreshConnectionState(true);
+                        if (reconnected) {
+                            console.log('✅ Credentials found — exiting DEMO MODE, starting live trading loop');
+                            await this.refreshSupportedSymbols(true).catch(() => {});
+                            this.saveState();
+                            // Fall through to normal trading loop
+                        } else {
+                            console.log(`📊 DEMO MODE - ${this.credentialsError || 'No exchange credentials'}. Configure in Settings → Crypto.`);
+                            await new Promise(resolve => setTimeout(resolve, this.config.scanInterval));
+                            continue;
+                        }
+                    } else {
+                        console.log(`📊 DEMO MODE - Next credential check in ${Math.round((retryInterval - timeSinceLastCheck) / 1000)}s. Configure in Settings → Crypto.`);
+                        await new Promise(resolve => setTimeout(resolve, this.config.scanInterval));
+                        continue;
+                    }
                 }
 
                 // Manage existing positions even when paused (exits still run)
@@ -3554,10 +3575,10 @@ class CryptoTradingEngine {
                             if (aiResult.risk_flags?.length) console.log(`[Agent]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
                             if (aiResult.lessons_applied?.length) console.log(`[Agent]   Lessons: ${aiResult.lessons_applied.slice(0, 2).join('; ')}`);
                             if (aiResult.confidence > 0.8 || aiResult.source === 'kill_switch') {
-                                (this._userTelegram || telegramAlerts).sendAgentRejection('Crypto Bot', signal.symbol, 'long', aiResult.reason, aiResult.confidence, aiResult.risk_flags).catch(() => {});
+                                (this._userTelegram || telegramAlerts).sendAgentRejection('Crypto Bot', signal.symbol, 'long', aiResult.reason, aiResult.confidence, aiResult.risk_flags).catch(err => console.warn('[ALERT] Telegram agent-rejection send failed:', err.message));
                             }
                             if (aiResult.source === 'kill_switch') {
-                                (this._userTelegram || telegramAlerts).sendKillSwitchAlert('Crypto Bot', aiResult.reason).catch(() => {});
+                                (this._userTelegram || telegramAlerts).sendKillSwitchAlert('Crypto Bot', aiResult.reason).catch(err => console.warn('[ALERT] Telegram kill-switch send failed:', err.message));
                             }
                             continue;
                         }
@@ -3567,8 +3588,8 @@ class CryptoTradingEngine {
                         const regime = aiResult.market_regime ? ` [${aiResult.market_regime}]` : '';
                         console.log(`[Agent] ${signal.symbol} APPROVED${srcTag}${regime} (conf: ${(aiResult.confidence || 0).toFixed(2)}, size: ${(aiResult.position_size_multiplier || 1).toFixed(2)}x) — ${aiResult.reason}`);
                         const tg = this._userTelegram || telegramAlerts;
-                        if (typeof tg.sendAgentApproval === 'function') {
-                            tg.sendAgentApproval('Crypto Bot', signal.symbol, 'long', aiResult.confidence || 0, aiResult.position_size_multiplier || 1, aiResult.market_regime).catch(() => {});
+                        if (tg && typeof tg.sendAgentApproval === 'function') {
+                            tg.sendAgentApproval('Crypto Bot', signal.symbol, 'long', aiResult.confidence || 0, aiResult.position_size_multiplier || 1, aiResult.market_regime).catch(err => console.warn('[ALERT] Telegram agent-approval send failed:', err.message));
                         }
                         signal.agentApproved = true;
                         signal.agentConfidence = aiResult.confidence;
@@ -3722,8 +3743,8 @@ class CryptoTradingEngine {
         // If no API keys configured, run in demo/paper mode (no exchange connection needed)
         const hasKeys = this.config.exchange.apiKey && this.config.exchange.apiSecret;
         if (!hasKeys) {
-            console.log('⚠️  No CRYPTO_API_KEY/CRYPTO_API_SECRET in .env');
-            console.log('📊 Running in DEMO MODE - monitoring only, no real trades');
+            console.log('⚠️  No crypto exchange credentials configured');
+            console.log('📊 Running in DEMO MODE — will auto-connect when credentials are saved in Settings → Crypto');
             this.isRunning = true;
             this.demoMode = true;
             this.credentialsValid = false;
@@ -4520,7 +4541,9 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
 
         let reconnectWarning = null;
         // If crypto keys were updated, reinitialise the exchange client and reconnect
+        // Reset credential check timer so trading loop retries immediately on next scan
         if (broker === 'crypto' && updated > 0) {
+            engine.lastCredentialCheckAt = 0;
             const apiKey = process.env.CRYPTO_API_KEY;
             const apiSecret = process.env.CRYPTO_API_SECRET;
             if (!apiKey || !apiSecret) {
@@ -4557,8 +4580,8 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
                     console.log(`🔧 [CryptoEngine ${userId}] Kraken client updated`);
                 } else if (!existingEngine) {
                     getOrCreateCryptoEngine(userId).then(eng => {
-                        if (eng) { eng.start().catch(() => {}); }
-                    }).catch(() => {});
+                        if (eng) { eng.start().catch(err => console.warn('[ALERT] Engine start failed:', err.message)); }
+                    }).catch(err => console.warn('[ALERT] getOrCreateCryptoEngine failed:', err.message));
                 }
             } catch (engineErr) {
                 warnings.push('Credentials saved, but the personal crypto engine could not be refreshed immediately');
@@ -4745,7 +4768,7 @@ async function getOrCreateCryptoEngine(userId) {
                 );
                 await client.query('COMMIT');
             } catch (e) {
-                await client.query('ROLLBACK').catch(() => {});
+                await client.query('ROLLBACK').catch(err => console.warn('[ALERT] ROLLBACK failed:', err.message));
                 console.warn('DB crypto close failed (rolled back):', e.message);
             } finally {
                 client.release();
@@ -4806,12 +4829,12 @@ async function getOrCreateCryptoEngine(userId) {
                 const tgBot = new TelegramBot(tgToken, { polling: false });
                 userEngine._userTelegram = {
                     sendCryptoEntry:     (sym, entry, sl, tp, qty, tier) =>
-                        tgBot.sendMessage(tgChatId, `✅ *CRYPTO ENTRY* [${tier}]\n₿ ${sym} x${qty}\n💰 Entry: $${entry.toFixed(2)}\n🛑 SL: $${sl?.toFixed(2) || '—'}  🎯 TP: $${tp?.toFixed(2) || '—'}`, { parse_mode: 'Markdown' }).catch(() => {}),
+                        tgBot.sendMessage(tgChatId, `✅ *CRYPTO ENTRY* [${tier}]\n₿ ${sym} x${qty}\n💰 Entry: $${entry.toFixed(2)}\n🛑 SL: $${sl?.toFixed(2) || '—'}  🎯 TP: $${tp?.toFixed(2) || '—'}`, { parse_mode: 'Markdown' }).catch(err => console.warn('[ALERT] TG crypto-entry failed:', err.message)),
                     sendCryptoStopLoss:  (sym, ep, cp, pnl, sl) =>
-                        tgBot.sendMessage(tgChatId, `🚨 *CRYPTO STOP LOSS*\n₿ ${sym}\n💰 Entry $${ep.toFixed(2)} → $${cp.toFixed(2)}\n💸 P&L: ${pnl.toFixed(2)}%`, { parse_mode: 'Markdown' }).catch(() => {}),
+                        tgBot.sendMessage(tgChatId, `🚨 *CRYPTO STOP LOSS*\n₿ ${sym}\n💰 Entry $${ep.toFixed(2)} → $${cp.toFixed(2)}\n💸 P&L: ${pnl.toFixed(2)}%`, { parse_mode: 'Markdown' }).catch(err => console.warn('[ALERT] TG crypto-stop-loss failed:', err.message)),
                     sendCryptoTakeProfit:(sym, ep, cp, pnl, tp) =>
-                        tgBot.sendMessage(tgChatId, `🎯 *CRYPTO TAKE PROFIT*\n₿ ${sym}\n💰 Entry $${ep.toFixed(2)} → $${cp.toFixed(2)}\n💵 P&L: +${pnl.toFixed(2)}%`, { parse_mode: 'Markdown' }).catch(() => {}),
-                    send:               (msg) => tgBot.sendMessage(tgChatId, msg, { parse_mode: 'Markdown' }).catch(() => {}),
+                        tgBot.sendMessage(tgChatId, `🎯 *CRYPTO TAKE PROFIT*\n₿ ${sym}\n💰 Entry $${ep.toFixed(2)} → $${cp.toFixed(2)}\n💵 P&L: +${pnl.toFixed(2)}%`, { parse_mode: 'Markdown' }).catch(err => console.warn('[ALERT] TG crypto-take-profit failed:', err.message)),
+                    send:               (msg) => tgBot.sendMessage(tgChatId, msg, { parse_mode: 'Markdown' }).catch(err => console.warn('[ALERT] TG send failed:', err.message)),
                 };
                 console.log(`📱 [CryptoEngine ${userId}] Per-user Telegram alerts configured`);
             } catch (e) {
@@ -5283,7 +5306,7 @@ app.listen(PORT, async () => {
         const silentMinutes = Math.floor((Date.now() - _cryptoLastScanTime) / 60000);
         if (silentMinutes >= 120 && !_cryptoHeartbeatAlertSent) {
             _cryptoHeartbeatAlertSent = true;
-            telegramAlerts.sendHeartbeatAlert('Crypto Bot', silentMinutes).catch(() => {});
+            telegramAlerts.sendHeartbeatAlert('Crypto Bot', silentMinutes).catch(err => console.warn('[ALERT] Telegram heartbeat send failed:', err.message));
         } else if (silentMinutes < 120) {
             _cryptoHeartbeatAlertSent = false;
         }
@@ -5312,7 +5335,7 @@ app.listen(PORT, async () => {
                     await client.query('COMMIT');
                     console.log(`🧹 Closed ${toClose.length} orphaned DB trade(s) from previous session`);
                 } catch (e) {
-                    await client.query('ROLLBACK').catch(() => {});
+                    await client.query('ROLLBACK').catch(err => console.warn('[ALERT] ROLLBACK failed:', err.message));
                     console.warn('⚠️ Orphaned cleanup rolled back:', e.message);
                 } finally {
                     client.release();

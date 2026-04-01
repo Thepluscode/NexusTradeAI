@@ -242,7 +242,7 @@ async function dbForexClose(id, exitPrice, pnlUsd, pnlPct, reason) {
         );
         await client.query('COMMIT');
     } catch (e) {
-        await client.query('ROLLBACK').catch(() => {});
+        await client.query('ROLLBACK').catch(err => console.warn('[ALERT]', err.message));
         console.warn('DB forex close failed (rolled back):', e.message);
     } finally {
         client.release();
@@ -2251,8 +2251,10 @@ const _FOREX_AGENT_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes — forex sessio
 const _FOREX_AGENT_CACHE_PRICE_DRIFT = 0.003; // 0.3% price change invalidates (forex is tighter)
 
 async function queryAIAdvisor(signal) {
+    // Cache key includes direction+tier to prevent collisions between different signal paths
+    const cacheKey = `${signal.pair}:${signal.direction || 'long'}:${signal.tier || 'tier1'}`;
     // Check cache first
-    const cached = _forexAgentCache.get(signal.pair);
+    const cached = _forexAgentCache.get(cacheKey);
     if (cached && cached.price > 0) {
         const age = Date.now() - cached.timestamp;
         const priceDrift = Math.abs(signal.entry - cached.price) / cached.price;
@@ -2260,7 +2262,7 @@ async function queryAIAdvisor(signal) {
             console.log(`[Agent] ${signal.pair}: using cached decision (${(age / 1000).toFixed(0)}s old, drift ${(priceDrift * 100).toFixed(3)}%)`);
             return { ...cached.result, source: 'cache' };
         }
-        _forexAgentCache.delete(signal.pair);
+        _forexAgentCache.delete(cacheKey);
     }
 
     try {
@@ -2305,7 +2307,7 @@ async function queryAIAdvisor(signal) {
         }
 
         // Cache the result
-        _forexAgentCache.set(signal.pair, {
+        _forexAgentCache.set(cacheKey, {
             result,
             price: signal.entry,
             timestamp: Date.now(),
@@ -3079,7 +3081,7 @@ async function closePositionWithReason(pair, reason) {
                     ? ((exitPrice - exitEntry) / exitEntry) * (posCopy.direction === 'short' ? -100 : 100)
                     : 0;
                 // [v17.1] Store decimal pnlPct in DB (0.05 = 5%), not percentage (5.0)
-                dbForexClose(posCopy.dbTradeId, exitPrice, exitPnl, exitPct / 100, reason).catch(() => {});
+                dbForexClose(posCopy.dbTradeId, exitPrice, exitPnl, exitPct / 100, reason).catch(err => console.warn('[ALERT]', err.message));
                 // [v4.1] Report to Agentic AI learning loop — Scan AI pattern tracking
                 reportForexTradeOutcome(posCopy, exitPrice, exitPnl, exitPct / 100, reason).catch(() => {});
                 // [v4.6] Record outcome into adaptive guardrails
@@ -3259,7 +3261,7 @@ async function managePositions() {
                     await reducePosition(pair, 0.33);
                     console.log(`💰 [PARTIAL-TP] ${pair}: closed 33% at +1R (+${(pricePnL / entryPrice * 100).toFixed(2)}%)`);
                     telegramAlerts.send(`💰 *PARTIAL TP 1R* — ${pair}\nClosed 33% at +${rMultiple.toFixed(1)}R\nStop → breakeven`)
-                        .catch(() => {});
+                        .catch(err => console.warn('[ALERT]', err.message));
                 } catch (e) {
                     console.warn(`⚠️  [PARTIAL-TP] ${pair}: reduce failed: ${e.message}`);
                 }
@@ -3278,7 +3280,7 @@ async function managePositions() {
                     await reducePosition(pair, 0.50); // 50% of remaining (≈33% of original)
                     console.log(`💰 [PARTIAL-TP] ${pair}: closed another 33% at +2R (+${(pricePnL / entryPrice * 100).toFixed(2)}%)`);
                     telegramAlerts.send(`💰 *PARTIAL TP 2R* — ${pair}\nClosed 33% at +${rMultiple.toFixed(1)}R\nStop → +1R locked`)
-                        .catch(() => {});
+                        .catch(err => console.warn('[ALERT]', err.message));
                 } catch (e) {
                     console.warn(`⚠️  [PARTIAL-TP] ${pair}: reduce failed: ${e.message}`);
                 }
@@ -3415,7 +3417,7 @@ async function managePositions() {
                         ? (realPnl < 0 ? 'Stop Loss' : 'Take Profit')
                         : 'Broker Closed';
                     // [v17.1] Store decimal pnlPct in DB (0.05 = 5%), not percentage (5.0)
-                    dbForexClose(localPos.dbTradeId, exitPrice, realPnl, exitPct / 100, reason).catch(() => {});
+                    dbForexClose(localPos.dbTradeId, exitPrice, realPnl, exitPct / 100, reason).catch(err => console.warn('[ALERT]', err.message));
                     // Update in-memory perf counters
                     simTotalTrades++;
                     simDailyPnL += realPnl;
@@ -3640,7 +3642,7 @@ async function tradingLoop() {
                         `${signal.existingDirection.toUpperCase()} → ${signal.direction.toUpperCase()}\n` +
                         `Committee: ${committee.confidence} | Score: ${signal.score}\n` +
                         `Flip #${flipReversalsToday} today`
-                    ).catch(() => {});
+                    ).catch(err => console.warn('[ALERT]', err.message));
                 } else {
                     console.log(`❌ [FLIP-REVERSAL] ${signal.pair} closed old position but failed to open new ${signal.direction}`);
                 }
@@ -3662,10 +3664,10 @@ async function tradingLoop() {
                 if (aiResult.risk_flags?.length) console.log(`[Agent]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
                 if (aiResult.lessons_applied?.length) console.log(`[Agent]   Lessons: ${aiResult.lessons_applied.slice(0, 2).join('; ')}`);
                 if (aiResult.confidence > 0.8 || aiResult.source === 'kill_switch') {
-                    telegramAlerts.sendAgentRejection('Forex Bot', signal.pair, signal.direction, aiResult.reason, aiResult.confidence, aiResult.risk_flags).catch(() => {});
+                    telegramAlerts.sendAgentRejection('Forex Bot', signal.pair, signal.direction, aiResult.reason, aiResult.confidence, aiResult.risk_flags).catch(err => console.warn('[ALERT]', err.message));
                 }
                 if (aiResult.source === 'kill_switch') {
-                    telegramAlerts.sendKillSwitchAlert('Forex Bot', aiResult.reason).catch(() => {});
+                    telegramAlerts.sendKillSwitchAlert('Forex Bot', aiResult.reason).catch(err => console.warn('[ALERT]', err.message));
                 }
                 continue;
             }
@@ -3674,7 +3676,7 @@ async function tradingLoop() {
             const srcTag = aiResult.source === 'cache' ? ' (cached)' : '';
             const regime = aiResult.market_regime ? ` [${aiResult.market_regime}]` : '';
             console.log(`[Agent] ${signal.pair} ${signal.direction} APPROVED${srcTag}${regime} (conf: ${(aiResult.confidence || 0).toFixed(2)}, size: ${(aiResult.position_size_multiplier || 1).toFixed(2)}x) — ${aiResult.reason}`);
-            telegramAlerts.sendAgentApproval('Forex Bot', signal.pair, signal.direction, aiResult.confidence || 0, aiResult.position_size_multiplier || 1, aiResult.market_regime).catch(() => {});
+            telegramAlerts.sendAgentApproval('Forex Bot', signal.pair, signal.direction, aiResult.confidence || 0, aiResult.position_size_multiplier || 1, aiResult.market_regime).catch(err => console.warn('[ALERT]', err.message));
             signal.agentApproved = true;
             signal.agentConfidence = aiResult.confidence;
             signal.agentReason = aiResult.reason;
@@ -4244,7 +4246,7 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
                         process.env.OANDA_PRACTICE !== undefined ? process.env.OANDA_PRACTICE !== 'false' : undefined,
                         { TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID });
                 } else {
-                    getOrCreateForexEngine(userId).catch(() => {});
+                    getOrCreateForexEngine(userId).catch(err => console.warn('[ALERT]', err.message));
                 }
             }
         }
@@ -4443,12 +4445,12 @@ class UserForexEngine {
                 const bot = new TelegramBot(tgToken, { polling: false });
                 this._telegram = {
                     sendForexEntry:     (pair, dir, entry, sl, tp, units, tier) =>
-                        bot.sendMessage(tgChatId, `✅ *FOREX ENTRY* [${tier}]\n🌍 ${pair} ${dir.toUpperCase()} x${units}\n💰 Entry: ${entry.toFixed(5)}\n🛑 SL: ${sl?.toFixed(5) || '—'}  🎯 TP: ${tp?.toFixed(5) || '—'}`, { parse_mode: 'Markdown' }).catch(() => {}),
+                        bot.sendMessage(tgChatId, `✅ *FOREX ENTRY* [${tier}]\n🌍 ${pair} ${dir.toUpperCase()} x${units}\n💰 Entry: ${entry.toFixed(5)}\n🛑 SL: ${sl?.toFixed(5) || '—'}  🎯 TP: ${tp?.toFixed(5) || '—'}`, { parse_mode: 'Markdown' }).catch(err => console.warn('[ALERT]', err.message)),
                     sendForexStopLoss:  (pair, entry, reason) =>
-                        bot.sendMessage(tgChatId, `🚨 *FOREX STOP LOSS*\n🌍 ${pair}\n💰 Entry: ${entry}\n📌 Reason: ${reason}`, { parse_mode: 'Markdown' }).catch(() => {}),
+                        bot.sendMessage(tgChatId, `🚨 *FOREX STOP LOSS*\n🌍 ${pair}\n💰 Entry: ${entry}\n📌 Reason: ${reason}`, { parse_mode: 'Markdown' }).catch(err => console.warn('[ALERT]', err.message)),
                     sendForexTakeProfit:(pair, entry, reason) =>
-                        bot.sendMessage(tgChatId, `🎯 *FOREX TAKE PROFIT*\n🌍 ${pair}\n💰 Entry: ${entry}\n📌 Reason: ${reason}`, { parse_mode: 'Markdown' }).catch(() => {}),
-                    send:               (msg) => bot.sendMessage(tgChatId, msg, { parse_mode: 'Markdown' }).catch(() => {}),
+                        bot.sendMessage(tgChatId, `🎯 *FOREX TAKE PROFIT*\n🌍 ${pair}\n💰 Entry: ${entry}\n📌 Reason: ${reason}`, { parse_mode: 'Markdown' }).catch(err => console.warn('[ALERT]', err.message)),
+                    send:               (msg) => bot.sendMessage(tgChatId, msg, { parse_mode: 'Markdown' }).catch(err => console.warn('[ALERT]', err.message)),
                 };
                 console.log(`📱 [ForexEngine ${this.userId}] Per-user Telegram alerts configured`);
             } catch (e) {
@@ -4599,7 +4601,7 @@ class UserForexEngine {
             );
             await client.query('COMMIT');
         } catch (e) {
-            await client.query('ROLLBACK').catch(() => {});
+            await client.query('ROLLBACK').catch(err => console.warn('[ALERT]', err.message));
             console.warn('DB forex close failed (rolled back):', e.message);
         } finally {
             client.release();
@@ -4632,7 +4634,7 @@ class UserForexEngine {
             const exitPct = exitEntry > 0
                 ? ((exitPrice - exitEntry) / exitEntry) * (pos.direction === 'short' ? -100 : 100)
                 : 0;
-            this.dbForexClose(pos.dbTradeId, exitPrice, exitPnl, exitPct, reason).catch(() => {});
+            this.dbForexClose(pos.dbTradeId, exitPrice, exitPnl, exitPct, reason).catch(err => console.warn('[ALERT]', err.message));
         }
         await this.closeOandaPosition(pair);
         if (reason.toLowerCase().includes('stop')) {
@@ -4669,7 +4671,7 @@ class UserForexEngine {
                             ? ((exitPrice - exitEntry) / exitEntry) * (localPos.direction === 'short' ? -100 : 100)
                             : 0;
                         const reason    = realPnl < 0 ? 'Stop Loss' : 'Take Profit';
-                        this.dbForexClose(localPos.dbTradeId, exitPrice, realPnl, exitPct, reason).catch(() => {});
+                        this.dbForexClose(localPos.dbTradeId, exitPrice, realPnl, exitPct, reason).catch(err => console.warn('[ALERT]', err.message));
                         console.log(`📊 [ForexEngine ${this.userId}] Synced closed trade ${pair}: pnl=${realPnl.toFixed(2)}`);
                     }
                 } catch (e) {
@@ -4786,7 +4788,7 @@ class UserForexEngine {
             });
             this.dbForexOpen(signal.pair, signal.direction, signal.tier, signal.entry, signal.stopLoss, signal.takeProfit, units, signal.session, signal)
                 .then(id => { const p = this.positions.get(signal.pair); if (p) p.dbTradeId = id; })
-                .catch(() => {});
+                .catch(err => console.warn('[ALERT]', err.message));
             this.totalTradesToday++;
             this.tradesPerPair.set(signal.pair, (this.tradesPerPair.get(signal.pair) || 0) + 1);
             const trades = this.recentTrades.get(signal.pair) || [];
@@ -4794,7 +4796,7 @@ class UserForexEngine {
             if (trades.length > 10) trades.shift();
             this.recentTrades.set(signal.pair, trades);
             await this.saveState();
-            (this._telegram || telegramAlerts).sendForexEntry(signal.pair, signal.direction, signal.entry, signal.stopLoss, signal.takeProfit, units, signal.tier).catch(() => {});
+            (this._telegram || telegramAlerts).sendForexEntry(signal.pair, signal.direction, signal.entry, signal.stopLoss, signal.takeProfit, units, signal.tier).catch(err => console.warn('[ALERT]', err.message));
             console.log(`✅ [ForexEngine ${this.userId}] Trade: ${signal.direction.toUpperCase()} ${signal.pair} x${Math.abs(units)}`);
             return true;
         }
@@ -4925,8 +4927,10 @@ async function getOrCreateForexEngine(userId) {
         if (!accountId || !accessToken) return null;
         const engine = new UserForexEngine(userId, accountId, accessToken, isPractice);
         await engine.loadState();
-        const tgCreds = await loadUserCredentials(userId, 'telegram').catch(() => ({}));
-        engine.updateCredentials(null, null, undefined, { TELEGRAM_BOT_TOKEN: tgCreds.TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID: tgCreds.TELEGRAM_CHAT_ID });
+        const tgCreds = await loadUserCredentials(userId, 'telegram').catch(err => { console.warn('[ALERT]', err.message); return {}; });
+        if (tgCreds && tgCreds.TELEGRAM_BOT_TOKEN && tgCreds.TELEGRAM_CHAT_ID) {
+            engine.updateCredentials(null, null, undefined, { TELEGRAM_BOT_TOKEN: tgCreds.TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID: tgCreds.TELEGRAM_CHAT_ID });
+        }
         forexEngineRegistry.set(key, engine);
         console.log(`🔧 [ForexRegistry] Engine registered for user ${userId} (${forexEngineRegistry.size} total)`);
         return engine;
@@ -5234,7 +5238,7 @@ app.listen(PORT, async () => {
                     await client.query('COMMIT');
                     console.log(`🧹 Closed ${toClose.length} orphaned DB trade(s) from previous session`);
                 } catch (e) {
-                    await client.query('ROLLBACK').catch(() => {});
+                    await client.query('ROLLBACK').catch(err => console.warn('[ALERT]', err.message));
                     console.warn('⚠️ Orphaned cleanup rolled back:', e.message);
                 } finally {
                     client.release();
@@ -5382,7 +5386,7 @@ app.listen(PORT, async () => {
         const silentMinutes = Math.floor((Date.now() - _fxLastScanTime) / 60000);
         if (silentMinutes >= 180 && !_fxHeartbeatAlertSent) {
             _fxHeartbeatAlertSent = true;
-            telegramAlerts.sendHeartbeatAlert('Forex Bot', silentMinutes).catch(() => {});
+            telegramAlerts.sendHeartbeatAlert('Forex Bot', silentMinutes).catch(err => console.warn('[ALERT]', err.message));
         }
     }, 30 * 60 * 1000);
 

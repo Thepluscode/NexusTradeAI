@@ -515,15 +515,26 @@ if FASTAPI_AVAILABLE:
     @app.post("/ai/evaluate")
     async def ai_evaluate(req: AIEvaluationRequest):
         """Evaluate a trade signal using Claude AI advisor."""
-        signal_dict = req.model_dump(exclude_none=True)
-        result = await ai_advisor.evaluate(signal_dict)
-        return {
-            "symbol": req.symbol,
-            "direction": req.direction,
-            "tier": req.tier,
-            **result,
-            "timestamp": datetime.now().isoformat()
-        }
+        try:
+            signal_dict = req.model_dump(exclude_none=True)
+            result = await ai_advisor.evaluate(signal_dict)
+            return {
+                "symbol": req.symbol,
+                "direction": req.direction,
+                "tier": req.tier,
+                **result,
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"AI evaluate error for {req.symbol}: {e}")
+            return {
+                "approved": False,
+                "confidence": 0.0,
+                "reason": f"Agent error: {str(e)}",
+                "source": "error_fallback",
+                "risk_flags": ["agent_error"],
+                "position_size_multiplier": 0,
+            }
 
     @app.get("/ai/stats")
     def ai_stats():
@@ -543,86 +554,106 @@ if FASTAPI_AVAILABLE:
         Full agentic pipeline evaluation.
         KillSwitch → MarketAgent → DecisionAgent(+lessons) → SafetyGuardrails
         """
-        snapshot = MarketSnapshot(
-            symbol=req.symbol,
-            asset_class=req.asset_class,
-            price=req.price or 0,
-            direction=req.direction,
-            tier=req.tier,
-            rsi=req.rsi,
-            momentum=req.momentum,
-            percent_change=req.percent_change,
-            volume_ratio=req.volume_ratio,
-            trend_strength=req.trend_strength,
-            atr_pct=req.atr_pct,
-            vwap=req.vwap,
-            h1_trend=req.h1_trend,
-            session=req.session,
-            regime=req.regime,
-            regime_quality=req.regime_quality,
-            macd_histogram=req.macd_histogram,
-            score=req.score,
-            stop_loss=req.stop_loss if hasattr(req, 'stop_loss') else None,
-            take_profit=req.take_profit if hasattr(req, 'take_profit') else None,
-            bridge_direction=req.bridge_direction,
-            bridge_confidence=req.bridge_confidence,
-        )
-        decision = await agent_orchestrator.evaluate_signal(snapshot)
-        return {
-            "symbol": req.symbol,
-            "direction": req.direction,
-            "tier": req.tier,
-            "approved": decision.approved,
-            "confidence": decision.confidence,
-            "reason": decision.reason,
-            "risk_flags": decision.risk_flags,
-            "position_size_multiplier": decision.position_size_multiplier,
-            "adjusted_stop": decision.adjusted_stop,
-            "market_regime": decision.market_regime,
-            "lessons_applied": decision.lessons_applied,
-            "source": decision.source,
-            "agents_consulted": decision.agents_consulted,
-            "decision_run_id": decision.decision_run_id,  # Bots pass this back with trade-outcome
-            "bandit_arm": getattr(decision, 'bandit_arm', 'moderate'),
-            "timestamp": datetime.now().isoformat()
-        }
+        try:
+            snapshot = MarketSnapshot(
+                symbol=req.symbol,
+                asset_class=req.asset_class,
+                price=req.price or 0,
+                direction=req.direction,
+                tier=req.tier,
+                rsi=req.rsi,
+                momentum=req.momentum,
+                percent_change=req.percent_change,
+                volume_ratio=req.volume_ratio,
+                trend_strength=req.trend_strength,
+                atr_pct=req.atr_pct,
+                vwap=req.vwap,
+                h1_trend=req.h1_trend,
+                session=req.session,
+                regime=req.regime,
+                regime_quality=req.regime_quality,
+                macd_histogram=req.macd_histogram,
+                score=req.score,
+                stop_loss=req.stop_loss if hasattr(req, 'stop_loss') else None,
+                take_profit=req.take_profit if hasattr(req, 'take_profit') else None,
+                bridge_direction=req.bridge_direction,
+                bridge_confidence=req.bridge_confidence,
+            )
+            decision = await agent_orchestrator.evaluate_signal(snapshot)
+            return {
+                "symbol": req.symbol,
+                "direction": req.direction,
+                "tier": req.tier,
+                "approved": decision.approved,
+                "confidence": decision.confidence,
+                "reason": decision.reason,
+                "risk_flags": decision.risk_flags,
+                "position_size_multiplier": decision.position_size_multiplier,
+                "adjusted_stop": decision.adjusted_stop,
+                "market_regime": decision.market_regime,
+                "lessons_applied": decision.lessons_applied,
+                "source": decision.source,
+                "agents_consulted": decision.agents_consulted,
+                "decision_run_id": decision.decision_run_id,  # Bots pass this back with trade-outcome
+                "bandit_arm": getattr(decision, 'bandit_arm', 'moderate'),
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"Agent evaluate error for {req.symbol}: {e}")
+            return {
+                "approved": False,
+                "confidence": 0.0,
+                "reason": f"Agent error: {str(e)}",
+                "source": "error_fallback",
+                "risk_flags": ["agent_error"],
+                "position_size_multiplier": 0,
+            }
 
     @app.post("/agent/trade-outcome")
     async def agent_trade_outcome(req: TradeOutcomeRequest):
         """Report a completed trade for learning and pattern tracking."""
-        outcome = TradeOutcome(
-            symbol=req.symbol,
-            asset_class=req.asset_class,
-            direction=req.direction,
-            tier=req.tier,
-            entry_price=req.entry_price,
-            exit_price=req.exit_price,
-            pnl=req.pnl,
-            pnl_pct=req.pnl_pct,
-            r_multiple=req.r_multiple,
-            hold_duration_minutes=req.hold_duration_minutes,
-            exit_reason=req.exit_reason,
-            entry_rsi=req.entry_rsi,
-            entry_regime=req.entry_regime,
-            entry_regime_quality=req.entry_regime_quality,
-            entry_momentum=req.entry_momentum,
-            entry_volume_ratio=req.entry_volume_ratio,
-            entry_atr_pct=req.entry_atr_pct,
-            entry_score=req.entry_score,
-            agent_approved=req.agent_approved,
-            agent_confidence=req.agent_confidence,
-            agent_reason=req.agent_reason,
-            decision_run_id=req.decision_run_id,  # Links outcome → decision
-            bandit_arm=req.bandit_arm,  # For correct reward attribution
-            timestamp=datetime.now().isoformat(),
-        )
-        await agent_orchestrator.record_trade_outcome(outcome)
-        return {
-            "status": "recorded",
-            "symbol": req.symbol,
-            "pnl_pct": req.pnl_pct,
-            "timestamp": datetime.now().isoformat()
-        }
+        try:
+            outcome = TradeOutcome(
+                symbol=req.symbol,
+                asset_class=req.asset_class,
+                direction=req.direction,
+                tier=req.tier,
+                entry_price=req.entry_price,
+                exit_price=req.exit_price,
+                pnl=req.pnl,
+                pnl_pct=req.pnl_pct,
+                r_multiple=req.r_multiple,
+                hold_duration_minutes=req.hold_duration_minutes,
+                exit_reason=req.exit_reason,
+                entry_rsi=req.entry_rsi,
+                entry_regime=req.entry_regime,
+                entry_regime_quality=req.entry_regime_quality,
+                entry_momentum=req.entry_momentum,
+                entry_volume_ratio=req.entry_volume_ratio,
+                entry_atr_pct=req.entry_atr_pct,
+                entry_score=req.entry_score,
+                agent_approved=req.agent_approved,
+                agent_confidence=req.agent_confidence,
+                agent_reason=req.agent_reason,
+                decision_run_id=req.decision_run_id,  # Links outcome → decision
+                bandit_arm=req.bandit_arm,  # For correct reward attribution
+                timestamp=datetime.now().isoformat(),
+            )
+            await agent_orchestrator.record_trade_outcome(outcome)
+            return {
+                "status": "recorded",
+                "symbol": req.symbol,
+                "pnl_pct": req.pnl_pct,
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"Trade outcome recording error for {req.symbol}: {e}")
+            return {
+                "status": "error",
+                "symbol": req.symbol,
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
+            }
 
     @app.get("/agent/stats")
     def agent_stats():

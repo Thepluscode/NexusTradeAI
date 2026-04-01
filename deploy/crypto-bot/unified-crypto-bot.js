@@ -786,7 +786,7 @@ class CryptoTradingEngine {
             await axios.post(`${bridgeUrl}/agent/trade-outcome`, payload, { timeout: 5000 });
             console.log(`[Learn] ${position.symbol} outcome reported: ${pnl > 0 ? 'WIN' : 'LOSS'} ${(pnlPct * 100).toFixed(2)}%`);
         } catch (e) {
-            // Non-blocking
+            console.warn(`[Learn] ${position.symbol} outcome report FAILED: ${e.message}`);
         }
     }
 
