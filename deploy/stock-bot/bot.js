@@ -1476,7 +1476,7 @@ const RISK_PER_TRADE = parseFloat(process.env.RISK_PER_TRADE || '0.0025');      
 // [v19.1] Lowered from 0.68 → 0.45: orchestrator blends agent confidence with
 // analyst track record, producing final values of 0.49-0.63. Old threshold blocked all trades.
 const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.45');
-const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.65');  // v17.0: lowered from 0.75 — committee provides quality filtering, this gate was too restrictive
+const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.20');  // [v19.1] was 0.65, regime multipliers reduce scores to 0.25-0.35 range
 const MIN_REWARD_RISK = parseFloat(process.env.MIN_REWARD_RISK || '1.75');
 
 // Auto-optimizer state — runs every 4 hours

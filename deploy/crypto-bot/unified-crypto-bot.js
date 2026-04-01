@@ -531,8 +531,8 @@ class KrakenClient {
 
 // ===== ADAPTIVE GUARDRAILS (v4.6) =====
 const RISK_PER_TRADE = parseFloat(process.env.RISK_PER_TRADE || '0.005');
-const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.72');
-const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.72');
+const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.45');
+const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.20');
 const MIN_REWARD_RISK = parseFloat(process.env.MIN_REWARD_RISK || '1.95');
 const MAX_SIGNALS_PER_CYCLE = parseInt(process.env.MAX_SIGNALS_PER_CYCLE || '1');
 const MAX_CONSECUTIVE_LOSSES = parseInt(process.env.MAX_CONSECUTIVE_LOSSES || '3');
