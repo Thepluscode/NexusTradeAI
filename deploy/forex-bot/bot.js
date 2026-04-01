@@ -1038,7 +1038,9 @@ const MIN_TIME_AFTER_STOP = 2 * 60 * 60 * 1000;  // 2 hours after stop-out
 
 // ===== ADAPTIVE GUARDRAILS (v4.6) =====
 const RISK_PER_TRADE = parseFloat(process.env.RISK_PER_TRADE || '0.0035');      // 0.35% per trade — forex is worst lane
-const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.65'); // [v17.0] was 0.74, too restrictive with 12 pairs
+// [v19.1] Lowered from 0.65 → 0.45: orchestrator blends agent confidence with
+// analyst track record, producing final values of 0.49-0.63. Old threshold blocked most trades.
+const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.45');
 const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.65'); // [v17.0] was 0.74, committee provides quality filtering
 const MIN_REWARD_RISK = parseFloat(process.env.FOREX_MIN_REWARD_RISK || process.env.MIN_REWARD_RISK || '1.4');  // [v13.2] forex-specific: 1.4 (TP/SL is 1.2%/0.8% = 1.5 R:R by design)
 const MAX_SIGNALS_PER_CYCLE = parseInt(process.env.MAX_SIGNALS_PER_CYCLE || '1');

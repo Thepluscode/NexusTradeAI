@@ -1604,7 +1604,10 @@ class KrakenClient {
 
 // ===== ADAPTIVE GUARDRAILS (v4.6) =====
 const RISK_PER_TRADE = parseFloat(process.env.RISK_PER_TRADE || '0.0025'); // [v19.0] 0.5% → 0.25% per trade (theplus-bot proven sizing)
-const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.72');
+// [v19.1] Lowered from 0.72 → 0.45: orchestrator blends decision_agent confidence (0.6-0.7)
+// with analyst track record (0.0-0.5), producing final confidence of 0.49-0.63.
+// Old 0.72 threshold was set pre-blending and blocked 100% of trades.
+const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.45');
 const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.72');
 const MIN_REWARD_RISK = parseFloat(process.env.MIN_REWARD_RISK || '1.7');
 const MAX_SIGNALS_PER_CYCLE = parseInt(process.env.MAX_SIGNALS_PER_CYCLE || '1');

@@ -1473,7 +1473,9 @@ let MAX_DRAWDOWN_PCT = parseFloat(process.env.MAX_DRAWDOWN_PCT || '10'); // perc
 // ===== ADAPTIVE GUARDRAILS (v4.6) =====
 // Env-overridable thresholds — stricter than legacy defaults
 const RISK_PER_TRADE = parseFloat(process.env.RISK_PER_TRADE || '0.0025');      // [v19.0] 0.25% per trade (was 0.75% — theplus-bot proven sizing)
-const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.68');
+// [v19.1] Lowered from 0.68 → 0.45: orchestrator blends agent confidence with
+// analyst track record, producing final values of 0.49-0.63. Old threshold blocked all trades.
+const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.45');
 const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.65');  // v17.0: lowered from 0.75 — committee provides quality filtering, this gate was too restrictive
 const MIN_REWARD_RISK = parseFloat(process.env.MIN_REWARD_RISK || '1.75');
 
