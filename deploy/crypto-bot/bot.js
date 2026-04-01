@@ -2023,10 +2023,11 @@ class CryptoTradingEngine {
             // Don't return false — neutral is OK
         }
 
-        // [v3.3] RSI band: 45-72 — wide enough for healthy uptrends (RSI often runs 45-72 in bull moves)
+        // [v19.1] RSI band: 38-78 — was 45-72, too tight (RSI 42.8 blocked all trades for hours)
+        // BTC RSI routinely dips to 38-42 in mild pullbacks without invalidating the trend
         const btcRsi = this.calculateRSI(btcPrices, 14);
-        if (btcRsi < 45 || btcRsi > 72) {
-            console.log(`[BTC Filter] RSI ${btcRsi.toFixed(1)} outside healthy range 45-72`);
+        if (btcRsi < 38 || btcRsi > 78) {
+            console.log(`[BTC Filter] RSI ${btcRsi.toFixed(1)} outside healthy range 38-78`);
             return false;
         }
 
@@ -3736,10 +3737,11 @@ class CryptoTradingEngine {
     // ========================================================================
 
     async start() {
-        if (this.isRunning) {
+        if (this.isRunning || this._isStarting) {
             console.log('⚠️ Trading engine already running');
             return;
         }
+        this._isStarting = true;
 
         console.log('🚀 Starting Crypto Trading Engine...');
 
@@ -3749,6 +3751,7 @@ class CryptoTradingEngine {
             console.log('⚠️  No crypto exchange credentials configured');
             console.log('📊 Running in DEMO MODE — will auto-connect when credentials are saved in Settings → Crypto');
             this.isRunning = true;
+            this._isStarting = false;
             this.demoMode = true;
             this.credentialsValid = false;
             this.credentialsError = 'No Kraken credentials configured';
@@ -3762,6 +3765,7 @@ class CryptoTradingEngine {
         if (!accountOk) {
             console.log(`❌ Failed to connect to exchange - running in DEMO MODE${this.credentialsError ? ` (${this.credentialsError})` : ''}`);
             this.isRunning = true;
+            this._isStarting = false;
             this.demoMode = true;
             this.saveState();
             this.tradingLoop().catch(e => console.error('❌ Crypto trading loop crashed:', e));
@@ -3774,6 +3778,7 @@ class CryptoTradingEngine {
         console.log(`💰 Account connected`);
 
         this.isRunning = true;
+        this._isStarting = false;
         this.demoMode = false;
         this.saveState();
         this.tradingLoop().catch(e => console.error('❌ Crypto trading loop crashed:', e));

@@ -5307,8 +5307,16 @@ app.listen(PORT, async () => {
         } catch (e) { console.warn('⚠️  DB forex perfData hydration failed:', e.message); }
     }
 
-    // Initial scan (default env-var mode)
-    setTimeout(() => tradingLoop().catch(e => console.error('❌ Forex loop crashed:', e)), 5000);
+    // Initial scan (default env-var mode) — only if no per-user engines are registered
+    // [v19.1] Guard: if per-user engines exist, ScanQueue handles them — running both causes duplicate scans
+    setTimeout(() => {
+        const anyEngineRunning = Array.from(forexEngineRegistry.values()).some(e => e.botRunning);
+        if (forexEngineRegistry.size === 0 || !anyEngineRunning) {
+            tradingLoop().catch(e => console.error('❌ Forex loop crashed:', e));
+        } else {
+            console.log('[Init] Per-user forex engines running — skipping global tradingLoop');
+        }
+    }, 12000); // [v19.1] delayed from 5s to 12s so auto-restart (T+5s) registers engines first
 
     // ── Auto-restart engines for users who had botRunning=true at last save ──
     async function autoRestartForexEngines() {
