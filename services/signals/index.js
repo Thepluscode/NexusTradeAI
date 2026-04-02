@@ -15,6 +15,7 @@ const { computeStops, STOP_CONFIG } = require('./stop-manager');
 const { getRoundTripCost, COST_MODELS } = require('./cost-model');
 const { evaluateExit, computeRatchetStop, detectMomentumFade, detectReversalCandle, computePortfolioHeat, computeEquityCurveMultiplier, computeCorrelationGuard } = require('./exit-manager');
 const { checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth } = require('./health-monitor');
+const { normalizeCryptoBars, normalizeForexBars, normalizeStockBars } = require('./normalizers');
 
 module.exports = {
   computeMomentum, computeOrderFlow, computeDisplacement,
@@ -29,4 +30,5 @@ module.exports = {
   evaluateExit, computeRatchetStop, detectMomentumFade, detectReversalCandle,
   computePortfolioHeat, computeEquityCurveMultiplier, computeCorrelationGuard,
   checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth,
+  normalizeCryptoBars, normalizeForexBars, normalizeStockBars,
 };
