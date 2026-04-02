@@ -2256,7 +2256,9 @@ class CryptoTradingEngine {
             const pullbackPositions = Array.from(this.positions.values())
                 .filter(position => position.tier === 'pullback').length;
 
-            if (
+            // ===== TREND PULLBACK — DISABLED (9.1% WR, -$17.94 over 11 trades, Apr 2 2026) =====
+            // Data: 1W/10L. Momentum strategy is 34% WR and +$20.49 — focus there.
+            if (false &&
                 pullbackPositions < pullbackConfig.maxPositions &&
                 trendStrength >= pullbackConfig.minTrendStrength &&
                 ema9 >= sma20 &&

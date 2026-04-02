@@ -3574,8 +3574,9 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
             }
         }
 
-        // ===== MOMENTUM ENTRIES (demoted — only fires when VWAP Reversal has no signal) =====
-        if (momentumAllowed && !vwapReversalCandidate && !belowVwap) {
+        // ===== MOMENTUM ENTRIES — DISABLED (30% WR, -$43.84 over 10 trades, Apr 2 2026) =====
+        // Data: 3W/7L, avg loss > avg win. ORB is 36.9% WR and nearly breakeven — focus there.
+        if (false && momentumAllowed && !vwapReversalCandidate && !belowVwap) {
             // Tier assignment with fallback: start at the highest qualifying tier,
             // fall back to lower tiers if secondary filters (volume ratio, RSI) fail.
             // Prevents a strong Tier3 move from being rejected just because ADX is 16 not 20.
@@ -6464,7 +6465,7 @@ app.get('/api/trades', async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not configured', trades: [] });
     try {
         const limit = Math.min(parseInt(req.query.limit) || 100, 500);
-        const bot = req.query.bot;
+        const bot = req.query.bot || 'stock'; // default to this bot's trades, not all bots
         // Optional: filter to the calling user's trades when JWT is present
         const mine = req.query.mine === 'true';
         let userId = null;
