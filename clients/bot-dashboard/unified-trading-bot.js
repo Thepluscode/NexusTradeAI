@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+axios.defaults.timeout = 15000; // 15 second default timeout
 const crypto = require('crypto');
 const path = require('path');
 const bcrypt = require('bcryptjs');
@@ -4750,7 +4751,7 @@ app.get('/api/portfolio/risk', async (req, res) => {
         const risk = await checkPortfolioRisk();
         res.json({ success: true, data: risk });
     } catch (error) {
-        res.json({ success: true, data: { totalPositions: positions.size, warnings: ['Cross-bot check failed'] } });
+        res.json({ success: false, data: { totalPositions: positions.size, warnings: ['Cross-bot check failed'] } });
     }
 });
 

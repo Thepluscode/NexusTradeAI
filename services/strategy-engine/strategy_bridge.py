@@ -658,10 +658,14 @@ if FASTAPI_AVAILABLE:
     @app.get("/agent/stats")
     def agent_stats():
         """Full agentic system statistics."""
-        return {
-            **agent_orchestrator.get_stats(),
-            "timestamp": datetime.now().isoformat()
-        }
+        try:
+            return {
+                **agent_orchestrator.get_stats(),
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"[/agent/stats] {e}", exc_info=True)
+            return {"error": str(e), "fallback": True, "timestamp": datetime.now().isoformat()}
 
     @app.get("/agent/debug-claude")
     async def agent_debug_claude(request: Request):
@@ -743,22 +747,33 @@ if FASTAPI_AVAILABLE:
         Test endpoint: fetch and score news sentiment for a symbol.
         Query param: ?asset_class=stock|forex|crypto (default: stock)
         """
-        sentiment = await agent_orchestrator.sentiment_agent.analyze(
-            symbol=symbol,
-            asset_class=asset_class,
-        )
-        return {
-            "symbol": symbol,
-            "asset_class": asset_class,
-            "sentiment_score": sentiment.sentiment_score,
-            "sentiment_label": sentiment.sentiment_label,
-            "headline_count": sentiment.headline_count,
-            "top_headlines": sentiment.top_headlines,
-            "bullish_count": sentiment.bullish_count,
-            "bearish_count": sentiment.bearish_count,
-            "cached": sentiment.cached,
-            "timestamp": datetime.now().isoformat(),
-        }
+        try:
+            sentiment = await agent_orchestrator.sentiment_agent.analyze(
+                symbol=symbol,
+                asset_class=asset_class,
+            )
+            return {
+                "symbol": symbol,
+                "asset_class": asset_class,
+                "sentiment_score": sentiment.sentiment_score,
+                "sentiment_label": sentiment.sentiment_label,
+                "headline_count": sentiment.headline_count,
+                "top_headlines": sentiment.top_headlines,
+                "bullish_count": sentiment.bullish_count,
+                "bearish_count": sentiment.bearish_count,
+                "cached": sentiment.cached,
+                "timestamp": datetime.now().isoformat(),
+            }
+        except Exception as e:
+            logger.error(f"[/agent/sentiment/{symbol}] {e}", exc_info=True)
+            return {
+                "error": str(e), "fallback": True,
+                "symbol": symbol, "asset_class": asset_class,
+                "sentiment_score": 0.0, "sentiment_label": "neutral",
+                "headline_count": 0, "top_headlines": [],
+                "bullish_count": 0, "bearish_count": 0,
+                "cached": False, "timestamp": datetime.now().isoformat(),
+            }
 
     # ========================================
     # SUPERVISOR BANDIT ENDPOINTS (v4.2)
@@ -772,31 +787,52 @@ if FASTAPI_AVAILABLE:
     @app.post("/agent/bandit/select")
     def bandit_select(req: BanditQueryRequest):
         """Query the supervisor bandit for the optimal arm in a given context."""
-        rec = agent_supervisor.select_arm(
-            regime=req.regime,
-            asset_class=req.asset_class,
-            tier=req.tier,
-        )
-        return {
-            **rec.to_dict(),
-            "timestamp": datetime.now().isoformat(),
-        }
+        try:
+            rec = agent_supervisor.select_arm(
+                regime=req.regime,
+                asset_class=req.asset_class,
+                tier=req.tier,
+            )
+            return {
+                **rec.to_dict(),
+                "timestamp": datetime.now().isoformat(),
+            }
+        except Exception as e:
+            logger.error(f"[/agent/bandit/select] {e}", exc_info=True)
+            return {
+                "error": str(e), "fallback": True,
+                "arm": "approve", "confidence": 0.5,
+                "regime": req.regime, "asset_class": req.asset_class, "tier": req.tier,
+                "timestamp": datetime.now().isoformat(),
+            }
 
     @app.post("/agent/bandit/context")
     def bandit_context_detail(req: BanditQueryRequest):
         """Get detailed arm distributions for a specific context."""
-        return {
-            **agent_supervisor.get_context_detail(req.regime, req.asset_class, req.tier),
-            "timestamp": datetime.now().isoformat(),
-        }
+        try:
+            return {
+                **agent_supervisor.get_context_detail(req.regime, req.asset_class, req.tier),
+                "timestamp": datetime.now().isoformat(),
+            }
+        except Exception as e:
+            logger.error(f"[/agent/bandit/context] {e}", exc_info=True)
+            return {
+                "error": str(e), "fallback": True,
+                "regime": req.regime, "asset_class": req.asset_class, "tier": req.tier,
+                "arms": {}, "timestamp": datetime.now().isoformat(),
+            }
 
     @app.get("/agent/bandit/stats")
     def bandit_stats():
         """Full supervisor bandit statistics."""
-        return {
-            **agent_supervisor.get_stats(),
-            "timestamp": datetime.now().isoformat(),
-        }
+        try:
+            return {
+                **agent_supervisor.get_stats(),
+                "timestamp": datetime.now().isoformat(),
+            }
+        except Exception as e:
+            logger.error(f"[/agent/bandit/stats] {e}", exc_info=True)
+            return {"error": str(e), "fallback": True, "timestamp": datetime.now().isoformat()}
 
     @app.post("/agent/bandit/sync")
     async def bandit_sync_db():
@@ -932,10 +968,14 @@ if FASTAPI_AVAILABLE:
     @app.get("/agent/rankings")
     async def get_rankings():
         """Get analyst rankings by regime and asset class."""
-        return {
-            **analyst_rankings.get_stats(),
-            "timestamp": datetime.now().isoformat(),
-        }
+        try:
+            return {
+                **analyst_rankings.get_stats(),
+                "timestamp": datetime.now().isoformat(),
+            }
+        except Exception as e:
+            logger.error(f"[/agent/rankings] {e}", exc_info=True)
+            return {"error": str(e), "fallback": True, "rankings": {}, "timestamp": datetime.now().isoformat()}
 
     @app.post("/agent/rankings/update")
     async def update_rankings():
@@ -950,17 +990,21 @@ if FASTAPI_AVAILABLE:
     @app.get("/agent/decisions")
     async def get_decisions(limit: int = 50):
         """Get recent agent decisions with outcomes for dashboard display."""
-        decisions = await analyst_rankings.get_recent_decisions(limit=limit)
-        # Convert datetime objects to strings for JSON serialization
-        for d in decisions:
-            for k, v in d.items():
-                if hasattr(v, 'isoformat'):
-                    d[k] = v.isoformat()
-        return {
-            "decisions": decisions,
-            "total": len(decisions),
-            "timestamp": datetime.now().isoformat(),
-        }
+        try:
+            decisions = await analyst_rankings.get_recent_decisions(limit=limit)
+            # Convert datetime objects to strings for JSON serialization
+            for d in decisions:
+                for k, v in d.items():
+                    if hasattr(v, 'isoformat'):
+                        d[k] = v.isoformat()
+            return {
+                "decisions": decisions,
+                "total": len(decisions),
+                "timestamp": datetime.now().isoformat(),
+            }
+        except Exception as e:
+            logger.error(f"[/agent/decisions] {e}", exc_info=True)
+            return {"error": str(e), "fallback": True, "decisions": [], "total": 0, "timestamp": datetime.now().isoformat()}
 
     # ========================================
     # PORTFOLIO RISK (v4.5)
@@ -969,15 +1013,24 @@ if FASTAPI_AVAILABLE:
     @app.get("/agent/portfolio")
     async def get_portfolio_risk():
         """Get current portfolio risk snapshot across all bots."""
-        snapshot = await portfolio_agent._get_portfolio_snapshot()
-        return {
-            "total_positions": snapshot['total'],
-            "by_asset_class": snapshot['by_class'],
-            "currency_exposure": snapshot['currency_net'],
-            "daily_pnl": snapshot['daily_pnl'],
-            "stats": portfolio_agent.get_stats(),
-            "timestamp": datetime.now().isoformat(),
-        }
+        try:
+            snapshot = await portfolio_agent._get_portfolio_snapshot()
+            return {
+                "total_positions": snapshot.get('total', 0),
+                "by_asset_class": snapshot.get('by_class', {}),
+                "currency_exposure": snapshot.get('currency_net', {}),
+                "daily_pnl": snapshot.get('daily_pnl', 0.0),
+                "stats": portfolio_agent.get_stats(),
+                "timestamp": datetime.now().isoformat(),
+            }
+        except Exception as e:
+            logger.error(f"[/agent/portfolio] {e}", exc_info=True)
+            return {
+                "error": str(e), "fallback": True,
+                "total_positions": 0, "by_asset_class": {},
+                "currency_exposure": {}, "daily_pnl": 0.0,
+                "stats": {}, "timestamp": datetime.now().isoformat(),
+            }
 
     class PortfolioCheckRequest(BaseModel):
         symbol: str
@@ -1009,14 +1062,31 @@ if FASTAPI_AVAILABLE:
     @app.get("/agent/macro")
     async def get_macro_regime(asset_class: str = "stock"):
         """Get current macro regime assessment (VIX, yield curve, DXY)."""
-        result = await macro_agent.analyze(asset_class)
-        return result.to_dict()
+        try:
+            result = await macro_agent.analyze(asset_class)
+            return result.to_dict()
+        except Exception as e:
+            logger.error(f"[/agent/macro] {e}", exc_info=True)
+            return {
+                "error": str(e), "fallback": True,
+                "regime": "neutral", "confidence": 0.0,
+                "asset_class": asset_class,
+                "timestamp": datetime.now().isoformat(),
+            }
 
     @app.get("/agent/institutional/{symbol}")
     async def get_institutional_flow(symbol: str):
         """Get institutional positioning for a stock symbol (13F data)."""
-        result = await institutional_agent.analyze(symbol)
-        return result.to_dict()
+        try:
+            result = await institutional_agent.analyze(symbol)
+            return result.to_dict()
+        except Exception as e:
+            logger.error(f"[/agent/institutional/{symbol}] {e}", exc_info=True)
+            return {
+                "error": str(e), "fallback": True,
+                "symbol": symbol, "flow": {},
+                "timestamp": datetime.now().isoformat(),
+            }
 
     # ========================================
     # POST-LOSS AUTOPSY ENDPOINTS (v7.1)
@@ -1025,39 +1095,51 @@ if FASTAPI_AVAILABLE:
     @app.get("/agent/autopsies")
     async def get_autopsies(limit: int = 20):
         """Get recent post-loss autopsy reports."""
-        from agents.outcome_store import outcome_store
-        pool = await outcome_store._get_pool()
-        autopsies = await get_recent_autopsies(pool, limit=limit)
-        # Convert datetime objects to strings for JSON serialization
-        for a in autopsies:
-            for k, v in a.items():
-                if hasattr(v, 'isoformat'):
-                    a[k] = v.isoformat()
-        return {
-            "autopsies": autopsies,
-            "total": len(autopsies),
-            "timestamp": datetime.now().isoformat(),
-        }
+        try:
+            from agents.outcome_store import outcome_store
+            pool = await outcome_store._get_pool()
+            autopsies = await get_recent_autopsies(pool, limit=limit)
+            # Convert datetime objects to strings for JSON serialization
+            for a in autopsies:
+                for k, v in a.items():
+                    if hasattr(v, 'isoformat'):
+                        a[k] = v.isoformat()
+            return {
+                "autopsies": autopsies,
+                "total": len(autopsies),
+                "timestamp": datetime.now().isoformat(),
+            }
+        except Exception as e:
+            logger.error(f"[/agent/autopsies] {e}", exc_info=True)
+            return {"error": str(e), "fallback": True, "autopsies": [], "total": 0, "timestamp": datetime.now().isoformat()}
 
     @app.get("/agent/autopsies/patterns")
     async def get_autopsy_patterns(since_days: int = 30):
         """Get aggregate failure mode counts from post-loss autopsies."""
-        from agents.outcome_store import outcome_store
-        pool = await outcome_store._get_pool()
-        patterns = await get_failure_mode_patterns(pool, since_days=since_days)
-        # Convert datetime objects and special types for JSON serialization
-        for p in patterns:
-            for k, v in p.items():
-                if hasattr(v, 'isoformat'):
-                    p[k] = v.isoformat()
-                elif hasattr(v, '__float__'):
-                    p[k] = float(v)
-        return {
-            "patterns": patterns,
-            "since_days": since_days,
-            "total_failure_modes": len(patterns),
-            "timestamp": datetime.now().isoformat(),
-        }
+        try:
+            from agents.outcome_store import outcome_store
+            pool = await outcome_store._get_pool()
+            patterns = await get_failure_mode_patterns(pool, since_days=since_days)
+            # Convert datetime objects and special types for JSON serialization
+            for p in patterns:
+                for k, v in p.items():
+                    if hasattr(v, 'isoformat'):
+                        p[k] = v.isoformat()
+                    elif hasattr(v, '__float__'):
+                        p[k] = float(v)
+            return {
+                "patterns": patterns,
+                "since_days": since_days,
+                "total_failure_modes": len(patterns),
+                "timestamp": datetime.now().isoformat(),
+            }
+        except Exception as e:
+            logger.error(f"[/agent/autopsies/patterns] {e}", exc_info=True)
+            return {
+                "error": str(e), "fallback": True,
+                "patterns": [], "since_days": since_days,
+                "total_failure_modes": 0, "timestamp": datetime.now().isoformat(),
+            }
 
     # ========================================
     # BACKGROUND DAILY TRAINING LOOP

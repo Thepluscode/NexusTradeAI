@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+axios.defaults.timeout = 15000; // 15 second default timeout
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
@@ -4288,7 +4289,7 @@ app.get('/api/portfolio/risk', async (req, res) => {
         const risk = await checkPortfolioRisk(engine.positions.size);
         res.json({ success: true, data: risk });
     } catch (error) {
-        res.json({ success: true, data: { totalPositions: engine.positions.size, warnings: ['Cross-bot check failed'] } });
+        res.json({ success: false, data: { totalPositions: engine.positions.size, warnings: ['Cross-bot check failed'] } });
     }
 });
 
@@ -4920,7 +4921,8 @@ app.post('/api/crypto/engine/close-all', requireJwt, async (req, res) => {
     const userEngine = cryptoEngineRegistry.get(String(req.user.sub));
     if (!userEngine) return res.status(404).json({ success: false, error: 'Engine not found' });
     const closed = [], skipped = [];
-    for (const [symbol] of userEngine.positions) {
+    const symbols = Array.from(userEngine.positions.keys());
+    for (const symbol of symbols) {
         try {
             const price = await userEngine.kraken.getPrice(symbol).catch(() => 0);
             await userEngine.closePosition(symbol, price, 'Manual Close All');
@@ -4933,7 +4935,8 @@ app.post('/api/crypto/engine/close-all', requireJwt, async (req, res) => {
 // Module-level close-all (no per-user engine context required)
 app.post('/api/crypto/close-all', async (req, res) => {
     const closed = [], skipped = [];
-    for (const [symbol] of engine.positions) {
+    const symbols = Array.from(engine.positions.keys());
+    for (const symbol of symbols) {
         try {
             const price = await engine.kraken.getPrice(symbol).catch(() => 0);
             await engine.closePosition(symbol, price, 'Manual Close All');
@@ -5082,7 +5085,7 @@ app.get('/api/crypto/allocator', (req, res) => {
 
 // [v14.0] Strategy-regime performance API
 app.get('/api/crypto/strategy-performance', async (req, res) => {
-    if (!dbPool) return res.json({ success: true, data: { message: 'No DB connected', currentWeights: strategyRegimeWeights } });
+    if (!dbPool) return res.json({ success: false, data: { message: 'No DB connected', currentWeights: strategyRegimeWeights } });
     try {
         const result = await dbPool.query(`
             SELECT strategy, regime, total_trades, win_rate, profit_factor, avg_pnl_pct, last_updated

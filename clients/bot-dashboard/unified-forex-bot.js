@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+axios.defaults.timeout = 15000; // 15 second default timeout
 const crypto = require('crypto');
 const path = require('path');
 const bcrypt = require('bcryptjs');
@@ -3085,7 +3086,7 @@ async function closePositionWithReason(pair, reason) {
                 // [v17.1] Store decimal pnlPct in DB (0.05 = 5%), not percentage (5.0)
                 dbForexClose(posCopy.dbTradeId, exitPrice, exitPnl, exitPct / 100, reason).catch(err => console.warn('[ALERT]', err.message));
                 // [v4.1] Report to Agentic AI learning loop — Scan AI pattern tracking
-                reportForexTradeOutcome(posCopy, exitPrice, exitPnl, exitPct / 100, reason).catch(() => {});
+                reportForexTradeOutcome(posCopy, exitPrice, exitPnl, exitPct / 100, reason).catch(err => console.warn('[Learn] outcome report failed:', err.message));
                 // [v4.6] Record outcome into adaptive guardrails
                 guardrails.recordOutcome(exitPnl > 0);
                 // Feed trade outcome to Monte Carlo position sizer (as decimal, e.g. 0.05 for +5%)
@@ -3798,7 +3799,7 @@ app.get('/api/portfolio/risk', async (req, res) => {
         const risk = await checkPortfolioRisk();
         res.json({ success: true, data: risk });
     } catch (error) {
-        res.json({ success: true, data: { totalPositions: positions.size, warnings: ['Cross-bot check failed'] } });
+        res.json({ success: false, data: { totalPositions: positions.size, warnings: ['Cross-bot check failed'] } });
     }
 });
 
@@ -4301,7 +4302,7 @@ app.get('/api/config/credentials/status', requireJwt, async (req, res) => {
         }});
     } catch (e) {
         console.warn('⚠️ Credential status lookup failed, falling back to environment values:', e.message);
-        res.json({ success: true, brokers: {
+        res.json({ success: false, brokers: {
             oanda:    { configured: (fileStatus.oanda    || 0) >= 2 || envStatus.oanda.configured },
             telegram: { configured: (fileStatus.telegram || 0) >= 2 || envStatus.telegram.configured },
             sms:      { configured: (fileStatus.sms      || 0) >= 2 || envStatus.sms.configured },
