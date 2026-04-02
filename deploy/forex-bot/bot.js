@@ -1683,8 +1683,83 @@ function calculateBollingerBands(candles, period = 20, numStdDev = 2) {
     const sma = closes.reduce((a, b) => a + b, 0) / period;
     const variance = closes.reduce((sum, c) => sum + Math.pow(c - sma, 2), 0) / period;
     const std = Math.sqrt(variance);
-    return { upper: sma + numStdDev * std, middle: sma, lower: sma - numStdDev * std };
+    return { upper: sma + numStdDev * std, middle: sma, lower: sma - numStdDev * std, bandwidth: (2 * numStdDev * std) / sma };
 }
+
+// ===== [v20.0] H4 Trend Filter + ADX for strategy routing =====
+// Research: London Breakout needs H4 200-SMA trend filter (QuantifiedStrategies.com)
+// Mean Reversion needs ADX < 25 (ranging market confirmation)
+const h4TrendCache = new Map(); // pair -> { sma200, adx, trend, timestamp }
+const H4_CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours
+
+async function getH4TrendAndADX(pair) {
+    const cached = h4TrendCache.get(pair);
+    if (cached && (Date.now() - cached.timestamp) < H4_CACHE_TTL) return cached;
+
+    try {
+        const h4Candles = await getCandles(pair, 'H4', 210);
+        if (h4Candles.length < 201) {
+            const result = { sma200: null, adx: null, trend: 'neutral', timestamp: Date.now() };
+            h4TrendCache.set(pair, result);
+            return result;
+        }
+        const closes = h4Candles.map(c => parseFloat(c.mid.c));
+        const highs = h4Candles.map(c => parseFloat(c.mid.h));
+        const lows = h4Candles.map(c => parseFloat(c.mid.l));
+
+        // 200-SMA on H4
+        const sma200 = closes.slice(-200).reduce((a, b) => a + b, 0) / 200;
+        const currentPrice = closes[closes.length - 1];
+        let trend = 'neutral';
+        if (currentPrice > sma200 * 1.001) trend = 'up';
+        else if (currentPrice < sma200 * 0.999) trend = 'down';
+
+        // ADX(14) on H4
+        let adx = null;
+        const adxPeriod = 14;
+        if (highs.length >= adxPeriod + 1) {
+            const tr = [], dmPlus = [], dmMinus = [];
+            for (let i = 1; i < highs.length; i++) {
+                tr.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i-1]), Math.abs(lows[i] - closes[i-1])));
+                const up = highs[i] - highs[i-1], dn = lows[i-1] - lows[i];
+                dmPlus.push(up > dn && up > 0 ? up : 0);
+                dmMinus.push(dn > up && dn > 0 ? dn : 0);
+            }
+            let atr14 = tr.slice(0, adxPeriod).reduce((a, b) => a + b, 0);
+            let diP14 = dmPlus.slice(0, adxPeriod).reduce((a, b) => a + b, 0);
+            let diM14 = dmMinus.slice(0, adxPeriod).reduce((a, b) => a + b, 0);
+            const dxArr = [];
+            const d0p = atr14 > 0 ? (diP14/atr14)*100 : 0, d0m = atr14 > 0 ? (diM14/atr14)*100 : 0;
+            if (d0p + d0m > 0) dxArr.push(Math.abs(d0p - d0m) / (d0p + d0m) * 100);
+            for (let i = adxPeriod; i < tr.length; i++) {
+                atr14 = atr14 - atr14/adxPeriod + tr[i];
+                diP14 = diP14 - diP14/adxPeriod + dmPlus[i];
+                diM14 = diM14 - diM14/adxPeriod + dmMinus[i];
+                const dp = atr14 > 0 ? (diP14/atr14)*100 : 0, dm = atr14 > 0 ? (diM14/atr14)*100 : 0;
+                if (dp + dm > 0) dxArr.push(Math.abs(dp - dm) / (dp + dm) * 100);
+            }
+            if (dxArr.length >= adxPeriod) {
+                adx = dxArr.slice(-adxPeriod).reduce((a, b) => a + b, 0) / adxPeriod;
+            }
+        }
+
+        const result = { sma200, adx, trend, currentPrice, timestamp: Date.now() };
+        h4TrendCache.set(pair, result);
+        console.log(`[H4 Filter] ${pair}: SMA200=${sma200?.toFixed(5)} price=${currentPrice.toFixed(5)} trend=${trend} ADX=${adx?.toFixed(1) || 'n/a'}`);
+        return result;
+    } catch (e) {
+        console.warn(`[H4 Filter] ${pair}: ${e.message}`);
+        const result = { sma200: null, adx: null, trend: 'neutral', timestamp: Date.now() };
+        h4TrendCache.set(pair, result);
+        return result;
+    }
+}
+
+// [v20.0] Pairs eligible for each strategy (evidence-based selection)
+// London Breakout: only works on GBP/USD (50-58% WR), USD/CHF — QuantifiedStrategies.com
+// Mean Reversion: EUR/USD, EUR/GBP (range-bound pairs) — BacktestMe, MQL5 research
+const LONDON_BREAKOUT_PAIRS = ['GBP_USD', 'USD_CHF'];
+const MEAN_REVERSION_PAIRS = ['EUR_USD', 'EUR_GBP'];
 
 // [v19.0] Session Box Builder — builds Asian session (00:00-06:00 UTC) high/low range
 // This is the core of the box breakout strategy from theplus-bot (31.59% CAGR backtested)
@@ -2601,11 +2676,18 @@ async function scanForSignals(heldPositions = positions) {
         const d1LongOk = d1Trend === 'up' || d1Trend === 'neutral';
         const d1ShortOk = d1Trend === 'down' || d1Trend === 'neutral';
 
-        // ===== [v19.0] STRATEGY 1: BOX BREAKOUT (Asian Box → London Breakout) =====
-        // This is the primary entry strategy — backtested 31.59% CAGR, Sharpe 2.38
-        // Box = Asian session (00:00-06:00 UTC) high/low → trade breakout during London (07:00-17:00)
+        // ===== [v20.0] Fetch H4 trend + ADX for strategy routing =====
+        const h4Data = await getH4TrendAndADX(pair);
+
+        // ===== [v20.0] STRATEGY 1: LONDON BREAKOUT (Asian Box → London session) =====
+        // Evidence: 50-58% WR on GBP/USD (QuantifiedStrategies.com)
+        // RESTRICTED to GBP_USD, USD_CHF only — loses money on EUR/USD
+        // H4 200-SMA trend filter: only long above SMA200, short below
         const box = sessionBoxes.get(pair);
-        if (box && box.isComplete) {
+        const isBreakoutPair = LONDON_BREAKOUT_PAIRS.includes(pair);
+        const h4LongOk = h4Data.trend === 'up' || h4Data.trend === 'neutral';
+        const h4ShortOk = h4Data.trend === 'down' || h4Data.trend === 'neutral';
+        if (isBreakoutPair && box && box.isComplete) {
             const zonePct = 0.20; // Entry zone: within 20% of box edge
             const zoneSize = box.range * zonePct;
             const botZoneHigh = box.low + zoneSize;      // Buy zone: bottom 20% of box
@@ -2616,7 +2698,8 @@ async function scanForSignals(heldPositions = positions) {
             const dynamicRR = calculateDynamicRR(atrPct);
 
             // ── BOX LONG: Price in bottom zone (mean-reversion buy at support) ──
-            if (d1LongOk && !box.longTaken && currentPrice <= botZoneHigh && currentPrice >= box.low) {
+            // [v20.0] Requires BOTH D1 trend AND H4 200-SMA alignment
+            if (d1LongOk && h4LongOk && !box.longTaken && currentPrice <= botZoneHigh && currentPrice >= box.low) {
                 // Multi-factor confirmation (theplus-bot's 46% WR secret)
                 const confirmation = calculateConfirmationScore({
                     rsi, direction: 'long', macd,
@@ -2675,7 +2758,8 @@ async function scanForSignals(heldPositions = positions) {
             }
 
             // ── BOX SHORT: Price in top zone (mean-reversion sell at resistance) ──
-            if (d1ShortOk && !box.shortTaken && currentPrice >= topZoneLow && currentPrice <= box.high) {
+            // [v20.0] Requires BOTH D1 trend AND H4 200-SMA alignment
+            if (d1ShortOk && h4ShortOk && !box.shortTaken && currentPrice >= topZoneLow && currentPrice <= box.high) {
                 const confirmation = calculateConfirmationScore({
                     rsi, direction: 'short', macd,
                     orderFlowImbalance: analysis.orderFlowImbalance,
@@ -2732,11 +2816,99 @@ async function scanForSignals(heldPositions = positions) {
             }
         }
 
-        // [v19.1] BB Reversal strategy REMOVED — 0% win rate in production (4 trades, 4 losses).
-        // Root cause: ATR x 2.0 stops too tight for JPY volatility, BB midline targets too close.
-        // Rule 11: no production claim without measured evidence. BB reversal had negative evidence.
-        // The bot now ONLY uses box breakout (backtested 31.59% CAGR, Sharpe 2.38).
-        // If no box signal fires, the bot waits — better to miss a trade than take a bad one.
+        // ===== [v20.0] STRATEGY 2: BB+RSI MEAN REVERSION (H4) =====
+        // Evidence: 60-70% WR in ranging markets (BacktestMe, MQL5 Jan 2026 study)
+        // RESTRICTED to EUR_USD, EUR_GBP (range-bound pairs)
+        // ADX < 25 filter: only trade when market is ranging (NOT trending)
+        // Entry: price at lower BB + RSI < 30 (long), upper BB + RSI > 70 (short)
+        // Target: middle BB (20-SMA). Stop: 1.5x ATR.
+        const isMeanRevPair = MEAN_REVERSION_PAIRS.includes(pair);
+        const isRanging = h4Data.adx !== null && h4Data.adx < 25;
+
+        if (isMeanRevPair && isRanging) {
+            // Get H4 candles for BB calculation on H4 timeframe
+            try {
+                const h4Candles = await getCandles(pair, 'H4', 25);
+                if (h4Candles.length >= 20) {
+                    const h4BB = calculateBollingerBands(h4Candles, 20, 2);
+                    const h4Closes = h4Candles.map(c => parseFloat(c.mid.c));
+                    const h4RSI = calculateRSI(h4Closes, 14);
+                    const h4ATR = calculateATR(h4Candles, 14);
+
+                    if (h4BB && h4RSI !== null && h4ATR > 0) {
+                        // ── MEAN REV LONG: price at/below lower BB + RSI oversold ──
+                        if (currentPrice <= h4BB.lower && h4RSI < 30) {
+                            const stopLoss = currentPrice - (h4ATR * 1.5);
+                            const takeProfit = h4BB.middle; // target = 20-SMA (middle BB)
+                            const risk = currentPrice - stopLoss;
+                            const reward = takeProfit - currentPrice;
+
+                            if (reward > 0 && reward / risk >= 1.0) {
+                                const mrScore = 0.50 + (30 - h4RSI) / 100 + (h4BB.lower - currentPrice) / currentPrice * 10;
+                                console.log(`📈 [MR LONG] ${pair}: price ${currentPrice.toFixed(5)} <= lowerBB ${h4BB.lower.toFixed(5)} | RSI ${h4RSI.toFixed(1)} | ADX ${h4Data.adx.toFixed(1)} | R:R ${(reward/risk).toFixed(1)} | score ${mrScore.toFixed(3)}`);
+
+                                signals.push({
+                                    pair, direction: 'long', tier,
+                                    entry: currentPrice, stopLoss, takeProfit,
+                                    rsi: h4RSI, trendStrength, atrPct, h1Trend, d1Trend, pullback,
+                                    score: parseFloat(mrScore.toFixed(3)),
+                                    strategy: 'meanReversion',
+                                    regime: 'ranging-oversold',
+                                    regimeQuality: (25 - h4Data.adx) / 25, // lower ADX = stronger ranging
+                                    marketRegime: forexRegime.regime,
+                                    macdHistogram: macd ? macd.histogram : null,
+                                    orderFlowImbalance: analysis.orderFlowImbalance,
+                                    hasDisplacement: analysis.hasDisplacement,
+                                    volumeProfile: analysis.volumeProfile ? { vah: analysis.volumeProfile.vah, val: analysis.volumeProfile.val, poc: analysis.volumeProfile.poc } : null,
+                                    fvgCount: analysis.fvg ? analysis.fvg.bullish.length + analysis.fvg.bearish.length : 0,
+                                    session: session.name,
+                                    h4ADX: h4Data.adx,
+                                    h4RSI,
+                                    h4BB: { upper: h4BB.upper, middle: h4BB.middle, lower: h4BB.lower }
+                                });
+                            }
+                        }
+
+                        // ── MEAN REV SHORT: price at/above upper BB + RSI overbought ──
+                        if (currentPrice >= h4BB.upper && h4RSI > 70) {
+                            const stopLoss = currentPrice + (h4ATR * 1.5);
+                            const takeProfit = h4BB.middle; // target = 20-SMA (middle BB)
+                            const risk = stopLoss - currentPrice;
+                            const reward = currentPrice - takeProfit;
+
+                            if (reward > 0 && reward / risk >= 1.0) {
+                                const mrScore = 0.50 + (h4RSI - 70) / 100 + (currentPrice - h4BB.upper) / currentPrice * 10;
+                                console.log(`📉 [MR SHORT] ${pair}: price ${currentPrice.toFixed(5)} >= upperBB ${h4BB.upper.toFixed(5)} | RSI ${h4RSI.toFixed(1)} | ADX ${h4Data.adx.toFixed(1)} | R:R ${(reward/risk).toFixed(1)} | score ${mrScore.toFixed(3)}`);
+
+                                signals.push({
+                                    pair, direction: 'short', tier,
+                                    entry: currentPrice, stopLoss, takeProfit,
+                                    rsi: h4RSI, trendStrength, atrPct, h1Trend, d1Trend, pullback,
+                                    score: parseFloat(mrScore.toFixed(3)),
+                                    strategy: 'meanReversion',
+                                    regime: 'ranging-overbought',
+                                    regimeQuality: (25 - h4Data.adx) / 25,
+                                    marketRegime: forexRegime.regime,
+                                    macdHistogram: macd ? macd.histogram : null,
+                                    orderFlowImbalance: analysis.orderFlowImbalance,
+                                    hasDisplacement: analysis.hasDisplacement,
+                                    volumeProfile: analysis.volumeProfile ? { vah: analysis.volumeProfile.vah, val: analysis.volumeProfile.val, poc: analysis.volumeProfile.poc } : null,
+                                    fvgCount: analysis.fvg ? analysis.fvg.bullish.length + analysis.fvg.bearish.length : 0,
+                                    session: session.name,
+                                    h4ADX: h4Data.adx,
+                                    h4RSI,
+                                    h4BB: { upper: h4BB.upper, middle: h4BB.middle, lower: h4BB.lower }
+                                });
+                            }
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn(`[MR] ${pair} H4 analysis failed: ${e.message}`);
+            }
+        } else if (isMeanRevPair && h4Data.adx !== null) {
+            console.log(`[MR] ${pair}: ADX ${h4Data.adx.toFixed(1)} >= 25 — trending, skip mean reversion`);
+        }
     }
 
     signals.sort((a, b) => (b.score || 0) - (a.score || 0));
