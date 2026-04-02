@@ -2268,7 +2268,7 @@ app.post('/api/trading/start', async (req, res) => {
             warning: 'Crypto is HIGH RISK - use testnet first!'
         });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -2291,7 +2291,7 @@ app.post('/api/crypto/start', async (req, res) => {
         await engine.start();
         res.json({ success: true, message: 'Crypto trading engine started' });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 app.post('/api/crypto/stop', (req, res) => {
@@ -2299,7 +2299,7 @@ app.post('/api/crypto/stop', (req, res) => {
         engine.stop();
         res.json({ success: true, message: 'Crypto trading engine stopped' });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 app.post('/api/crypto/pause', (req, res) => {
@@ -2307,7 +2307,7 @@ app.post('/api/crypto/pause', (req, res) => {
         engine.pause();
         res.json({ success: true, message: 'Crypto trading engine paused' });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -2343,7 +2343,7 @@ This is a test alert from your Crypto Trading Bot.
         res.status(500).json({
             success: false,
             message: 'Failed to send Telegram message',
-            error: error.message,
+            error: 'Internal server error',
             timestamp: new Date().toISOString()
         });
     }
@@ -2410,7 +2410,7 @@ app.post('/api/config/mode', requireApiSecret, async (req, res) => {
         console.log(`⚙️  Crypto trading mode switched to: ${mode.toUpperCase()}`);
         res.json({ success: true, mode });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -2543,7 +2543,7 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
 
         res.json(response);
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -2600,7 +2600,7 @@ app.get('/api/trades', async (req, res) => {
         const r = await dbPool.query(
             `SELECT * FROM trades WHERE bot='crypto' ORDER BY created_at DESC LIMIT $1`, [limit]);
         res.json({ success: true, trades: r.rows, count: r.rows.length });
-    } catch (e) { res.status(500).json({ success: false, error: e.message, trades: [] }); }
+    } catch (e) { res.status(500).json({ success: false, error: 'Internal server error', trades: [] }); }
 });
 
 app.get('/api/trades/summary', async (req, res) => {
@@ -2635,7 +2635,7 @@ app.get('/api/trades/summary', async (req, res) => {
             FROM trades WHERE bot='crypto'
         `);
         res.json({ success: true, daily: r.rows, totals: totals.rows });
-    } catch (e) { res.status(500).json({ success: false, error: e.message, daily: [], totals: [] }); }
+    } catch (e) { res.status(500).json({ success: false, error: 'Internal server error', daily: [], totals: [] }); }
 });
 
 app.get('/metrics', async (req, res) => {
@@ -2843,7 +2843,7 @@ app.post('/api/crypto/engine/close-all', requireJwt, async (req, res) => {
             const price = await userEngine.kraken.getPrice(symbol).catch(() => 0);
             await userEngine.closePosition(symbol, price, 'Manual Close All');
             closed.push(symbol);
-        } catch (err) { skipped.push({ symbol, error: err.message }); }
+        } catch (err) { skipped.push({ symbol, error: 'Internal server error' }); }
     }
     res.json({ success: true, closed, skipped });
 });
@@ -2856,7 +2856,7 @@ app.post('/api/crypto/close-all', async (req, res) => {
             const price = await engine.kraken.getPrice(symbol).catch(() => 0);
             await engine.closePosition(symbol, price, 'Manual Close All');
             closed.push(symbol);
-        } catch (err) { skipped.push({ symbol, error: err.message }); }
+        } catch (err) { skipped.push({ symbol, error: 'Internal server error' }); }
     }
     res.json({ success: true, closed, skipped });
 });

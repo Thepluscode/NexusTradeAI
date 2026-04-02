@@ -10,8 +10,37 @@ on:
     branches: [main]
 
 jobs:
+  # ── 0. Run signal module unit tests ──────────────────────────────────────────
+  test:
+    name: Signal tests (Jest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/signals
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: services/signals/node_modules
+          key: signals-node-modules-${{ hashFiles('services/signals/package.json') }}
+          restore-keys: signals-node-modules-
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run tests
+        run: npx jest --ci --passWithNoTests
+
   # ── 1. Lint + type-check + production build ─────────────────────────────────
   dashboard-build:
+    needs: test
     name: Dashboard — lint · typecheck · build
     runs-on: ubuntu-latest
     defaults:

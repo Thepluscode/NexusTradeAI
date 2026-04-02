@@ -286,8 +286,16 @@ const PORT = process.env.PORT || process.env.FOREX_PORT || 3005;
 const STOCK_BOT_URL = process.env.STOCK_BOT_URL || 'http://localhost:3002';
 const CRYPTO_BOT_URL = process.env.CRYPTO_BOT_URL || 'http://localhost:3006';
 
-app.use(cors());
+app.use(cors({
+    origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : ['http://localhost:3000', 'http://localhost:5173'],
+    credentials: true
+}));
 app.use(express.json());
+
+// Rate limit all API endpoints (60 req/min per IP)
+const apiRateLimit = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false,
+    message: { success: false, error: 'Too many requests, try again later' } });
+app.use('/api/', apiRateLimit);
 
 // ── Auth middleware for config-write endpoints ──────────────────────────────
 function requireApiSecret(req, res, next) {
@@ -3939,7 +3947,7 @@ async function tradingLoop() {
         }
     } catch (err) {
         console.error('❌ Forex trading loop error:', err.message);
-        recentErrors.push({ timestamp: Date.now(), error: err.message });
+        recentErrors.push({ timestamp: Date.now(), error: 'Internal server error' });
         if (recentErrors.length > MAX_ERROR_HISTORY) recentErrors.shift();
     }
 
@@ -4214,7 +4222,7 @@ app.get('/api/forex/status', async (req, res) => {
             },
         });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -4246,7 +4254,7 @@ app.get('/api/accounts/summary', async (req, res) => {
             res.status(500).json({ success: false, error: 'Cannot fetch account' });
         }
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -4257,7 +4265,7 @@ app.post('/api/forex/start', (req, res) => {
         saveBotState();
         res.json({ success: true, message: 'Forex trading bot started', isRunning: true, isPaused: false });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -4268,7 +4276,7 @@ app.post('/api/forex/stop', (req, res) => {
         saveBotState();
         res.json({ success: true, message: 'Forex trading bot stopped', isRunning: false, isPaused: false });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -4278,7 +4286,7 @@ app.post('/api/forex/pause', (req, res) => {
         saveBotState();
         res.json({ success: true, message: botPaused ? 'Forex trading bot paused' : 'Forex trading bot resumed', isRunning: botRunning, isPaused: botPaused });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -4287,7 +4295,7 @@ app.post('/api/forex/scan', async (req, res) => {
         const signals = await scanForSignals();
         res.json({ success: true, signals });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -4313,7 +4321,7 @@ app.post('/test-telegram', async (req, res) => {
     } catch (error) {
         res.status(500).json({
             success: false,
-            error: error.message
+            error: 'Internal server error'
         });
     }
 });
@@ -4433,7 +4441,7 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
         res.json(response);
     } catch (err) {
         console.error('Credentials update error:', err.message);
-        res.status(500).json({ success: false, error: err.message || 'Failed to save credentials' });
+        res.status(500).json({ success: false, error: 'Internal server error' || 'Failed to save credentials' });
     }
 });
 
@@ -4490,7 +4498,7 @@ app.get('/api/trades', async (req, res) => {
         const r = await dbPool.query(
             `SELECT * FROM trades WHERE bot='forex' ORDER BY created_at DESC LIMIT $1`, [limit]);
         res.json({ success: true, trades: r.rows, count: r.rows.length });
-    } catch (e) { res.status(500).json({ success: false, error: e.message, trades: [] }); }
+    } catch (e) { res.status(500).json({ success: false, error: 'Internal server error', trades: [] }); }
 });
 
 app.get('/api/trades/summary', async (req, res) => {
@@ -4525,7 +4533,7 @@ app.get('/api/trades/summary', async (req, res) => {
             FROM trades WHERE bot='forex'
         `);
         res.json({ success: true, daily: r.rows, totals: totals.rows });
-    } catch (e) { res.status(500).json({ success: false, error: e.message, daily: [], totals: [] }); }
+    } catch (e) { res.status(500).json({ success: false, error: 'Internal server error', daily: [], totals: [] }); }
 });
 
 app.get('/metrics', async (req, res) => {
@@ -4534,7 +4542,7 @@ app.get('/metrics', async (req, res) => {
         res.set('Content-Type', promClient.register.contentType);
         res.end(await metrics.getMetrics());
     } catch (error) {
-        res.status(500).end(error.message);
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -5155,7 +5163,7 @@ app.get('/api/forex/engine/status', requireJwt, async (req, res) => {
             stats: { totalTradesToday: engine.totalTradesToday, openPositions: engine.positions.size },
             portfolioValue: equity });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -5192,7 +5200,7 @@ app.post('/api/forex/engine/close-all', requireJwt, async (req, res) => {
         try {
             await engine.closePositionWithReason(pair, 'Manual Close All');
             closed.push(pair);
-        } catch (err) { skipped.push({ pair, error: err.message }); }
+        } catch (err) { skipped.push({ pair, error: 'Internal server error' }); }
     }
     res.json({ success: true, closed, skipped });
 });
@@ -5204,7 +5212,7 @@ app.post('/api/forex/close-all', async (req, res) => {
         try {
             await closePositionWithReason(pair, 'Manual Close All');
             closed.push(pair);
-        } catch (err) { skipped.push({ pair, error: err.message }); }
+        } catch (err) { skipped.push({ pair, error: 'Internal server error' }); }
     }
     res.json({ success: true, closed, skipped });
 });

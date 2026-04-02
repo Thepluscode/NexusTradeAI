@@ -283,7 +283,7 @@ function createSignalEndpoints(app, routePrefix, bot, getEvaluations, getBotComp
       reportCache.set(bot, { report, timestamp: Date.now() });
       res.json({ success: true, data: report });
     } catch (error) {
-      res.status(500).json({ success: false, error: error.message });
+      res.status(500).json({ success: false, error: 'Internal server error' });
     }
   });
 
@@ -311,7 +311,7 @@ function createSignalEndpoints(app, routePrefix, bot, getEvaluations, getBotComp
       }));
       res.json({ success: true, data: timeline });
     } catch (error) {
-      res.status(500).json({ success: false, error: error.message });
+      res.status(500).json({ success: false, error: 'Internal server error' });
     }
   });
 
@@ -332,7 +332,7 @@ function createSignalEndpoints(app, routePrefix, bot, getEvaluations, getBotComp
       const result = analytics.regimeConditionalIC(trades, components);
       res.json({ success: true, data: result });
     } catch (error) {
-      res.status(500).json({ success: false, error: error.message });
+      res.status(500).json({ success: false, error: 'Internal server error' });
     }
   });
 
@@ -368,7 +368,7 @@ function createSignalEndpoints(app, routePrefix, bot, getEvaluations, getBotComp
       const optimal = results.reduce((best, r) => (!best || r.profitFactor > best.profitFactor) ? r.threshold : best, null);
       res.json({ success: true, data: { results, optimal } });
     } catch (error) {
-      res.status(500).json({ success: false, error: error.message });
+      res.status(500).json({ success: false, error: 'Internal server error' });
     }
   });
 }

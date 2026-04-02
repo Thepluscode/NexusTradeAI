@@ -363,7 +363,7 @@ function createMetricsServer(port = 9091) {
       const metricsData = await metrics.getMetrics();
       res.end(metricsData);
     } catch (error) {
-      res.status(500).end(error.message);
+      res.status(500).json({ success: false, error: 'Internal server error' });
     }
   });
 

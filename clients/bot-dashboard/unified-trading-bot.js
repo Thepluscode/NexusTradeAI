@@ -111,8 +111,16 @@ const PORT = process.env.PORT || process.env.TRADING_PORT || 3002;
 const FOREX_BOT_URL = process.env.FOREX_BOT_URL || 'http://localhost:3005';
 const CRYPTO_BOT_URL = process.env.CRYPTO_BOT_URL || 'http://localhost:3006';
 
-app.use(cors());
+app.use(cors({
+    origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : ['http://localhost:3000', 'http://localhost:5173'],
+    credentials: true
+}));
 app.use(express.json());
+
+// Rate limit all API endpoints (60 req/min per IP)
+const apiRateLimit = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false,
+    message: { success: false, error: 'Too many requests, try again later' } });
+app.use('/api/', apiRateLimit);
 
 // ── Auth middleware for config-write endpoints ──────────────────────────────
 // All POST /api/config/* routes require: Authorization: Bearer <NEXUS_API_SECRET>
@@ -4604,7 +4612,7 @@ app.get('/api/trading/status', async (req, res) => {
                 }
             });
         }
-        res.status(500).json({ success: false, error: error.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -4654,7 +4662,7 @@ app.get('/api/trading/engine/status', requireJwt, async (req, res) => {
             return res.json({ success: true, credentialsRequired: true,
                 message: 'Alpaca credentials invalid or expired' });
         }
-        res.status(500).json({ success: false, error: error.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -4674,7 +4682,7 @@ app.post('/api/trading/engine/start', requireJwt, async (req, res) => {
         if (status === 401 || status === 403) {
             return res.status(400).json({ success: false, error: 'Alpaca credentials invalid or expired' });
         }
-        return res.status(500).json({ success: false, error: error.message });
+        return res.status(500).json({ success: false, error: 'Internal server error' });
     }
     engine.botRunning = true; engine.botPaused = false; engine.savePerfData();
     res.json({ success: true, isRunning: true, isPaused: false });
@@ -4708,7 +4716,7 @@ app.post('/api/trading/engine/close-all', requireJwt, async (req, res) => {
             });
             await engine.closePosition(symbol, posRes.data.qty, 'Manual Close All');
             closed.push(symbol);
-        } catch (err) { skipped.push({ symbol, error: err.message }); }
+        } catch (err) { skipped.push({ symbol, error: 'Internal server error' }); }
     }
     res.json({ success: true, closed, skipped });
 });
@@ -4746,7 +4754,7 @@ app.get('/api/accounts/summary', async (req, res) => {
             }
         });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -4784,7 +4792,7 @@ app.post('/api/trading/start', (req, res) => {
         saveBotState();
         res.json({ success: true, message: 'Stock trading bot started', isRunning: true, isPaused: false });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -4795,7 +4803,7 @@ app.post('/api/trading/stop', (req, res) => {
         saveBotState();
         res.json({ success: true, message: 'Stock trading bot stopped', isRunning: false, isPaused: false });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -4824,7 +4832,7 @@ app.post('/api/trading/realize-profits', async (req, res) => {
                     skipped.push({ symbol, pnl: unrealizedPnL });
                 }
             } catch (err) {
-                skipped.push({ symbol, error: err.message });
+                skipped.push({ symbol, error: 'Internal server error' });
             }
         }
 
@@ -4835,7 +4843,7 @@ app.post('/api/trading/realize-profits', async (req, res) => {
             skipped,
         });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -4875,7 +4883,7 @@ app.post('/api/accounts/demo/reset', (req, res) => {
         console.log('🔄 Demo account stats reset');
         res.json({ success: true, message: 'Demo account statistics reset' });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -4885,7 +4893,7 @@ app.post('/api/trading/pause', (req, res) => {
         saveBotState();
         res.json({ success: true, message: botPaused ? 'Stock trading bot paused' : 'Stock trading bot resumed', isRunning: botRunning, isPaused: botPaused });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -4911,7 +4919,7 @@ app.post('/test-sms', async (req, res) => {
     } catch (error) {
         res.status(500).json({
             success: false,
-            error: error.message
+            error: 'Internal server error'
         });
     }
 });
@@ -4938,7 +4946,7 @@ app.post('/test-telegram', async (req, res) => {
     } catch (error) {
         res.status(500).json({
             success: false,
-            error: error.message
+            error: 'Internal server error'
         });
     }
 });
@@ -5012,7 +5020,7 @@ app.post('/api/config/risk', requireApiSecret, (req, res) => {
         console.log(`⚙️  Config updated: ${tier} → stopLoss=${MOMENTUM_CONFIG[tier].stopLoss} profitTarget=${MOMENTUM_CONFIG[tier].profitTarget}`);
         res.json({ success: true, data: MOMENTUM_CONFIG[tier] });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -5030,7 +5038,7 @@ app.post('/api/config/mode', requireApiSecret, async (req, res) => {
         console.log(`⚙️  Trading mode switched to: ${mode.toUpperCase()}`);
         res.json({ success: true, mode });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -5072,7 +5080,7 @@ app.post('/api/config/risk-limits', requireApiSecret, (req, res) => {
         console.log(`⚙️  Risk limits updated: maxDailyLoss=$${MAX_DAILY_LOSS} maxDrawdown=${MAX_DRAWDOWN_PCT}% maxTrades=${MAX_TRADES_PER_DAY}`);
         res.json({ success: true, riskLimits: { maxDailyLoss: MAX_DAILY_LOSS, maxDrawdown: MAX_DRAWDOWN_PCT, maxTradesPerDay: MAX_TRADES_PER_DAY } });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -5192,7 +5200,7 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
         res.json(response);
     } catch (err) {
         console.error('Credentials update error:', err.message);
-        res.status(500).json({ success: false, error: err.message || 'Failed to save credentials' });
+        res.status(500).json({ success: false, error: 'Internal server error' || 'Failed to save credentials' });
     }
 });
 
@@ -5274,7 +5282,7 @@ app.post('/api/config/test-notification', requireApiSecret, async (req, res) => 
         }
         res.status(400).json({ success: false, error: 'Unknown channel' });
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -5360,7 +5368,7 @@ app.get('/metrics', async (req, res) => {
         res.set('Content-Type', promClient.register.contentType);
         res.end(await metrics.getMetrics());
     } catch (error) {
-        res.status(500).end(error.message);
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -6453,7 +6461,7 @@ async function tradingLoop() {
         }
     } catch (err) {
         console.error('❌ Stock trading loop error:', err.message);
-        recentErrors.push({ timestamp: Date.now(), error: err.message });
+        recentErrors.push({ timestamp: Date.now(), error: 'Internal server error' });
         if (recentErrors.length > MAX_ERROR_HISTORY) recentErrors.shift();
     }
 
@@ -6495,7 +6503,7 @@ app.get('/api/trades', async (req, res) => {
         }
         const r = await dbPool.query(q, params);
         res.json({ success: true, trades: r.rows, count: r.rows.length });
-    } catch (e) { res.status(500).json({ success: false, error: e.message, trades: [] }); }
+    } catch (e) { res.status(500).json({ success: false, error: 'Internal server error', trades: [] }); }
 });
 
 function getOptionalTradeUserId(req) {
@@ -6556,7 +6564,7 @@ app.get('/api/trades/summary', async (req, res) => {
             GROUP BY bot
         `, userId ? [userId] : []);
         res.json({ success: true, daily: r.rows, totals: totals.rows });
-    } catch (e) { res.status(500).json({ success: false, error: e.message, daily: [], totals: [] }); }
+    } catch (e) { res.status(500).json({ success: false, error: 'Internal server error', daily: [], totals: [] }); }
 });
 
 // Equity curve: daily cumulative P&L for charting
@@ -6592,7 +6600,7 @@ app.get('/api/performance/equity', async (req, res) => {
             };
         });
         res.json({ success: true, data });
-    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    } catch (e) { res.status(500).json({ success: false, error: 'Internal server error' }); }
 });
 
 // Trade analytics: win rate by hour, symbol breakdown, tier breakdown
@@ -6668,7 +6676,7 @@ app.get('/api/trades/analytics', async (req, res) => {
                 byRegime: byRegime.rows
             }
         });
-    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    } catch (e) { res.status(500).json({ success: false, error: 'Internal server error' }); }
 });
 
 app.post('/api/admin/trades/backfill-tags', requireJwtOrApiSecret, async (req, res) => {
@@ -6680,7 +6688,7 @@ app.post('/api/admin/trades/backfill-tags', requireJwtOrApiSecret, async (req, r
         const result = await backfillTradeTags({ limit });
         res.json({ success: true, ...result });
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -6693,7 +6701,7 @@ app.post('/api/admin/trades/repair-pnl', requireJwtOrApiSecret, async (req, res)
         const result = await repairInvalidTradePnL({ limit });
         res.json({ success: true, ...result });
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -6725,7 +6733,7 @@ app.get('/api/admin/users', requireJwt, async (req, res) => {
             activeInRegistry: engineRegistry.has(String(r.id)),
         }));
         res.json({ success: true, users: rows });
-    } catch (e) { res.status(500).json({ success: false, error: e.message, users: [] }); }
+    } catch (e) { res.status(500).json({ success: false, error: 'Internal server error', users: [] }); }
 });
 
 // Admin: force-close stuck open trades (no matching exit recorded)
@@ -6744,7 +6752,7 @@ app.post('/api/admin/trades/fix-stuck', requireJwt, async (req, res) => {
         const result = await dbPool.query(query, params);
         res.json({ success: true, fixed: result.rows.length, trades: result.rows });
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -6776,7 +6784,7 @@ app.post('/api/backtest/run', async (req, res) => {
         res.json({ success: true, signals: results, scanned: symbols.length, elapsed: `${elapsed}s`,
             timestamp: new Date().toISOString() });
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     } finally {
         backtestRunning = false;
     }
@@ -6940,7 +6948,7 @@ app.post('/api/backtest/threshold-analysis', async (req, res) => {
         });
     } catch (e) {
         console.error('[ThresholdAnalysis] Error:', e.message);
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
