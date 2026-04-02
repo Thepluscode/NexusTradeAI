@@ -695,6 +695,8 @@ const PROFIT_PROTECT_REENTRY_WINDOW = 30 * 60 * 1000; // 30 minutes
 
 // Daily loss circuit breaker — updated by the status endpoint each poll
 let cachedDailyPnL = 0;
+// [v19.1] Cached account equity — updated on every Alpaca account fetch, replaces hardcoded 100000
+let cachedAccountEquity = 0;
 
 // Performance tracking (in-memory, persisted to performance.json)
 const fs = require('fs');
@@ -4434,6 +4436,7 @@ app.get('/api/trading/status', async (req, res) => {
         const equity = parseFloat(account.equity);
         const lastEquity = parseFloat(account.last_equity);
         cachedDailyPnL = equity - lastEquity;  // update circuit breaker cache
+        cachedAccountEquity = equity;  // [v19.1] keep equity current from broker
 
         const positionsData = positionsResponse.data.map(pos => {
             const tracked = positions.get(pos.symbol);
@@ -4722,6 +4725,7 @@ app.get('/api/accounts/summary', async (req, res) => {
         const account = accountResponse.data;
         const equity = parseFloat(account.equity);
         const cash = parseFloat(account.cash);
+        cachedAccountEquity = equity;  // [v19.1] keep equity current from broker
 
         res.json({
             success: true,
@@ -4730,8 +4734,8 @@ app.get('/api/accounts/summary', async (req, res) => {
                 realAccount: {
                     balance: cash,
                     equity,
-                    pnl: equity - 100000,
-                    pnlPercent: ((equity - 100000) / 100000) * 100
+                    pnl: perfData.totalProfit || 0,
+                    pnlPercent: equity > 0 ? ((perfData.totalProfit || 0) / equity) * 100 : 0
                 },
                 demoAccount: {
                     balance: cash,
@@ -5325,7 +5329,7 @@ app.get('/api/backtest/report', (req, res) => {
             stopLossPct: MOMENTUM_CONFIG.tier1.stopLoss,
             profitTargetPct: MOMENTUM_CONFIG.tier1.profitTarget,
             positionSizePct: MOMENTUM_CONFIG.tier1.positionSize,
-            initialCapital: 100000,
+            initialCapital: cachedAccountEquity || 100000,  // [v19.1] from broker, fallback if not yet fetched
             walkForwardWindows: 5,
             inSampleRatio: 0.7,
         },
