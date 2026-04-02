@@ -150,6 +150,16 @@ jobs:
           cp services/signals/auto-optimizer.js               deploy/stock-bot/auto-optimizer.js
           cp services/signals/auto-optimizer.js               deploy/forex-bot/auto-optimizer.js
           cp services/signals/auto-optimizer.js               deploy/crypto-bot/auto-optimizer.js
+          # Sync shared signal modules to each deploy dir
+          mkdir -p deploy/stock-bot/signals deploy/forex-bot/signals deploy/crypto-bot/signals
+          for f in services/signals/*.js; do
+            fname=$(basename "$f")
+            [ "$fname" = "jest.config.js" ] && continue
+            cp "$f" "deploy/stock-bot/signals/$fname"
+            cp "$f" "deploy/forex-bot/signals/$fname"
+            cp "$f" "deploy/crypto-bot/signals/$fname"
+          done
+          echo "Signal modules synced to deploy dirs"
           echo "Bot files synced:"
           wc -l \
             deploy/stock-bot/bot.js deploy/stock-bot/userCredentialStore.js deploy/stock-bot/signal-analytics.js deploy/stock-bot/auto-optimizer.js \
