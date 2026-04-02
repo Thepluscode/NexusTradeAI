@@ -670,7 +670,8 @@ function saveBotState() {
 }
 const _initState = loadBotState();
 let botRunning = _initState.running;
-let botPaused = _initState.paused;
+// BOT_PAUSED env var survives Railway deploys (filesystem state is ephemeral)
+let botPaused = process.env.BOT_PAUSED === 'true' || _initState.paused;
 
 // Simulation state (used when no OANDA credentials)
 const SIM_STARTING_EQUITY = 100000;
