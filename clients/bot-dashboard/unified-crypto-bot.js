@@ -42,6 +42,15 @@ try {
   // [v17.1] On Railway, auto-optimizer ships alongside bot.js
   try { ({ optimize: autoOptimize, evaluateStrategies: autoEvalStrategies, PARAM_BOUNDS: AUTO_PARAM_BOUNDS } = require('./auto-optimizer')); console.log('[INIT] auto-optimizer loaded from local'); } catch (_) {}
 }
+// Shared signal functions (compat wrappers preserve old interface)
+let sharedSignals;
+try {
+    sharedSignals = require('./signals/compat');
+} catch (e) {
+    try { sharedSignals = require('../../services/signals/compat'); } catch (_) {
+        sharedSignals = null;
+    }
+}
 // Load .env from project root (Railway injects env vars directly, so dotenv is a no-op there)
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
@@ -1042,191 +1051,22 @@ function isRealTradingEnabled() {
 // [Phase 1] Order Flow Imbalance — approximates buy/sell pressure from OHLCV klines
 // Kline format: [time, open, high, low, close, volume] (Kraken-compatible arrays)
 // Returns -1 to +1: positive = buy pressure dominant, negative = sell pressure dominant
-function calculateOrderFlowImbalance(klines, lookback = 20) {
-    if (!klines || klines.length === 0) return 0;
-    const recent = klines.slice(-lookback);
-    let buyVolume = 0, sellVolume = 0;
-    for (const k of recent) {
-        const open = parseFloat(k[1]);
-        const close = parseFloat(k[4]);
-        const volume = parseFloat(k[5]) || 0;
-        if (close >= open) {
-            buyVolume += volume;
-        } else {
-            sellVolume += volume;
-        }
-    }
-    const total = buyVolume + sellVolume;
-    if (total === 0) return 0;
-    return (buyVolume - sellVolume) / total; // -1 to +1
-}
+// Signal functions — delegated to shared library (services/signals/)
+const calculateOrderFlowImbalance = sharedSignals
+    ? (klines, lookback) => sharedSignals.calculateOrderFlowImbalance(klines, lookback, 'crypto')
+    : (klines, lookback) => 0;
 
-// [Phase 1] Displacement Candle Detection — checks if recent klines show strong directional conviction
-// Large body (>70% of range) with range exceeding 1.5x ATR signals institutional commitment
-// Kline format: [time, open, high, low, close, volume]
-function isDisplacementCandle(klines, atr, lookback = 3) {
-    if (!klines || klines.length < lookback || !atr || atr <= 0) return false;
-    const recent = klines.slice(-lookback);
-    for (const k of recent) {
-        const open = parseFloat(k[1]);
-        const high = parseFloat(k[2]);
-        const low = parseFloat(k[3]);
-        const close = parseFloat(k[4]);
-        const body = Math.abs(close - open);
-        const range = high - low;
-        if (range <= 0) continue;
-        // Body must be >70% of range (small wicks) and range must exceed 1.5x ATR
-        if (body / range > 0.7 && range > 1.5 * atr) {
-            return true;
-        }
-    }
-    return false;
-}
+const isDisplacementCandle = sharedSignals
+    ? (klines, atr, lookback) => sharedSignals.isDisplacementCandle(klines, atr, lookback, 'crypto')
+    : () => false;
 
-// ============================================================================
-// [Phase 2] VOLUME PROFILE + FAIR VALUE GAP — market structure analysis
-// ============================================================================
+const calculateVolumeProfile = sharedSignals
+    ? (klines, numBuckets) => sharedSignals.calculateVolumeProfile(klines, numBuckets, 'crypto')
+    : () => null;
 
-// [Phase 2] Volume Profile — calculates VAH, VAL, POC from OHLCV klines
-// VAH = Value Area High, VAL = Value Area Low, POC = Point of Control (highest volume price)
-// Value Area contains 70% of total volume, centered around POC
-// Kline format: [time, open, high, low, close, volume]
-function calculateVolumeProfile(klines, numBuckets = 50) {
-    if (!klines || klines.length < 20) return null;
-
-    // Find price range
-    let minPrice = Infinity, maxPrice = -Infinity;
-    for (const k of klines) {
-        const high = parseFloat(k[2]);
-        const low = parseFloat(k[3]);
-        if (low < minPrice) minPrice = low;
-        if (high > maxPrice) maxPrice = high;
-    }
-
-    const priceRange = maxPrice - minPrice;
-    if (priceRange <= 0) return null;
-    const bucketSize = priceRange / numBuckets;
-
-    // Build volume-at-price histogram
-    const volumeByBucket = new Array(numBuckets).fill(0);
-    let totalVolume = 0;
-
-    for (const k of klines) {
-        const high = parseFloat(k[2]);
-        const low = parseFloat(k[3]);
-        const volume = parseFloat(k[5]) || 0;
-
-        // Distribute volume across the bar's price range
-        const barLowBucket = Math.max(0, Math.floor((low - minPrice) / bucketSize));
-        const barHighBucket = Math.min(numBuckets - 1, Math.floor((high - minPrice) / bucketSize));
-        const bucketsInBar = barHighBucket - barLowBucket + 1;
-        const volumePerBucket = bucketsInBar > 0 ? volume / bucketsInBar : 0;
-
-        for (let i = barLowBucket; i <= barHighBucket; i++) {
-            volumeByBucket[i] += volumePerBucket;
-        }
-        totalVolume += volume;
-    }
-
-    if (totalVolume === 0) return null;
-
-    // Find POC (bucket with highest volume)
-    let pocBucket = 0;
-    for (let i = 1; i < numBuckets; i++) {
-        if (volumeByBucket[i] > volumeByBucket[pocBucket]) pocBucket = i;
-    }
-    const poc = minPrice + (pocBucket + 0.5) * bucketSize;
-
-    // Calculate Value Area (70% of volume centered on POC)
-    const targetVolume = totalVolume * 0.70;
-    let vaVolume = volumeByBucket[pocBucket];
-    let vaLowBucket = pocBucket;
-    let vaHighBucket = pocBucket;
-
-    while (vaVolume < targetVolume && (vaLowBucket > 0 || vaHighBucket < numBuckets - 1)) {
-        const belowVol = vaLowBucket > 0 ? volumeByBucket[vaLowBucket - 1] : 0;
-        const aboveVol = vaHighBucket < numBuckets - 1 ? volumeByBucket[vaHighBucket + 1] : 0;
-
-        if (belowVol >= aboveVol && vaLowBucket > 0) {
-            vaLowBucket--;
-            vaVolume += volumeByBucket[vaLowBucket];
-        } else if (vaHighBucket < numBuckets - 1) {
-            vaHighBucket++;
-            vaVolume += volumeByBucket[vaHighBucket];
-        } else if (vaLowBucket > 0) {
-            vaLowBucket--;
-            vaVolume += volumeByBucket[vaLowBucket];
-        } else {
-            break;
-        }
-    }
-
-    const vah = minPrice + (vaHighBucket + 1) * bucketSize;
-    const val = minPrice + vaLowBucket * bucketSize;
-
-    // Identify low-volume nodes (buckets with volume < 30% of POC volume)
-    const pocVolume = volumeByBucket[pocBucket];
-    const lowVolumeNodes = [];
-    for (let i = 0; i < numBuckets; i++) {
-        if (volumeByBucket[i] < pocVolume * 0.30) {
-            lowVolumeNodes.push({
-                priceLow: minPrice + i * bucketSize,
-                priceHigh: minPrice + (i + 1) * bucketSize,
-                priceMid: minPrice + (i + 0.5) * bucketSize,
-                volumeRatio: pocVolume > 0 ? volumeByBucket[i] / pocVolume : 0
-            });
-        }
-    }
-
-    return { vah, val, poc, lowVolumeNodes, bucketSize };
-}
-
-// [Phase 2] Fair Value Gap Detection — identifies price gaps left by fast-moving candles
-// Bullish FVG: gap between candle[i-1].high and candle[i+1].low (price moved up too fast)
-// Bearish FVG: gap between candle[i-1].low and candle[i+1].high (price moved down too fast)
-// Kline format: [time, open, high, low, close, volume]
-function detectFairValueGaps(klines, lookback = 20) {
-    if (!klines || klines.length < 3) return { bullish: [], bearish: [] };
-
-    const recent = klines.slice(-lookback);
-    const bullishGaps = [];
-    const bearishGaps = [];
-
-    for (let i = 1; i < recent.length - 1; i++) {
-        const prev = recent[i - 1];
-        const curr = recent[i];
-        const next = recent[i + 1];
-
-        const prevHigh = parseFloat(prev[2]);
-        const prevLow = parseFloat(prev[3]);
-        const nextHigh = parseFloat(next[2]);
-        const nextLow = parseFloat(next[3]);
-        const currClose = parseFloat(curr[4]);
-        const currOpen = parseFloat(curr[1]);
-
-        // Bullish FVG: gap between prev candle's high and next candle's low
-        if (nextLow > prevHigh && currClose > currOpen) {
-            bullishGaps.push({
-                gapLow: prevHigh,
-                gapHigh: nextLow,
-                gapMid: (prevHigh + nextLow) / 2,
-                gapSize: nextLow - prevHigh
-            });
-        }
-
-        // Bearish FVG: gap between prev candle's low and next candle's high
-        if (nextHigh < prevLow && currClose < currOpen) {
-            bearishGaps.push({
-                gapLow: nextHigh,
-                gapHigh: prevLow,
-                gapMid: (nextHigh + prevLow) / 2,
-                gapSize: prevLow - nextHigh
-            });
-        }
-    }
-
-    return { bullish: bullishGaps, bearish: bearishGaps };
-}
+const detectFairValueGaps = sharedSignals
+    ? (klines, lookback) => sharedSignals.detectFairValueGaps(klines, lookback, 'crypto')
+    : () => ({ bullish: [], bearish: [] });
 
 // ============================================================================
 // [Phase 3] COMMITTEE AGGREGATOR + REGIME — unified confidence & market conditions

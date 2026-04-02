@@ -32,6 +32,15 @@ try {
   // [v17.1] On Railway, auto-optimizer ships alongside bot.js
   try { ({ optimize: autoOptimize, evaluateStrategies: autoEvaluateStrategies, PARAM_BOUNDS: AUTO_PARAM_BOUNDS } = require('./auto-optimizer')); console.log('[INIT] auto-optimizer loaded from local'); } catch (_) {}
 }
+// Shared signal functions (compat wrappers preserve old interface)
+let sharedSignals;
+try {
+    sharedSignals = require('./signals/compat');
+} catch (e) {
+    try { sharedSignals = require('../../services/signals/compat'); } catch (_) {
+        sharedSignals = null;
+    }
+}
 // Load .env from project root (Railway injects env vars directly, so dotenv is a no-op there)
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
@@ -1835,143 +1844,18 @@ function calculateConfirmationScore({ rsi, direction, macd, orderFlowImbalance, 
     return parseFloat(score.toFixed(3));
 }
 
-// [Phase 1] Order Flow Imbalance — approximates buy/sell pressure from OHLCV candles
-// Uses candle body/range ratio as conviction proxy (volume unavailable in forex)
-function calculateOrderFlowImbalance(candles, lookback = 20) {
-    const recent = candles.slice(-lookback);
-    let buyPressure = 0, sellPressure = 0;
-    for (const candle of recent) {
-        const open = parseFloat(candle.mid.o);
-        const high = parseFloat(candle.mid.h);
-        const low = parseFloat(candle.mid.l);
-        const close = parseFloat(candle.mid.c);
-        const body = Math.abs(close - open);
-        const range = high - low;
-        if (range <= 0) continue;
-        // Weight by body/range ratio (conviction strength)
-        const conviction = body / range;
-        if (close >= open) {
-            buyPressure += conviction;
-        } else {
-            sellPressure += conviction;
-        }
-    }
-    const total = buyPressure + sellPressure;
-    if (total === 0) return 0;
-    return (buyPressure - sellPressure) / total; // -1 to +1
-}
+// Signal functions — delegated to shared library (services/signals/)
+const calculateOrderFlowImbalance = sharedSignals
+    ? (candles, lookback) => sharedSignals.calculateOrderFlowImbalance(candles, lookback, 'forex')
+    : () => 0;
 
-// [Phase 1] Displacement Candle Detection — large-body, high-range candles signal institutional intent
-function isDisplacementCandle(candles, atr, lookback = 3) {
-    if (!candles || candles.length < lookback || !atr || atr <= 0) return false;
-    const recent = candles.slice(-lookback);
-    for (const candle of recent) {
-        const open = parseFloat(candle.mid.o);
-        const high = parseFloat(candle.mid.h);
-        const low = parseFloat(candle.mid.l);
-        const close = parseFloat(candle.mid.c);
-        const body = Math.abs(close - open);
-        const range = high - low;
-        if (range <= 0) continue;
-        if (body / range > 0.7 && range > 1.5 * atr) {
-            return true;
-        }
-    }
-    return false;
-}
+const isDisplacementCandle = sharedSignals
+    ? (candles, atr, lookback) => sharedSignals.isDisplacementCandle(candles, atr, lookback, 'forex')
+    : () => false;
 
-// [Phase 2] Volume Profile for Forex — uses bar frequency and conviction weighting
-// (Forex has no reliable volume; uses candle body/range as conviction proxy)
-function calculateVolumeProfile(candles, numBuckets = 40) {
-    if (!candles || candles.length < 20) return null;
-
-    let minPrice = Infinity, maxPrice = -Infinity;
-    for (const candle of candles) {
-        const high = parseFloat(candle.mid.h);
-        const low = parseFloat(candle.mid.l);
-        if (low < minPrice) minPrice = low;
-        if (high > maxPrice) maxPrice = high;
-    }
-
-    const priceRange = maxPrice - minPrice;
-    if (priceRange <= 0) return null;
-    const bucketSize = priceRange / numBuckets;
-
-    const activityByBucket = new Array(numBuckets).fill(0);
-    let totalActivity = 0;
-
-    for (const candle of candles) {
-        const open = parseFloat(candle.mid.o);
-        const high = parseFloat(candle.mid.h);
-        const low = parseFloat(candle.mid.l);
-        const close = parseFloat(candle.mid.c);
-        const body = Math.abs(close - open);
-        const range = high - low;
-        // Conviction weight: large-body candles count more than dojis
-        const weight = range > 0 ? 1 + (body / range) : 1;
-
-        const barLowBucket = Math.max(0, Math.floor((low - minPrice) / bucketSize));
-        const barHighBucket = Math.min(numBuckets - 1, Math.floor((high - minPrice) / bucketSize));
-        const bucketsInBar = barHighBucket - barLowBucket + 1;
-        const weightPerBucket = bucketsInBar > 0 ? weight / bucketsInBar : 0;
-
-        for (let i = barLowBucket; i <= barHighBucket; i++) {
-            activityByBucket[i] += weightPerBucket;
-        }
-        totalActivity += weight;
-    }
-
-    if (totalActivity === 0) return null;
-
-    // POC
-    let pocBucket = 0;
-    for (let i = 1; i < numBuckets; i++) {
-        if (activityByBucket[i] > activityByBucket[pocBucket]) pocBucket = i;
-    }
-    const poc = minPrice + (pocBucket + 0.5) * bucketSize;
-
-    // Value Area (70%)
-    const targetActivity = totalActivity * 0.70;
-    let vaActivity = activityByBucket[pocBucket];
-    let vaLowBucket = pocBucket;
-    let vaHighBucket = pocBucket;
-
-    while (vaActivity < targetActivity && (vaLowBucket > 0 || vaHighBucket < numBuckets - 1)) {
-        const belowAct = vaLowBucket > 0 ? activityByBucket[vaLowBucket - 1] : 0;
-        const aboveAct = vaHighBucket < numBuckets - 1 ? activityByBucket[vaHighBucket + 1] : 0;
-
-        if (belowAct >= aboveAct && vaLowBucket > 0) {
-            vaLowBucket--;
-            vaActivity += activityByBucket[vaLowBucket];
-        } else if (vaHighBucket < numBuckets - 1) {
-            vaHighBucket++;
-            vaActivity += activityByBucket[vaHighBucket];
-        } else if (vaLowBucket > 0) {
-            vaLowBucket--;
-            vaActivity += activityByBucket[vaLowBucket];
-        } else {
-            break;
-        }
-    }
-
-    const vah = minPrice + (vaHighBucket + 1) * bucketSize;
-    const val = minPrice + vaLowBucket * bucketSize;
-
-    // Low-activity nodes
-    const pocActivity = activityByBucket[pocBucket];
-    const lowVolumeNodes = [];
-    for (let i = 0; i < numBuckets; i++) {
-        if (activityByBucket[i] < pocActivity * 0.30) {
-            lowVolumeNodes.push({
-                priceLow: minPrice + i * bucketSize,
-                priceHigh: minPrice + (i + 1) * bucketSize,
-                priceMid: minPrice + (i + 0.5) * bucketSize
-            });
-        }
-    }
-
-    return { vah, val, poc, lowVolumeNodes, bucketSize };
-}
+const calculateVolumeProfile = sharedSignals
+    ? (candles, numBuckets) => sharedSignals.calculateVolumeProfile(candles, numBuckets, 'forex')
+    : () => null;
 
 // [Phase 2] Fair Value Gap Detection — forex candle format (candle.mid.o/h/l/c)
 // Forex-adapted: literal price gaps (next.low > prev.high) are extremely rare in
