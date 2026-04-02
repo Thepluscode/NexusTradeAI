@@ -2832,7 +2832,7 @@ async function scanForSignals(heldPositions = positions) {
                 if (h4Candles.length >= 20) {
                     const h4BB = calculateBollingerBands(h4Candles, 20, 2);
                     const h4Closes = h4Candles.map(c => parseFloat(c.mid.c));
-                    const h4RSI = calculateRSI(h4Closes, 14);
+                    const h4RSI = calculateRSI(h4Candles, 14);
                     const h4ATR = calculateATR(h4Candles, 14);
 
                     if (h4BB && h4RSI !== null && h4ATR > 0) {
@@ -2854,7 +2854,7 @@ async function scanForSignals(heldPositions = positions) {
                                     score: parseFloat(mrScore.toFixed(3)),
                                     strategy: 'meanReversion',
                                     regime: 'ranging-oversold',
-                                    regimeQuality: (25 - h4Data.adx) / 25, // lower ADX = stronger ranging
+                                    regimeQuality: (25 - h4Data.adx) / 25,
                                     marketRegime: forexRegime.regime,
                                     macdHistogram: macd ? macd.histogram : null,
                                     orderFlowImbalance: analysis.orderFlowImbalance,
@@ -2872,7 +2872,7 @@ async function scanForSignals(heldPositions = positions) {
                         // ── MEAN REV SHORT: price at/above upper BB + RSI overbought ──
                         if (currentPrice >= h4BB.upper && h4RSI > 70) {
                             const stopLoss = currentPrice + (h4ATR * 1.5);
-                            const takeProfit = h4BB.middle; // target = 20-SMA (middle BB)
+                            const takeProfit = h4BB.middle;
                             const risk = stopLoss - currentPrice;
                             const reward = currentPrice - takeProfit;
 
