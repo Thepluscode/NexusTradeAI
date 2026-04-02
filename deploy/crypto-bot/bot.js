@@ -5232,11 +5232,30 @@ app.listen(PORT, async () => {
         }
     }
 
+    // Register the default engine in the registry BEFORE starting, so autoRestartCryptoEngines
+    // won't create a duplicate engine for the same user.
+    // Fix for: two engine instances created on boot (autoStart + registry registration)
+    if (dbPool) {
+        try {
+            const firstUserRow = await dbPool.query('SELECT id FROM users ORDER BY id ASC LIMIT 1');
+            if (firstUserRow.rows.length > 0) {
+                const defaultUserId = String(firstUserRow.rows[0].id);
+                engine._userId = parseInt(defaultUserId);
+                cryptoEngineRegistry.set(defaultUserId, engine);
+                console.log(`🔧 [CryptoRegistry] Default engine pre-registered for user ${defaultUserId}`);
+            }
+        } catch (e) {
+            console.warn('⚠️ Failed to pre-register default engine in registry:', e.message);
+        }
+    }
+
     // Auto-start the default crypto engine (matches stock/forex bot behavior)
     console.log('🚀 Auto-starting default crypto trading engine...');
     engine.start().catch(e => console.error('❌ Default crypto engine start failed:', e.message));
 
     // ── Auto-restart engines for users who had isRunning=true at last save ──
+    // NOTE: The default engine is already registered above, so getOrCreateCryptoEngine
+    // will return it (not create a second instance) for the default user.
     async function autoRestartCryptoEngines() {
         if (!dbPool) return;
         try {
@@ -5254,6 +5273,8 @@ app.listen(PORT, async () => {
                     if (eng && !eng.isRunning) {
                         await eng.start();
                         console.log(`✅ Auto-restarted crypto engine for user ${row.email}`);
+                    } else if (eng && eng.isRunning) {
+                        console.log(`⏩ Crypto engine already running for user ${row.email}, skipping`);
                     }
                 } catch (e) {
                     console.warn(`⚠️ Failed to auto-restart crypto engine for user ${row.user_id}:`, e.message);
