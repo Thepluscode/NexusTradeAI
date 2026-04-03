@@ -16,6 +16,7 @@ const { getRoundTripCost, COST_MODELS } = require('./cost-model');
 const { evaluateExit, computeRatchetStop, detectMomentumFade, detectReversalCandle, computePortfolioHeat, computeEquityCurveMultiplier, computeCorrelationGuard } = require('./exit-manager');
 const { checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth } = require('./health-monitor');
 const { normalizeCryptoBars, normalizeForexBars, normalizeStockBars } = require('./normalizers');
+const { calculateSMA, calculateEMA, calculateRSI, calculateMACD, calculateBollingerBands } = require('./indicators');
 
 module.exports = {
   computeMomentum, computeOrderFlow, computeDisplacement,
@@ -31,4 +32,5 @@ module.exports = {
   computePortfolioHeat, computeEquityCurveMultiplier, computeCorrelationGuard,
   checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth,
   normalizeCryptoBars, normalizeForexBars, normalizeStockBars,
+  calculateSMA, calculateEMA, calculateRSI, calculateMACD, calculateBollingerBands,
 };
