@@ -131,7 +131,11 @@ const FOREX_BOT_URL = process.env.FOREX_BOT_URL || 'http://localhost:3005';
 const CRYPTO_BOT_URL = process.env.CRYPTO_BOT_URL || 'http://localhost:3006';
 
 app.use(cors({
-    origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : ['http://localhost:3000', 'http://localhost:5173'],
+    origin: [
+        ...(process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : []),
+        'https://nexus-dashboard-production-e6e6.up.railway.app',
+        'http://localhost:3000', 'http://localhost:5173',
+    ],
     credentials: true
 }));
 app.use(express.json());

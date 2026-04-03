@@ -3852,7 +3852,11 @@ class CryptoTradingEngine {
 
 const app = express();
 app.use(cors({
-    origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : ['http://localhost:3000', 'http://localhost:5173'],
+    origin: [
+        ...(process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : []),
+        'https://nexus-dashboard-production-e6e6.up.railway.app',
+        'http://localhost:3000', 'http://localhost:5173',
+    ],
     credentials: true
 }));
 app.use(express.json());
