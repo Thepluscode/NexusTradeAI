@@ -130,56 +130,75 @@ jobs:
           rm -rf deploy/dashboard/dist/assets
           cp -r clients/bot-dashboard/dist/. deploy/dashboard/dist/
 
-      # Deploy dirs use thin loaders (bot.js) that require the source files
-      # directly from clients/bot-dashboard/ via ../../ paths. Railway clones
-      # the full repo, so all source files are available. No file copying needed.
-      # The deploy/*/bot.js loaders set NODE_PATH so npm-installed deps resolve.
-      - name: Verify deploy loaders
+      # Sync bot source + dependencies to deploy dirs.
+      # Railway rootDirectory only copies that subdirectory to /app/,
+      # so all required files must be present inside each deploy dir.
+      - name: Sync bot files to deploy dirs
         run: |
-          for BOT_DIR in deploy/stock-bot deploy/forex-bot deploy/crypto-bot; do
-            if ! head -1 "$BOT_DIR/bot.js" | grep -q "#!/usr/bin/env node"; then
-              echo "ERROR: $BOT_DIR/bot.js is not a thin loader — expected shebang line"
-              exit 1
-            fi
-          done
-          echo "All deploy loaders verified"
-          wc -l deploy/stock-bot/bot.js deploy/forex-bot/bot.js deploy/crypto-bot/bot.js
+          # Stock bot
+          cp clients/bot-dashboard/unified-trading-bot.js deploy/stock-bot/unified-trading-bot.js
+          cp clients/bot-dashboard/userCredentialStore.js deploy/stock-bot/userCredentialStore.js
+          cp clients/bot-dashboard/signal-analytics.js deploy/stock-bot/signal-analytics.js
+          cp -r clients/bot-dashboard/shared/ deploy/stock-bot/shared/
+          cp -r clients/bot-dashboard/infrastructure/ deploy/stock-bot/infrastructure/
+          mkdir -p deploy/stock-bot/services/trading
+          cp clients/bot-dashboard/services/trading/popular-stocks-list.js deploy/stock-bot/services/trading/popular-stocks-list.js
 
-      - name: Check if dashboard bundle changed
+          # Forex bot
+          cp clients/bot-dashboard/unified-forex-bot.js deploy/forex-bot/unified-forex-bot.js
+          cp clients/bot-dashboard/userCredentialStore.js deploy/forex-bot/userCredentialStore.js
+          cp clients/bot-dashboard/signal-analytics.js deploy/forex-bot/signal-analytics.js
+          cp -r clients/bot-dashboard/shared/ deploy/forex-bot/shared/
+          cp -r clients/bot-dashboard/infrastructure/ deploy/forex-bot/infrastructure/
+
+          # Crypto bot
+          cp clients/bot-dashboard/unified-crypto-bot.js deploy/crypto-bot/unified-crypto-bot.js
+          cp clients/bot-dashboard/userCredentialStore.js deploy/crypto-bot/userCredentialStore.js
+          cp clients/bot-dashboard/signal-analytics.js deploy/crypto-bot/signal-analytics.js
+          cp -r clients/bot-dashboard/shared/ deploy/crypto-bot/shared/
+          cp -r clients/bot-dashboard/infrastructure/ deploy/crypto-bot/infrastructure/
+
+          # Shared signals + auto-optimizer (bots use fallback require patterns)
+          for BOT_DIR in deploy/stock-bot deploy/forex-bot deploy/crypto-bot; do
+            rm -rf "$BOT_DIR/signals"
+            cp -r services/signals/ "$BOT_DIR/signals/"
+            rm -rf "$BOT_DIR/signals/__tests__" "$BOT_DIR/signals/node_modules" "$BOT_DIR/signals/package.json" "$BOT_DIR/signals/jest.config.js"
+            cp services/signals/auto-optimizer.js "$BOT_DIR/auto-optimizer.js" 2>/dev/null || true
+          done
+
+          echo "Sync complete"
+          wc -l deploy/stock-bot/unified-trading-bot.js deploy/forex-bot/unified-forex-bot.js deploy/crypto-bot/unified-crypto-bot.js
+
+      - name: Check if deploy files changed
         id: check
         run: |
-          git add -f deploy/dashboard/dist/ || true
-          if git diff --cached --quiet deploy/dashboard/; then
+          git add -f deploy/ || true
+          if git diff --cached --quiet deploy/; then
             echo "changed=false" >> $GITHUB_OUTPUT
-            echo "Dashboard bundle unchanged — skipping commit"
+            echo "Deploy files unchanged — skipping commit"
           else
             echo "changed=true" >> $GITHUB_OUTPUT
-            echo "Dashboard bundle changed — will commit"
+            echo "Deploy files changed — will commit"
+            git diff --cached --stat deploy/
           fi
 
-      - name: Commit and push dashboard bundle
+      - name: Commit and push deploy files
         if: steps.check.outputs.changed == 'true'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f deploy/dashboard/dist/
-          git commit -m "chore: sync dashboard bundle [skip ci]"
+          git add -f deploy/
+          git commit -m "chore: sync deploy files (bot-only) [skip ci]"
           git push origin main
 
-      # IMPORTANT — Railway watchPatterns (update in Railway dashboard):
-      # Bot services now use thin loaders that require source directly.
-      # watchPatterns must include the SOURCE directories, not just deploy/:
-      #   nexus-stock-bot      → ["clients/bot-dashboard/**", "services/signals/**", "infrastructure/**"]
-      #   nexus-forex-bot      → ["clients/bot-dashboard/**", "services/signals/**", "infrastructure/**"]
-      #   nexus-crypto-bot     → ["clients/bot-dashboard/**", "services/signals/**", "infrastructure/**"]
-      #   nexus-dashboard      → ["deploy/dashboard/**"]
-      #   nexus-strategy-bridge → ["services/strategy-engine/**"]
       - name: Verify deploy files
         run: |
-          ls -la deploy/stock-bot/bot.js deploy/forex-bot/bot.js deploy/crypto-bot/bot.js deploy/dashboard/dist/index.html
+          ls -la deploy/stock-bot/bot.js deploy/stock-bot/unified-trading-bot.js
+          ls -la deploy/forex-bot/bot.js deploy/forex-bot/unified-forex-bot.js
+          ls -la deploy/crypto-bot/bot.js deploy/crypto-bot/unified-crypto-bot.js
+          ls -la deploy/dashboard/dist/index.html
 
       # Trigger Railway redeploys on every push to main.
-      # Bot loaders reference source files directly, so any code change needs a redeploy.
       - name: Trigger Railway redeploys
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
