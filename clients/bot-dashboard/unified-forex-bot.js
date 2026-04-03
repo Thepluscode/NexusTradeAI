@@ -7,6 +7,7 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
+const { requireApiSecret, requireJwt, requireJwtOrApiSecret, getEncryptionKey, encryptCredential, decryptCredential, signTokens, registerAuthRoutes } = require('./shared/auth');
 const { createUserCredentialStore } = require('./userCredentialStore');
 // Signal modules — try local signal-analytics (ships with deploy), fall back to no-op
 let createSignalEndpoints;
@@ -39,6 +40,15 @@ try {
 } catch (e) {
     try { sharedSignals = require('../../services/signals/compat'); } catch (_) {
         sharedSignals = null;
+    }
+}
+// Shared indicator calculations — delegate to centralized module, inline fallback for Railway
+let sharedIndicators;
+try {
+    sharedIndicators = require('./signals/indicators');
+} catch (e) {
+    try { sharedIndicators = require('../../services/signals/indicators'); } catch (_) {
+        sharedIndicators = null;
     }
 }
 // Load .env from project root (Railway injects env vars directly, so dotenv is a no-op there)
@@ -306,15 +316,6 @@ const apiRateLimit = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: 
     message: { success: false, error: 'Too many requests, try again later' } });
 app.use('/api/', apiRateLimit);
 
-// ── Auth middleware for config-write endpoints ──────────────────────────────
-function requireApiSecret(req, res, next) {
-    const secret = process.env.NEXUS_API_SECRET;
-    if (!secret) return next();
-    const auth = req.headers.authorization || '';
-    if (auth === `Bearer ${secret}`) return next();
-    return res.status(401).json({ success: false, error: 'Unauthorized' });
-}
-
 // ── Persist env var to Railway (survives redeploys) ────────────────────────
 async function persistEnvVar(name, value) {
     const token   = process.env.RAILWAY_TOKEN;
@@ -331,42 +332,6 @@ async function persistEnvVar(name, value) {
     } catch (e) {
         console.warn(`⚠️  Railway env var persist failed for ${name}: ${e.message}`);
     }
-}
-
-// ── Per-user credential encryption (AES-256-GCM) ───────────────────────────
-function getEncryptionKey() {
-    const envKey = (process.env.CREDENTIAL_ENCRYPTION_KEY || '').trim();
-    if (envKey) {
-        const normalized = envKey.startsWith('0x') ? envKey.slice(2) : envKey;
-        if (/^[0-9a-fA-F]{64}$/.test(normalized)) {
-            return Buffer.from(normalized, 'hex');
-        }
-        console.warn('⚠️ Invalid CREDENTIAL_ENCRYPTION_KEY format; hashing configured value instead of raw hex');
-        return crypto.createHash('sha256').update(envKey).digest();
-    }
-    const secret = process.env.JWT_SECRET || 'dev-secret-change-me';
-    return crypto.createHash('sha256').update(secret).digest();
-}
-
-function encryptCredential(plaintext) {
-    const key = getEncryptionKey();
-    const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-    let encrypted = cipher.update(plaintext, 'utf8', 'hex');
-    encrypted += cipher.final('hex');
-    const tag = cipher.getAuthTag().toString('hex');
-    return `${iv.toString('hex')}:${tag}:${encrypted}`;
-}
-
-function decryptCredential(stored) {
-    const key = getEncryptionKey();
-    const [ivHex, tagHex, ciphertext] = stored.split(':');
-    if (!ivHex || !tagHex || !ciphertext) throw new Error('Invalid encrypted format');
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivHex, 'hex'));
-    decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
-    let decrypted = decipher.update(ciphertext, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    return decrypted;
 }
 
 function normalizeCredentialValue(value) {
@@ -410,186 +375,8 @@ async function loadUserCredentials(userId, broker) {
     }
 }
 
-// For credential endpoints — accepts JWT (per-user) or API secret (backward compat)
-function requireJwtOrApiSecret(req, res, next) {
-    const auth = req.headers.authorization || '';
-    if (auth.startsWith('Bearer ')) {
-        const token = auth.slice(7);
-        const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
-        try {
-            req.user = jwt.verify(token, JWT_SECRET);
-            return next();
-        } catch { /* not a JWT — try API secret */ }
-        const secret = process.env.NEXUS_API_SECRET;
-        if (secret && auth === `Bearer ${secret}`) return next();
-    }
-    return res.status(401).json({ success: false, error: 'Unauthorized — provide JWT or API secret' });
-}
-
-// ── JWT Auth Helpers ─────────────────────────────────────────────────────────
-function signTokens(userId, email) {
-    const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
-    const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret-change-me';
-    const accessToken = jwt.sign({ sub: userId, email }, JWT_SECRET, { expiresIn: '24h' });
-    const refreshToken = jwt.sign({ sub: userId, email }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
-    return { accessToken, refreshToken };
-}
-
-function requireJwt(req, res, next) {
-    const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
-    const auth = req.headers.authorization || '';
-    if (!auth.startsWith('Bearer ')) return res.status(401).json({ success: false, error: 'Missing token' });
-    try {
-        req.user = jwt.verify(auth.slice(7), JWT_SECRET);
-        next();
-    } catch {
-        return res.status(401).json({ success: false, error: 'Invalid or expired token' });
-    }
-}
-
-// Rate limiter for auth endpoints — prevents brute force attacks
-const authRateLimit = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 20,                   // max 20 requests per window per IP
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { success: false, error: 'Too many requests — try again in 15 minutes' },
-    skip: () => process.env.NODE_ENV === 'test',
-});
-
-// ── Auth Endpoints ────────────────────────────────────────────────────────────
-
-app.post('/api/auth/register', authRateLimit, async (req, res) => {
-    if (!dbPool) return res.status(503).json({ success: false, error: 'Auth service unavailable' });
-    const { email, password, name } = req.body || {};
-    if (!email || !password) return res.status(400).json({ success: false, error: 'Email and password required' });
-    if (password.length < 8) return res.status(400).json({ success: false, error: 'Password must be at least 8 characters' });
-    try {
-        const hash = await bcrypt.hash(password, 12);
-        const result = await dbPool.query(
-            'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id, email, name, role',
-            [email.toLowerCase().trim(), hash, name || null]
-        );
-        const user = result.rows[0];
-        const tokens = signTokens(user.id, user.email);
-        await dbPool.query('UPDATE users SET refresh_token=$1, last_login=NOW() WHERE id=$2', [tokens.refreshToken, user.id]);
-        res.json({ success: true, user: { id: user.id, email: user.email, name: user.name, role: user.role }, ...tokens });
-    } catch (e) {
-        if (e.code === '23505') return res.status(409).json({ success: false, error: 'Email already registered' });
-        console.error('Register error:', e.message);
-        res.status(500).json({ success: false, error: 'Registration failed' });
-    }
-});
-
-app.post('/api/auth/login', authRateLimit, async (req, res) => {
-    if (!dbPool) return res.status(503).json({ success: false, error: 'Auth service unavailable' });
-    const { email, password } = req.body || {};
-    if (!email || !password) return res.status(400).json({ success: false, error: 'Email and password required' });
-    try {
-        const result = await dbPool.query('SELECT * FROM users WHERE email=$1', [email.toLowerCase().trim()]);
-        const user = result.rows[0];
-        if (!user || !(await bcrypt.compare(password, user.password_hash))) {
-            return res.status(401).json({ success: false, error: 'Invalid email or password' });
-        }
-        const tokens = signTokens(user.id, user.email);
-        await dbPool.query('UPDATE users SET refresh_token=$1, last_login=NOW() WHERE id=$2', [tokens.refreshToken, user.id]);
-        res.json({ success: true, user: { id: user.id, email: user.email, name: user.name, role: user.role }, ...tokens });
-    } catch (e) {
-        console.error('Login error:', e.message);
-        res.status(500).json({ success: false, error: 'Login failed' });
-    }
-});
-
-app.post('/api/auth/forgot-password', authRateLimit, async (req, res) => {
-    const { email } = req.body;
-    if (!email) return res.status(400).json({ success: false, error: 'Email required' });
-    if (!dbPool) return res.json({ success: true }); // silent for security
-    try {
-        const result = await dbPool.query('SELECT id FROM users WHERE email=$1', [email.toLowerCase().trim()]);
-        if (result.rows.length === 0) return res.json({ success: true }); // don't reveal existence
-        const userId = result.rows[0].id;
-        const token = crypto.randomBytes(32).toString('hex');
-        const expires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
-        await dbPool.query(
-            `INSERT INTO password_reset_tokens (user_id, token, expires_at)
-             VALUES ($1, $2, $3)
-             ON CONFLICT (user_id) DO UPDATE SET token=$2, expires_at=$3`,
-            [userId, token, expires]
-        );
-        // Log token for now (email delivery is future work)
-        console.log(`🔑 Password reset token for ${email}: ${token}`);
-        res.json({ success: true });
-    } catch (e) {
-        res.json({ success: true }); // never reveal errors
-    }
-});
-
-app.post('/api/auth/reset-password', authRateLimit, async (req, res) => {
-    const { token, password } = req.body;
-    if (!token || !password) return res.status(400).json({ success: false, error: 'Token and password required' });
-    if (password.length < 8) return res.status(400).json({ success: false, error: 'Password must be at least 8 characters' });
-    if (!dbPool) return res.status(503).json({ success: false, error: 'Database unavailable' });
-    try {
-        const result = await dbPool.query(
-            `SELECT user_id FROM password_reset_tokens
-             WHERE token=$1 AND expires_at > NOW()`,
-            [token]
-        );
-        if (result.rows.length === 0) return res.status(400).json({ success: false, error: 'Invalid or expired token' });
-        const userId = result.rows[0].user_id;
-        const hash = await bcrypt.hash(password, 12);
-        await dbPool.query('UPDATE users SET password_hash=$1 WHERE id=$2', [hash, userId]);
-        await dbPool.query('DELETE FROM password_reset_tokens WHERE user_id=$1', [userId]);
-        res.json({ success: true });
-    } catch (e) {
-        res.status(500).json({ success: false, error: 'Reset failed' });
-    }
-});
-
-app.post('/api/auth/refresh', async (req, res) => {
-    if (!dbPool) return res.status(503).json({ success: false, error: 'Auth service unavailable' });
-    const { refreshToken } = req.body || {};
-    if (!refreshToken) return res.status(400).json({ success: false, error: 'Refresh token required' });
-    const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret-change-me';
-    try {
-        const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
-        const result = await dbPool.query('SELECT * FROM users WHERE id=$1 AND refresh_token=$2', [payload.sub, refreshToken]);
-        if (!result.rows[0]) return res.status(401).json({ success: false, error: 'Invalid refresh token' });
-        const user = result.rows[0];
-        const tokens = signTokens(user.id, user.email);
-        await dbPool.query('UPDATE users SET refresh_token=$1 WHERE id=$2', [tokens.refreshToken, user.id]);
-        res.json({ success: true, ...tokens });
-    } catch {
-        res.status(401).json({ success: false, error: 'Invalid or expired refresh token' });
-    }
-});
-
-app.post('/api/auth/logout', async (req, res) => {
-    if (dbPool) {
-        const { refreshToken } = req.body || {};
-        if (refreshToken) {
-            const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret-change-me';
-            try {
-                const payload = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
-                await dbPool.query('UPDATE users SET refresh_token=NULL WHERE id=$1', [payload.sub]);
-            } catch {}
-        }
-    }
-    res.json({ success: true });
-});
-
-app.get('/api/auth/me', requireJwt, async (req, res) => {
-    if (!dbPool) return res.status(503).json({ success: false, error: 'Auth service unavailable' });
-    try {
-        const result = await dbPool.query('SELECT id, email, name, role FROM users WHERE id=$1', [req.user.sub]);
-        if (!result.rows[0]) return res.status(404).json({ success: false, error: 'User not found' });
-        res.json({ success: true, user: result.rows[0] });
-    } catch (e) {
-        res.status(500).json({ success: false, error: 'Failed to fetch user' });
-    }
-});
-
-// ── End Auth Endpoints ────────────────────────────────────────────────────────
+// Auth routes provided by shared module
+registerAuthRoutes(app, () => dbPool);
 
 // Initialize Alert Services
 const smsAlerts = getSMSAlertService();
@@ -1609,6 +1396,7 @@ async function reducePosition(instrument, fraction) {
 function calculateRSI(candles, period = 14) {
     if (candles.length < period * 2) return 50;
     const closes = candles.map(c => parseFloat(c.mid.c));
+    if (sharedIndicators) return sharedIndicators.calculateRSI(closes, period);
     const changes = [];
     for (let i = 1; i < closes.length; i++) changes.push(closes[i] - closes[i - 1]);
 
@@ -1634,6 +1422,7 @@ function calculateRSI(candles, period = 14) {
 function calculateSMA(candles, period) {
     if (candles.length < period) return 0;
     const closes = candles.slice(-period).map(c => parseFloat(c.mid.c));
+    if (sharedIndicators) return sharedIndicators.calculateSMA(closes, closes.length) || 0;
     return closes.reduce((a, b) => a + b, 0) / period;
 }
 
@@ -1653,6 +1442,7 @@ function calculateATR(candles, period = 14) {
 
 // [v3.4] EMA on a raw number array (needed by MACD)
 function calculateEMAArray(values, period) {
+    if (sharedIndicators) return sharedIndicators.calculateEMA(values, period);
     if (values.length < period) return null;
     const mult = 2 / (period + 1);
     let ema = values.slice(0, period).reduce((a, b) => a + b, 0) / period;
@@ -1665,6 +1455,11 @@ function calculateEMAArray(values, period) {
 function calculateMACDForex(candles, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
     if (candles.length < slowPeriod + signalPeriod) return null;
     const closes = candles.map(c => parseFloat(c.mid.c));
+    if (sharedIndicators) {
+        const result = sharedIndicators.calculateMACD(closes, fastPeriod, slowPeriod, signalPeriod);
+        if (result) return { macd: result.macd, signal: result.signal, histogram: result.histogram, bullish: result.histogram > 0, bearish: result.histogram < 0 };
+        return null;
+    }
     const macdLine = [];
     for (let i = slowPeriod - 1; i < closes.length; i++) {
         const slice = closes.slice(0, i + 1);
@@ -1697,6 +1492,11 @@ function calculateMACDForex(candles, fastPeriod = 12, slowPeriod = 26, signalPer
 function calculateBollingerBands(candles, period = 20, numStdDev = 2) {
     if (candles.length < period) return null;
     const closes = candles.slice(-period).map(c => parseFloat(c.mid.c));
+    if (sharedIndicators) {
+        const result = sharedIndicators.calculateBollingerBands(closes, closes.length, numStdDev);
+        if (result) return { upper: result.upper, middle: result.middle, lower: result.lower, bandwidth: result.bandwidth };
+        return null;
+    }
     const sma = closes.reduce((a, b) => a + b, 0) / period;
     const variance = closes.reduce((sum, c) => sum + Math.pow(c - sma, 2), 0) / period;
     const std = Math.sqrt(variance);

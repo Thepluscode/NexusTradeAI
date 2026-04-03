@@ -66,31 +66,31 @@ git push main → GitHub Actions CI → Railway auto-deploy
 ```
 
 **CI pipeline (.github/workflows/ci.yml):**
-1. `test` — Jest signal module tests (17 suites, 86 tests)
+1. `test` — Jest signal module tests (20 suites, 129 tests) + shared auth tests (18 tests)
 2. `dashboard-build` — lint, typecheck, Vite build (needs: test)
 3. `smoke-tests` — health checks + API contract validation on all 5 Railway services
 
-**Railway:** Each service has its own Railway project. Deploys trigger on push to main. Filesystem is ephemeral — never use JSON files for persistence (use PostgreSQL).
+**Railway:** Each service has its own Railway project. Deploy dirs contain thin loaders (16 lines) that `require()` the source files from `clients/bot-dashboard/`. Railway clones the full repo, so all paths resolve. Filesystem is ephemeral — never use JSON files for persistence (use PostgreSQL).
 
 ---
 
 ## Key Files
 
-### Bot Engines (the actual running code)
+### Bot Engines (single source of truth)
 | File | Lines | What it does |
 |------|-------|-------------|
-| `deploy/stock-bot/bot.js` | ~7,400 | Stock trading engine + Express API |
-| `deploy/forex-bot/bot.js` | ~5,600 | Forex trading engine + Express API |
-| `deploy/crypto-bot/bot.js` | ~5,500 | Crypto trading engine + Express API |
+| `clients/bot-dashboard/unified-trading-bot.js` | ~7,000 | Stock trading engine + Express API |
+| `clients/bot-dashboard/unified-forex-bot.js` | ~5,300 | Forex trading engine + Express API |
+| `clients/bot-dashboard/unified-crypto-bot.js` | ~5,100 | Crypto trading engine + Express API |
 
-### Client Mirrors (must stay in sync with deploy/)
-| File | Mirror of |
-|------|-----------|
-| `clients/bot-dashboard/unified-trading-bot.js` | `deploy/stock-bot/bot.js` |
-| `clients/bot-dashboard/unified-forex-bot.js` | `deploy/forex-bot/bot.js` |
-| `clients/bot-dashboard/unified-crypto-bot.js` | `deploy/crypto-bot/bot.js` |
+### Deploy Entry Points (thin loaders — DO NOT edit directly)
+| File | Loads |
+|------|-------|
+| `deploy/stock-bot/bot.js` | `../../clients/bot-dashboard/unified-trading-bot.js` |
+| `deploy/forex-bot/bot.js` | `../../clients/bot-dashboard/unified-forex-bot.js` |
+| `deploy/crypto-bot/bot.js` | `../../clients/bot-dashboard/unified-crypto-bot.js` |
 
-**When editing bot code, always change BOTH deploy/ and clients/bot-dashboard/ copies.**
+**Only edit `clients/bot-dashboard/` files. Deploy loaders are 16-line wrappers that set NODE_PATH and require the source.**
 
 ### Dashboard Frontend
 - `clients/bot-dashboard/src/` — React 18 + TypeScript + Vite + MUI
@@ -98,11 +98,16 @@ git push main → GitHub Actions CI → Railway auto-deploy
 - `clients/bot-dashboard/src/services/api.ts` — API client
 
 ### Shared Modules
-- `services/signals/` — 21 signal detection modules (momentum, order-flow, FVG, etc.)
+- `services/signals/` — 22 signal modules (momentum, order-flow, FVG, indicators, normalizers, etc.)
+- `services/signals/indicators.js` — RSI, EMA, SMA, MACD, Bollinger Bands
+- `services/signals/normalizers.js` — Bar format adapters (crypto/forex/stock)
+- `services/signals/compat.js` — Backward-compatible wrappers for inline function interfaces
+- `clients/bot-dashboard/shared/auth.js` — Auth middleware, encryption, JWT, auth routes
 - `services/trading/monte-carlo-sizer.js` — Monte Carlo position sizing
 
 ### Tests
-- `services/signals/__tests__/` — 17 test suites, 86 tests
+- `services/signals/__tests__/` — 20 test suites, 129 tests
+- `clients/bot-dashboard/shared/__tests__/` — 1 test suite, 18 tests (auth)
 - `tests/unit/anti-churning.test.js` — 32 tests (anti-churning protection)
 - `tests/unit/monte-carlo-sizer.test.js` — 28 tests (position sizer)
 - Run: `npx jest tests/unit/ --config='{}'` or `cd services/signals && npx jest`
@@ -199,11 +204,11 @@ gh run list --limit 1   # check CI status
 
 ## Known Architectural Debt
 
-1. **Monolith bot files** — 5,400–7,400 lines each, mixing API server + trading engine + signal processing + auth. Not modular, hard to test.
+1. **Monolith bot files** — 5,100–7,000 lines each, mixing API server + trading engine + signal processing. Auth, indicators, and signal analysis have been extracted to shared modules, but the core engine loop + route handlers are still inline.
 
-2. **Triple duplication** — deploy/ and clients/bot-dashboard/ mirrors must be manually synced. Infrastructure modules (metrics, telegram, SMS, userCredentialStore, signal-analytics, auto-optimizer) are copy-pasted into each bot dir.
+2. **~~Triple duplication~~ RESOLVED** — deploy/ now uses thin loaders (16 lines each) that require the source from `clients/bot-dashboard/`. No more manual syncing. Railway watchPatterns must include `clients/bot-dashboard/**` and `services/signals/**`.
 
-3. **21 shared signal modules unused** — `services/signals/committee-scorer.js` has a TODO: "consolidate all 3 inline scorers." Bots implement their own versions inline.
+3. **Committee scorers + regime detectors still inline** — Each bot has custom committee scoring and regime detection that can't be trivially unified (different signal components, strategy routing, regime adjustments). `services/signals/committee-scorer.js` exists but bots use their own versions.
 
 4. **Root jest.config.js broken** — references missing `tests/setup/custom-matchers.js`. Use `--config='{}'` to bypass.
 
@@ -212,13 +217,14 @@ gh run list --limit 1   # check CI status
 ## Rules for Making Changes
 
 1. **Read the code before changing it.** These are 5,000+ line files — don't guess.
-2. **Change both copies.** deploy/ file AND clients/bot-dashboard/ mirror.
+2. **Only edit `clients/bot-dashboard/` files.** Deploy dirs have thin loaders — never edit `deploy/*/bot.js` directly.
 3. **Don't touch anti-churning** without reading the full `canTrade()` function and understanding the SMX incident.
 4. **Don't increase position sizes or disable safety limits** without explicit approval.
 5. **Verify after deploy.** "CI passed" ≠ "feature works." Check Railway logs.
 6. **Never use JSON file persistence on Railway** — filesystem is ephemeral. Use PostgreSQL.
 7. **Never commit .env files.** Credentials are in Railway env vars only.
 8. **Run tests before committing.** `cd services/signals && npx jest` must pass.
+9. **Railway watchPatterns** must include `clients/bot-dashboard/**` and `services/signals/**` for bot services — deploy/ dirs no longer change on code pushes.
 
 ---
 

@@ -38,6 +38,10 @@ jobs:
       - name: Run tests
         run: npx jest --ci --passWithNoTests
 
+      - name: Run shared module tests (auth)
+        working-directory: .
+        run: npx jest clients/bot-dashboard/shared/__tests__/ --ci --config '{}' --passWithNoTests
+
   # ── 1. Lint + type-check + production build ─────────────────────────────────
   dashboard-build:
     needs: test
