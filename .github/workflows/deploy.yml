@@ -133,36 +133,34 @@ jobs:
       # Sync bot source + dependencies to deploy dirs.
       # Railway rootDirectory only copies that subdirectory to /app/,
       # so all required files must be present inside each deploy dir.
+      # Sync bot source files to deploy dirs.
+      # Railway rootDirectory only copies that subdirectory to /app/.
+      # Files synced: unified bot files, shared auth, userCredentialStore,
+      # signal-analytics, signals/ from services/signals/.
+      # Infrastructure/ and services/ are tracked directly in deploy/ dirs.
       - name: Sync bot files to deploy dirs
         run: |
-          # Stock bot
+          # Core bot files (source of truth: clients/bot-dashboard/)
           cp clients/bot-dashboard/unified-trading-bot.js deploy/stock-bot/unified-trading-bot.js
-          cp clients/bot-dashboard/userCredentialStore.js deploy/stock-bot/userCredentialStore.js
-          cp clients/bot-dashboard/signal-analytics.js deploy/stock-bot/signal-analytics.js
-          cp -r clients/bot-dashboard/shared/ deploy/stock-bot/shared/
-          cp -r clients/bot-dashboard/infrastructure/ deploy/stock-bot/infrastructure/
-          mkdir -p deploy/stock-bot/services/trading
-          cp clients/bot-dashboard/services/trading/popular-stocks-list.js deploy/stock-bot/services/trading/popular-stocks-list.js
-
-          # Forex bot
           cp clients/bot-dashboard/unified-forex-bot.js deploy/forex-bot/unified-forex-bot.js
-          cp clients/bot-dashboard/userCredentialStore.js deploy/forex-bot/userCredentialStore.js
-          cp clients/bot-dashboard/signal-analytics.js deploy/forex-bot/signal-analytics.js
-          cp -r clients/bot-dashboard/shared/ deploy/forex-bot/shared/
-          cp -r clients/bot-dashboard/infrastructure/ deploy/forex-bot/infrastructure/
-
-          # Crypto bot
           cp clients/bot-dashboard/unified-crypto-bot.js deploy/crypto-bot/unified-crypto-bot.js
-          cp clients/bot-dashboard/userCredentialStore.js deploy/crypto-bot/userCredentialStore.js
-          cp clients/bot-dashboard/signal-analytics.js deploy/crypto-bot/signal-analytics.js
-          cp -r clients/bot-dashboard/shared/ deploy/crypto-bot/shared/
-          cp -r clients/bot-dashboard/infrastructure/ deploy/crypto-bot/infrastructure/
 
-          # Shared signals + auto-optimizer (bots use fallback require patterns)
+          # Shared modules
           for BOT_DIR in deploy/stock-bot deploy/forex-bot deploy/crypto-bot; do
-            rm -rf "$BOT_DIR/signals"
-            cp -r services/signals/ "$BOT_DIR/signals/"
-            rm -rf "$BOT_DIR/signals/__tests__" "$BOT_DIR/signals/node_modules" "$BOT_DIR/signals/package.json" "$BOT_DIR/signals/jest.config.js"
+            cp clients/bot-dashboard/userCredentialStore.js "$BOT_DIR/userCredentialStore.js"
+            cp clients/bot-dashboard/signal-analytics.js "$BOT_DIR/signal-analytics.js"
+            mkdir -p "$BOT_DIR/shared"
+            cp clients/bot-dashboard/shared/auth.js "$BOT_DIR/shared/auth.js"
+
+            # Shared signals (source of truth: services/signals/)
+            mkdir -p "$BOT_DIR/signals"
+            for SIG in compat.js indicators.js api-handlers.js committee-scorer.js exit-manager.js \
+                       health-monitor.js auto-optimizer.js stop-manager.js index.js normalizers.js \
+                       momentum.js trend.js order-flow.js volume-profile.js volume-ratio.js \
+                       displacement.js fvg-detector.js macd.js regime-detector.js \
+                       entry-qualifier.js confidence-calibrator.js cost-model.js multi-timeframe.js; do
+              cp "services/signals/$SIG" "$BOT_DIR/signals/$SIG" 2>/dev/null || true
+            done
             cp services/signals/auto-optimizer.js "$BOT_DIR/auto-optimizer.js" 2>/dev/null || true
           done
 
