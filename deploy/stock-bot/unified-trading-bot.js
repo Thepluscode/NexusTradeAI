@@ -6953,11 +6953,14 @@ app.listen(PORT, async () => {
     // Default single-loop for env-var-only mode + multi-user ScanQueue
     setInterval(async () => {
         try {
-            // Run ScanQueue for all registered user engines
-            await runScanQueue();
-            // [v13.0] Fall back to global loop if NO engines are actively running
-            // Bug: pre-registration creates engines with botRunning=false, blocking global loop
-            // while per-user engines silently skip scans.
+            // Run ScanQueue with timeout — if a broker API hangs, don't block forever
+            const scanTimeout = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('ScanQueue timeout (90s)')), 90000));
+            await Promise.race([runScanQueue(), scanTimeout]).catch(e => {
+                console.error('❌ ScanQueue error:', e.message);
+                scanQueueRunning = false; // reset stuck flag
+            });
+            // Always run global tradingLoop when no per-user engine is active
             const anyEngineRunning = Array.from(engineRegistry.values()).some(e => e.botRunning);
             if (engineRegistry.size === 0 || !anyEngineRunning) {
                 await tradingLoop();
