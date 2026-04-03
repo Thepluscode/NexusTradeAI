@@ -38,10 +38,6 @@ jobs:
       - name: Run tests
         run: npx jest --ci --passWithNoTests
 
-      - name: Run shared module tests (auth)
-        working-directory: .
-        run: npx jest clients/bot-dashboard/shared/__tests__/ --ci --config '{}' --passWithNoTests
-
   # ── 1. Lint + type-check + production build ─────────────────────────────────
   dashboard-build:
     needs: test
@@ -76,6 +72,9 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Run shared module tests (auth)
+        run: npx jest shared/__tests__/ --ci --config '{}' --passWithNoTests
 
       # Upload the built dist so the deploy job can download it without rebuilding
       - name: Upload dist artifact
