@@ -1746,8 +1746,13 @@ class CryptoTradingEngine {
             const age = Date.now() - cached.timestamp;
             const priceDrift = Math.abs(signal.price - cached.price) / cached.price;
             if (age < this._AGENT_CACHE_TTL_MS && priceDrift < this._AGENT_CACHE_PRICE_DRIFT) {
-                console.log(`[Agent] ${signal.symbol}: using cached decision (${(age / 1000).toFixed(0)}s old, drift ${(priceDrift * 100).toFixed(2)}%)`);
-                return { ...cached.result, source: 'cache' };
+                // Only reuse REJECTED decisions — approvals must re-evaluate so each trade
+                // gets its own decision_run_id (outcome learning loop depends on 1:1 linkage).
+                if (cached.result.approved === false) {
+                    console.log(`[Agent] ${signal.symbol}: using cached REJECTION (${(age / 1000).toFixed(0)}s old)`);
+                    return { ...cached.result, source: 'cache' };
+                }
+                console.log(`[Agent] ${signal.symbol}: cache hit but APPROVED — re-evaluating for fresh decision_run_id`);
             }
             this._agentCache.delete(cacheKey);
         }
@@ -4997,10 +5002,13 @@ app.listen(PORT, async () => {
 
     // ── DB Reconciliation: close orphaned 'open' trades not in memory ──
     // Runs after loadState so engine.positions is populated from saved state.
+    // Two passes: (1) system-level orphans (user_id IS NULL), (2) stale orphans from any user.
     try {
         if (dbPool) {
             const orphaned = await dbPool.query(
-                `SELECT id, symbol FROM trades WHERE bot='crypto' AND status='open' AND user_id IS NULL`
+                `SELECT id, symbol FROM trades WHERE bot='crypto' AND status='open'
+                 AND (user_id IS NULL OR entry_time < NOW() - make_interval(days => $1))`,
+                [engine.config.stalePositionDays]
             );
             const toClose = orphaned.rows.filter(row => !engine.positions.has(row.symbol));
             if (toClose.length > 0) {

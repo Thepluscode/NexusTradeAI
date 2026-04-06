@@ -1189,6 +1189,10 @@ function canTrade(pair, direction = 'long') {
 
 // [v10.1] Re-entry validation — only allow re-entry if conditions still favor the original direction
 function isReentryValid(pair, signal) {
+    // Pause guard — never re-enter while the bot is paused, regardless of signal quality
+    if (botPaused) {
+        return { valid: false, reason: 'bot paused' };
+    }
     const reentryData = profitProtectReentryPairs.get(pair);
     if (!reentryData) return { valid: true, reason: 'no re-entry flag' }; // Not a re-entry, pass through
 
@@ -2034,8 +2038,13 @@ async function queryAIAdvisor(signal) {
         const age = Date.now() - cached.timestamp;
         const priceDrift = Math.abs(signal.entry - cached.price) / cached.price;
         if (age < _FOREX_AGENT_CACHE_TTL_MS && priceDrift < _FOREX_AGENT_CACHE_PRICE_DRIFT) {
-            console.log(`[Agent] ${signal.pair}: using cached decision (${(age / 1000).toFixed(0)}s old, drift ${(priceDrift * 100).toFixed(3)}%)`);
-            return { ...cached.result, source: 'cache' };
+            // Only reuse REJECTED decisions — approvals must re-evaluate so each trade
+            // gets its own decision_run_id (outcome learning loop depends on 1:1 linkage).
+            if (cached.result.approved === false) {
+                console.log(`[Agent] ${signal.pair}: using cached REJECTION (${(age / 1000).toFixed(0)}s old)`);
+                return { ...cached.result, source: 'cache' };
+            }
+            console.log(`[Agent] ${signal.pair}: cache hit but APPROVED — re-evaluating for fresh decision_run_id`);
         }
         _forexAgentCache.delete(cacheKey);
     }
@@ -5089,11 +5098,17 @@ app.listen(PORT, async () => {
     // ── DB Reconciliation: close orphaned 'open' trades not in memory ──
     // Runs after position hydration so in-memory positions map is complete.
     // Any DB row still 'open' for a pair we don't track = orphaned on restart.
-    // ONLY check system-level trades (user_id IS NULL). Per-user trades are managed by UserForexEngine.
+    // Two passes: (1) system-level recent orphans (user_id IS NULL, >5 min old),
+    //             (2) stale orphans from any user_id open longer than stalePositionDays.
     try {
         if (dbPool) {
             const orphaned = await dbPool.query(
-                `SELECT id, symbol FROM trades WHERE bot='forex' AND status='open' AND user_id IS NULL AND entry_time < NOW() - INTERVAL '5 minutes'`
+                `SELECT id, symbol FROM trades WHERE bot='forex' AND status='open'
+                 AND (
+                   (user_id IS NULL AND entry_time < NOW() - INTERVAL '5 minutes')
+                   OR entry_time < NOW() - make_interval(days => $1)
+                 )`,
+                [EXIT_CONFIG.stalePositionDays]
             );
             const toClose = orphaned.rows.filter(row => !positions.has(row.symbol));
             if (toClose.length > 0) {
