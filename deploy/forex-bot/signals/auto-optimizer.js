@@ -14,8 +14,10 @@
  */
 
 // Parameter bounds — NEVER optimize outside these safety limits
+// [v20.1] committeeThreshold lowered: absent signals now score 0.5 (neutral) not 0.1 (penalty),
+// so the effective score range shifted up. Old 0.50 threshold blocked nearly everything.
 const PARAM_BOUNDS = {
-  committeeThreshold: { min: 0.45, max: 0.60, step: 0.025, default: 0.50 },
+  committeeThreshold: { min: 0.35, max: 0.55, step: 0.025, default: 0.40 },
   minRewardRisk:      { min: 1.5,  max: 2.5,  step: 0.25,  default: 2.0 },
   sizeMultiplier:     { min: 0.5,  max: 1.5,  step: 0.25,  default: 1.0 },
   atrStopMultiplier:  { min: 1.0,  max: 2.0,  step: 0.25,  default: 1.5 },
