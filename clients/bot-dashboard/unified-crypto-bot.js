@@ -1166,26 +1166,35 @@ function computeCryptoCommitteeScore(signal) {
     let totalWeight = 0;
 
     // 1. Momentum strength (weight: cryptoCommitteeWeights.momentum)
-    // [Tier3 Fix] Wider normalization for crypto — 5% cap flattened differentiation on 10-30% moves
-    const momentumScore = Math.min(Math.abs(parseFloat(signal.momentum || 0)) / 15, 1.0);
+    // [v20.1] Tier-aware normalization — tier1/tier2 fire at 0.1-1.0% momentum,
+    // dividing by 15 made them score ~0.01. Use 2% cap for tier1/2, 15% for tier3.
+    const momAbs = Math.abs(parseFloat(signal.momentum || 0));
+    const momCap = (signal.tier === 'tier3') ? 15 : 2;
+    const momentumScore = Math.min(momAbs / momCap, 1.0);
     confirmations += momentumScore * cryptoCommitteeWeights.momentum;
     totalWeight += cryptoCommitteeWeights.momentum;
 
     // 2. Order flow confirmation (weight: cryptoCommitteeWeights.orderFlow)
+    // [v20.1] Absent flow = neutral (0.5), not penalty. Flow data may be unavailable
+    // during warmup or when signal modules aren't loaded.
     const flowScore = signal.orderFlowImbalance !== undefined
         ? Math.max(0, signal.orderFlowImbalance) // 0 to 1 for longs
-        : 0.1; // [v14.0] 0.3→0.1: absent flow = no confirmation, should penalize not inflate
+        : 0.5;
     confirmations += flowScore * cryptoCommitteeWeights.orderFlow;
     totalWeight += cryptoCommitteeWeights.orderFlow;
 
     // 3. Displacement candle (weight: cryptoCommitteeWeights.displacement)
-    // [v14.2] 0.1 when absent — 0.3 was too generous; absent means no confirmation
-    const displacementScore = signal.hasDisplacement ? 1.0 : 0.1;
+    // [v20.1] Absent = neutral (0.5). Displacement is a rare institutional event —
+    // its absence is normal, not a negative signal. Penalizing it (0.1) blocked
+    // the vast majority of legitimate momentum entries.
+    const displacementScore = signal.hasDisplacement ? 1.0 : 0.5;
     confirmations += displacementScore * cryptoCommitteeWeights.displacement;
     totalWeight += cryptoCommitteeWeights.displacement;
 
     // 4. Volume Profile position (weight: cryptoCommitteeWeights.volumeProfile)
-    let vpScore = 0.1; // [v14.0] 0.3→0.1: absent VP = no confirmation, should penalize not inflate
+    // [v20.1] Absent VP = neutral (0.5). VP requires sufficient kline history to compute;
+    // during warmup or for low-volume pairs it returns null.
+    let vpScore = 0.5;
     if (signal.volumeProfileData) {
         const price = parseFloat(signal.price);
         const { vah, val } = signal.volumeProfileData;
@@ -1200,8 +1209,8 @@ function computeCryptoCommitteeScore(signal) {
     totalWeight += cryptoCommitteeWeights.volumeProfile;
 
     // 5. FVG confirmation (weight: cryptoCommitteeWeights.fvg)
-    // [v14.2] 0.1 when absent — 0.3 was too generous; absent means no confirmation
-    const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0.1;
+    // [v20.1] Absent = neutral (0.5). FVGs are opportunistic — their absence is normal.
+    const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0.5;
     confirmations += fvgScore * cryptoCommitteeWeights.fvg;
     totalWeight += cryptoCommitteeWeights.fvg;
 
@@ -3295,7 +3304,7 @@ class CryptoTradingEngine {
                 // Effective thresholds — use optimized values when available, else defaults
                 const effectiveCommitteeThreshold = this._optimizedParams
                     ? this._optimizedParams.committeeThreshold
-                    : (AUTO_PARAM_BOUNDS.committeeThreshold || {}).default || 0.55; // [v17.0] threshold sweep: PF jumps from 1.20→2.74 at 0.55
+                    : (AUTO_PARAM_BOUNDS.committeeThreshold || {}).default || 0.40; // [v20.1] was 0.55, too high with neutral-default scoring (absent=0.5 not 0.1)
                 const effectiveMinRR = this._optimizedParams
                     ? this._optimizedParams.minRewardRisk
                     : (AUTO_PARAM_BOUNDS.minRewardRisk || {}).default || 2.0;
