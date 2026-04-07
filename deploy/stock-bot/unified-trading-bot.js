@@ -1736,7 +1736,7 @@ function calculateMACD(bars, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9)
 // Signal functions — delegated to shared library (services/signals/)
 const calculateOrderFlowImbalance = sharedSignals
     ? (klines, lookback) => sharedSignals.calculateOrderFlowImbalance(klines, lookback, 'stock')
-    : (klines, lookback) => 0;
+    : (klines, lookback) => undefined; // undefined = gate skipped (no signal data available)
 
 const isDisplacementCandle = sharedSignals
     ? (klines, atr, lookback) => sharedSignals.isDisplacementCandle(klines, atr, lookback, 'stock')
@@ -2822,10 +2822,15 @@ async function scanMomentumBreakouts() {
                         console.log(`[Guardrail] ${mover.symbol} BLOCKED — R:R ${rewardRisk.toFixed(2)} < ${effectiveMinRR}`);
                         continue;
                     }
-                    // [Phase 1] Order flow confirmation — skip if flow opposes trade direction
-                    if (mover.orderFlowImbalance !== undefined && mover.orderFlowImbalance < 0.1) {
-                        console.log(`[FILTER] ${mover.symbol}: Order flow imbalance too weak (${mover.orderFlowImbalance.toFixed(2)}), skipping`);
-                        continue;
+                    // [Phase 1] Order flow confirmation — block only when flow actively opposes trade direction
+                    // Previous threshold (< 0.1) blocked nearly all trades in balanced markets where imbalance is typically 0.01-0.08
+                    if (mover.orderFlowImbalance !== undefined) {
+                        const dir = mover.direction || 'long';
+                        const ofi = mover.orderFlowImbalance;
+                        if ((dir === 'long' && ofi < -0.05) || (dir === 'short' && ofi > 0.05)) {
+                            console.log(`[FILTER] ${mover.symbol}: Order flow opposes ${dir} (imbalance=${ofi.toFixed(2)}), skipping`);
+                            continue;
+                        }
                     }
                     // [Phase 3] Committee aggregator — unified confidence from all signal sources
                     const committee = computeCommitteeScore(mover);
@@ -5597,10 +5602,14 @@ class UserTradingEngine {
                     console.log(`[Engine ${this.userId}][ORB LIMIT] ${mover.symbol}: Already ${this.orbTradesToday} ORB trades today (max 2) — skipping`);
                     continue;
                 }
-                // [Phase 1] Order flow confirmation
-                if (mover.orderFlowImbalance !== undefined && mover.orderFlowImbalance < 0.1) {
-                    console.log(`[Engine ${this.userId}][FILTER] ${mover.symbol}: Order flow imbalance too weak (${mover.orderFlowImbalance.toFixed(2)}), skipping`);
-                    continue;
+                // [Phase 1] Order flow confirmation — block only when flow actively opposes trade direction
+                if (mover.orderFlowImbalance !== undefined) {
+                    const dir = mover.direction || 'long';
+                    const ofi = mover.orderFlowImbalance;
+                    if ((dir === 'long' && ofi < -0.05) || (dir === 'short' && ofi > 0.05)) {
+                        console.log(`[Engine ${this.userId}][FILTER] ${mover.symbol}: Order flow opposes ${dir} (imbalance=${ofi.toFixed(2)}), skipping`);
+                        continue;
+                    }
                 }
                 // [Phase 3] Committee aggregator — unified confidence from all signal sources
                 const committee = computeCommitteeScore(mover);
