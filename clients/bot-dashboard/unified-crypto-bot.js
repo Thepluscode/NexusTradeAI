@@ -1064,7 +1064,7 @@ function isRealTradingEnabled() {
 // Signal functions — delegated to shared library (services/signals/)
 const calculateOrderFlowImbalance = sharedSignals
     ? (klines, lookback) => sharedSignals.calculateOrderFlowImbalance(klines, lookback, 'crypto')
-    : (klines, lookback) => 0;
+    : (klines, lookback) => undefined; // undefined = gate skipped (no signal data available)
 
 const isDisplacementCandle = sharedSignals
     ? (klines, atr, lookback) => sharedSignals.isDisplacementCandle(klines, atr, lookback, 'crypto')
@@ -3495,10 +3495,15 @@ class CryptoTradingEngine {
                             console.log(`[Regime] ${signal.symbol} BLOCKED — score ${(signal.score || 0).toFixed(2)} < ${regimeScoreThreshold.toFixed(2)} (regime: ${cryptoRegime.adjustments.label})`);
                             continue;
                         }
-                        // [Phase 1] Order flow confirmation — skip if flow opposes trade direction
-                        if (signal.orderFlowImbalance !== undefined && signal.orderFlowImbalance < 0.1) {
-                            console.log(`[FILTER] ${signal.symbol}: Order flow imbalance too weak (${signal.orderFlowImbalance.toFixed(2)}), skipping`);
-                            continue;
+                        // [Phase 1] Order flow confirmation — block only when flow actively opposes trade direction
+                        // Previous threshold (< 0.1) blocked nearly all trades in balanced markets where imbalance is typically 0.01-0.08
+                        if (signal.orderFlowImbalance !== undefined) {
+                            const dir = signal.direction || 'long';
+                            const ofi = signal.orderFlowImbalance;
+                            if ((dir === 'long' && ofi < -0.05) || (dir === 'short' && ofi > 0.05)) {
+                                console.log(`[FILTER] ${signal.symbol}: Order flow opposes ${dir} (imbalance=${ofi.toFixed(2)}), skipping`);
+                                continue;
+                            }
                         }
                         // [Phase 3] Committee aggregator — unified confidence from all signal sources
                         // threshold uses auto-optimized value (falls back to 0.50 default)
