@@ -1764,27 +1764,30 @@ function computeCommitteeScore(signal) {
     let totalWeight = 0;
 
     // 1. Momentum strength (weight: dynamic via committeeWeights)
+    // [v20.1] Stock movers are typically 1-5% — /10 cap is appropriate for stocks
     const momentumScore = Math.min(parseFloat(signal.percentChange || 0) / 10, 1.0);
     confirmations += momentumScore * committeeWeights.momentum;
     totalWeight += committeeWeights.momentum;
 
     // 2. Order flow confirmation (weight: dynamic via committeeWeights)
-    // Neutral default 0.1 — absence of confirmation should penalize, not inflate
+    // [v20.1] Absent = neutral (0.5). Flow data unavailable during warmup or when
+    // signal modules aren't loaded shouldn't penalize the score.
     const flowScore = signal.orderFlowImbalance !== undefined
         ? Math.max(0, signal.orderFlowImbalance) // 0 to 1 for longs
-        : 0.3; // penalizing default if unavailable
+        : 0.5;
     confirmations += flowScore * committeeWeights.orderFlow;
     totalWeight += committeeWeights.orderFlow;
 
     // 3. Displacement candle (weight: dynamic via committeeWeights)
-    // Neutral default 0.1 — absence of confirmation should penalize, not inflate
-    const displacementScore = signal.hasDisplacement ? 1.0 : 0.1;
+    // [v20.1] Absent = neutral (0.5). Displacement is a rare institutional event —
+    // its absence is normal for most momentum entries.
+    const displacementScore = signal.hasDisplacement ? 1.0 : 0.5;
     confirmations += displacementScore * committeeWeights.displacement;
     totalWeight += committeeWeights.displacement;
 
     // 4. Volume Profile position (weight: dynamic via committeeWeights)
-    // Neutral default 0.1 — absence of confirmation should penalize, not inflate
-    let vpScore = 0.3; // penalizing default when volume profile unavailable
+    // [v20.1] Absent = neutral (0.5). VP requires sufficient bar history.
+    let vpScore = 0.5;
     if (signal.volumeProfile) {
         const price = parseFloat(signal.price);
         const { vah, val, poc } = signal.volumeProfile;
@@ -1799,8 +1802,8 @@ function computeCommitteeScore(signal) {
     totalWeight += committeeWeights.volumeProfile;
 
     // 5. FVG confirmation (weight: dynamic via committeeWeights)
-    // Neutral default 0.1 — absence of confirmation should penalize, not inflate
-    const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0.1;
+    // [v20.1] Absent = neutral (0.5). FVGs are opportunistic confirmations.
+    const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0.5;
     confirmations += fvgScore * committeeWeights.fvg;
     totalWeight += committeeWeights.fvg;
 
@@ -2840,7 +2843,7 @@ async function scanMomentumBreakouts() {
                     // [Phase 3] Committee aggregator — unified confidence from all signal sources
                     const committee = computeCommitteeScore(mover);
                     // [v14.0] Raised default from 0.50 → 0.60 — 0.50 passed too many low-conviction signals (36% WR)
-                    const committeeThreshold = optimizedParams?.committeeThreshold || 0.50; // [v17.0] was 0.60, too few trades with binary components
+                    const committeeThreshold = optimizedParams?.committeeThreshold || 0.40; // [v20.1] was 0.50, too high with neutral-default scoring (absent=0.5 not 0.1)
                     if (committee.confidence < committeeThreshold) {
                         console.log(`[Committee] ${mover.symbol}: Confidence ${committee.confidence} < ${committeeThreshold} threshold — ${JSON.stringify(committee.components)}`);
                         continue;
@@ -5619,7 +5622,7 @@ class UserTradingEngine {
                 // [Phase 3] Committee aggregator — unified confidence from all signal sources
                 const committee = computeCommitteeScore(mover);
                 // [v14.0] Raised default from 0.50 → 0.60 — 0.50 passed too many low-conviction signals
-                const committeeThreshold = optimizedParams?.committeeThreshold || 0.50; // [v17.0] was 0.60, too few trades with binary components
+                const committeeThreshold = optimizedParams?.committeeThreshold || 0.40; // [v20.1] was 0.50, too high with neutral-default scoring (absent=0.5 not 0.1)
                 if (committee.confidence < committeeThreshold) {
                     console.log(`[Engine ${this.userId}][Committee] ${mover.symbol}: Confidence ${committee.confidence} < ${committeeThreshold} — skipping`);
                     continue;
