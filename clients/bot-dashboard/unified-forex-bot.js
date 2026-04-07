@@ -37,8 +37,12 @@ try {
 let sharedSignals;
 try {
     sharedSignals = require('./signals/compat');
+    console.log('[INIT] sharedSignals loaded from ./signals/compat');
 } catch (e) {
-    try { sharedSignals = require('../../services/signals/compat'); } catch (_) {
+    try { sharedSignals = require('../../services/signals/compat');
+        console.log('[INIT] sharedSignals loaded from ../../services/signals/compat');
+    } catch (_) {
+        console.log('[INIT] sharedSignals NOT available — order flow/displacement/volume-profile gates disabled');
         sharedSignals = null;
     }
 }
@@ -299,6 +303,7 @@ const { getTelegramAlertService } = require('./infrastructure/notifications/tele
  */
 
 const app = express();
+app.set('trust proxy', 1); // Railway runs behind a reverse proxy
 const PORT = process.env.PORT || process.env.FOREX_PORT || 3005;
 
 // [Phase 3.5] Cross-bot portfolio risk URLs (for co-located or Railway deployment)

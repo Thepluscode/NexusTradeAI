@@ -47,8 +47,12 @@ try {
 let sharedSignals;
 try {
     sharedSignals = require('./signals/compat');
+    console.log('[INIT] sharedSignals loaded from ./signals/compat');
 } catch (e) {
-    try { sharedSignals = require('../../services/signals/compat'); } catch (_) {
+    try { sharedSignals = require('../../services/signals/compat');
+        console.log('[INIT] sharedSignals loaded from ../../services/signals/compat');
+    } catch (_) {
+        console.log('[INIT] sharedSignals NOT available — order flow/displacement/volume-profile gates disabled');
         sharedSignals = null;
     }
 }
@@ -1888,11 +1892,12 @@ class CryptoTradingEngine {
             // Don't return false — neutral is OK
         }
 
-        // [v19.1] RSI band: 38-78 — was 45-72, too tight (RSI 42.8 blocked all trades for hours)
-        // BTC RSI routinely dips to 38-42 in mild pullbacks without invalidating the trend
+        // [v20.1] RSI band: 35-82 — was 38-78, too tight (RSI 78.6 blocked all trades 2026-04-07)
+        // BTC RSI routinely hits 78-82 during healthy rallies without signaling a crash
+        // Only block at RSI extremes that historically precede sharp reversals
         const btcRsi = this.calculateRSI(btcPrices, 14);
-        if (btcRsi < 38 || btcRsi > 78) {
-            console.log(`[BTC Filter] RSI ${btcRsi.toFixed(1)} outside healthy range 38-78`);
+        if (btcRsi < 35 || btcRsi > 82) {
+            console.log(`[BTC Filter] RSI ${btcRsi.toFixed(1)} outside healthy range 35-82`);
             return false;
         }
 
@@ -3861,6 +3866,7 @@ class CryptoTradingEngine {
 // ============================================================================
 
 const app = express();
+app.set('trust proxy', 1); // Railway runs behind a reverse proxy
 app.use(cors({
     origin: [
         ...(process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : []),
