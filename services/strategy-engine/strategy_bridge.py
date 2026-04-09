@@ -145,6 +145,20 @@ class TradeOutcomeRequest(BaseModel):
     decision_run_id: Optional[int] = None  # Links back to the agent decision
     bandit_arm: Optional[str] = None  # For supervisor bandit reward attribution
 
+class TradeExecutionRequest(BaseModel):
+    symbol: str
+    asset_class: str = "stock"
+    direction: str = "long"
+    tier: str = "tier1"
+    decision_run_id: Optional[int] = None
+    fill_price: float
+    intended_price: Optional[float] = None
+    quantity: float = 0.0
+    position_size_usd: float = 0.0
+    strategy: str = ""
+    agent_approved: Optional[bool] = None
+    agent_confidence: Optional[float] = None
+
 class StrategySignalResponse(BaseModel):
     strategy: str
     signal: str  # BUY, SELL, NEUTRAL
@@ -648,6 +662,40 @@ if FASTAPI_AVAILABLE:
             }
         except Exception as e:
             logger.error(f"Trade outcome recording error for {req.symbol}: {e}")
+            return {
+                "status": "error",
+                "symbol": req.symbol,
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
+            }
+
+    @app.post("/agent/execution")
+    async def agent_execution(req: TradeExecutionRequest):
+        """Report a trade execution (bot confirmed fill from broker)."""
+        try:
+            snapshot = MarketSnapshot(
+                symbol=req.symbol,
+                asset_class=req.asset_class,
+                price=req.intended_price or req.fill_price,
+                direction=req.direction,
+                tier=req.tier,
+            )
+            execution_id = await agent_orchestrator.outcome_store.log_execution(
+                decision_run_id=req.decision_run_id,
+                snapshot=snapshot,
+                fill_price=req.fill_price,
+                quantity=req.quantity,
+                position_size_usd=req.position_size_usd,
+                strategy=req.strategy,
+            )
+            return {
+                "status": "recorded",
+                "execution_id": execution_id,
+                "symbol": req.symbol,
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"Execution recording error for {req.symbol}: {e}")
             return {
                 "status": "error",
                 "symbol": req.symbol,
