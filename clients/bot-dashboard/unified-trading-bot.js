@@ -2261,11 +2261,12 @@ function isStockEntryQualified(signal, committee) {
         reasons.push(`percentChange=${percentChange.toFixed(2)}% not positive`);
     }
 
-    // 4. RSI must be between 40-60 (data: RSI 45-55 = 62% WR +$101, RSI 65+ = 34% WR -$160)
-    // [v22.0] Tightened from 30-65 — overbought entries (>60) consistently lose money
+    // 4. RSI must be between 40-65 (data: RSI 45-55 = 62% WR, RSI 65+ = -$160)
+    // [v22.1] Widened from 40-60 to 40-65 — ORB builder already filters 48-68,
+    // and a 40-60 window was too narrow (killed all morning ORB signals where RSI is typically 55-65)
     const rsi = parseFloat(signal.rsi || 50);
-    if (rsi < 40 || rsi > 60) {
-        reasons.push(`rsi=${rsi.toFixed(1)} outside 40-60`);
+    if (rsi < 40 || rsi > 65) {
+        reasons.push(`rsi=${rsi.toFixed(1)} outside 40-65`);
     }
 
     // 5. Not entering against a strong move (don't buy after a -3% day)
