@@ -680,7 +680,8 @@ if FASTAPI_AVAILABLE:
                 direction=req.direction,
                 tier=req.tier,
             )
-            execution_id = await agent_orchestrator.outcome_store.log_execution(
+            from agents.outcome_store import outcome_store
+            execution_id = await outcome_store.log_execution(
                 decision_run_id=req.decision_run_id,
                 snapshot=snapshot,
                 fill_price=req.fill_price,
