@@ -2834,6 +2834,24 @@ async function executeTrade(signal) {
             signal.tier
         ).catch(e => console.warn(`⚠️  Telegram entry alert failed: ${e.message}`));
 
+        // [v21.0] Report execution to strategy bridge learning loop
+        axios.post(`${BRIDGE_URL}/agent/execution`, {
+            symbol: signal.pair,
+            asset_class: 'forex',
+            direction: signal.direction,
+            tier: signal.tier || 'tier1',
+            decision_run_id: signal.decisionRunId || null,
+            fill_price: effectiveEntry,
+            intended_price: signal.entry,
+            quantity: Math.abs(units),
+            position_size_usd: positionValue,
+            strategy: tags.strategy || 'forex',
+            agent_approved: signal.agentApproved || false,
+            agent_confidence: signal.agentConfidence || null,
+        }, { timeout: 5000 }).then(() => {
+            console.log(`[Learn] ${signal.pair} execution reported to bridge`);
+        }).catch(e => console.warn(`[Learn] ${signal.pair} execution report failed: ${e.message}`));
+
         return true;
     }
 
@@ -4683,6 +4701,15 @@ class UserForexEngine {
             this.recentTrades.set(signal.pair, trades);
             await this.saveState();
             (this._telegram || telegramAlerts).sendForexEntry(signal.pair, signal.direction, signal.entry, signal.stopLoss, signal.takeProfit, units, signal.tier).catch(err => console.warn('[ALERT]', err.message));
+            // [v21.0] Report execution to strategy bridge learning loop
+            axios.post(`${BRIDGE_URL}/agent/execution`, {
+                symbol: signal.pair, asset_class: 'forex', direction: signal.direction,
+                tier: signal.tier || 'tier1', decision_run_id: signal.decisionRunId || null,
+                fill_price: effectiveEntry, intended_price: signal.entry,
+                quantity: Math.abs(units), position_size_usd: positionValue,
+                strategy: tags.strategy || 'forex',
+                agent_approved: signal.agentApproved || false, agent_confidence: signal.agentConfidence || null,
+            }, { timeout: 5000 }).catch(e => console.warn(`[Learn] ${signal.pair} execution report failed: ${e.message}`));
             console.log(`✅ [ForexEngine ${this.userId}] Trade: ${signal.direction.toUpperCase()} ${signal.pair} x${Math.abs(units)}`);
             return true;
         }

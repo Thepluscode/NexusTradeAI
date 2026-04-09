@@ -3868,6 +3868,24 @@ async function executeTrade(signal, strategy) {
         telegramAlerts.sendStockEntry(signal.symbol, signal.price, parseFloat(stopPrice), parseFloat(targetPrice), shares, tier)
             .catch(e => console.warn(`⚠️  Telegram entry alert failed: ${e.message}`));
 
+        // [v21.0] Report execution to strategy bridge learning loop
+        axios.post(`${BRIDGE_URL}/agent/execution`, {
+            symbol: signal.symbol,
+            asset_class: 'stock',
+            direction: 'long',
+            tier,
+            decision_run_id: signal.decisionRunId || null,
+            fill_price: effectiveEntry,
+            intended_price: signal.price,
+            quantity: shares,
+            position_size_usd: shares * effectiveEntry,
+            strategy,
+            agent_approved: signal.agentApproved || false,
+            agent_confidence: signal.agentConfidence || null,
+        }, { timeout: 5000 }).then(() => {
+            console.log(`[Learn] ${signal.symbol} execution reported to bridge`);
+        }).catch(e => console.warn(`[Learn] ${signal.symbol} execution report failed: ${e.message}`));
+
         return orderResponse.data;
 
     } catch (error) {
@@ -5644,6 +5662,13 @@ class UserTradingEngine {
             this.totalTradesToday++;
             if (tier === 'orb' || strategy === 'openingRangeBreakout') this.orbTradesToday++;
             (this._telegram || telegramAlerts).sendStockEntry(signal.symbol, signal.price, parseFloat(stopPrice), parseFloat(targetPrice), shares, tier).catch(err => console.warn('[ALERT]', err.message));
+            // [v21.0] Report execution to strategy bridge learning loop
+            axios.post(`${BRIDGE_URL}/agent/execution`, {
+                symbol: signal.symbol, asset_class: 'stock', direction: 'long', tier,
+                decision_run_id: signal.decisionRunId || null, fill_price: effectiveEntry,
+                intended_price: signal.price, quantity: shares, position_size_usd: shares * effectiveEntry,
+                strategy, agent_approved: signal.agentApproved || false, agent_confidence: signal.agentConfidence || null,
+            }, { timeout: 5000 }).catch(e => console.warn(`[Learn] ${signal.symbol} execution report failed: ${e.message}`));
             console.log(`✅ [Engine ${this.userId}] TRADE: ${signal.symbol} [${tier}] x${shares} @ $${signal.price}`);
             return orderResponse.data;
         } catch (error) {

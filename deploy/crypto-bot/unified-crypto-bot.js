@@ -2902,6 +2902,25 @@ class CryptoTradingEngine {
                 signal.tier
             ).catch(e => console.warn(`⚠️  Telegram entry alert failed: ${e.message}`));
 
+            // [v21.0] Report execution to strategy bridge learning loop
+            const bridgeUrl = this._getBridgeUrl();
+            axios.post(`${bridgeUrl}/agent/execution`, {
+                symbol: signal.symbol,
+                asset_class: 'crypto',
+                direction: 'long',
+                tier: signal.tier || 'tier1',
+                decision_run_id: signal.decisionRunId || null,
+                fill_price: effectiveEntry,
+                intended_price: signal.price,
+                quantity,
+                position_size_usd: positionSizeUSD,
+                strategy: tags.strategy || 'momentum',
+                agent_approved: signal.agentApproved || false,
+                agent_confidence: signal.agentConfidence || null,
+            }, { timeout: 5000 }).then(() => {
+                console.log(`[Learn] ${signal.symbol} execution reported to bridge`);
+            }).catch(e => console.warn(`[Learn] ${signal.symbol} execution report failed: ${e.message}`));
+
             return position;
         } catch (error) {
             console.error(`❌ Error executing trade:`, error);
