@@ -351,6 +351,31 @@ let scanCount = 0;
 let lastScanTime = null;
 let lastScanCompletedAt = 0; // for health monitor
 const recentErrors = []; // { timestamp, error } for health monitoring
+
+// Scan diagnostics — tracks which gates block trades each cycle
+const scanDiagnostics = {
+    lastCycleTime: null,
+    signalsFound: 0,
+    gateBlocks: {}, // gate name → count of blocks this cycle
+    history: [],     // last 10 cycles for trend analysis
+    _reset() {
+        this.signalsFound = 0;
+        this.gateBlocks = {};
+        this.lastCycleTime = new Date().toISOString();
+    },
+    _block(gate) {
+        this.gateBlocks[gate] = (this.gateBlocks[gate] || 0) + 1;
+    },
+    _save() {
+        this.history.push({
+            time: this.lastCycleTime,
+            signals: this.signalsFound,
+            blocks: { ...this.gateBlocks },
+            totalBlocked: Object.values(this.gateBlocks).reduce((a, b) => a + b, 0),
+        });
+        if (this.history.length > 10) this.history.shift();
+    },
+};
 const MAX_ERROR_HISTORY = 100;
 
 // Persistent bot state (survives restarts)
@@ -2721,6 +2746,7 @@ async function scanMomentumBreakouts() {
 
         const symbols = popularStocks.getAllSymbols();
         console.log(`\n🔍 Momentum Scan: Checking ${symbols.length} stocks... [Regime: ${regime.adjustments.label}${regime.isTrending ? ' TRENDING' : ''}] [SPY: ${spyBullish ? 'BULLISH' : 'BEARISH'}]${regime.isTrending ? ' [MeanRev: BLOCKED]' : ''}`);
+        scanDiagnostics._reset();
 
         const movers = [];
         const batchSize = 20;
@@ -2741,6 +2767,7 @@ async function scanMomentumBreakouts() {
 
         movers.sort((a, b) => parseFloat(b.percentChange) - parseFloat(a.percentChange));
 
+        scanDiagnostics.signalsFound = movers.length;
         if (movers.length > 0) {
             console.log(`🚀 Found ${movers.length} momentum signals!`);
             for (const mover of movers.slice(0, 5)) {
@@ -2763,16 +2790,29 @@ async function scanMomentumBreakouts() {
                     const moverStrategy = mover.strategy || (mover.tier === 'orb' ? 'openingRangeBreakout' : 'momentum');
                     const stratStatus = lastStrategyPerf[moverStrategy];
                     if (stratStatus && !stratStatus.active && stratStatus.trades >= 10) {
+                        scanDiagnostics._block('strategy_inactive');
                         console.log(`[STRATEGY GATE] ${mover.symbol}: ${moverStrategy} is INACTIVE (WR ${(stratStatus.winRate*100).toFixed(0)}%, PF ${stratStatus.profitFactor.toFixed(2)}, ${stratStatus.trades} trades) — skipping`);
                         continue;
                     }
-                    // [v11.0] SPY Trend Hard Gate — reject all LONG entries when SPY is bearish
+                    // [v11.0] SPY Trend Gate — block weak LONG entries when SPY is bearish
+                    // [v21.0] Softened: allow through strong individual signals (relative strength override)
+                    // A stock breaking out on 2x+ volume with high committee confidence likely has a
+                    // catalyst independent of the broad market (earnings, news, sector rotation).
                     if (!spyBullish) {
-                        console.log(`[SPY GATE] ${mover.symbol}: Market bearish — skipping LONG entry`);
-                        continue;
+                        const volRatio = parseFloat(mover.volumeRatio || 0);
+                        const pctChange = parseFloat(mover.percentChange || 0);
+                        const hasRelativeStrength = volRatio >= 2.0 && pctChange >= 3.0;
+                        if (!hasRelativeStrength) {
+                            scanDiagnostics._block('spy_bearish');
+                            console.log(`[SPY GATE] ${mover.symbol}: Market bearish — skipping LONG entry (vol=${volRatio.toFixed(1)}x, chg=${pctChange.toFixed(1)}%)`);
+                            continue;
+                        }
+                        // SAFETY-REVIEWED: relative strength override — strong individual catalyst overrides broad market weakness
+                        console.log(`[SPY GATE] ${mover.symbol}: Market bearish but RELATIVE STRENGTH detected (vol=${volRatio.toFixed(1)}x, chg=${pctChange.toFixed(1)}%) — allowing through`);
                     }
                     // [v11.0] ORB daily limit — max 2 ORB trades per day
                     if ((mover.tier === 'orb' || mover.strategy === 'openingRangeBreakout') && orbTradesToday >= 2) {
+                        scanDiagnostics._block('orb_limit');
                         console.log(`[ORB LIMIT] ${mover.symbol}: Already ${orbTradesToday} ORB trades today (max 2) — skipping`);
                         continue;
                     }
@@ -2781,6 +2821,7 @@ async function scanMomentumBreakouts() {
 
                     // Agent rejection = hard stop (no trade without AI approval)
                     if (!aiResult.approved) {
+                        scanDiagnostics._block('agent_rejected');
                         console.log(`[Agent] ${mover.symbol} REJECTED (conf: ${(aiResult.confidence || 0).toFixed(2)}, src: ${aiResult.source}) — ${aiResult.reason}`);
                         if (aiResult.risk_flags?.length) console.log(`[Agent]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
                         if (aiResult.lessons_applied?.length) console.log(`[Agent]   Lessons: ${aiResult.lessons_applied.slice(0, 2).join('; ')}`);
@@ -2809,16 +2850,19 @@ async function scanMomentumBreakouts() {
                     }
                     // [v4.6] Adaptive guardrails — pre-trade quality gate
                     if (guardrails.isPaused) {
+                        scanDiagnostics._block('guardrail_paused');
                         console.log(`[Guardrail] ${mover.symbol} BLOCKED — lane paused until ${new Date(guardrails.lanePausedUntil).toLocaleTimeString()}`);
                         continue;
                     }
                     // [Phase 3] Regime-adjusted score threshold — high vol raises the bar, low vol lowers it
                     const regimeScoreThreshold = MIN_SIGNAL_SCORE * regime.adjustments.scoreThresholdMultiplier;
                     if ((mover.score || 0) < regimeScoreThreshold) {
+                        scanDiagnostics._block('score_threshold');
                         console.log(`[Guardrail] ${mover.symbol} BLOCKED — score ${(mover.score || 0).toFixed(2)} < ${regimeScoreThreshold.toFixed(2)} (regime: ${regime.adjustments.label})`);
                         continue;
                     }
                     if (aiResult && aiResult.confidence < MIN_SIGNAL_CONFIDENCE) {
+                        scanDiagnostics._block('confidence_low');
                         console.log(`[Guardrail] ${mover.symbol} BLOCKED — confidence ${aiResult.confidence.toFixed(2)} < ${MIN_SIGNAL_CONFIDENCE}`);
                         continue;
                     }
@@ -2827,36 +2871,39 @@ async function scanMomentumBreakouts() {
                     const rewardRisk = (tierCfg.profitTarget || 0.08) / (tierCfg.stopLoss || 0.04);
                     const effectiveMinRR = optimizedParams?.minRewardRisk || MIN_REWARD_RISK;
                     if (rewardRisk < effectiveMinRR) {
+                        scanDiagnostics._block('reward_risk');
                         console.log(`[Guardrail] ${mover.symbol} BLOCKED — R:R ${rewardRisk.toFixed(2)} < ${effectiveMinRR}`);
                         continue;
                     }
                     // [Phase 1] Order flow confirmation — block only when flow actively opposes trade direction
-                    // Previous threshold (< 0.1) blocked nearly all trades in balanced markets where imbalance is typically 0.01-0.08
                     if (mover.orderFlowImbalance !== undefined) {
                         const dir = mover.direction || 'long';
                         const ofi = mover.orderFlowImbalance;
                         if ((dir === 'long' && ofi < -0.05) || (dir === 'short' && ofi > 0.05)) {
+                            scanDiagnostics._block('order_flow');
                             console.log(`[FILTER] ${mover.symbol}: Order flow opposes ${dir} (imbalance=${ofi.toFixed(2)}), skipping`);
                             continue;
                         }
                     }
                     // [Phase 3] Committee aggregator — unified confidence from all signal sources
                     const committee = computeCommitteeScore(mover);
-                    // [v14.0] Raised default from 0.50 → 0.60 — 0.50 passed too many low-conviction signals (36% WR)
-                    const committeeThreshold = optimizedParams?.committeeThreshold || 0.40; // [v20.1] was 0.50, too high with neutral-default scoring (absent=0.5 not 0.1)
+                    const committeeThreshold = optimizedParams?.committeeThreshold || 0.40;
                     if (committee.confidence < committeeThreshold) {
+                        scanDiagnostics._block('committee_threshold');
                         console.log(`[Committee] ${mover.symbol}: Confidence ${committee.confidence} < ${committeeThreshold} threshold — ${JSON.stringify(committee.components)}`);
                         continue;
                     }
                     // [v11.0] Require 2+ positive components — prevents marginal single-signal entries
                     const positiveComponents = Object.values(committee.components).filter(v => v > 0).length;
                     if (positiveComponents < 2) {
+                        scanDiagnostics._block('committee_components');
                         console.log(`[Committee] ${mover.symbol}: Only ${positiveComponents} positive component(s) (need 2+) — ${JSON.stringify(committee.components)}`);
                         continue;
                     }
                     // [Improvement 3] Transaction cost filter — reject negative EV trades
                     if (!isPositiveEV(committee.confidence)) {
-                        continue; // Skip this trade — negative expected value after costs
+                        scanDiagnostics._block('negative_ev');
+                        continue;
                     }
                     console.log(`[Committee] ${mover.symbol}: APPROVED conf:${committee.confidence} (${positiveComponents}/6 positive) — momentum:${committee.components.momentum} flow:${committee.components.orderFlow} displacement:${committee.components.displacement} VP:${committee.components.volumeProfile} FVG:${committee.components.fvg}`);
                     mover.committeeConfidence = committee.confidence;
@@ -2877,6 +2924,7 @@ async function scanMomentumBreakouts() {
                     if (profitProtectReentrySymbols.has(mover.symbol)) {
                         const reentryCheck = isStockReentryValid(mover.symbol, mover);
                         if (!reentryCheck.valid) {
+                            scanDiagnostics._block('reentry_blocked');
                             console.log(`[RE-ENTRY] ${mover.symbol}: re-entry BLOCKED — ${reentryCheck.reason}`);
                             continue;
                         }
@@ -2884,6 +2932,7 @@ async function scanMomentumBreakouts() {
                     // [v10.1] Entry quality gate — final profitability checklist
                     const qualityCheck = isStockEntryQualified(mover, committee);
                     if (!qualityCheck.qualified) {
+                        scanDiagnostics._block('quality_gate');
                         console.log(`[QUALITY GATE] ${mover.symbol}: BLOCKED — ${qualityCheck.reason}`);
                         continue;
                     }
@@ -2894,6 +2943,7 @@ async function scanMomentumBreakouts() {
                         if (guard.isConcentrated) {
                             const signalDir = 'long'; // stock bot is long-only
                             if (!guard.canOpenLong) {
+                                scanDiagnostics._block('correlation_guard');
                                 console.log(`[CORRELATION] ${mover.symbol} ${signalDir} BLOCKED — portfolio ${(guard.exposureRatio * 100).toFixed(0)}% ${guard.directionBias} (${guard.longCount}L/${guard.shortCount}S)`);
                                 continue;
                             }
@@ -2902,10 +2952,18 @@ async function scanMomentumBreakouts() {
                     await executeTrade(mover, mover.strategy || 'momentum');
                 }
             } else {
+                scanDiagnostics._block('max_positions');
                 console.log(`⏸  Max positions (${maxPositions}) reached - not entering new trades`);
             }
         } else {
             console.log(`   No qualifying momentum signals found this scan`);
+        }
+        scanDiagnostics._save();
+        // Log diagnostics summary each cycle
+        const blocks = scanDiagnostics.history[scanDiagnostics.history.length - 1];
+        if (blocks && blocks.totalBlocked > 0) {
+            const topGates = Object.entries(blocks.blocks).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([g, c]) => `${g}:${c}`).join(', ');
+            console.log(`[DIAGNOSTICS] ${blocks.signals} signals, ${blocks.totalBlocked} blocked — top gates: ${topGates}`);
         }
 
         return movers;
@@ -4032,6 +4090,32 @@ app.get('/api/trading/weights', (req, res) => {
             tradeCount: (globalThis._tradeEvaluations || []).length,
             lastOptimized: 'check weights file'
         }
+    });
+});
+
+// Scan diagnostics — shows which gates are blocking trades
+app.get('/api/scan/diagnostics', (req, res) => {
+    const latest = scanDiagnostics.history[scanDiagnostics.history.length - 1] || null;
+    // Aggregate gate blocks across last 10 cycles
+    const aggregated = {};
+    let totalSignals = 0;
+    for (const cycle of scanDiagnostics.history) {
+        totalSignals += cycle.signals;
+        for (const [gate, count] of Object.entries(cycle.blocks)) {
+            aggregated[gate] = (aggregated[gate] || 0) + count;
+        }
+    }
+    res.json({
+        success: true,
+        spyBullish,
+        botRunning,
+        botPaused,
+        lastCycle: latest,
+        recentCycles: scanDiagnostics.history.length,
+        aggregated: Object.entries(aggregated)
+            .sort((a, b) => b[1] - a[1])
+            .reduce((obj, [k, v]) => { obj[k] = v; return obj; }, {}),
+        totalSignalsScanned: totalSignals,
     });
 });
 
@@ -5600,10 +5684,18 @@ class UserTradingEngine {
                     console.log(`[Engine ${this.userId}][STRATEGY GATE] ${mover.symbol}: ${moverStrategy} is INACTIVE (WR ${(stratStatus.winRate*100).toFixed(0)}%, PF ${stratStatus.profitFactor.toFixed(2)}) — skipping`);
                     continue;
                 }
-                // [v11.0] SPY Trend Hard Gate — reject all LONG entries when SPY is bearish
+                // [v11.0] SPY Trend Gate — block weak LONG entries when SPY is bearish
+                // [v21.0] Softened: allow through strong individual signals (relative strength override)
                 if (!spyBullish) {
-                    console.log(`[Engine ${this.userId}][SPY GATE] ${mover.symbol}: Market bearish — skipping LONG entry`);
-                    continue;
+                    const volRatio = parseFloat(mover.volumeRatio || 0);
+                    const pctChange = parseFloat(mover.percentChange || 0);
+                    const hasRelativeStrength = volRatio >= 2.0 && pctChange >= 3.0;
+                    if (!hasRelativeStrength) {
+                        console.log(`[Engine ${this.userId}][SPY GATE] ${mover.symbol}: Market bearish — skipping LONG entry (vol=${volRatio.toFixed(1)}x, chg=${pctChange.toFixed(1)}%)`);
+                        continue;
+                    }
+                    // SAFETY-REVIEWED: relative strength override — strong individual catalyst overrides broad market weakness
+                    console.log(`[Engine ${this.userId}][SPY GATE] ${mover.symbol}: Market bearish but RELATIVE STRENGTH (vol=${volRatio.toFixed(1)}x, chg=${pctChange.toFixed(1)}%) — allowing`);
                 }
                 // [v11.0] ORB daily limit — max 2 ORB trades per day
                 if ((mover.tier === 'orb' || mover.strategy === 'openingRangeBreakout') && this.orbTradesToday >= 2) {
@@ -6008,7 +6100,10 @@ async function runScanQueue() {
         }
         // Keep global lastScanTime in sync so /api/trading/status shows a live timestamp
         // even when user engines are handling the scans (engineRegistry.size > 0)
-        if (engines.length > 0) lastScanTime = new Date();
+        if (engines.length > 0) {
+            lastScanTime = new Date();
+            lastScanCompletedAt = Date.now(); // health check uses this — must update when engines handle scanning
+        }
     } finally {
         scanQueueRunning = false;
     }
