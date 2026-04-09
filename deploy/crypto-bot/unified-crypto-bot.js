@@ -2681,12 +2681,12 @@ class CryptoTradingEngine {
             reasons.push(`BTC bearish — no long altcoin entries`);
         }
 
-        // 3. RSI between 25-75 (crypto gets wider range due to volatility)
-        // [v14.0] Mean reversion specifically targets RSI extremes — widen range for it
+        // 3. RSI between 35-70 (data: RSI 45-55 = 62% WR, RSI 65+ loses money)
+        // [v22.0] Tightened from 25-75; mean reversion gets wider range
         const rsi = signal.rsi || 50;
         const isMeanReversion = signal.strategy === 'meanReversion' || signal.strategy === 'boxBreakout';
-        const rsiLow = isMeanReversion ? 15 : 25;
-        const rsiHigh = isMeanReversion ? 85 : 75;
+        const rsiLow = isMeanReversion ? 15 : 35;
+        const rsiHigh = isMeanReversion ? 85 : 70;
         if (rsi < rsiLow || rsi > rsiHigh) {
             reasons.push(`rsi=${rsi.toFixed(1)} outside ${rsiLow}-${rsiHigh}`);
         }

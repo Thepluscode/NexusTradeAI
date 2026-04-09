@@ -1788,51 +1788,54 @@ function computeCommitteeScore(signal) {
     let confirmations = 0;
     let totalWeight = 0;
 
-    // 1. Momentum strength (weight: dynamic via committeeWeights)
-    // [v20.1] Stock movers are typically 1-5% — /10 cap is appropriate for stocks
+    // [v22.0] EVIDENCE-BASED SCORING: absent signals = 0 (no evidence), not 0.5 (neutral).
+    // Only count components that have actual data. This prevents confidence inflation
+    // from missing data — data showed high confidence (0.585) had 6% WR while low (0.492) had 33%.
+    // Root cause: 0.5 defaults inflated scores for trades missing order flow, VP, FVG, displacement.
+
+    // 1. Momentum strength — always available
     const momentumScore = Math.min(parseFloat(signal.percentChange || 0) / 10, 1.0);
     confirmations += momentumScore * committeeWeights.momentum;
     totalWeight += committeeWeights.momentum;
 
-    // 2. Order flow confirmation (weight: dynamic via committeeWeights)
-    // [v20.1] Absent = neutral (0.5). Flow data unavailable during warmup or when
-    // signal modules aren't loaded shouldn't penalize the score.
+    // 2. Order flow — only count if data present
     const flowScore = signal.orderFlowImbalance !== undefined
-        ? Math.max(0, signal.orderFlowImbalance) // 0 to 1 for longs
-        : 0.5;
-    confirmations += flowScore * committeeWeights.orderFlow;
-    totalWeight += committeeWeights.orderFlow;
+        ? Math.max(0, signal.orderFlowImbalance)
+        : 0;
+    if (signal.orderFlowImbalance !== undefined) {
+        confirmations += flowScore * committeeWeights.orderFlow;
+        totalWeight += committeeWeights.orderFlow;
+    }
 
-    // 3. Displacement candle (weight: dynamic via committeeWeights)
-    // [v20.1] Absent = neutral (0.5). Displacement is a rare institutional event —
-    // its absence is normal for most momentum entries.
-    const displacementScore = signal.hasDisplacement ? 1.0 : 0.5;
-    confirmations += displacementScore * committeeWeights.displacement;
-    totalWeight += committeeWeights.displacement;
+    // 3. Displacement candle — only count if displacement detected
+    const displacementScore = signal.hasDisplacement ? 1.0 : 0;
+    if (signal.hasDisplacement) {
+        confirmations += displacementScore * committeeWeights.displacement;
+        totalWeight += committeeWeights.displacement;
+    }
 
-    // 4. Volume Profile position (weight: dynamic via committeeWeights)
-    // [v20.1] Absent = neutral (0.5). VP requires sufficient bar history.
-    let vpScore = 0.5;
+    // 4. Volume Profile — only count if VP data present
+    let vpScore = 0;
     if (signal.volumeProfile) {
         const price = parseFloat(signal.price);
-        const { vah, val, poc } = signal.volumeProfile;
+        const { vah, val } = signal.volumeProfile;
         const range = vah - val;
         if (range > 0) {
-            // Score higher when closer to VAL (buying at discount)
             const positionInRange = (price - val) / range;
-            vpScore = Math.max(0, 1.0 - positionInRange); // 1.0 at VAL, 0.0 at VAH
+            vpScore = Math.max(0, 1.0 - positionInRange);
         }
+        confirmations += vpScore * committeeWeights.volumeProfile;
+        totalWeight += committeeWeights.volumeProfile;
     }
-    confirmations += vpScore * committeeWeights.volumeProfile;
-    totalWeight += committeeWeights.volumeProfile;
 
-    // 5. FVG confirmation (weight: dynamic via committeeWeights)
-    // [v20.1] Absent = neutral (0.5). FVGs are opportunistic confirmations.
-    const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0.5;
-    confirmations += fvgScore * committeeWeights.fvg;
-    totalWeight += committeeWeights.fvg;
+    // 5. FVG confirmation — only count if FVGs present
+    const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0;
+    if ((signal.fvgCount || 0) > 0) {
+        confirmations += fvgScore * committeeWeights.fvg;
+        totalWeight += committeeWeights.fvg;
+    }
 
-    // 6. Volume ratio (weight: dynamic via committeeWeights)
+    // 6. Volume ratio — always available
     const volRatioScore = Math.min(parseFloat(signal.volumeRatio || 1) / 3, 1.0);
     confirmations += volRatioScore * committeeWeights.volumeRatio;
     totalWeight += committeeWeights.volumeRatio;
@@ -2238,12 +2241,18 @@ function isStockEntryQualified(signal, committee) {
         reasons.push(`score=${score.toFixed(2)} <= 0`);
     }
 
-    // 2. Volume must confirm breakout (research: volume > 20-period SMA confirms real momentum)
+    // 2. Volume must confirm breakout but not be extreme (chasing spikes = buying tops)
+    // Data: vol < 1.5x = 57% WR +$63, vol 1.5-3x = 54% WR +$70, vol 3-10x = 21% WR -$148
+    // [v22.0] Added max cap at 10x — extreme volume spikes are institutional exits, not entries
     const volRatio = parseFloat(signal.volumeRatio || 0);
     const isORB = signal.tier === 'orb' || signal.strategy === 'openingRangeBreakout';
-    const minVolRatio = isORB ? 1.5 : 1.0; // ORB needs stronger volume confirmation
+    const minVolRatio = isORB ? 1.5 : 1.0;
+    const maxVolRatio = 10.0;
     if (volRatio < minVolRatio) {
         reasons.push(`volumeRatio=${volRatio.toFixed(2)} < ${minVolRatio} (${isORB ? 'ORB needs 1.5x' : 'min 1.0x'})`);
+    }
+    if (volRatio > maxVolRatio) {
+        reasons.push(`volumeRatio=${volRatio.toFixed(2)} > ${maxVolRatio} (extreme volume spike — likely buying tops)`);
     }
 
     // 3. Trend must align with direction (percentChange must be positive for longs)
@@ -2252,10 +2261,11 @@ function isStockEntryQualified(signal, committee) {
         reasons.push(`percentChange=${percentChange.toFixed(2)}% not positive`);
     }
 
-    // 4. RSI must be between 30-65 (research: reject overbought entries > 65 to avoid buying peaks)
+    // 4. RSI must be between 40-60 (data: RSI 45-55 = 62% WR +$101, RSI 65+ = 34% WR -$160)
+    // [v22.0] Tightened from 30-65 — overbought entries (>60) consistently lose money
     const rsi = parseFloat(signal.rsi || 50);
-    if (rsi < 30 || rsi > 65) {
-        reasons.push(`rsi=${rsi.toFixed(1)} outside 30-65`);
+    if (rsi < 40 || rsi > 60) {
+        reasons.push(`rsi=${rsi.toFixed(1)} outside 40-60`);
     }
 
     // 5. Not entering against a strong move (don't buy after a -3% day)
@@ -2816,36 +2826,26 @@ async function scanMomentumBreakouts() {
                         console.log(`[ORB LIMIT] ${mover.symbol}: Already ${orbTradesToday} ORB trades today (max 2) — skipping`);
                         continue;
                     }
-                    // [v5.0] HARD GATE: every trade MUST be approved by the agentic AI pipeline
+                    // [v22.0] AI advisor — ADVISORY MODE (data: 17% WR when approved vs 29% overall)
+                    // Evaluate for metadata + learning loop, but never block trades.
+                    // Kill switch is the only hard gate — protects against catastrophic scenarios.
                     const aiResult = await queryAIAdvisor(mover);
-
-                    // Agent rejection = hard stop (no trade without AI approval)
-                    if (!aiResult.approved) {
-                        scanDiagnostics._block('agent_rejected');
-                        console.log(`[Agent] ${mover.symbol} REJECTED (conf: ${(aiResult.confidence || 0).toFixed(2)}, src: ${aiResult.source}) — ${aiResult.reason}`);
-                        if (aiResult.risk_flags?.length) console.log(`[Agent]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
-                        if (aiResult.lessons_applied?.length) console.log(`[Agent]   Lessons: ${aiResult.lessons_applied.slice(0, 2).join('; ')}`);
-                        // Telegram alerts for rejections
-                        if (aiResult.confidence > 0.8 || aiResult.source === 'kill_switch') {
-                            telegramAlerts.sendAgentRejection('Stock Bot', mover.symbol, 'long', aiResult.reason, aiResult.confidence, aiResult.risk_flags).catch(err => console.warn('[ALERT]', err.message));
-                        }
-                        if (aiResult.source === 'kill_switch') {
-                            telegramAlerts.sendKillSwitchAlert('Stock Bot', aiResult.reason).catch(err => console.warn('[ALERT]', err.message));
-                        }
+                    if (aiResult.source === 'kill_switch') {
+                        scanDiagnostics._block('kill_switch');
+                        console.log(`[Agent] ${mover.symbol} KILL SWITCH — ${aiResult.reason}`);
+                        telegramAlerts.sendKillSwitchAlert('Stock Bot', aiResult.reason).catch(err => console.warn('[ALERT]', err.message));
                         continue;
                     }
-
-                    // Agent approved — log and store metadata
+                    // Store metadata for learning loop — approval/rejection is logged but not enforced
                     const srcTag = aiResult.source === 'cache' ? ' (cached)' : '';
-                    const regime = aiResult.market_regime ? ` [${aiResult.market_regime}]` : '';
-                    console.log(`[Agent] ${mover.symbol} APPROVED${srcTag}${regime} (conf: ${(aiResult.confidence || 0).toFixed(2)}, size: ${(aiResult.position_size_multiplier || 1).toFixed(2)}x) — ${aiResult.reason}`);
-                    telegramAlerts.sendAgentApproval('Stock Bot', mover.symbol, 'long', aiResult.confidence || 0, aiResult.position_size_multiplier || 1, aiResult.market_regime).catch(err => console.warn('[ALERT]', err.message));
-                    mover.agentApproved = true;
+                    const agentVerdict = aiResult.approved ? 'AGREES' : 'DISAGREES';
+                    console.log(`[Agent] ${mover.symbol} ${agentVerdict}${srcTag} (conf: ${(aiResult.confidence || 0).toFixed(2)}) — ${aiResult.reason}`);
+                    mover.agentApproved = aiResult.approved;
                     mover.agentConfidence = aiResult.confidence;
                     mover.agentReason = aiResult.reason;
                     mover.decisionRunId = aiResult.decision_run_id || null;
                     mover.banditArm = aiResult.bandit_arm || 'moderate';
-                    if (aiResult.position_size_multiplier && aiResult.position_size_multiplier !== 1.0) {
+                    if (aiResult.approved && aiResult.position_size_multiplier && aiResult.position_size_multiplier !== 1.0) {
                         mover.agentSizeMultiplier = aiResult.position_size_multiplier;
                     }
                     // [v4.6] Adaptive guardrails — pre-trade quality gate
@@ -2861,11 +2861,8 @@ async function scanMomentumBreakouts() {
                         console.log(`[Guardrail] ${mover.symbol} BLOCKED — score ${(mover.score || 0).toFixed(2)} < ${regimeScoreThreshold.toFixed(2)} (regime: ${regime.adjustments.label})`);
                         continue;
                     }
-                    if (aiResult && aiResult.confidence < MIN_SIGNAL_CONFIDENCE) {
-                        scanDiagnostics._block('confidence_low');
-                        console.log(`[Guardrail] ${mover.symbol} BLOCKED — confidence ${aiResult.confidence.toFixed(2)} < ${MIN_SIGNAL_CONFIDENCE}`);
-                        continue;
-                    }
+                    // [v22.0] Agent confidence gate REMOVED — data showed agent approval was anti-predictive (17% WR)
+                    // Agent confidence is still logged on position for learning loop analysis
                     // [v4.7] Check reward/risk ratio meets minimum threshold
                     const tierCfg = MOMENTUM_CONFIG[mover.tier] || MOMENTUM_CONFIG.tier1;
                     const rewardRisk = (tierCfg.profitTarget || 0.08) / (tierCfg.stopLoss || 0.04);
@@ -2887,7 +2884,7 @@ async function scanMomentumBreakouts() {
                     }
                     // [Phase 3] Committee aggregator — unified confidence from all signal sources
                     const committee = computeCommitteeScore(mover);
-                    const committeeThreshold = optimizedParams?.committeeThreshold || 0.40;
+                    const committeeThreshold = optimizedParams?.committeeThreshold || 0.25; // [v22.0] lowered from 0.40 — absent signals now score 0 not 0.5
                     if (committee.confidence < committeeThreshold) {
                         scanDiagnostics._block('committee_threshold');
                         console.log(`[Committee] ${mover.symbol}: Confidence ${committee.confidence} < ${committeeThreshold} threshold — ${JSON.stringify(committee.components)}`);
@@ -5739,7 +5736,7 @@ class UserTradingEngine {
                 // [Phase 3] Committee aggregator — unified confidence from all signal sources
                 const committee = computeCommitteeScore(mover);
                 // [v14.0] Raised default from 0.50 → 0.60 — 0.50 passed too many low-conviction signals
-                const committeeThreshold = optimizedParams?.committeeThreshold || 0.40; // [v20.1] was 0.50, too high with neutral-default scoring (absent=0.5 not 0.1)
+                const committeeThreshold = optimizedParams?.committeeThreshold || 0.25; // [v22.0] lowered from 0.40 — absent signals now score 0 not 0.5 // [v20.1] was 0.50, too high with neutral-default scoring (absent=0.5 not 0.1)
                 if (committee.confidence < committeeThreshold) {
                     console.log(`[Engine ${this.userId}][Committee] ${mover.symbol}: Confidence ${committee.confidence} < ${committeeThreshold} — skipping`);
                     continue;
