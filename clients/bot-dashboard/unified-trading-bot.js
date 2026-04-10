@@ -5676,9 +5676,12 @@ class UserTradingEngine {
     }
 
     async scanMomentumBreakouts() {
-        if (this.perfData.maxDrawdown >= MAX_DRAWDOWN_PCT) return [];
+        scanDiagnostics._reset();
+        if (this.perfData.maxDrawdown >= MAX_DRAWDOWN_PCT) { scanDiagnostics._block('drawdown_breaker'); scanDiagnostics._save(); return []; }
         // [Guardrail] Check if trading is paused by adaptive guardrails
         if (guardrails.isPaused) {
+            scanDiagnostics._block('guardrail_paused');
+            scanDiagnostics._save();
             console.log(`[Engine ${this.userId}][Guardrail] BLOCKED — lane paused until ${new Date(guardrails.lanePausedUntil).toLocaleTimeString()}`);
             return [];
         }
@@ -5692,6 +5695,8 @@ class UserTradingEngine {
             await new Promise(resolve => setTimeout(resolve, 500));
         }
         movers.sort((a, b) => (b.score || 0) - (a.score || 0));
+        scanDiagnostics.signalsFound = movers.length;
+        console.log(`[Engine ${this.userId}] Scan: ${symbols.length} symbols → ${movers.length} qualifying movers`);
         const regime = globalThis._marketRegime || { adjustments: { maxPositions: 6 } };
         const maxPositions = regime.adjustments.maxPositions || 6;
         if (this.positions.size < maxPositions) {
@@ -5704,6 +5709,7 @@ class UserTradingEngine {
                 const moverStrategy = mover.strategy || (mover.tier === 'orb' ? 'openingRangeBreakout' : 'momentum');
                 const stratStatus = lastStrategyPerf[moverStrategy];
                 if (stratStatus && !stratStatus.active && stratStatus.trades >= 10) {
+                    scanDiagnostics._block('strategy_inactive');
                     console.log(`[Engine ${this.userId}][STRATEGY GATE] ${mover.symbol}: ${moverStrategy} is INACTIVE (WR ${(stratStatus.winRate*100).toFixed(0)}%, PF ${stratStatus.profitFactor.toFixed(2)}) — skipping`);
                     continue;
                 }
@@ -5714,6 +5720,7 @@ class UserTradingEngine {
                     const pctChange = parseFloat(mover.percentChange || 0);
                     const hasRelativeStrength = volRatio >= 2.0 && pctChange >= 3.0;
                     if (!hasRelativeStrength) {
+                        scanDiagnostics._block('spy_bearish');
                         console.log(`[Engine ${this.userId}][SPY GATE] ${mover.symbol}: Market bearish — skipping LONG entry (vol=${volRatio.toFixed(1)}x, chg=${pctChange.toFixed(1)}%)`);
                         continue;
                     }
@@ -5722,6 +5729,7 @@ class UserTradingEngine {
                 }
                 // [v11.0] ORB daily limit — max 2 ORB trades per day
                 if ((mover.tier === 'orb' || mover.strategy === 'openingRangeBreakout') && this.orbTradesToday >= 2) {
+                    scanDiagnostics._block('orb_limit');
                     console.log(`[Engine ${this.userId}][ORB LIMIT] ${mover.symbol}: Already ${this.orbTradesToday} ORB trades today (max 2) — skipping`);
                     continue;
                 }
@@ -5730,25 +5738,28 @@ class UserTradingEngine {
                     const dir = mover.direction || 'long';
                     const ofi = mover.orderFlowImbalance;
                     if ((dir === 'long' && ofi < -0.05) || (dir === 'short' && ofi > 0.05)) {
+                        scanDiagnostics._block('order_flow');
                         console.log(`[Engine ${this.userId}][FILTER] ${mover.symbol}: Order flow opposes ${dir} (imbalance=${ofi.toFixed(2)}), skipping`);
                         continue;
                     }
                 }
                 // [Phase 3] Committee aggregator — unified confidence from all signal sources
                 const committee = computeCommitteeScore(mover);
-                // [v14.0] Raised default from 0.50 → 0.60 — 0.50 passed too many low-conviction signals
-                const committeeThreshold = optimizedParams?.committeeThreshold || 0.25; // [v22.0] lowered from 0.40 — absent signals now score 0 not 0.5 // [v20.1] was 0.50, too high with neutral-default scoring (absent=0.5 not 0.1)
+                const committeeThreshold = optimizedParams?.committeeThreshold || 0.25; // [v22.0] lowered from 0.40 — absent signals now score 0 not 0.5
                 if (committee.confidence < committeeThreshold) {
+                    scanDiagnostics._block('committee_threshold');
                     console.log(`[Engine ${this.userId}][Committee] ${mover.symbol}: Confidence ${committee.confidence} < ${committeeThreshold} — skipping`);
                     continue;
                 }
                 const positiveComponents = Object.values(committee.components).filter(v => v > 0).length;
                 if (positiveComponents < 2) {
+                    scanDiagnostics._block('committee_components');
                     console.log(`[Engine ${this.userId}][Committee] ${mover.symbol}: Only ${positiveComponents} positive component(s) (need 2+) — skipping`);
                     continue;
                 }
                 // [Improvement 3] Transaction cost filter — reject negative EV trades
                 if (!isPositiveEV(committee.confidence)) {
+                    scanDiagnostics._block('negative_ev');
                     console.log(`[Engine ${this.userId}][EV] ${mover.symbol}: Negative EV after costs — skipping`);
                     continue;
                 }
@@ -5759,34 +5770,22 @@ class UserTradingEngine {
                     mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * guardrails.lossSizeMultiplier;
                     console.log(`[Engine ${this.userId}][Guardrail] ${mover.symbol} size cut to ${mover.agentSizeMultiplier.toFixed(2)}x (${guardrails.consecutiveLosses} consecutive losses)`);
                 }
-                // [v5.0] HARD GATE: every trade MUST be approved by the agentic AI pipeline
+                // [v22.0] AI advisor — ADVISORY MODE (data: 17% WR when approved vs 29% overall)
+                // Evaluate for metadata + learning loop; kill switch is the only hard gate.
                 const aiResult = await queryAIAdvisor(mover);
-
-                // Agent rejection = hard stop (no trade without AI approval)
-                if (!aiResult.approved) {
-                    console.log(`[Engine ${this.userId}][Agent] ${mover.symbol} REJECTED (conf: ${(aiResult.confidence || 0).toFixed(2)}, src: ${aiResult.source}) — ${aiResult.reason}`);
-                    if (aiResult.risk_flags?.length) console.log(`[Engine ${this.userId}][Agent]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
-                    if (aiResult.lessons_applied?.length) console.log(`[Engine ${this.userId}][Agent]   Lessons: ${aiResult.lessons_applied.slice(0, 2).join('; ')}`);
-                    if (aiResult.confidence > 0.8 || aiResult.source === 'kill_switch') {
-                        (this._telegram || telegramAlerts).sendAgentRejection('Stock Bot', mover.symbol, 'long', aiResult.reason, aiResult.confidence, aiResult.risk_flags).catch(err => console.warn('[ALERT]', err.message));
-                    }
-                    if (aiResult.source === 'kill_switch') {
-                        (this._telegram || telegramAlerts).sendKillSwitchAlert('Stock Bot', aiResult.reason).catch(err => console.warn('[ALERT]', err.message));
-                    }
+                if (aiResult.source === 'kill_switch') {
+                    console.log(`[Engine ${this.userId}][Agent] ${mover.symbol} KILL SWITCH — ${aiResult.reason}`);
+                    (this._telegram || telegramAlerts).sendKillSwitchAlert('Stock Bot', aiResult.reason).catch(err => console.warn('[ALERT]', err.message));
                     continue;
                 }
-
-                // Agent approved — log and store metadata
-                const srcTag = aiResult.source === 'cache' ? ' (cached)' : '';
-                const regime = aiResult.market_regime ? ` [${aiResult.market_regime}]` : '';
-                console.log(`[Engine ${this.userId}][Agent] ${mover.symbol} APPROVED${srcTag}${regime} (conf: ${(aiResult.confidence || 0).toFixed(2)}, size: ${(aiResult.position_size_multiplier || 1).toFixed(2)}x) — ${aiResult.reason}`);
-                (this._telegram || telegramAlerts).sendAgentApproval('Stock Bot', mover.symbol, 'long', aiResult.confidence || 0, aiResult.position_size_multiplier || 1, aiResult.market_regime).catch(err => console.warn('[ALERT]', err.message));
-                mover.agentApproved = true;
+                const agentVerdict = aiResult.approved ? 'AGREES' : 'DISAGREES';
+                console.log(`[Engine ${this.userId}][Agent] ${mover.symbol} ${agentVerdict} (conf: ${(aiResult.confidence || 0).toFixed(2)}) — ${aiResult.reason}`);
+                mover.agentApproved = aiResult.approved;
                 mover.agentConfidence = aiResult.confidence;
                 mover.agentReason = aiResult.reason;
                 mover.decisionRunId = aiResult.decision_run_id || null;
                 mover.banditArm = aiResult.bandit_arm || 'moderate';
-                if (aiResult.position_size_multiplier && aiResult.position_size_multiplier !== 1.0) {
+                if (aiResult.approved && aiResult.position_size_multiplier && aiResult.position_size_multiplier !== 1.0) {
                     mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * aiResult.position_size_multiplier;
                 }
 
@@ -5794,6 +5793,7 @@ class UserTradingEngine {
                 if (this.profitProtectReentrySymbols.has(mover.symbol)) {
                     const reentryCheck = isStockReentryValid(mover.symbol, mover);
                     if (!reentryCheck.valid) {
+                        scanDiagnostics._block('reentry_blocked');
                         console.log(`[Engine ${this.userId}][RE-ENTRY] ${mover.symbol}: re-entry BLOCKED — ${reentryCheck.reason}`);
                         continue;
                     }
@@ -5801,6 +5801,7 @@ class UserTradingEngine {
                 // [v10.1] Entry quality gate — final profitability checklist
                 const qualityCheck = isStockEntryQualified(mover, null);
                 if (!qualityCheck.qualified) {
+                    scanDiagnostics._block('quality_gate');
                     console.log(`[Engine ${this.userId}][QUALITY GATE] ${mover.symbol}: BLOCKED — ${qualityCheck.reason}`);
                     continue;
                 }
@@ -5809,6 +5810,7 @@ class UserTradingEngine {
                     const ownPositions = Array.from(this.positions.values());
                     const guard = computeCorrelationGuard(ownPositions);
                     if (guard.isConcentrated && !guard.canOpenLong) {
+                        scanDiagnostics._block('correlation_guard');
                         console.log(`[Engine ${this.userId}][CORRELATION] ${mover.symbol} long BLOCKED — portfolio ${(guard.exposureRatio * 100).toFixed(0)}% ${guard.directionBias} (${guard.longCount}L/${guard.shortCount}S)`);
                         continue;
                     }
@@ -5816,6 +5818,12 @@ class UserTradingEngine {
 
                 await this.executeTrade(mover, mover.strategy || 'momentum');
             }
+        }
+        scanDiagnostics._save();
+        const latest = scanDiagnostics.history[scanDiagnostics.history.length - 1];
+        if (latest && latest.totalBlocked > 0) {
+            const topGates = Object.entries(latest.blocks).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([g, c]) => `${g}:${c}`).join(', ');
+            console.log(`[Engine ${this.userId}][DIAGNOSTICS] ${latest.signals} signals, ${latest.totalBlocked} blocked — top gates: ${topGates}`);
         }
         return movers;
     }
