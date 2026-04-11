@@ -368,7 +368,7 @@ EOF
 - `calculateSMA(prices, period)` — array of numbers
 - `calculateEMA(prices, period)` — array of numbers
 - `calculateRSI(prices, period = 14)` — array of numbers, returns **50** on insufficient data (not null)
-- `calculateMACD(prices, fast, slow, signal)` — array of numbers, returns `{line, signal, histogram, bullish}` or null
+- `calculateMACD(prices, fast, slow, signal)` — array of numbers, returns `{macd, signal, histogram, prevHistogram, bullish, bearish}` or null. Needs ≥35 bars (slow=26 + signal=9).
 - `calculateBollingerBands(prices, period, stdDev)` — array of numbers
 
 All functions take **arrays of closing prices** (numbers), not bar objects. Convert via `bars.map(b => b.c)` before calling.
@@ -451,10 +451,20 @@ describe('computeContext', () => {
         expect(Number.isFinite(ctx.ema21)).toBe(true);
     });
 
-    test('MACD returns an object on 30 trending bars', () => {
+    test('MACD returns null when fewer than 35 bars', () => {
+        // calculateMACD needs slow(26) + signal(9) = 35 bars minimum
         const ctx = computeContext(makeTrendingBars(30), 'trending');
-        // calculateMACD returns {line, signal, histogram, bullish} or null
-        expect(ctx.macd === null || typeof ctx.macd === 'object').toBe(true);
+        expect(ctx.macd).toBeNull();
+    });
+
+    test('MACD returns an object with histogram on 40 trending bars', () => {
+        // 40 >= 35, should produce a real MACD object
+        const ctx = computeContext(makeTrendingBars(40), 'trending');
+        expect(ctx.macd).not.toBeNull();
+        expect(typeof ctx.macd).toBe('object');
+        expect(ctx.macd).toHaveProperty('histogram');
+        expect(ctx.macd).toHaveProperty('bullish');
+        expect(Number.isFinite(ctx.macd.histogram)).toBe(true);
     });
 
     test('currentPrice matches last bar close', () => {
@@ -527,7 +537,8 @@ function computeContext(bars, marketRegime) {
         ? indicators.calculateRSI(closes, 2)
         : null;
 
-    // MACD — returns {line, signal, histogram, bullish} or null on insufficient data.
+    // MACD — returns {macd, signal, histogram, prevHistogram, bullish, bearish} or null.
+    // Needs at least slow + signal = 26 + 9 = 35 bars to produce a value.
     const macd = indicators.calculateMACD(closes);
 
     // VWAP from typical price × volume
@@ -595,10 +606,12 @@ git commit -m "$(cat <<'EOF'
 feat(signals): add strategy-context skeleton — one-shot indicator computation
 
 Pure function computeContext(bars, regime) that computes VWAP, EMA9/21, RSI,
-RSI(2), ADX, MACD, ATR, plus derived flags (belowVwap, emaUptrend, position
-in daily range) once per scan instead of recomputing in each strategy.
+RSI(2), MACD, plus derived flags (belowVwap, emaUptrend, position in daily
+range) once per scan instead of recomputing in each strategy.
 
 Reuses existing services/signals/indicators.js — no duplication.
+ADX and ATR deferred to Plan 3 (they live inline in unified-trading-bot.js
+and need to be ported to indicators.js when ORB needs them).
 
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 EOF
