@@ -141,3 +141,84 @@ describe('computeContext — VWAP', () => {
         expect(ctx.belowVwap).toBe(false);
     });
 });
+
+describe('computeContext — insufficient data', () => {
+    test('returns null ema21 when < 21 bars', () => {
+        const bars = [];
+        for (let i = 0; i < 10; i++) {
+            bars.push({ t: '', o: 100, h: 100, l: 100, c: 100 + i, v: 100 });
+        }
+        const ctx = computeContext(bars, 'trending');
+        expect(ctx.ema21).toBeNull();
+    });
+
+    test('returns null emaUptrend when either EMA is null', () => {
+        const bars = [];
+        for (let i = 0; i < 5; i++) {
+            bars.push({ t: '', o: 100, h: 100, l: 100, c: 100, v: 100 });
+        }
+        const ctx = computeContext(bars, 'trending');
+        expect(ctx.emaUptrend).toBeNull();
+    });
+
+    test('RSI returns 50 on insufficient data (not null — existing contract)', () => {
+        // indicators.calculateRSI returns 50 (not null) when prices.length < period * 2
+        // Our context inherits this behavior — document it here as the contract.
+        const bars = [
+            { t: '', o: 100, h: 100, l: 100, c: 100, v: 100 },
+            { t: '', o: 101, h: 101, l: 101, c: 101, v: 100 },
+        ];
+        const ctx = computeContext(bars, 'trending');
+        expect(ctx.rsi).toBe(50);
+    });
+
+    test('rsi2 returns null when < 3 bars', () => {
+        const bars = [
+            { t: '', o: 100, h: 100, l: 100, c: 100, v: 100 },
+            { t: '', o: 101, h: 101, l: 101, c: 101, v: 100 },
+        ];
+        const ctx = computeContext(bars, 'trending');
+        expect(ctx.rsi2).toBeNull();
+    });
+
+    test('emaUptrend=true when ema9 > ema21 in rising bars', () => {
+        const bars = [];
+        for (let i = 0; i < 30; i++) {
+            const price = 100 + i * 2; // clearly rising
+            bars.push({ t: '', o: price, h: price + 0.1, l: price - 0.1, c: price, v: 100 });
+        }
+        const ctx = computeContext(bars, 'trending');
+        expect(ctx.ema9).not.toBeNull();
+        expect(ctx.ema21).not.toBeNull();
+        expect(ctx.emaUptrend).toBe(true);
+    });
+
+    test('emaUptrend=false when ema9 < ema21 in falling bars', () => {
+        const bars = [];
+        for (let i = 0; i < 30; i++) {
+            const price = 100 - i * 2; // clearly falling
+            bars.push({ t: '', o: price, h: price + 0.1, l: price - 0.1, c: price, v: 100 });
+        }
+        const ctx = computeContext(bars, 'trending');
+        expect(ctx.emaUptrend).toBe(false);
+    });
+
+    test('positionInDailyRange is null when daily range is zero', () => {
+        const bars = [
+            { t: '', o: 100, h: 100, l: 100, c: 100, v: 100 },
+            { t: '', o: 100, h: 100, l: 100, c: 100, v: 100 },
+        ];
+        const ctx = computeContext(bars, 'trending');
+        expect(ctx.positionInDailyRange).toBeNull();
+    });
+
+    test('positionInDailyRange is 0 at daily low, 1 at daily high', () => {
+        const bars = [
+            { t: '', o: 100, h: 100, l: 100, c: 100, v: 100 }, // low
+            { t: '', o: 110, h: 110, l: 110, c: 110, v: 100 }, // high
+            { t: '', o: 105, h: 105, l: 105, c: 105, v: 100 }, // middle
+        ];
+        const ctx = computeContext(bars, 'trending');
+        expect(ctx.positionInDailyRange).toBeCloseTo(0.5, 2);
+    });
+});
