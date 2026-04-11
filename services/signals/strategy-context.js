@@ -48,15 +48,14 @@ function computeContext(bars, marketRegime) {
     // Needs at least slow + signal = 26 + 9 = 35 bars to produce a value.
     const macd = indicators.calculateMACD(closes);
 
-    // VWAP from typical price × volume
+    // VWAP from typical price × volume (reuses volumeToday — no duplicate reduction)
     let vwap = null;
-    const totalVol = bars.reduce((s, b) => s + (b.v || 0), 0);
-    if (totalVol > 0) {
+    if (volumeToday > 0) {
         const tpVolSum = bars.reduce((s, b) => {
             const tp = (b.h + b.l + b.c) / 3;
             return s + tp * (b.v || 0);
         }, 0);
-        vwap = tpVolSum / totalVol;
+        vwap = tpVolSum / volumeToday;
     }
 
     // Daily range position
