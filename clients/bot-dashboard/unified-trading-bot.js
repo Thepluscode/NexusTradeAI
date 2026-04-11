@@ -49,6 +49,14 @@ try {
   // [v17.1] On Railway, auto-optimizer ships alongside bot.js
   try { ({ optimize, evaluateStrategies } = require('./auto-optimizer')); console.log('[INIT] auto-optimizer loaded from local'); } catch (_) {}
 }
+// Signal schema initializer — creates historical_bars_cache, backtest_results,
+// shadow_signals, strategy_enabled tables. Idempotent.
+let initSignalSchema;
+try {
+  ({ initSignalSchema } = require('../../services/signals/schema'));
+} catch (e) {
+  console.log('[INIT] signals/schema not available — signal tables will not be created');
+}
 // Shared signal functions (compat wrappers preserve old interface)
 let sharedSignals;
 try {
@@ -313,6 +321,11 @@ async function initDb() {
             )
         `);
         console.log('✅ Password reset tokens table ready');
+
+        // Signal schema — idempotent; safe to run on every startup
+        if (typeof initSignalSchema === 'function') {
+            await initSignalSchema(dbPool);
+        }
     } catch (e) {
         console.warn('⚠️  Auth DB init failed:', e.message);
         dbPool = null;
