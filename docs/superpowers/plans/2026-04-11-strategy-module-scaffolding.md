@@ -304,9 +304,17 @@ EOF
 **Files:**
 - Modify: `clients/bot-dashboard/unified-trading-bot.js` (inside `initDb()`)
 
-- [ ] **Step 1: Read the existing `initDb` function**
+- [ ] **Step 1: Find the existing `initDb` function**
 
-Read `clients/bot-dashboard/unified-trading-bot.js:215-400` to understand where table creations end and what pattern to match.
+The file is ~7000 lines and line numbers drift. Find the function with:
+```bash
+grep -n "async function initDb" clients/bot-dashboard/unified-trading-bot.js
+```
+
+Then scan from that line until you find the LAST `console.log('✅ ... table ready')` line inside the same try block. That's where you'll add the call. Use:
+```bash
+grep -n "✅.*table ready" clients/bot-dashboard/unified-trading-bot.js
+```
 
 - [ ] **Step 2: Add require at top of file**
 
@@ -356,7 +364,20 @@ EOF
 - Create: `services/signals/strategy-context.js`
 - Test: `services/signals/__tests__/strategy-context.test.js`
 
-**Reference for indicator calculations:** `services/signals/indicators.js` already has `calculateEMA`, `calculateRSI`, `calculateADX`, `calculateMACD`, `calculateATR`. **Reuse them — do not reimplement.**
+**Reference for indicator calculations:** `services/signals/indicators.js` exports these **and only these**:
+- `calculateSMA(prices, period)` — array of numbers
+- `calculateEMA(prices, period)` — array of numbers
+- `calculateRSI(prices, period = 14)` — array of numbers, returns **50** on insufficient data (not null)
+- `calculateMACD(prices, fast, slow, signal)` — array of numbers, returns `{line, signal, histogram, bullish}` or null
+- `calculateBollingerBands(prices, period, stdDev)` — array of numbers
+
+All functions take **arrays of closing prices** (numbers), not bar objects. Convert via `bars.map(b => b.c)` before calling.
+
+**NOT available in indicators.js (do NOT use in Plan 1):**
+- `calculateADX` — lives inline in `clients/bot-dashboard/unified-trading-bot.js` only. **Defer to Plan 3** when ORB needs it.
+- `calculateATR` — same. **Defer to Plan 3.**
+
+Plan 1's context therefore excludes `adx` and `atr/atrPct` fields. Plan 3 will port these functions to `indicators.js` before porting ORB.
 
 - [ ] **Step 1: Write the skeleton failing test**
 
@@ -407,6 +428,33 @@ describe('computeContext', () => {
         expect(ctx).toHaveProperty('marketRegime');
         expect(ctx).toHaveProperty('belowVwap');
         expect(ctx).toHaveProperty('emaUptrend');
+        // Plan 1 does NOT include adx/atr — those arrive with Plan 3 (ORB port)
+        expect(ctx.adx).toBeUndefined();
+        expect(ctx.atr).toBeUndefined();
+    });
+
+    test('RSI returns a numeric value on 30 trending bars', () => {
+        // Regression: verify calculateRSI is called with closes (numbers),
+        // not bars (objects) — passing bars produces NaN.
+        const ctx = computeContext(makeTrendingBars(30), 'trending');
+        expect(typeof ctx.rsi).toBe('number');
+        expect(Number.isFinite(ctx.rsi)).toBe(true);
+        expect(ctx.rsi).toBeGreaterThan(0);
+        expect(ctx.rsi).toBeLessThanOrEqual(100);
+    });
+
+    test('EMA9 and EMA21 return numeric values on 30 trending bars', () => {
+        const ctx = computeContext(makeTrendingBars(30), 'trending');
+        expect(typeof ctx.ema9).toBe('number');
+        expect(typeof ctx.ema21).toBe('number');
+        expect(Number.isFinite(ctx.ema9)).toBe(true);
+        expect(Number.isFinite(ctx.ema21)).toBe(true);
+    });
+
+    test('MACD returns an object on 30 trending bars', () => {
+        const ctx = computeContext(makeTrendingBars(30), 'trending');
+        // calculateMACD returns {line, signal, histogram, bullish} or null
+        expect(ctx.macd === null || typeof ctx.macd === 'object').toBe(true);
     });
 
     test('currentPrice matches last bar close', () => {
@@ -439,8 +487,14 @@ Expected: FAIL with "Cannot find module '../strategy-context'".
 const indicators = require('./indicators');
 
 /**
- * Compute all indicators strategies might need.
+ * Compute indicators strategies might need.
  * Pure function — no I/O, no side effects, deterministic output.
+ *
+ * IMPORTANT: indicators.js functions take arrays of CLOSES (numbers),
+ * not bar objects. We extract closes once and pass it around.
+ *
+ * NOTE: ADX and ATR are NOT computed in Plan 1 — they live inline in the
+ * stock bot and will be ported to indicators.js in Plan 3 when ORB needs them.
  *
  * @param {Array<{t,o,h,l,c,v}>} bars — OHLCV bars ordered ascending by time
  * @param {string} marketRegime — current regime from SPY detection
@@ -456,16 +510,25 @@ function computeContext(bars, marketRegime) {
     const volumeToday = bars.reduce((s, b) => s + (b.v || 0), 0);
     const percentChange = todayOpen > 0 ? ((currentPrice - todayOpen) / todayOpen) * 100 : 0;
 
-    // Indicators from the existing shared module (null if insufficient data)
+    // Extract closes once — indicators.js expects numbers, not bar objects.
     const closes = bars.map(b => b.c);
+
+    // EMAs — return null if insufficient data.
     const ema9 = indicators.calculateEMA(closes, 9);
     const ema21 = indicators.calculateEMA(closes, 21);
-    const rsi = indicators.calculateRSI(bars);
-    const rsi2 = bars.length >= 3 ? indicators.calculateRSI(bars, 2) : null;
-    const adx = indicators.calculateADX(bars);
-    const macd = indicators.calculateMACD(bars);
-    const atr = indicators.calculateATR(bars);
-    const atrPct = atr !== null && currentPrice > 0 ? atr / currentPrice : null;
+
+    // RSI — returns 50 on insufficient data (NOT null), per indicators.js:45.
+    // Callers must NOT treat 50 as "null"; use it as-is.
+    const rsi = indicators.calculateRSI(closes, 14);
+
+    // RSI(2) — short-period RSI for mean-reversion strategies.
+    // Needs period+1 bars minimum; return null explicitly if fewer.
+    const rsi2 = closes.length >= 3
+        ? indicators.calculateRSI(closes, 2)
+        : null;
+
+    // MACD — returns {line, signal, histogram, bullish} or null on insufficient data.
+    const macd = indicators.calculateMACD(closes);
 
     // VWAP from typical price × volume
     let vwap = null;
@@ -502,16 +565,14 @@ function computeContext(bars, marketRegime) {
         ema21,
         rsi,
         rsi2,
-        adx,
         macd,
-        atr,
-        atrPct,
         // Derived
         belowVwap,
         emaUptrend,
         positionInDailyRange,
         // Market state
         marketRegime: marketRegime || null,
+        // NOTE: adx, atr, atrPct intentionally absent — Plan 3 adds them
     };
 }
 
@@ -650,6 +711,26 @@ describe('computeContext — insufficient data', () => {
         }
         const ctx = computeContext(bars, 'trending');
         expect(ctx.emaUptrend).toBeNull();
+    });
+
+    test('RSI returns 50 on insufficient data (not null — existing contract)', () => {
+        // indicators.calculateRSI returns 50 (not null) when prices.length < period * 2
+        // Our context inherits this behavior — document it here as the contract.
+        const bars = [
+            { t: '', o: 100, h: 100, l: 100, c: 100, v: 100 },
+            { t: '', o: 101, h: 101, l: 101, c: 101, v: 100 },
+        ];
+        const ctx = computeContext(bars, 'trending');
+        expect(ctx.rsi).toBe(50);
+    });
+
+    test('rsi2 returns null when < 3 bars', () => {
+        const bars = [
+            { t: '', o: 100, h: 100, l: 100, c: 100, v: 100 },
+            { t: '', o: 101, h: 101, l: 101, c: 101, v: 100 },
+        ];
+        const ctx = computeContext(bars, 'trending');
+        expect(ctx.rsi2).toBeNull();
     });
 
     test('emaUptrend=true when ema9 > ema21 in rising bars', () => {
