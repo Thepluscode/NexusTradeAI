@@ -94,3 +94,50 @@ describe('computeContext', () => {
         expect(ctx.marketRegime).toBe('opening-range');
     });
 });
+
+describe('computeContext — VWAP', () => {
+    test('VWAP equals mean price when all volumes are equal', () => {
+        // 3 bars, all vol=100, typical prices 10, 20, 30
+        const bars = [
+            { t: '', o: 10, h: 10, l: 10, c: 10, v: 100 },
+            { t: '', o: 20, h: 20, l: 20, c: 20, v: 100 },
+            { t: '', o: 30, h: 30, l: 30, c: 30, v: 100 },
+        ];
+        const ctx = computeContext(bars, 'trending');
+        expect(ctx.vwap).toBeCloseTo(20, 5); // (10+20+30)/3
+    });
+
+    test('VWAP weights heavy-volume bars more', () => {
+        const bars = [
+            { t: '', o: 10, h: 10, l: 10, c: 10, v: 100 },
+            { t: '', o: 100, h: 100, l: 100, c: 100, v: 900 }, // 9x volume
+        ];
+        const ctx = computeContext(bars, 'trending');
+        // weighted mean: (10*100 + 100*900) / 1000 = 91
+        expect(ctx.vwap).toBeCloseTo(91, 5);
+    });
+
+    test('VWAP is null when total volume is zero', () => {
+        const bars = [
+            { t: '', o: 10, h: 10, l: 10, c: 10, v: 0 },
+        ];
+        const ctx = computeContext(bars, 'trending');
+        expect(ctx.vwap).toBeNull();
+    });
+
+    test('belowVwap is true when price is below VWAP', () => {
+        const bars = [
+            { t: '', o: 100, h: 100, l: 100, c: 100, v: 100 },
+            { t: '', o: 100, h: 100, l: 100, c: 100, v: 100 },
+            { t: '', o: 90, h: 90, l: 90, c: 90, v: 100 }, // current price 90 < vwap ~96.7
+        ];
+        const ctx = computeContext(bars, 'trending');
+        expect(ctx.belowVwap).toBe(true);
+    });
+
+    test('belowVwap is false when VWAP is null (insufficient data)', () => {
+        const bars = [{ t: '', o: 10, h: 10, l: 10, c: 10, v: 0 }];
+        const ctx = computeContext(bars, 'trending');
+        expect(ctx.belowVwap).toBe(false);
+    });
+});
