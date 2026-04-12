@@ -57,6 +57,13 @@ try {
 } catch (e) {
   console.log('[INIT] signals/schema not available — signal tables will not be created');
 }
+// VWAP Reversal strategy — mean-reversion for below-VWAP stocks
+let vwapReversalStrategy;
+try {
+  vwapReversalStrategy = require('../../services/signals/strategies/stock-vwap-reversal');
+} catch (e) {
+  console.log('[INIT] stock-vwap-reversal strategy not available');
+}
 // Shared signal functions (compat wrappers preserve old interface)
 let sharedSignals;
 try {
@@ -5894,12 +5901,16 @@ async function analyzeMomentumForEngine(symbol, engine) {
         // [v11.0] Minimum price $20 — removes penny stock noise
         if (current < 20 || current > 1000) return null;
         if (volumeToday < 500000) return null;
-        const vwap = calculateVWAP(bars);
-        if (vwap && current < vwap) return null;
+        // [v22.1] VWAP returns {vwap, upperBand, lowerBand, stdDev} — extract properly
+        // Previous code compared number < object (always false) — was a no-op
+        const vwapData = calculateVWAP(bars);
+        const vwap = vwapData ? vwapData.vwap : null;
+        const belowVwap = vwap !== null && current < vwap;
         const closes = bars.map(b => b.c);
         const ema9 = calculateEMA(closes, 9);
         const ema21 = calculateEMA(closes, 21);
-        if (ema9 !== null && ema21 !== null && ema9 <= ema21) return null;
+        // [v22.1] Relaxed from hard return-null to flag — VWAP Reversal needs non-uptrend stocks
+        const emaUptrend = !(ema9 !== null && ema21 !== null && ema9 <= ema21);
         const atr = calculateATR(bars);
         const atrPct = atr !== null && current > 0 ? atr / current : null;
         const candidates = [];
@@ -5915,7 +5926,43 @@ async function analyzeMomentumForEngine(symbol, engine) {
         });
         if (orbCandidate) candidates.push(orbCandidate);
 
-        let momentumAllowed = true;
+        // [v22.1] VWAP Reversal — mean-reversion for below-VWAP stocks in structural uptrends
+        // Fires when price drops below VWAP lower band with RSI < 40 + SPY bullish
+        if (vwapReversalStrategy && belowVwap && vwapData) {
+            // Fetch SMA50 daily for structural uptrend check (non-blocking, nullable)
+            let sma50daily = null;
+            try {
+                const barUrl50 = `${engine.alpacaConfig.dataURL}/v2/stocks/${symbol}/bars`;
+                const dailyResp50 = await axios.get(barUrl50, {
+                    headers: { 'APCA-API-KEY-ID': engine.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': engine.alpacaConfig.secretKey },
+                    params: { timeframe: '1Day', limit: 55, feed: 'sip' },
+                    timeout: 5000,
+                });
+                const dBars50 = dailyResp50.data?.bars || [];
+                if (dBars50.length >= 50) {
+                    sma50daily = dBars50.slice(-50).map(b => b.c).reduce((s, v) => s + v, 0) / 50;
+                }
+            } catch { /* daily bars unavailable — strategy handles null sma50daily gracefully */ }
+
+            const vwapContext = {
+                currentPrice: current,
+                vwap: vwap,
+                vwapLowerBand: vwapData.lowerBand,
+                rsi: rsi,
+                volumeRatio: volumeRatio,
+                atr: atr,
+                spyBullish: spyBullish,
+                sma50daily: sma50daily,
+                percentChange: percentChange,
+            };
+            const vwapResult = vwapReversalStrategy.evaluate(bars, vwapContext);
+            if (vwapResult.candidate) {
+                candidates.push(vwapResult.candidate);
+                console.log(`📊 [VWAP REV] ${symbol}: $${current.toFixed(2)} below VWAP band $${vwapData.lowerBand.toFixed(2)} | RSI ${rsi.toFixed(1)} | score ${vwapResult.candidate.score}`);
+            }
+        }
+
+        let momentumAllowed = emaUptrend;
         const dailyHigh = Math.max(...bars.map(b => b.h));
         const dailyLow = Math.min(...bars.map(b => b.l));
         const dailyRange = dailyHigh - dailyLow;

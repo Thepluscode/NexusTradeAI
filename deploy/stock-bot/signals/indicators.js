@@ -123,10 +123,64 @@ function calculateBollingerBands(prices, period = 20, stdDevMultiplier = 2) {
     return { upper, middle: sma, lower, bandwidth: bandWidth, percentB };
 }
 
+/**
+ * Average True Range — measures volatility from high/low/close bars.
+ * Uses Wilder's smoothing after the seed period.
+ * @param {Array<{h,l,c}>} bars — OHLC bars (needs h, l, c fields)
+ * @param {number} period — lookback period (default 14)
+ * @returns {number|null} ATR value or null if insufficient bars
+ */
+function calculateATR(bars, period = 14) {
+    if (!bars || bars.length < period + 1) return null;
+    const trValues = [];
+    for (let i = 1; i < bars.length; i++) {
+        const high = bars[i].h, low = bars[i].l, prevClose = bars[i - 1].c;
+        trValues.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
+    }
+    // Seed with simple average of first `period` true ranges
+    let atr = trValues.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    // Wilder's smoothing for remaining values
+    for (let i = period; i < trValues.length; i++) {
+        atr = (atr * (period - 1) + trValues[i]) / period;
+    }
+    return atr;
+}
+
+/**
+ * VWAP with 1.5-sigma bands — volume-weighted average price + statistical bands.
+ * Used for mean-reversion strategy entries (buy below lower band).
+ * @param {Array<{h,l,c,v}>} bars — OHLCV bars
+ * @returns {{vwap, upperBand, lowerBand, stdDev}|null}
+ */
+function calculateVWAPWithBands(bars) {
+    if (!bars || bars.length === 0) return null;
+    let cumulativeTPV = 0;
+    let cumulativeTPV2 = 0;
+    let cumulativeVolume = 0;
+    for (const bar of bars) {
+        const tp = (bar.h + bar.l + bar.c) / 3;
+        cumulativeTPV += tp * (bar.v || 0);
+        cumulativeTPV2 += tp * tp * (bar.v || 0);
+        cumulativeVolume += (bar.v || 0);
+    }
+    if (cumulativeVolume <= 0) return null;
+    const vwap = cumulativeTPV / cumulativeVolume;
+    const variance = (cumulativeTPV2 / cumulativeVolume) - (vwap * vwap);
+    const stdDev = Math.sqrt(Math.max(variance, 0));
+    return {
+        vwap,
+        upperBand: vwap + 1.5 * stdDev,
+        lowerBand: vwap - 1.5 * stdDev,
+        stdDev,
+    };
+}
+
 module.exports = {
     calculateSMA,
     calculateEMA,
     calculateRSI,
     calculateMACD,
     calculateBollingerBands,
+    calculateATR,
+    calculateVWAPWithBands,
 };
