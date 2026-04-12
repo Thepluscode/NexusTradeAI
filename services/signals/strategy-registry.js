@@ -61,6 +61,41 @@ function runStrategies(enabledStrategies, symbol, bars, context) {
     return { candidates, diagnostics };
 }
 
+// DB-backed enablement cache
+let enabledCache = null;
+let enabledCacheFetchedAt = 0;
+const ENABLED_CACHE_TTL_MS = 60_000;
+
+async function getEnabledStrategies(assetClass, regime, dbPool) {
+    const age = Date.now() - enabledCacheFetchedAt;
+    const shouldRefresh = enabledCache === null || age > ENABLED_CACHE_TTL_MS;
+
+    if (shouldRefresh) {
+        try {
+            const result = await dbPool.query(
+                `SELECT strategy_name, state FROM strategy_enabled
+                 WHERE asset_class = $1 AND state IN ('shadow','live')`,
+                [assetClass]
+            );
+            enabledCache = result.rows;
+            enabledCacheFetchedAt = Date.now();
+        } catch (e) {
+            console.error(`[strategy-registry] DB query failed: ${e.message} — using cached (${enabledCache === null ? 'NO CACHE' : 'stale'})`);
+            if (enabledCache === null) return [];
+        }
+    }
+
+    return enabledCache
+        .map(row => {
+            const strategy = strategies.get(row.strategy_name);
+            if (!strategy) return null;
+            return { ...strategy, state: row.state };
+        })
+        .filter(s => s !== null)
+        .filter(s => s.assetClass === assetClass)
+        .filter(s => s.regimes.includes(regime) || s.regimes.includes('any'));
+}
+
 // Test-only helpers — not part of the public API
 function _reset() {
     strategies.clear();
@@ -68,10 +103,20 @@ function _reset() {
 function _getAll() {
     return Array.from(strategies.values());
 }
+function _resetEnabledCache() {
+    enabledCache = null;
+    enabledCacheFetchedAt = 0;
+}
+function _forceCacheExpiry() {
+    enabledCacheFetchedAt = 0;
+}
 
 module.exports = {
     register,
     runStrategies,
+    getEnabledStrategies,
     _reset,
     _getAll,
+    _resetEnabledCache,
+    _forceCacheExpiry,
 };

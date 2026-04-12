@@ -116,3 +116,102 @@ describe('registry.runStrategies', () => {
         expect(diagnostics).toEqual({});
     });
 });
+
+describe('registry.getEnabledStrategies', () => {
+    function makeStubPool(rows, shouldFail = false) {
+        return {
+            query: async (sql, params) => {
+                if (shouldFail) throw new Error('db_down');
+                return { rows };
+            }
+        };
+    }
+
+    beforeEach(() => {
+        registry._reset();
+        registry._resetEnabledCache();
+        registry.register({
+            name: 's1',
+            assetClass: 'stock',
+            regimes: ['trending'],
+            evaluate: () => ({ killedBy: 'noop' }),
+        });
+        registry.register({
+            name: 's2',
+            assetClass: 'stock',
+            regimes: ['ranging'],
+            evaluate: () => ({ killedBy: 'noop' }),
+        });
+    });
+
+    test('returns strategies matching assetClass and regime from DB', async () => {
+        const pool = makeStubPool([
+            { strategy_name: 's1', state: 'live' },
+            { strategy_name: 's2', state: 'live' },
+        ]);
+        const enabled = await registry.getEnabledStrategies('stock', 'trending', pool);
+        expect(enabled).toHaveLength(1);
+        expect(enabled[0].name).toBe('s1');
+    });
+
+    test('uses "any" as wildcard regime', async () => {
+        registry.register({
+            name: 'sAny',
+            assetClass: 'stock',
+            regimes: ['any'],
+            evaluate: () => ({ killedBy: 'noop' }),
+        });
+        const pool = makeStubPool([
+            { strategy_name: 'sAny', state: 'live' },
+        ]);
+        const enabled = await registry.getEnabledStrategies('stock', 'ranging', pool);
+        expect(enabled).toHaveLength(1);
+        expect(enabled[0].name).toBe('sAny');
+    });
+
+    test('caches results for 60s — second call does not requery', async () => {
+        let queryCount = 0;
+        const pool = {
+            query: async () => {
+                queryCount++;
+                return { rows: [{ strategy_name: 's1', state: 'live' }] };
+            }
+        };
+        await registry.getEnabledStrategies('stock', 'trending', pool);
+        await registry.getEnabledStrategies('stock', 'trending', pool);
+        expect(queryCount).toBe(1);
+    });
+
+    test('falls back to cached value when DB query fails', async () => {
+        const okPool = makeStubPool([{ strategy_name: 's1', state: 'live' }]);
+        await registry.getEnabledStrategies('stock', 'trending', okPool);
+        registry._forceCacheExpiry();
+        const badPool = makeStubPool([], true);
+        const enabled = await registry.getEnabledStrategies('stock', 'trending', badPool);
+        expect(enabled).toHaveLength(1);
+    });
+
+    test('returns empty array on first-ever DB failure (safe default)', async () => {
+        const badPool = makeStubPool([], true);
+        const enabled = await registry.getEnabledStrategies('stock', 'trending', badPool);
+        expect(enabled).toEqual([]);
+    });
+
+    test('includes state field on returned strategies', async () => {
+        const pool = makeStubPool([{ strategy_name: 's1', state: 'shadow' }]);
+        const enabled = await registry.getEnabledStrategies('stock', 'trending', pool);
+        expect(enabled[0].state).toBe('shadow');
+    });
+
+    test('filters out strategies registered in code but not in DB', async () => {
+        const pool = makeStubPool([]);
+        const enabled = await registry.getEnabledStrategies('stock', 'trending', pool);
+        expect(enabled).toEqual([]);
+    });
+
+    test('filters out DB rows without a matching registered strategy', async () => {
+        const pool = makeStubPool([{ strategy_name: 'ghostStrategy', state: 'live' }]);
+        const enabled = await registry.getEnabledStrategies('stock', 'trending', pool);
+        expect(enabled).toEqual([]);
+    });
+});
