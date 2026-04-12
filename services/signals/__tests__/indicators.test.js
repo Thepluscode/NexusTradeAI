@@ -4,6 +4,8 @@ const {
     calculateRSI,
     calculateMACD,
     calculateBollingerBands,
+    calculateATR,
+    calculateVWAPWithBands,
 } = require('../indicators');
 
 // ── SMA ──────────────────────────────────────────────────────────────────────
@@ -167,5 +169,111 @@ describe('calculateBollingerBands', () => {
         // percentB should be a number between 0 and 1
         expect(result.percentB).toBeGreaterThanOrEqual(-0.5);
         expect(result.percentB).toBeLessThanOrEqual(1.5);
+    });
+});
+
+// ── ATR ─────────────────────────────────────────────────────────────────────
+
+describe('calculateATR', () => {
+    test('returns null when fewer than period+1 bars', () => {
+        const bars = Array(14).fill({ h: 10, l: 9, c: 9.5 });
+        expect(calculateATR(bars, 14)).toBeNull();
+    });
+
+    test('computes ATR correctly for uniform-range bars', () => {
+        // 16 bars, each with h=101, l=100, c=100.5 → TR = 1.0 for each
+        // ATR(14) with all TR=1.0 should be 1.0
+        const bars = [];
+        for (let i = 0; i < 16; i++) {
+            bars.push({ h: 101, l: 100, c: 100.5 });
+        }
+        const atr = calculateATR(bars, 14);
+        expect(atr).not.toBeNull();
+        expect(atr).toBeCloseTo(1.0, 2);
+    });
+
+    test('uses Wilder smoothing after seed period', () => {
+        // 15 bars: TR=1.0 each, then bar 16: TR=2.0
+        // Seed ATR = 1.0 (average of first 14 TRs)
+        // Wilder: (1.0 * 13 + 2.0) / 14 ≈ 1.071
+        const bars = [];
+        for (let i = 0; i < 15; i++) {
+            bars.push({ h: 101, l: 100, c: 100.5 });
+        }
+        bars.push({ h: 102, l: 100, c: 101 }); // TR = max(2, |102-100.5|, |100-100.5|) = 2.0
+        const atr = calculateATR(bars, 14);
+        expect(atr).toBeCloseTo(1.071, 2);
+    });
+
+    test('defaults to period 14', () => {
+        const bars = Array(16).fill({ h: 101, l: 100, c: 100.5 });
+        expect(calculateATR(bars)).toEqual(calculateATR(bars, 14));
+    });
+
+    test('handles gap-up bars (true range uses prev close)', () => {
+        // Bar 1: c=100, Bar 2: h=110, l=108 → TR = max(2, |110-100|, |108-100|) = 10
+        const bars = [
+            { h: 101, l: 100, c: 100 },
+            { h: 110, l: 108, c: 109 }, // gap up
+        ];
+        // Need 15 bars for period=14, but test with period=1 for isolation
+        expect(calculateATR(bars, 1)).toBeCloseTo(10, 1);
+    });
+});
+
+// ── VWAP with bands ─────────────────────────────────────────────────────────
+
+describe('calculateVWAPWithBands', () => {
+    test('returns null for empty bars', () => {
+        expect(calculateVWAPWithBands([])).toBeNull();
+        expect(calculateVWAPWithBands(null)).toBeNull();
+    });
+
+    test('returns vwap + upperBand + lowerBand + stdDev', () => {
+        const bars = [
+            { h: 10, l: 10, c: 10, v: 100 },
+            { h: 20, l: 20, c: 20, v: 100 },
+        ];
+        const result = calculateVWAPWithBands(bars);
+        expect(result).toHaveProperty('vwap');
+        expect(result).toHaveProperty('upperBand');
+        expect(result).toHaveProperty('lowerBand');
+        expect(result).toHaveProperty('stdDev');
+    });
+
+    test('VWAP equals volume-weighted typical price', () => {
+        const bars = [
+            { h: 10, l: 10, c: 10, v: 100 },
+            { h: 100, l: 100, c: 100, v: 900 },
+        ];
+        const result = calculateVWAPWithBands(bars);
+        // weighted: (10*100 + 100*900) / 1000 = 91
+        expect(result.vwap).toBeCloseTo(91, 2);
+    });
+
+    test('bands use 1.5 sigma spread', () => {
+        const bars = [
+            { h: 10, l: 10, c: 10, v: 100 },
+            { h: 20, l: 20, c: 20, v: 100 },
+        ];
+        const result = calculateVWAPWithBands(bars);
+        expect(result.upperBand).toBeCloseTo(result.vwap + 1.5 * result.stdDev, 5);
+        expect(result.lowerBand).toBeCloseTo(result.vwap - 1.5 * result.stdDev, 5);
+    });
+
+    test('returns null when total volume is zero', () => {
+        const bars = [{ h: 10, l: 10, c: 10, v: 0 }];
+        expect(calculateVWAPWithBands(bars)).toBeNull();
+    });
+
+    test('stdDev is zero when all prices are equal', () => {
+        const bars = [
+            { h: 50, l: 50, c: 50, v: 100 },
+            { h: 50, l: 50, c: 50, v: 100 },
+        ];
+        const result = calculateVWAPWithBands(bars);
+        expect(result.stdDev).toBeCloseTo(0, 5);
+        expect(result.upperBand).toBeCloseTo(result.vwap, 5);
+        expect(result.lowerBand).toBeCloseTo(result.vwap, 5);
     });
 });
