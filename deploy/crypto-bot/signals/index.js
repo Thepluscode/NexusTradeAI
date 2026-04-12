@@ -18,6 +18,11 @@ const { checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, 
 const { normalizeCryptoBars, normalizeForexBars, normalizeStockBars } = require('./normalizers');
 const { calculateSMA, calculateEMA, calculateRSI, calculateMACD, calculateBollingerBands } = require('./indicators');
 
+// Plan 1: Strategy registry scaffolding
+const strategyContext = require('./strategy-context');
+const strategyRegistry = require('./strategy-registry');
+const signalSchema = require('./schema');
+
 module.exports = {
   computeMomentum, computeOrderFlow, computeDisplacement,
   computeVolumeProfile, computeFVG, computeVolumeRatio,
@@ -33,4 +38,5 @@ module.exports = {
   checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth,
   normalizeCryptoBars, normalizeForexBars, normalizeStockBars,
   calculateSMA, calculateEMA, calculateRSI, calculateMACD, calculateBollingerBands,
+  strategyContext, strategyRegistry, signalSchema,
 };
