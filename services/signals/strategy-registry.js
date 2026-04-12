@@ -29,6 +29,38 @@ function register(strategy) {
     strategies.set(strategy.name, normalized);
 }
 
+/**
+ * Run a set of strategies against the same bars + context.
+ * Fault-isolated: one strategy crashing never affects others.
+ * @returns {{ candidates: Array, diagnostics: Object }}
+ */
+function runStrategies(enabledStrategies, symbol, bars, context) {
+    const candidates = [];
+    const diagnostics = {};
+
+    for (const strategy of enabledStrategies) {
+        try {
+            const result = strategy.evaluate(bars, context);
+            if (result && result.candidate) {
+                candidates.push({
+                    ...result.candidate,
+                    strategy: strategy.name,
+                });
+            } else if (result && result.killedBy) {
+                if (!diagnostics[strategy.name]) diagnostics[strategy.name] = {};
+                diagnostics[strategy.name][result.killedBy] =
+                    (diagnostics[strategy.name][result.killedBy] || 0) + 1;
+            }
+        } catch (e) {
+            console.error(`[strategy ${strategy.name}] ${symbol} crashed: ${e.message}`);
+            if (!diagnostics[strategy.name]) diagnostics[strategy.name] = {};
+            diagnostics[strategy.name]._error = e.message;
+        }
+    }
+
+    return { candidates, diagnostics };
+}
+
 // Test-only helpers — not part of the public API
 function _reset() {
     strategies.clear();
@@ -39,6 +71,7 @@ function _getAll() {
 
 module.exports = {
     register,
+    runStrategies,
     _reset,
     _getAll,
 };
