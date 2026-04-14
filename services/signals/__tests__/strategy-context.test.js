@@ -44,9 +44,11 @@ describe('computeContext', () => {
         expect(ctx).toHaveProperty('marketRegime');
         expect(ctx).toHaveProperty('belowVwap');
         expect(ctx).toHaveProperty('emaUptrend');
-        // Plan 1 does NOT include adx/atr — those arrive with Plan 3 (ORB port)
-        expect(ctx.adx).toBeUndefined();
-        expect(ctx.atr).toBeUndefined();
+        // ATR + VWAP bands added for VWAP Reversal strategy
+        expect(ctx).toHaveProperty('atr');
+        expect(ctx).toHaveProperty('atrPct');
+        expect(ctx).toHaveProperty('vwapLowerBand');
+        expect(ctx).toHaveProperty('vwapUpperBand');
     });
 
     test('RSI returns a numeric value on 30 trending bars', () => {

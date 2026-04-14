@@ -48,15 +48,15 @@ function computeContext(bars, marketRegime) {
     // Needs at least slow + signal = 26 + 9 = 35 bars to produce a value.
     const macd = indicators.calculateMACD(closes);
 
-    // VWAP from typical price × volume (reuses volumeToday — no duplicate reduction)
-    let vwap = null;
-    if (volumeToday > 0) {
-        const tpVolSum = bars.reduce((s, b) => {
-            const tp = (b.h + b.l + b.c) / 3;
-            return s + tp * (b.v || 0);
-        }, 0);
-        vwap = tpVolSum / volumeToday;
-    }
+    // ATR — measures volatility from bar highs/lows/closes.
+    const atr = indicators.calculateATR(bars);
+    const atrPct = atr !== null && currentPrice > 0 ? atr / currentPrice : null;
+
+    // VWAP with bands — for mean-reversion strategies (buy below lower band).
+    const vwapData = indicators.calculateVWAPWithBands(bars);
+    const vwap = vwapData ? vwapData.vwap : null;
+    const vwapLowerBand = vwapData ? vwapData.lowerBand : null;
+    const vwapUpperBand = vwapData ? vwapData.upperBand : null;
 
     // Daily range position
     const dailyHigh = Math.max(...bars.map(b => b.h));
@@ -78,18 +78,21 @@ function computeContext(bars, marketRegime) {
         dailyLow,
         // Indicators
         vwap,
+        vwapLowerBand,
+        vwapUpperBand,
         ema9,
         ema21,
         rsi,
         rsi2,
         macd,
+        atr,
+        atrPct,
         // Derived
         belowVwap,
         emaUptrend,
         positionInDailyRange,
         // Market state
         marketRegime: marketRegime || null,
-        // NOTE: adx, atr, atrPct intentionally absent — Plan 3 adds them
     };
 }
 

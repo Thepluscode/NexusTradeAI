@@ -15,7 +15,7 @@ const { computeContext } = require('../strategy-context');
  * @returns {{ trades: Array, winRate: number, profitFactor: number }}
  */
 function simulateTrades(strategy, bars, options = {}) {
-    const { lookback = 30, maxHoldBars = 60 } = options;
+    const { lookback = 30, maxHoldBars = 60, contextOverrides = {} } = options;
 
     if (!bars || bars.length <= lookback) {
         return { trades: [], winRate: 0, profitFactor: 0 };
@@ -81,8 +81,9 @@ function simulateTrades(strategy, bars, options = {}) {
 
         // No open position — evaluate strategy for new entry
         const barsUntilNow = bars.slice(0, i + 1);
-        const context = computeContext(barsUntilNow, 'backtest');
-        if (!context) continue;
+        const baseContext = computeContext(barsUntilNow, 'backtest');
+        if (!baseContext) continue;
+        const context = { ...baseContext, ...contextOverrides };
 
         const result = strategy.evaluate(barsUntilNow, context);
         if (result && result.candidate) {
