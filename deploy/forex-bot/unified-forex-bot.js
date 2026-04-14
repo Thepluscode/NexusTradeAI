@@ -3493,25 +3493,27 @@ async function tradingLoop() {
                 continue;
             }
 
-            // AI advisor gate (same as normal trades)
+            // [v22.0] AI advisor — ADVISORY MODE (data: 0% WR when hard-gating forex)
             const aiResult = await queryAIAdvisor(signal);
-            if (!aiResult.approved) {
-                console.log(`[FLIP-REVERSAL] ${signal.pair} ${signal.direction} REJECTED by AI — ${aiResult.reason}`);
+            if (aiResult.source === 'kill_switch') {
+                console.log(`[FLIP-REVERSAL] ${signal.pair} KILL SWITCH — ${aiResult.reason}`);
+                telegramAlerts.sendKillSwitchAlert('Forex Bot', aiResult.reason).catch(err => console.warn('[ALERT]', err.message));
                 continue;
             }
-            signal.agentApproved = true;
+            const flipVerdict = aiResult.approved ? 'AGREES' : 'DISAGREES';
+            console.log(`[FLIP-REVERSAL] ${signal.pair} ${signal.direction} agent ${flipVerdict} (conf: ${(aiResult.confidence || 0).toFixed(2)}) — ${aiResult.reason}`);
+            signal.agentApproved = aiResult.approved;
             signal.agentConfidence = aiResult.confidence;
             signal.agentReason = aiResult.reason;
             signal.decisionRunId = aiResult.decision_run_id || null;
             signal.banditArm = aiResult.bandit_arm || 'moderate';
-            if (aiResult.position_size_multiplier && aiResult.position_size_multiplier !== 1.0) {
+            if (aiResult.approved && aiResult.position_size_multiplier && aiResult.position_size_multiplier !== 1.0) {
                 signal.agentSizeMultiplier = aiResult.position_size_multiplier;
             }
 
             // Guardrail checks
             if (guardrails.isPaused) continue;
             if ((signal.score || 0) < MIN_SIGNAL_SCORE) continue;
-            if (aiResult.confidence < MIN_SIGNAL_CONFIDENCE) continue;
 
             // Transaction cost EV filter
             if (!isForexPositiveEV(signal.pair, committee.confidence)) continue;
@@ -3560,28 +3562,17 @@ async function tradingLoop() {
         const signalsToExecute = normalSignals.slice(0, Math.min(maxNewPositions, MAX_SIGNALS_PER_CYCLE));
 
         for (const signal of signalsToExecute) {
-            // [v5.0] HARD GATE: every trade MUST be approved by the agentic AI pipeline
+            // [v22.0] AI advisor — ADVISORY MODE (data: 0% WR when hard-gating forex)
+            // Kill switch is the only hard gate. Agent opinion is logged for learning loop.
             const aiResult = await queryAIAdvisor(signal);
-
-            if (!aiResult.approved) {
-                console.log(`[Agent] ${signal.pair} ${signal.direction} REJECTED (conf: ${(aiResult.confidence || 0).toFixed(2)}, src: ${aiResult.source}) — ${aiResult.reason}`);
-                if (aiResult.risk_flags?.length) console.log(`[Agent]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
-                if (aiResult.lessons_applied?.length) console.log(`[Agent]   Lessons: ${aiResult.lessons_applied.slice(0, 2).join('; ')}`);
-                if (aiResult.confidence > 0.8 || aiResult.source === 'kill_switch') {
-                    telegramAlerts.sendAgentRejection('Forex Bot', signal.pair, signal.direction, aiResult.reason, aiResult.confidence, aiResult.risk_flags).catch(err => console.warn('[ALERT]', err.message));
-                }
-                if (aiResult.source === 'kill_switch') {
-                    telegramAlerts.sendKillSwitchAlert('Forex Bot', aiResult.reason).catch(err => console.warn('[ALERT]', err.message));
-                }
+            if (aiResult.source === 'kill_switch') {
+                console.log(`[Agent] ${signal.pair} KILL SWITCH — ${aiResult.reason}`);
+                telegramAlerts.sendKillSwitchAlert('Forex Bot', aiResult.reason).catch(err => console.warn('[ALERT]', err.message));
                 continue;
             }
-
-            // Agent approved
-            const srcTag = aiResult.source === 'cache' ? ' (cached)' : '';
-            const regime = aiResult.market_regime ? ` [${aiResult.market_regime}]` : '';
-            console.log(`[Agent] ${signal.pair} ${signal.direction} APPROVED${srcTag}${regime} (conf: ${(aiResult.confidence || 0).toFixed(2)}, size: ${(aiResult.position_size_multiplier || 1).toFixed(2)}x) — ${aiResult.reason}`);
-            telegramAlerts.sendAgentApproval('Forex Bot', signal.pair, signal.direction, aiResult.confidence || 0, aiResult.position_size_multiplier || 1, aiResult.market_regime).catch(err => console.warn('[ALERT]', err.message));
-            signal.agentApproved = true;
+            const agentVerdict = aiResult.approved ? 'AGREES' : 'DISAGREES';
+            console.log(`[Agent] ${signal.pair} ${signal.direction} ${agentVerdict} (conf: ${(aiResult.confidence || 0).toFixed(2)}) — ${aiResult.reason}`);
+            signal.agentApproved = aiResult.approved;
             signal.agentConfidence = aiResult.confidence;
             signal.agentReason = aiResult.reason;
             signal.decisionRunId = aiResult.decision_run_id || null;  // For linking outcomes back
@@ -3598,7 +3589,8 @@ async function tradingLoop() {
                 console.log(`[Guardrail] ${signal.pair} BLOCKED — score ${(signal.score || 0).toFixed(2)} < ${MIN_SIGNAL_SCORE}`);
                 continue;
             }
-            if (aiResult && aiResult.confidence < MIN_SIGNAL_CONFIDENCE) {
+            // [v22.0] Agent confidence gate REMOVED — agent is advisory only, confidence logged for learning
+            if (false && aiResult && aiResult.confidence < MIN_SIGNAL_CONFIDENCE) {
                 console.log(`[Guardrail] ${signal.pair} BLOCKED — confidence ${aiResult.confidence.toFixed(2)} < ${MIN_SIGNAL_CONFIDENCE}`);
                 continue;
             }
