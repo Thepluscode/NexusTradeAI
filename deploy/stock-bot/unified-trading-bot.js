@@ -2060,6 +2060,39 @@ async function queryStrategyBridge(symbol, bars, assetClass = 'stock') {
     }
 }
 
+// [v23.2] ML Regime endpoint — 4-state directional regime (TRENDING_UP/DOWN,
+// MEAN_REVERTING, HIGH_VOLATILITY). Shadow-mode for now — logs alongside the
+// existing ATR-based 3-state regime for comparison.
+const _mlRegimeCache = new Map();
+const _ML_REGIME_CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function queryMLRegime(symbol, bars) {
+    try {
+        if (!bars || bars.length < 60) return null;
+        const cached = _mlRegimeCache.get(symbol);
+        if (cached && Date.now() - cached.timestamp < _ML_REGIME_CACHE_TTL_MS) {
+            return cached.result;
+        }
+        const prices = bars.slice(-100).map(b => ({
+            timestamp: b.t || new Date().toISOString(),
+            open: parseFloat(b.o) || 0,
+            high: parseFloat(b.h) || 0,
+            low: parseFloat(b.l) || 0,
+            close: parseFloat(b.c) || 0,
+            volume: parseFloat(b.v) || 0,
+        }));
+        const response = await axios.post(`${BRIDGE_URL}/ml/regime`,
+            { symbol, prices, asset_class: 'stock' },
+            { timeout: 5000 }
+        );
+        const result = response.data;
+        _mlRegimeCache.set(symbol, { result, timestamp: Date.now() });
+        return result;
+    } catch (e) {
+        return null; // non-blocking
+    }
+}
+
 // ===== AI TRADE ADVISOR =====
 // [v5.0] Agentic AI — Claude-powered trade evaluation via strategy bridge
 // HARD GATE: every trade MUST be approved by the agent pipeline. No AI = no trade.
@@ -3195,6 +3228,19 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                 const registryFired = registryCandidates.length > 0;
                 if (registryFired || inlineFired) {
                     console.log(`[SHADOW] ${symbol}: inline=${inlineFired ? 'ORB' : 'none'} registry=${registryCandidates.map(c => c.strategy).join(',') || 'none'} diag=${JSON.stringify(shadowDiag)}`);
+
+                    // [v23.2] When a signal fires, ALSO log the ML regime — gives us A/B
+                    // data on whether ML regime agrees with inline/registry decisions.
+                    // Fire-and-forget; never blocks trading.
+                    queryMLRegime(symbol, bars).then(mlReg => {
+                        if (mlReg) {
+                            console.log(`[ML_REGIME] ${symbol}: ${mlReg.regime} conf=${mlReg.confidence} size_mult=${mlReg.position_size_multiplier} features=${JSON.stringify(mlReg.features)}`);
+                        } else {
+                            console.log(`[ML_REGIME] ${symbol}: unavailable (bridge down or insufficient bars)`);
+                        }
+                    }).catch(err => {
+                        console.warn(`[ML_REGIME] ${symbol}: query failed - ${err.message}`);
+                    });
                 }
             } catch (shadowErr) {
                 // never block trading on shadow errors
