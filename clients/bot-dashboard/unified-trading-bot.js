@@ -72,6 +72,18 @@ try {
 } catch (e) {
   console.log('[INIT] stock-vwap-reversal strategy not available');
 }
+
+// [v23.1] Strategy registry — load all strategy modules for shadow-mode comparison
+let strategyRegistry = null;
+let registryStrategies = [];
+try {
+  strategyRegistry = require('../../services/signals/strategy-registry');
+  const { loadAllStrategies } = require('../../services/signals/strategies');
+  registryStrategies = loadAllStrategies();
+  console.log(`[INIT] Strategy registry loaded with ${registryStrategies.length} strategies: ${registryStrategies.map(s => s.name).join(', ')}`);
+} catch (e) {
+  console.log(`[INIT] strategy-registry not available: ${e.message}`);
+}
 // Shared signal functions (compat wrappers preserve old interface)
 let sharedSignals;
 try {
@@ -3151,6 +3163,36 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
             atrPct
         });
         if (orbCandidate) candidates.push(orbCandidate);
+
+        // [v23.1] SHADOW MODE — run registry strategies for A/B comparison (log-only, no trades)
+        if (strategyRegistry && registryStrategies.length > 0 && !backtestMode) {
+            try {
+                const shadowContext = {
+                    currentPrice: current,
+                    rsi,
+                    vwap,
+                    volumeRatio: volumeToday && bars.length > 0
+                        ? volumeToday / bars.reduce((s, b) => s + (b.v || 0), 0) * bars.length
+                        : null,
+                    atr, atrPct,
+                    percentChange: bars[0] && bars[0].o > 0 ? ((current - bars[0].o) / bars[0].o) * 100 : 0,
+                    now: getESTDate(),
+                    spyBullish: globalThis._spyBullish !== false, // default true if unknown
+                    sma50daily: null, // optional
+                    regimeQuality: 0.8,
+                };
+                const { candidates: registryCandidates, diagnostics: shadowDiag } = strategyRegistry.runStrategies(
+                    registryStrategies, symbol, bars, shadowContext
+                );
+                const inlineFired = !!orbCandidate;
+                const registryFired = registryCandidates.length > 0;
+                if (registryFired || inlineFired) {
+                    console.log(`[SHADOW] ${symbol}: inline=${inlineFired ? 'ORB' : 'none'} registry=${registryCandidates.map(c => c.strategy).join(',') || 'none'} diag=${JSON.stringify(shadowDiag)}`);
+                }
+            } catch (shadowErr) {
+                // never block trading on shadow errors
+            }
+        }
 
         let momentumAllowed = emaUptrend;  // [VWAP Reclaim] requires emaUptrend; reclaim does not
 
