@@ -14,7 +14,13 @@ const { createUserCredentialStore } = require('./userCredentialStore');
 let createSignalEndpoints;
 try { createSignalEndpoints = require('./signal-analytics').createSignalEndpoints; } catch (_) { createSignalEndpoints = () => {}; }
 let BOT_COMPONENTS = { stock: { components: ['momentum','orderFlow','displacement','volumeProfile','fvg','volumeRatio','mtfConfluence'] } };
+let sharedCommitteeScore; // Unified committee scorer from services/signals/committee-scorer.js
+let qualifyEntry = () => ({ qualified: true, reason: 'no-qualifier', ev: 0, allocationFactor: 1.0 });
+let calibrateConfidence = (raw) => raw;
+let fitPlattScaling = () => null;
 let computeCorrelationGuard = () => ({ blocked: false });
+let computePortfolioHeat = () => ({ heat: 0, canOpen: true });
+let computeEquityCurveMultiplier = () => ({ multiplier: 1.0, aboveMA: true });
 let optimize = () => ({ improved: false });
 let evaluateStrategies = () => ({});
 let lastStrategyPerf = {}; // [v14.1] Stores latest evaluateStrategies() output for INACTIVE enforcement
@@ -40,8 +46,10 @@ let aggregateHealth = (checks) => {
 };
 try {
   ({ createSignalEndpoints } = require('../../services/signals/api-handlers'));
-  ({ BOT_COMPONENTS } = require('../../services/signals/committee-scorer'));
-  ({ computeCorrelationGuard } = require('../../services/signals/exit-manager'));
+  ({ BOT_COMPONENTS, computeCommitteeScore: sharedCommitteeScore } = require('../../services/signals/committee-scorer'));
+  ({ qualifyEntry } = require('../../services/signals/entry-qualifier'));
+  ({ calibrateConfidence, fitPlattScaling } = require('../../services/signals/confidence-calibrator'));
+  ({ computeCorrelationGuard, computePortfolioHeat, computeEquityCurveMultiplier } = require('../../services/signals/exit-manager'));
   ({ checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth } = require('../../services/signals/health-monitor'));
   ({ optimize, evaluateStrategies } = require('../../services/signals/auto-optimizer'));
 } catch (e) {
@@ -1800,41 +1808,34 @@ const detectFairValueGaps = sharedSignals
     ? (klines, lookback) => sharedSignals.detectFairValueGaps(klines, lookback, 'stock')
     : () => ({ bullish: [], bearish: [] });
 
-// [Phase 3] Committee Aggregator — combines multiple signal confirmations into unified confidence
-// Each signal source contributes independently; more confirmations = higher confidence
-// [v13.1] Threshold lowered from 0.50 to 0.45 — binary components (displacement, FVG) rarely fire,
-// making 0.50 nearly unreachable. Neutral defaults (0.3) + 0.45 threshold still filters weak signals.
+// [Phase 3] Committee Aggregator — delegates to shared module (services/signals/committee-scorer.js)
+// [v23.0] Consolidation: this function is now a thin wrapper around the unified scorer.
+// The inline implementation was replaced to eliminate duplication across stock/forex/crypto bots.
+// Scoring approach preserved: v22.0 dynamic-weight (absent signals skipped, not penalized/inflated).
 function computeCommitteeScore(signal) {
+    if (sharedCommitteeScore) {
+        return sharedCommitteeScore(signal, 'stock', { weights: committeeWeights });
+    }
+    // Fallback (Railway resilience): inline v22.0 logic if shared module fails to load
     let confirmations = 0;
     let totalWeight = 0;
 
-    // [v22.0] EVIDENCE-BASED SCORING: absent signals = 0 (no evidence), not 0.5 (neutral).
-    // Only count components that have actual data. This prevents confidence inflation
-    // from missing data — data showed high confidence (0.585) had 6% WR while low (0.492) had 33%.
-    // Root cause: 0.5 defaults inflated scores for trades missing order flow, VP, FVG, displacement.
-
-    // 1. Momentum strength — always available
     const momentumScore = Math.min(parseFloat(signal.percentChange || 0) / 10, 1.0);
     confirmations += momentumScore * committeeWeights.momentum;
     totalWeight += committeeWeights.momentum;
 
-    // 2. Order flow — only count if data present
-    const flowScore = signal.orderFlowImbalance !== undefined
-        ? Math.max(0, signal.orderFlowImbalance)
-        : 0;
+    const flowScore = signal.orderFlowImbalance !== undefined ? Math.max(0, signal.orderFlowImbalance) : 0;
     if (signal.orderFlowImbalance !== undefined) {
         confirmations += flowScore * committeeWeights.orderFlow;
         totalWeight += committeeWeights.orderFlow;
     }
 
-    // 3. Displacement candle — only count if displacement detected
     const displacementScore = signal.hasDisplacement ? 1.0 : 0;
     if (signal.hasDisplacement) {
         confirmations += displacementScore * committeeWeights.displacement;
         totalWeight += committeeWeights.displacement;
     }
 
-    // 4. Volume Profile — only count if VP data present
     let vpScore = 0;
     if (signal.volumeProfile) {
         const price = parseFloat(signal.price);
@@ -1848,20 +1849,17 @@ function computeCommitteeScore(signal) {
         totalWeight += committeeWeights.volumeProfile;
     }
 
-    // 5. FVG confirmation — only count if FVGs present
     const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0;
     if ((signal.fvgCount || 0) > 0) {
         confirmations += fvgScore * committeeWeights.fvg;
         totalWeight += committeeWeights.fvg;
     }
 
-    // 6. Volume ratio — always available
     const volRatioScore = Math.min(parseFloat(signal.volumeRatio || 1) / 3, 1.0);
     confirmations += volRatioScore * committeeWeights.volumeRatio;
     totalWeight += committeeWeights.volumeRatio;
 
     const confidence = totalWeight > 0 ? confirmations / totalWeight : 0;
-
     return {
         confidence: parseFloat(confidence.toFixed(3)),
         components: {
@@ -2924,8 +2922,39 @@ async function scanMomentumBreakouts() {
                         continue;
                     }
                     console.log(`[Committee] ${mover.symbol}: APPROVED conf:${committee.confidence} (${positiveComponents}/6 positive) — momentum:${committee.components.momentum} flow:${committee.components.orderFlow} displacement:${committee.components.displacement} VP:${committee.components.volumeProfile} FVG:${committee.components.fvg}`);
+
+                    // [v23.0] Apply Platt-scaled calibration if available (maps raw→win probability)
+                    const calibratedConf = calibrateConfidence(committee.confidence, globalThis._stockPlattParams);
+                    committee.calibrated = calibratedConf;
+
+                    // [v23.0] Shared entry qualifier — EV gate + allocation factor for size scaling
+                    const evals = globalThis._tradeEvaluations || [];
+                    const recent = evals.slice(-50);
+                    const wins = recent.filter(e => e.pnl > 0);
+                    const losses = recent.filter(e => e.pnl <= 0);
+                    const avgWinPct = wins.length ? wins.reduce((s, e) => s + Math.abs(e.pnlPct || 0), 0) / wins.length * 100 : 2.0;
+                    const avgLossPct = losses.length ? losses.reduce((s, e) => s + Math.abs(e.pnlPct || 0), 0) / losses.length * 100 : 1.5;
+                    const qualifier = qualifyEntry(
+                        committee,
+                        { threshold: committeeThreshold, avgWinPct, avgLossPct, minPositiveComponents: 2 },
+                        { costPct: TOTAL_ROUND_TRIP_COST * 100 }
+                    );
+                    if (!qualifier.qualified) {
+                        scanDiagnostics._block('entry_qualifier');
+                        console.log(`[Qualifier] ${mover.symbol} BLOCKED — ${qualifier.reason}`);
+                        continue;
+                    }
+                    console.log(`[Qualifier] ${mover.symbol} PASSED — EV=${qualifier.ev.toFixed(3)}%, allocationFactor=${qualifier.allocationFactor.toFixed(2)}`);
+
                     mover.committeeConfidence = committee.confidence;
+                    mover.calibratedConfidence = calibratedConf;
                     mover.committeeComponents = committee.components;
+                    mover.allocationFactor = qualifier.allocationFactor;
+                    mover.expectedValue = qualifier.ev;
+
+                    // Apply allocation factor to position sizing (scales by confidence strength)
+                    mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * qualifier.allocationFactor;
+
                     // Apply loss-adjusted position sizing
                     if (guardrails.lossSizeMultiplier < 1.0) {
                         mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * guardrails.lossSizeMultiplier;
@@ -2967,6 +2996,31 @@ async function scanMomentumBreakouts() {
                             }
                         }
                     } catch (_guardErr) { /* guard is optional — never block trading on error */ }
+
+                    // [v23.0] Portfolio heat guard — block new entries when aggregate risk > 6% of equity
+                    try {
+                        const ownPositions = Array.from(positions.values());
+                        const equityForHeat = perfData.currentEquity || perfData.startingBalance || 100000;
+                        const heatCheck = computePortfolioHeat(ownPositions, equityForHeat, 0.06);
+                        if (!heatCheck.canOpen) {
+                            scanDiagnostics._block('portfolio_heat');
+                            console.log(`[PORTFOLIO_HEAT] ${mover.symbol} BLOCKED — total risk $${heatCheck.riskDollars} = ${(heatCheck.heat * 100).toFixed(2)}% of equity (max ${(heatCheck.maxHeat * 100).toFixed(0)}%)`);
+                            continue;
+                        }
+                    } catch (_heatErr) { /* non-fatal */ }
+
+                    // [v23.0] Equity curve sizing — reduce size when equity below MA (strategy underperforming)
+                    try {
+                        const equityHistory = globalThis._stockEquityHistory || [];
+                        if (equityHistory.length >= 20) {
+                            const eqCurve = computeEquityCurveMultiplier(equityHistory, 20);
+                            if (!eqCurve.aboveMA) {
+                                mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * eqCurve.multiplier;
+                                console.log(`[EQUITY_CURVE] ${mover.symbol} size ×${eqCurve.multiplier} — ${eqCurve.reason}`);
+                            }
+                        }
+                    } catch (_eqErr) { /* non-fatal */ }
+
                     await executeTrade(mover, mover.strategy || 'momentum');
                 }
             } else {
@@ -6948,6 +7002,38 @@ app.listen(PORT, async () => {
         console.warn('[Persistence] Evaluation load failed, starting empty:', e.message);
         return [];
     });
+
+    // [v23.0] Replay historical trade returns into Monte Carlo sizer so it survives Railway restarts
+    // Without this, every redeploy resets the sizer's 50-sample threshold — sizing never activates.
+    try {
+        const historicalReturns = (globalThis._tradeEvaluations || [])
+            .map(e => parseFloat(e.pnlPct) || 0)
+            .filter(r => isFinite(r))
+            .map(r => r / 100); // convert % to decimal
+        if (historicalReturns.length > 0 && monteCarloSizer.addTrades) {
+            monteCarloSizer.addTrades(historicalReturns);
+            console.log(`[MonteCarlo] Replayed ${historicalReturns.length} historical returns into sizer`);
+        } else if (historicalReturns.length > 0) {
+            // fallback class has no addTrades method — use addTrade individually
+            historicalReturns.forEach(r => monteCarloSizer.addTrade(r));
+            console.log(`[MonteCarlo] Replayed ${historicalReturns.length} returns (one-by-one)`);
+        }
+    } catch (e) {
+        console.warn('[MonteCarlo] Historical replay failed:', e.message);
+    }
+
+    // [v23.0] Fit Platt scaling on historical trades so confidence calibration is active from startup
+    try {
+        const plattParams = fitPlattScaling(globalThis._tradeEvaluations || [], 20);
+        if (plattParams) {
+            globalThis._stockPlattParams = plattParams;
+            console.log(`[Calibrator] Fit Platt scaling from ${plattParams.n} historical trades (A=${plattParams.A.toFixed(3)}, B=${plattParams.B.toFixed(3)})`);
+        } else {
+            console.log('[Calibrator] Insufficient trades for Platt scaling (need 20+), using raw scores');
+        }
+    } catch (e) {
+        console.warn('[Calibrator] Platt scaling fit failed:', e.message);
+    }
 
     // ── Hydrate perfData from DB so stats survive redeploys ──
     if (dbPool && perfData.totalTrades === 0) {

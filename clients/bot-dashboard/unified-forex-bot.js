@@ -13,7 +13,13 @@ const { createUserCredentialStore } = require('./userCredentialStore');
 let createSignalEndpoints;
 try { createSignalEndpoints = require('./signal-analytics').createSignalEndpoints; } catch (_) { createSignalEndpoints = () => {}; }
 let BOT_COMPONENTS = { forex: { components: ['trend','orderFlow','displacement','volumeProfile','fvg','macd','mtfConfluence'] } };
+let sharedCommitteeScore; // Unified committee scorer from services/signals/committee-scorer.js
+let qualifyEntry = () => ({ qualified: true, reason: 'no-qualifier', ev: 0, allocationFactor: 1.0 });
+let calibrateConfidence = (raw) => raw;
+let fitPlattScaling = () => null;
 let computeCorrelationGuard = () => ({ blocked: false });
+let computePortfolioHeat = () => ({ heat: 0, canOpen: true });
+let computeEquityCurveMultiplier = () => ({ multiplier: 1.0, aboveMA: true });
 let autoOptimize = () => ({ improved: false });
 let autoEvaluateStrategies = () => ({});
 let AUTO_PARAM_BOUNDS = {};
@@ -24,8 +30,10 @@ let checkMemoryHealth = () => ({ healthy: true });
 let aggregateHealth = () => ({ status: 'ok' });
 try {
   ({ createSignalEndpoints } = require('../../services/signals/api-handlers'));
-  ({ BOT_COMPONENTS } = require('../../services/signals/committee-scorer'));
-  ({ computeCorrelationGuard } = require('../../services/signals/exit-manager'));
+  ({ BOT_COMPONENTS, computeCommitteeScore: sharedCommitteeScore } = require('../../services/signals/committee-scorer'));
+  ({ qualifyEntry } = require('../../services/signals/entry-qualifier'));
+  ({ calibrateConfidence, fitPlattScaling } = require('../../services/signals/confidence-calibrator'));
+  ({ computeCorrelationGuard, computePortfolioHeat, computeEquityCurveMultiplier } = require('../../services/signals/exit-manager'));
   ({ optimize: autoOptimize, evaluateStrategies: autoEvaluateStrategies, PARAM_BOUNDS: AUTO_PARAM_BOUNDS } = require('../../services/signals/auto-optimizer'));
   ({ checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth } = require('../../services/signals/health-monitor'));
 } catch (e) {
@@ -1757,67 +1765,69 @@ function detectFairValueGaps(candles, lookback = 20) {
     return { bullish: bullishGaps, bearish: bearishGaps };
 }
 
-// [Phase 3] Committee Aggregator for Forex — combines multiple signal confirmations
-// Direction-aware: flow scoring is relative to trade direction
+// [Phase 3] Committee Aggregator for Forex — delegates to shared module
+// [v23.0] Consolidation: this function is now a thin wrapper around the unified scorer
+// (services/signals/committee-scorer.js). Direction-aware scoring preserved via 'forex'
+// extractor. Upgrades old neutral=0.5 behavior to v22.0 dynamic-weight (absent = skip).
 function computeForexCommitteeScore(signal) {
+    if (sharedCommitteeScore) {
+        return sharedCommitteeScore(signal, 'forex', { weights: forexCommitteeWeights });
+    }
+    // Fallback (Railway resilience): inline implementation
     let confirmations = 0;
     let totalWeight = 0;
     const isLong = signal.direction === 'long';
 
-    // 1. Trend alignment — H1 trend matching signal direction (weight: dynamic via forexCommitteeWeights)
     const trendScore = (isLong && signal.h1Trend === 'up') || (!isLong && signal.h1Trend === 'down') ? 1.0 : 0.0;
     confirmations += trendScore * forexCommitteeWeights.trend;
     totalWeight += forexCommitteeWeights.trend;
 
-    // 2. Order flow confirmation — direction-aware (weight: dynamic via forexCommitteeWeights)
-    let flowScore = 0.5;
+    let flowScore = 0;
     if (signal.orderFlowImbalance !== undefined) {
         flowScore = isLong
-            ? Math.max(0, Math.min(1, signal.orderFlowImbalance + 0.5)) // positive flow favors longs
-            : Math.max(0, Math.min(1, -signal.orderFlowImbalance + 0.5)); // negative flow favors shorts
+            ? Math.max(0, Math.min(1, signal.orderFlowImbalance + 0.5))
+            : Math.max(0, Math.min(1, -signal.orderFlowImbalance + 0.5));
+        confirmations += flowScore * forexCommitteeWeights.orderFlow;
+        totalWeight += forexCommitteeWeights.orderFlow;
     }
-    confirmations += flowScore * forexCommitteeWeights.orderFlow;
-    totalWeight += forexCommitteeWeights.orderFlow;
 
-    // 3. Displacement candle (weight: dynamic via forexCommitteeWeights)
     const displacementScore = signal.hasDisplacement ? 1.0 : 0.0;
-    confirmations += displacementScore * forexCommitteeWeights.displacement;
-    totalWeight += forexCommitteeWeights.displacement;
+    if (signal.hasDisplacement) {
+        confirmations += displacementScore * forexCommitteeWeights.displacement;
+        totalWeight += forexCommitteeWeights.displacement;
+    }
 
-    // 4. Volume Profile position — direction-aware (weight: dynamic via forexCommitteeWeights)
-    let vpScore = 0.5;
+    let vpScore = 0;
     if (signal.volumeProfile) {
         const price = signal.entry;
         const { vah, val } = signal.volumeProfile;
         const range = vah - val;
         if (range > 0) {
             const positionInRange = (price - val) / range;
-            // Longs want to buy near VAL (low), shorts want to sell near VAH (high)
             vpScore = isLong
                 ? Math.max(0, 1.0 - positionInRange)
                 : Math.max(0, positionInRange);
         }
+        confirmations += vpScore * forexCommitteeWeights.volumeProfile;
+        totalWeight += forexCommitteeWeights.volumeProfile;
     }
-    confirmations += vpScore * forexCommitteeWeights.volumeProfile;
-    totalWeight += forexCommitteeWeights.volumeProfile;
 
-    // 5. FVG confirmation (weight: dynamic via forexCommitteeWeights)
     const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0.0;
-    confirmations += fvgScore * forexCommitteeWeights.fvg;
-    totalWeight += forexCommitteeWeights.fvg;
+    if ((signal.fvgCount || 0) > 0) {
+        confirmations += fvgScore * forexCommitteeWeights.fvg;
+        totalWeight += forexCommitteeWeights.fvg;
+    }
 
-    // 6. MACD momentum (weight: dynamic via forexCommitteeWeights)
-    let macdScore = 0.5;
+    let macdScore = 0;
     if (signal.macdHistogram !== null && signal.macdHistogram !== undefined) {
         macdScore = isLong
             ? Math.min(1, Math.max(0, signal.macdHistogram * 10000 + 0.5))
             : Math.min(1, Math.max(0, -signal.macdHistogram * 10000 + 0.5));
+        confirmations += macdScore * forexCommitteeWeights.macd;
+        totalWeight += forexCommitteeWeights.macd;
     }
-    confirmations += macdScore * forexCommitteeWeights.macd;
-    totalWeight += forexCommitteeWeights.macd;
 
     const confidence = totalWeight > 0 ? confirmations / totalWeight : 0;
-
     return {
         confidence: parseFloat(confidence.toFixed(3)),
         components: {
@@ -3622,10 +3632,30 @@ async function tradingLoop() {
             }
             console.log(`[Committee] ${signal.pair} ${signal.direction}: APPROVED conf:${committee.confidence} — trend:${committee.components.trend} flow:${committee.components.orderFlow} disp:${committee.components.displacement} VP:${committee.components.volumeProfile}`);
 
+            // [v23.0] Shared entry qualifier — EV gate + allocation factor (supplements existing isForexPositiveEV)
+            const forexEvals = globalThis._forexTradeEvaluations || [];
+            const fxRecent = forexEvals.slice(-50);
+            const fxWins = fxRecent.filter(e => e.pnl > 0);
+            const fxLosses = fxRecent.filter(e => e.pnl <= 0);
+            const fxAvgWinPct = fxWins.length ? fxWins.reduce((s, e) => s + Math.abs(e.pnlPct || 0), 0) / fxWins.length * 100 : 1.0;
+            const fxAvgLossPct = fxLosses.length ? fxLosses.reduce((s, e) => s + Math.abs(e.pnlPct || 0), 0) / fxLosses.length * 100 : 1.0;
+            const fxQualifier = qualifyEntry(
+                committee,
+                { threshold: _forexCommitteeThreshold, avgWinPct: fxAvgWinPct, avgLossPct: fxAvgLossPct, minPositiveComponents: 2 },
+                { costPct: 0.03 }  // forex typical spread+slippage ~0.03%
+            );
+            if (!fxQualifier.qualified) {
+                console.log(`[Qualifier] ${signal.pair} BLOCKED — ${fxQualifier.reason}`);
+                continue;
+            }
+            console.log(`[Qualifier] ${signal.pair} PASSED — EV=${fxQualifier.ev.toFixed(3)}%, allocationFactor=${fxQualifier.allocationFactor.toFixed(2)}`);
+
             // [v8.0] Assign committee data BEFORE executeTrade → dbForexOpen captures it in entry_context
-            // Previously assigned after, so DB always had null committee data (Signal Intelligence showed "0 trades with")
             signal.committeeConfidence = committee.confidence;
             signal.committeeComponents = committee.components;
+            signal.allocationFactor = fxQualifier.allocationFactor;
+            signal.expectedValue = fxQualifier.ev;
+            signal.agentSizeMultiplier = (signal.agentSizeMultiplier || 1.0) * fxQualifier.allocationFactor;
 
             // [v10.1] Re-entry validation — if this is a re-entry, require extra confirmation
             if (profitProtectReentryPairs.has(signal.pair)) {
@@ -3654,6 +3684,17 @@ async function tradingLoop() {
                     }
                 }
             } catch (_guardErr) { /* guard is optional — never block trading on error */ }
+
+            // [v23.0] Portfolio heat guard — block if aggregate risk > 6% of equity
+            try {
+                const ownPositions = Array.from(positions.values());
+                const equityForHeat = simTotalPnL + 100000; // OANDA practice starts ~100k
+                const heatCheck = computePortfolioHeat(ownPositions, equityForHeat, 0.06);
+                if (!heatCheck.canOpen) {
+                    console.log(`[PORTFOLIO_HEAT] ${signal.pair} BLOCKED — total risk $${heatCheck.riskDollars} = ${(heatCheck.heat * 100).toFixed(2)}% of equity (max 6%)`);
+                    continue;
+                }
+            } catch (_heatErr) { /* non-fatal */ }
 
             await executeTrade(signal);
         }
@@ -5010,6 +5051,31 @@ app.listen(PORT, async () => {
 
     // Load evaluations from DB (replaces JSON file — survives redeploys)
     globalThis._forexTradeEvaluations = await loadForexEvaluationsFromDB();
+
+    // [v23.0] Replay historical returns into Monte Carlo sizer + fit Platt scaling
+    try {
+        const historicalReturns = (globalThis._forexTradeEvaluations || [])
+            .map(e => parseFloat(e.pnlPct) || 0)
+            .filter(r => isFinite(r))
+            .map(r => r / 100);
+        if (historicalReturns.length > 0) {
+            if (monteCarloSizer.addTrades) monteCarloSizer.addTrades(historicalReturns);
+            else historicalReturns.forEach(r => monteCarloSizer.addTrade(r));
+            console.log(`[MonteCarlo] Replayed ${historicalReturns.length} historical returns into forex sizer`);
+        }
+    } catch (e) {
+        console.warn('[MonteCarlo] Forex historical replay failed:', e.message);
+    }
+    try {
+        const plattParams = fitPlattScaling(globalThis._forexTradeEvaluations || [], 20);
+        if (plattParams) {
+            globalThis._forexPlattParams = plattParams;
+            console.log(`[Calibrator] Fit Platt scaling for forex from ${plattParams.n} trades (A=${plattParams.A.toFixed(3)}, B=${plattParams.B.toFixed(3)})`);
+        }
+    } catch (e) {
+        console.warn('[Calibrator] Forex Platt fit failed:', e.message);
+    }
+
     // Optimize weights now that evaluations are loaded (replaces the old 10s setTimeout)
     setTimeout(() => {
         const newWeights = optimizeForexWeights();

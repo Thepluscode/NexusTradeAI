@@ -14,6 +14,12 @@ const { requireApiSecret, requireJwt, requireJwtOrApiSecret, getEncryptionKey, e
 let createSignalEndpoints;
 try { createSignalEndpoints = require('./signal-analytics').createSignalEndpoints; } catch (_) { createSignalEndpoints = () => {}; }
 let BOT_COMPONENTS = { crypto: { components: ['momentum','orderFlow','displacement','volumeProfile','fvg','volumeRatio','mtfConfluence'] } };
+let sharedCommitteeScore; // Unified committee scorer from services/signals/committee-scorer.js
+let qualifyEntry = () => ({ qualified: true, reason: 'no-qualifier', ev: 0, allocationFactor: 1.0 });
+let sharedCalibrateConfidence = (raw) => raw;
+let sharedFitPlattScaling = () => null;
+let computePortfolioHeat = () => ({ heat: 0, canOpen: true });
+let computeEquityCurveMultiplier = () => ({ multiplier: 1.0, aboveMA: true });
 let computeCorrelationGuard = (positions) => {
   // Inline fallback — real guard when services/ unavailable (Railway)
   const longs = positions.filter(p => (p.direction || 'long') === 'long').length;
@@ -34,8 +40,10 @@ let checkMemoryHealth = () => ({ healthy: true });
 let aggregateHealth = () => ({ status: 'ok' });
 try {
   ({ createSignalEndpoints } = require('../../services/signals/api-handlers'));
-  ({ BOT_COMPONENTS } = require('../../services/signals/committee-scorer'));
-  ({ computeCorrelationGuard } = require('../../services/signals/exit-manager'));
+  ({ BOT_COMPONENTS, computeCommitteeScore: sharedCommitteeScore } = require('../../services/signals/committee-scorer'));
+  ({ qualifyEntry } = require('../../services/signals/entry-qualifier'));
+  ({ calibrateConfidence: sharedCalibrateConfidence, fitPlattScaling: sharedFitPlattScaling } = require('../../services/signals/confidence-calibrator'));
+  ({ computeCorrelationGuard, computePortfolioHeat, computeEquityCurveMultiplier } = require('../../services/signals/exit-manager'));
   ({ optimize: autoOptimize, evaluateStrategies: autoEvalStrategies, PARAM_BOUNDS: AUTO_PARAM_BOUNDS } = require('../../services/signals/auto-optimizer'));
   ({ checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth } = require('../../services/signals/health-monitor'));
 } catch (e) {
@@ -1159,68 +1167,64 @@ function calculateCryptoDynamicRR(atrPct) {
     return 3.0 - ((atrPct - 0.005) / (0.02 - 0.005)) * 1.5;
 }
 
-// [Phase 3] Committee Aggregator for Crypto — combines multiple signal confirmations
-// 6 weighted components; minimum threshold: 0.50 confidence required to trade
+// [Phase 3] Committee Aggregator for Crypto — delegates to shared module
+// [v23.0] Consolidation: this function is now a thin wrapper around the unified scorer
+// (services/signals/committee-scorer.js). Scoring upgraded from neutral=0.5 defaults to
+// v22.0 dynamic-weight — absent signals are SKIPPED (not inflated to 0.5 or penalized to 0.1).
+// This is a deliberate behaviour change: data showed 0.5 defaults inflated confidence for
+// trades missing real signals (6% WR at 0.585 vs 33% WR at 0.492). The new approach counts
+// only real evidence.
 function computeCryptoCommitteeScore(signal) {
+    if (sharedCommitteeScore) {
+        return sharedCommitteeScore(signal, 'crypto', { weights: cryptoCommitteeWeights });
+    }
+    // Fallback (Railway resilience): inline implementation (upgraded to v22.0 dynamic-weight)
     let confirmations = 0;
     let totalWeight = 0;
 
-    // 1. Momentum strength (weight: cryptoCommitteeWeights.momentum)
-    // [v20.1] Tier-aware normalization — tier1/tier2 fire at 0.1-1.0% momentum,
-    // dividing by 15 made them score ~0.01. Use 2% cap for tier1/2, 15% for tier3.
     const momAbs = Math.abs(parseFloat(signal.momentum || 0));
     const momCap = (signal.tier === 'tier3') ? 15 : 2;
     const momentumScore = Math.min(momAbs / momCap, 1.0);
     confirmations += momentumScore * cryptoCommitteeWeights.momentum;
     totalWeight += cryptoCommitteeWeights.momentum;
 
-    // 2. Order flow confirmation (weight: cryptoCommitteeWeights.orderFlow)
-    // [v20.1] Absent flow = neutral (0.5), not penalty. Flow data may be unavailable
-    // during warmup or when signal modules aren't loaded.
-    const flowScore = signal.orderFlowImbalance !== undefined
-        ? Math.max(0, signal.orderFlowImbalance) // 0 to 1 for longs
-        : 0.5;
-    confirmations += flowScore * cryptoCommitteeWeights.orderFlow;
-    totalWeight += cryptoCommitteeWeights.orderFlow;
+    let flowScore = 0;
+    if (signal.orderFlowImbalance !== undefined) {
+        flowScore = Math.max(0, signal.orderFlowImbalance);
+        confirmations += flowScore * cryptoCommitteeWeights.orderFlow;
+        totalWeight += cryptoCommitteeWeights.orderFlow;
+    }
 
-    // 3. Displacement candle (weight: cryptoCommitteeWeights.displacement)
-    // [v20.1] Absent = neutral (0.5). Displacement is a rare institutional event —
-    // its absence is normal, not a negative signal. Penalizing it (0.1) blocked
-    // the vast majority of legitimate momentum entries.
-    const displacementScore = signal.hasDisplacement ? 1.0 : 0.5;
-    confirmations += displacementScore * cryptoCommitteeWeights.displacement;
-    totalWeight += cryptoCommitteeWeights.displacement;
+    const displacementScore = signal.hasDisplacement ? 1.0 : 0;
+    if (signal.hasDisplacement) {
+        confirmations += displacementScore * cryptoCommitteeWeights.displacement;
+        totalWeight += cryptoCommitteeWeights.displacement;
+    }
 
-    // 4. Volume Profile position (weight: cryptoCommitteeWeights.volumeProfile)
-    // [v20.1] Absent VP = neutral (0.5). VP requires sufficient kline history to compute;
-    // during warmup or for low-volume pairs it returns null.
-    let vpScore = 0.5;
+    let vpScore = 0;
     if (signal.volumeProfileData) {
         const price = parseFloat(signal.price);
         const { vah, val } = signal.volumeProfileData;
         const range = vah - val;
         if (range > 0) {
-            // Score higher when closer to VAL (buying at discount)
             const positionInRange = (price - val) / range;
-            vpScore = Math.max(0, 1.0 - positionInRange); // 1.0 at VAL, 0.0 at VAH
+            vpScore = Math.max(0, 1.0 - positionInRange);
         }
+        confirmations += vpScore * cryptoCommitteeWeights.volumeProfile;
+        totalWeight += cryptoCommitteeWeights.volumeProfile;
     }
-    confirmations += vpScore * cryptoCommitteeWeights.volumeProfile;
-    totalWeight += cryptoCommitteeWeights.volumeProfile;
 
-    // 5. FVG confirmation (weight: cryptoCommitteeWeights.fvg)
-    // [v20.1] Absent = neutral (0.5). FVGs are opportunistic — their absence is normal.
-    const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0.5;
-    confirmations += fvgScore * cryptoCommitteeWeights.fvg;
-    totalWeight += cryptoCommitteeWeights.fvg;
+    const fvgScore = (signal.fvgCount || 0) > 0 ? 1.0 : 0;
+    if ((signal.fvgCount || 0) > 0) {
+        confirmations += fvgScore * cryptoCommitteeWeights.fvg;
+        totalWeight += cryptoCommitteeWeights.fvg;
+    }
 
-    // 6. Volume ratio (weight: cryptoCommitteeWeights.volumeRatio)
     const volRatioScore = Math.min(parseFloat(signal.volumeRatio || 1) / 3, 1.0);
     confirmations += volRatioScore * cryptoCommitteeWeights.volumeRatio;
     totalWeight += cryptoCommitteeWeights.volumeRatio;
 
     const confidence = totalWeight > 0 ? confirmations / totalWeight : 0;
-
     return {
         confidence: parseFloat(confidence.toFixed(3)),
         components: {
@@ -3470,37 +3474,62 @@ class CryptoTradingEngine {
                             console.log(`⏭️  ${signal.symbol}: Already have open position — skipping AI eval`);
                             continue;
                         }
-                        // [v5.0] HARD GATE: every trade MUST be approved by the agentic AI pipeline
+                        // [v23.0] ADVISORY MODE: agent evaluation is informational, NOT a hard gate.
+                        // Data analysis showed agent approval was anti-predictive: 17% WR when approved
+                        // vs 29% WR overall. Hard-gating on agent blocked good trades and kept bad ones.
+                        // New behavior:
+                        //   - kill_switch: still blocks (true safety override, not prediction)
+                        //   - other rejections: log + modest size reduction, don't block
+                        //   - approvals: don't boost (approval was anti-predictive in backtest)
+                        //   - bridge offline: proceed on committee score only
                         const aiResult = await this.queryAIAdvisor(signal);
 
-                        // Agent rejection = hard stop
-                        if (!aiResult.approved) {
-                            console.log(`[Agent] ${signal.symbol} REJECTED (conf: ${(aiResult.confidence || 0).toFixed(2)}, src: ${aiResult.source}) — ${aiResult.reason}`);
-                            if (aiResult.risk_flags?.length) console.log(`[Agent]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
-                            if (aiResult.lessons_applied?.length) console.log(`[Agent]   Lessons: ${aiResult.lessons_applied.slice(0, 2).join('; ')}`);
-                            if (aiResult.confidence > 0.8 || aiResult.source === 'kill_switch') {
-                                (this._userTelegram || telegramAlerts).sendAgentRejection('Crypto Bot', signal.symbol, 'long', aiResult.reason, aiResult.confidence, aiResult.risk_flags).catch(err => console.warn('[ALERT] Telegram agent-rejection send failed:', err.message));
-                            }
-                            if (aiResult.source === 'kill_switch') {
-                                (this._userTelegram || telegramAlerts).sendKillSwitchAlert('Crypto Bot', aiResult.reason).catch(err => console.warn('[ALERT] Telegram kill-switch send failed:', err.message));
-                            }
+                        // KILL-SWITCH is the ONLY blocking path — it's a safety override, not a prediction
+                        if (aiResult.source === 'kill_switch') {
+                            console.log(`[Agent] ${signal.symbol} KILL-SWITCH BLOCK — ${aiResult.reason}`);
+                            (this._userTelegram || telegramAlerts).sendKillSwitchAlert('Crypto Bot', aiResult.reason).catch(err => console.warn('[ALERT] Telegram kill-switch send failed:', err.message));
                             continue;
                         }
 
-                        // Agent approved — store metadata
-                        const srcTag = aiResult.source === 'cache' ? ' (cached)' : '';
-                        const regime = aiResult.market_regime ? ` [${aiResult.market_regime}]` : '';
-                        console.log(`[Agent] ${signal.symbol} APPROVED${srcTag}${regime} (conf: ${(aiResult.confidence || 0).toFixed(2)}, size: ${(aiResult.position_size_multiplier || 1).toFixed(2)}x) — ${aiResult.reason}`);
-                        const tg = this._userTelegram || telegramAlerts;
-                        if (tg && typeof tg.sendAgentApproval === 'function') {
-                            tg.sendAgentApproval('Crypto Bot', signal.symbol, 'long', aiResult.confidence || 0, aiResult.position_size_multiplier || 1, aiResult.market_regime).catch(err => console.warn('[ALERT] Telegram agent-approval send failed:', err.message));
+                        // All other paths are ADVISORY — log outcome, adjust size, proceed
+                        const advisoryAction = !aiResult.approved
+                            ? (aiResult.confidence > 0.7 ? 'advisory_reduce' : 'advisory_neutral')
+                            : 'advisory_neutral';  // approvals don't boost (anti-predictive)
+
+                        const bridgeAvailable = aiResult.source !== 'hard_gate_offline' && aiResult.source !== 'error';
+                        if (!bridgeAvailable) {
+                            console.log(`[Agent] ${signal.symbol} ADVISORY_UNAVAILABLE — bridge offline, proceeding on committee score (${(signal.committeeConfidence || 0).toFixed(2)})`);
+                        } else {
+                            const srcTag = aiResult.source === 'cache' ? ' (cached)' : '';
+                            const regime = aiResult.market_regime ? ` [${aiResult.market_regime}]` : '';
+                            const status = aiResult.approved ? 'APPROVED' : 'REJECTED';
+                            console.log(`[Agent] ${signal.symbol} ${status}${srcTag}${regime} advisory=${advisoryAction} (agent_conf: ${(aiResult.confidence || 0).toFixed(2)}, committee: ${(signal.committeeConfidence || 0).toFixed(2)}) — ${aiResult.reason}`);
+                            if (aiResult.risk_flags?.length) console.log(`[Agent]   Risk flags: ${aiResult.risk_flags.join(', ')}`);
                         }
-                        signal.agentApproved = true;
+
+                        // Compute advisory size multiplier (reduce if high-conf disagreement, else neutral)
+                        const advisorySizeMultiplier = advisoryAction === 'advisory_reduce' ? 0.7 : 1.0;
+
+                        // Structured log for future outcome tracking (what advisory recommended vs what happened)
+                        console.log(`[AdvisoryLog] ${JSON.stringify({
+                            symbol: signal.symbol,
+                            agentApproved: aiResult.approved,
+                            agentConfidence: aiResult.confidence || 0,
+                            agentSource: aiResult.source,
+                            committeeConfidence: signal.committeeConfidence || 0,
+                            action: advisoryAction,
+                            sizeMultiplier: advisorySizeMultiplier,
+                            bridgeAvailable
+                        })}`);
+
+                        // Store metadata for later outcome correlation
+                        signal.agentApproved = !!aiResult.approved;
                         signal.agentConfidence = aiResult.confidence;
                         signal.agentReason = aiResult.reason;
-                        signal.agentPositionSizeMultiplier = aiResult.position_size_multiplier || 1.0;
+                        signal.agentPositionSizeMultiplier = advisorySizeMultiplier;
                         signal.decisionRunId = aiResult.decision_run_id || null;
                         signal.banditArm = aiResult.bandit_arm || 'moderate';
+                        signal.advisoryAction = advisoryAction;
                         // [v4.6] Adaptive guardrails — pre-trade quality gate
                         if (this.isLanePaused()) {
                             console.log(`[Guardrail] ${signal.symbol} BLOCKED — lane paused until ${new Date(this.guardrails.lanePausedUntil).toLocaleTimeString()}`);
@@ -3510,10 +3539,9 @@ class CryptoTradingEngine {
                             console.log(`[Guardrail] ${signal.symbol} BLOCKED — score ${(signal.score || 0).toFixed(2)} < ${MIN_SIGNAL_SCORE}`);
                             continue;
                         }
-                        if (aiResult && aiResult.confidence < MIN_SIGNAL_CONFIDENCE) {
-                            console.log(`[Guardrail] ${signal.symbol} BLOCKED — confidence ${aiResult.confidence.toFixed(2)} < ${MIN_SIGNAL_CONFIDENCE}`);
-                            continue;
-                        }
+                        // [v23.0] Removed agent-confidence gate — agent confidence was anti-predictive
+                        // (17% WR when approved vs 29% overall). Committee confidence threshold already
+                        // enforced earlier in scan logic is the correct predictor.
                         // [v4.7] Reward/risk ratio gate — uses auto-optimized threshold when available
                         const stopPct = (signal.stopLossPercent || 5) / 100;
                         const tpPct = (signal.profitTargetPercent || 10) / 100;
@@ -3568,11 +3596,33 @@ class CryptoTradingEngine {
                         if (!isCryptoPositiveEV(calibratedConf)) {
                             continue;
                         }
+
+                        // [v23.0] Shared entry qualifier — supplementary EV gate + allocation factor
+                        const cryptoEvals = globalThis._cryptoTradeEvaluations || [];
+                        const cxRecent = cryptoEvals.slice(-50);
+                        const cxWins = cxRecent.filter(e => e.pnl > 0);
+                        const cxLosses = cxRecent.filter(e => e.pnl <= 0);
+                        const cxAvgWinPct = cxWins.length ? cxWins.reduce((s, e) => s + Math.abs(e.pnlPct || 0), 0) / cxWins.length * 100 : 2.0;
+                        const cxAvgLossPct = cxLosses.length ? cxLosses.reduce((s, e) => s + Math.abs(e.pnlPct || 0), 0) / cxLosses.length * 100 : 1.5;
+                        const committeeForQualifier = { ...committee, calibrated: calibratedConf };
+                        const cxQualifier = qualifyEntry(
+                            committeeForQualifier,
+                            { threshold: MIN_SIGNAL_CONFIDENCE, avgWinPct: cxAvgWinPct, avgLossPct: cxAvgLossPct, minPositiveComponents: 2 },
+                            { costPct: CRYPTO_ROUND_TRIP_COST * 100 }
+                        );
+                        if (!cxQualifier.qualified) {
+                            console.log(`[Qualifier] ${signal.symbol} BLOCKED — ${cxQualifier.reason}`);
+                            continue;
+                        }
+                        console.log(`[Qualifier] ${signal.symbol} PASSED — EV=${cxQualifier.ev.toFixed(3)}%, allocationFactor=${cxQualifier.allocationFactor.toFixed(2)}`);
+
                         signal.committeeConfidence = rawConf;
                         signal.calibratedConfidence = calibratedConf;
                         signal.allocation = alloc.allocation;
                         signal.allocationFactors = alloc.factors;
                         signal.committeeComponents = committee.components;
+                        signal.entryQualifierEV = cxQualifier.ev;
+                        signal.entryQualifierAllocationFactor = cxQualifier.allocationFactor;
                         if (this.getLossSizeMultiplier() < 1.0) {
                             signal.guardrailSizeMultiplier = this.getLossSizeMultiplier();
                             console.log(`[Guardrail] ${signal.symbol} size cut to ${signal.guardrailSizeMultiplier.toFixed(2)}x (${this.guardrails.consecutiveLosses} consecutive losses)`);
@@ -3617,6 +3667,18 @@ class CryptoTradingEngine {
                                 }
                             }
                         } catch (_guardErr) { /* guard is optional — never block trading on error */ }
+
+                        // [v23.0] Portfolio heat guard — block if aggregate risk > 6% of equity
+                        try {
+                            const ownPositions = Array.from(this.positions.values());
+                            const equityForHeat = this.startingBalance || 10000;
+                            const heatCheck = computePortfolioHeat(ownPositions, equityForHeat, 0.06);
+                            if (!heatCheck.canOpen) {
+                                console.log(`[PORTFOLIO_HEAT] ${signal.symbol} BLOCKED — total risk $${heatCheck.riskDollars} = ${(heatCheck.heat * 100).toFixed(2)}% of equity (max 6%)`);
+                                continue;
+                            }
+                        } catch (_heatErr) { /* non-fatal */ }
+
                         await this.executeTrade(signal);
                     }
                 }
@@ -4828,6 +4890,31 @@ app.listen(PORT, async () => {
 
     // Load evaluations from DB now that dbPool is ready
     globalThis._cryptoTradeEvaluations = await loadCryptoEvaluationsFromDB();
+
+    // [v23.0] Replay historical returns into engine's Monte Carlo sizer
+    try {
+        const historicalReturns = (globalThis._cryptoTradeEvaluations || [])
+            .map(e => parseFloat(e.pnlPct) || 0)
+            .filter(r => isFinite(r))
+            .map(r => r / 100);
+        if (historicalReturns.length > 0 && engine.monteCarloSizer) {
+            if (engine.monteCarloSizer.addTrades) engine.monteCarloSizer.addTrades(historicalReturns);
+            else historicalReturns.forEach(r => engine.monteCarloSizer.addTrade(r));
+            console.log(`[MonteCarlo] Replayed ${historicalReturns.length} historical returns into crypto sizer`);
+        }
+    } catch (e) {
+        console.warn('[MonteCarlo] Crypto historical replay failed:', e.message);
+    }
+    // Fit shared Platt scaling (supplements existing local calibrateConfidence)
+    try {
+        const plattParams = sharedFitPlattScaling(globalThis._cryptoTradeEvaluations || [], 20);
+        if (plattParams) {
+            globalThis._cryptoPlattParams = plattParams;
+            console.log(`[Calibrator] Fit shared Platt scaling for crypto from ${plattParams.n} trades`);
+        }
+    } catch (e) {
+        console.warn('[Calibrator] Crypto shared Platt fit failed:', e.message);
+    }
 
     // FIRST: load local state (daily counters, operational state like demoMode)
     engine.loadState();
