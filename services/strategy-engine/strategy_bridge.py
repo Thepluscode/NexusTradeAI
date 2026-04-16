@@ -483,6 +483,117 @@ if FASTAPI_AVAILABLE:
             timestamp=datetime.now().isoformat()
         )
 
+    @app.post("/ml/regime")
+    def ml_regime(req: SignalRequest):
+        """
+        [v23.2] Feature-based 4-state market regime classifier.
+
+        Regimes: TRENDING_UP, TRENDING_DOWN, MEAN_REVERTING, HIGH_VOLATILITY.
+        Uses annualized volatility + 20-day return + momentum vs SMA50 for
+        probabilistic classification. HMM upgrade path: add hmmlearn and
+        replace this feature-based block with ai-ml/models/regime.RegimeDetector.
+
+        Why: bots currently use ATR-based 3-state regime (low/medium/high vol).
+        This endpoint gives directional regime (trend up/down) — enables
+        strategy routing (mean-reversion in ranges, momentum in trends).
+
+        Requires ≥60 bars (prefers ≥100).
+        """
+        if len(req.prices) < 60:
+            raise HTTPException(status_code=400, detail="Need at least 60 bars for regime detection")
+
+        closes = np.array([p.close for p in req.prices])
+
+        # Feature 1: annualized realized volatility (60-bar)
+        returns = np.diff(closes) / closes[:-1]
+        recent_returns = returns[-60:] if len(returns) >= 60 else returns
+        annualized_vol = float(np.std(recent_returns) * np.sqrt(252)) if len(recent_returns) > 1 else 0.0
+
+        # Feature 2: 20-bar return (directional momentum)
+        ret_20 = float((closes[-1] - closes[-20]) / closes[-20]) if len(closes) >= 20 else 0.0
+
+        # Feature 3: price vs 50-bar SMA (trend position)
+        sma_50 = float(np.mean(closes[-50:])) if len(closes) >= 50 else float(closes[-1])
+        dev_from_sma = float((closes[-1] - sma_50) / sma_50) if sma_50 > 0 else 0.0
+
+        # Feature 4: vol-of-vol (short vol / long vol) — detects regime transitions
+        short_vol = float(np.std(returns[-20:])) if len(returns) >= 20 else 0.0
+        long_vol = float(np.std(returns[-60:])) if len(returns) >= 60 else 0.0
+        vol_ratio = short_vol / long_vol if long_vol > 0 else 1.0
+
+        # Probabilistic classification via soft thresholds (sigmoid-ish)
+        def sigmoid(x, center, scale):
+            return 1.0 / (1.0 + np.exp(-(x - center) / scale))
+
+        # HIGH_VOLATILITY: high annualized vol OR vol expansion
+        p_hivol = max(
+            float(sigmoid(annualized_vol, 0.30, 0.08)),
+            float(sigmoid(vol_ratio, 1.6, 0.3))
+        )
+
+        # TRENDING_UP: blended 20d return + SMA position (additive, not multiplicative)
+        trend_up_score = 0.6 * sigmoid(ret_20, 0.02, 0.015) + 0.4 * sigmoid(dev_from_sma, 0.01, 0.02)
+        p_trend_up = float(max(0.0, trend_up_score * (1 - p_hivol)))
+
+        # TRENDING_DOWN: symmetric
+        trend_down_score = 0.6 * sigmoid(-ret_20, 0.02, 0.015) + 0.4 * sigmoid(-dev_from_sma, 0.01, 0.02)
+        p_trend_down = float(max(0.0, trend_down_score * (1 - p_hivol)))
+
+        # MEAN_REVERTING: inverse of trend strength
+        p_mean_revert = float(max(0.0, 1.0 - p_hivol - p_trend_up - p_trend_down))
+
+        # Renormalize to sum to 1.0
+        total = p_hivol + p_trend_up + p_trend_down + p_mean_revert
+        if total > 0:
+            p_hivol /= total
+            p_trend_up /= total
+            p_trend_down /= total
+            p_mean_revert /= total
+
+        probabilities = {
+            "TRENDING_UP": round(p_trend_up, 4),
+            "TRENDING_DOWN": round(p_trend_down, 4),
+            "MEAN_REVERTING": round(p_mean_revert, 4),
+            "HIGH_VOLATILITY": round(p_hivol, 4),
+        }
+
+        current_regime = max(probabilities, key=probabilities.get)
+        confidence = probabilities[current_regime]
+
+        # Strategy weight recommendations per regime (drives bot strategy routing)
+        strategy_weights = {
+            "TRENDING_UP": {"momentum": 1.2, "breakout": 1.1, "mean_reversion": 0.2},
+            "TRENDING_DOWN": {"momentum": 0.4, "breakout": 0.3, "mean_reversion": 0.3},
+            "MEAN_REVERTING": {"momentum": 0.3, "breakout": 0.4, "mean_reversion": 1.3},
+            "HIGH_VOLATILITY": {"momentum": 0.5, "breakout": 0.5, "mean_reversion": 0.4},
+        }
+
+        # Position size multiplier per regime (high vol → reduce; strong trend → normal)
+        size_multipliers = {
+            "TRENDING_UP": 1.0,
+            "TRENDING_DOWN": 0.7,   # shorts only
+            "MEAN_REVERTING": 0.9,
+            "HIGH_VOLATILITY": 0.5,
+        }
+
+        return {
+            "symbol": req.symbol,
+            "regime": current_regime,
+            "confidence": round(confidence, 4),
+            "probabilities": probabilities,
+            "strategy_weights": strategy_weights[current_regime],
+            "position_size_multiplier": size_multipliers[current_regime],
+            "features": {
+                "annualized_vol": round(annualized_vol, 4),
+                "return_20d": round(ret_20, 4),
+                "deviation_from_sma50": round(dev_from_sma, 4),
+                "vol_ratio": round(vol_ratio, 4),
+            },
+            "bars_analyzed": len(closes),
+            "model": "feature-based-v1",
+            "timestamp": datetime.now().isoformat()
+        }
+
     @app.post("/pairs/analyze")
     def analyze_pair(req: PairAnalysisRequest):
         """Analyze a pair for trading opportunities"""
