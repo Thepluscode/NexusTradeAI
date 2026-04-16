@@ -74,12 +74,19 @@ try {
 }
 
 // [v23.1] Strategy registry — load all strategy modules for shadow-mode comparison
+// Try local path first (shipped with deploy by CI), fall back to services/ for dev
 let strategyRegistry = null;
 let registryStrategies = [];
 try {
-  strategyRegistry = require('../../services/signals/strategy-registry');
-  const { loadAllStrategies } = require('../../services/signals/strategies');
-  registryStrategies = loadAllStrategies();
+  try {
+    strategyRegistry = require('./signals/strategy-registry');
+    const { loadAllStrategies } = require('./signals/strategies');
+    registryStrategies = loadAllStrategies();
+  } catch (_localErr) {
+    strategyRegistry = require('../../services/signals/strategy-registry');
+    const { loadAllStrategies } = require('../../services/signals/strategies');
+    registryStrategies = loadAllStrategies();
+  }
   console.log(`[INIT] Strategy registry loaded with ${registryStrategies.length} strategies: ${registryStrategies.map(s => s.name).join(', ')}`);
 } catch (e) {
   console.log(`[INIT] strategy-registry not available: ${e.message}`);
