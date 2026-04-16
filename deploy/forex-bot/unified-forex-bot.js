@@ -2035,6 +2035,38 @@ const BRIDGE_URL = (() => {
 })();
 console.log(`🤖 Strategy Bridge URL: ${BRIDGE_URL}`);
 
+// [v23.2] ML Regime endpoint — 4-state directional regime. Shadow-mode + size multiplier.
+const _forexMlRegimeCache = new Map();
+const _FOREX_ML_REGIME_CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function queryMLRegime(pair, candles) {
+    try {
+        if (!candles || candles.length < 60) return null;
+        const cached = _forexMlRegimeCache.get(pair);
+        if (cached && Date.now() - cached.timestamp < _FOREX_ML_REGIME_CACHE_TTL_MS) {
+            return cached.result;
+        }
+        // OANDA candles have mid.o/h/l/c structure
+        const prices = candles.slice(-100).map(c => ({
+            timestamp: c.time || new Date().toISOString(),
+            open: parseFloat(c.mid?.o ?? c.o ?? 0),
+            high: parseFloat(c.mid?.h ?? c.h ?? 0),
+            low: parseFloat(c.mid?.l ?? c.l ?? 0),
+            close: parseFloat(c.mid?.c ?? c.c ?? 0),
+            volume: parseFloat(c.volume ?? c.v ?? 0),
+        }));
+        const response = await axios.post(`${BRIDGE_URL}/ml/regime`,
+            { symbol: pair, prices, asset_class: 'forex' },
+            { timeout: 5000 }
+        );
+        const result = response.data;
+        _forexMlRegimeCache.set(pair, { result, timestamp: Date.now() });
+        return result;
+    } catch (e) {
+        return null;
+    }
+}
+
 // ===== AI TRADE ADVISOR =====
 // [v5.0] Agentic AI — Claude-powered trade evaluation via strategy bridge
 // HARD GATE: every trade MUST be approved by the agent pipeline
@@ -3656,6 +3688,25 @@ async function tradingLoop() {
             signal.allocationFactor = fxQualifier.allocationFactor;
             signal.expectedValue = fxQualifier.ev;
             signal.agentSizeMultiplier = (signal.agentSizeMultiplier || 1.0) * fxQualifier.allocationFactor;
+
+            // [v23.2] ML Regime directional size multiplier — only reduces, never amplifies
+            try {
+                const cachedMlReg = _forexMlRegimeCache.get(signal.pair);
+                if (cachedMlReg && Date.now() - cachedMlReg.timestamp < _FOREX_ML_REGIME_CACHE_TTL_MS) {
+                    const mlMult = cachedMlReg.result.position_size_multiplier;
+                    if (mlMult != null && mlMult < 1.0) {
+                        signal.agentSizeMultiplier = (signal.agentSizeMultiplier || 1.0) * mlMult;
+                        signal.mlRegime = cachedMlReg.result.regime;
+                        console.log(`[ML_REGIME] ${signal.pair} size ×${mlMult.toFixed(2)} applied (regime=${cachedMlReg.result.regime} conf=${cachedMlReg.result.confidence})`);
+                    }
+                } else {
+                    // Pre-fetch for next scan
+                    const bars = await getCandles(signal.pair, 'M15', 100).catch(() => null);
+                    if (bars) queryMLRegime(signal.pair, bars).catch(err => console.warn(`[ML_REGIME] ${signal.pair}: pre-fetch failed - ${err.message}`));
+                }
+            } catch (mlErr) {
+                console.warn(`[ML_REGIME] ${signal.pair}: apply failed - ${mlErr.message}`);
+            }
 
             // [v10.1] Re-entry validation — if this is a re-entry, require extra confirmation
             if (profitProtectReentryPairs.has(signal.pair)) {
