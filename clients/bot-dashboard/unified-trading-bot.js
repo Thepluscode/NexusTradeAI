@@ -3019,6 +3019,30 @@ async function scanMomentumBreakouts() {
                     if (regime.regime !== 'medium') {
                         console.log(`[Regime] ${mover.symbol} size adjusted to ×${mover.agentSizeMultiplier.toFixed(2)} (${regime.adjustments.label})`);
                     }
+
+                    // [v23.2] ML Regime directional size multiplier — ONLY reduces size, never amplifies.
+                    // Safety-first: in HIGH_VOLATILITY regime we want smaller positions automatically.
+                    // Fire-and-forget cache check: if we already have a fresh ML regime for this symbol,
+                    // apply it now; otherwise query async for next scan (don't delay this trade).
+                    try {
+                        const cachedMlReg = _mlRegimeCache.get(mover.symbol);
+                        if (cachedMlReg && Date.now() - cachedMlReg.timestamp < _ML_REGIME_CACHE_TTL_MS) {
+                            const mlMult = cachedMlReg.result.position_size_multiplier;
+                            if (mlMult != null && mlMult < 1.0) {
+                                mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * mlMult;
+                                mover.mlRegime = cachedMlReg.result.regime;
+                                mover.mlRegimeConfidence = cachedMlReg.result.confidence;
+                                console.log(`[ML_REGIME] ${mover.symbol} size ×${mlMult.toFixed(2)} applied (regime=${cachedMlReg.result.regime} conf=${cachedMlReg.result.confidence})`);
+                            }
+                        } else {
+                            // Pre-fetch for next scan (async, don't block this trade)
+                            queryMLRegime(mover.symbol, bars).catch(err => {
+                                console.warn(`[ML_REGIME] ${mover.symbol}: pre-fetch failed - ${err.message}`);
+                            });
+                        }
+                    } catch (mlErr) {
+                        console.warn(`[ML_REGIME] ${mover.symbol}: apply failed - ${mlErr.message}`);
+                    }
                     // [v10.1] Re-entry validation — if this is a re-entry, require extra confirmation
                     if (profitProtectReentrySymbols.has(mover.symbol)) {
                         const reentryCheck = isStockReentryValid(mover.symbol, mover);

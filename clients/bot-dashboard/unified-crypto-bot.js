@@ -1742,6 +1742,38 @@ class CryptoTradingEngine {
         }
     }
 
+    // [v23.2] ML Regime — 4-state directional classification
+    _mlRegimeCache = new Map();
+    _ML_REGIME_CACHE_TTL_MS = 5 * 60 * 1000;
+    async queryMLRegime(symbol, klines) {
+        try {
+            if (!klines || klines.length < 60) return null;
+            const cached = this._mlRegimeCache.get(symbol);
+            if (cached && Date.now() - cached.timestamp < this._ML_REGIME_CACHE_TTL_MS) {
+                return cached.result;
+            }
+            const bridgeUrl = this._getBridgeUrl();
+            // Kraken klines: [time, open, high, low, close, vwap, volume, count]
+            const prices = klines.slice(-100).map(k => ({
+                timestamp: new Date((k[0] || 0) * 1000).toISOString(),
+                open: parseFloat(k[1]) || 0,
+                high: parseFloat(k[2]) || 0,
+                low: parseFloat(k[3]) || 0,
+                close: parseFloat(k[4]) || 0,
+                volume: parseFloat(k[6]) || 0,
+            }));
+            const response = await axios.post(`${bridgeUrl}/ml/regime`,
+                { symbol, prices, asset_class: 'crypto' },
+                { timeout: 5000 }
+            );
+            const result = response.data;
+            this._mlRegimeCache.set(symbol, { result, timestamp: Date.now() });
+            return result;
+        } catch (e) {
+            return null;
+        }
+    }
+
     // ========================================================================
     // AI TRADE ADVISOR
     // ========================================================================
@@ -3633,6 +3665,26 @@ class CryptoTradingEngine {
                         signal.marketRegime = cryptoRegime.regime;
                         if (cryptoRegime.regime !== 'medium') {
                             console.log(`[Regime] ${signal.symbol} size adjusted to x${signal.agentPositionSizeMultiplier.toFixed(2)} (${cryptoRegime.adjustments.label})`);
+                        }
+
+                        // [v23.2] ML Regime directional size multiplier — only reduces, never amplifies
+                        try {
+                            const cachedMlReg = this._mlRegimeCache.get(signal.symbol);
+                            if (cachedMlReg && Date.now() - cachedMlReg.timestamp < this._ML_REGIME_CACHE_TTL_MS) {
+                                const mlMult = cachedMlReg.result.position_size_multiplier;
+                                if (mlMult != null && mlMult < 1.0) {
+                                    signal.agentPositionSizeMultiplier = (signal.agentPositionSizeMultiplier || 1.0) * mlMult;
+                                    signal.mlRegime = cachedMlReg.result.regime;
+                                    console.log(`[ML_REGIME] ${signal.symbol} size x${mlMult.toFixed(2)} applied (regime=${cachedMlReg.result.regime} conf=${cachedMlReg.result.confidence})`);
+                                }
+                            } else if (signal.klines && signal.klines.length >= 60) {
+                                // Pre-fetch for next scan
+                                this.queryMLRegime(signal.symbol, signal.klines).catch(err =>
+                                    console.warn(`[ML_REGIME] ${signal.symbol}: pre-fetch failed - ${err.message}`)
+                                );
+                            }
+                        } catch (mlErr) {
+                            console.warn(`[ML_REGIME] ${signal.symbol}: apply failed - ${mlErr.message}`);
                         }
                         // [Phase 3] Regime-based position cap
                         if (this.positions.size >= cryptoRegime.adjustments.maxPositions) {
