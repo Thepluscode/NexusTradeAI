@@ -142,12 +142,12 @@ describe('compat: detectFairValueGaps', () => {
 
   test('returns empty arrays for input with no gaps', () => {
     const result = detectFairValueGaps([], 5, 'crypto');
-    expect(result).toEqual({ bullish: [], bearish: [] });
+    expect(result).toEqual({ bullish: [], bearish: [], score: 0 });
   });
 
   test('returns empty arrays for null input', () => {
     const result = detectFairValueGaps(null, 5, 'crypto');
-    expect(result).toEqual({ bullish: [], bearish: [] });
+    expect(result).toEqual({ bullish: [], bearish: [], score: 0 });
   });
 
   test('stock format works', () => {

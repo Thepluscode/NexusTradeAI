@@ -87,8 +87,10 @@ describe('computeCommitteeScore (new bot API)', () => {
       expect(result.confidence).toBeGreaterThan(0.5);
       expect(result.components.momentum).toBeCloseTo(0.25, 1);
       expect(result.components.orderFlow).toBeCloseTo(0.7, 1);
-      expect(result.components.displacement).toBe(1);
-      expect(result.components.fvg).toBe(1);
+      // v24.0: graded — hasDisplacement=true without strength → fallback 0.7
+      expect(result.components.displacement).toBeCloseTo(0.7, 1);
+      // v24.0: graded — fvgCount=2 → min(2/3, 1.0) = 0.667
+      expect(result.components.fvg).toBeCloseTo(0.667, 1);
     });
 
     test('absent signals are skipped, not penalized', () => {

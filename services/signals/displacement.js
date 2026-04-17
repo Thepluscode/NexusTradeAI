@@ -3,6 +3,16 @@
  * A displacement candle has body > 70% of range AND range > 1.5x ATR.
  * Extracted from unified-crypto-bot.js lines 1001-1018.
  *
+ * [v24.0] Graded scoring: returns a 0-1 strength score based on displacement
+ * magnitude rather than a binary 0/1. This preserves signal information —
+ * a 3x ATR displacement is stronger than a 1.6x ATR displacement.
+ *
+ * Scoring formula:
+ *   strength = clamp((maxMagnitude - 1.5) / 2.5, 0, 1)
+ *   At 1.5x ATR (threshold): strength = 0.0
+ *   At 2.75x ATR (midpoint): strength = 0.5
+ *   At 4.0x ATR (strong):    strength = 1.0
+ *
  * @param {Array} klines - OHLCV bars
  * @param {number} atr - Current ATR value
  * @param {number} lookback - How many recent candles to check (default 3)
@@ -12,7 +22,7 @@ function computeDisplacement(klines, atr, lookback = 3, config = {}) {
   const neutralDefault = config.neutralDefault ?? 0.3;
 
   if (!klines || klines.length === 0 || !atr) {
-    return { score: neutralDefault, raw: { detected: false, magnitude: 0 }, meta: {} };
+    return { score: neutralDefault, raw: { detected: false, magnitude: 0, strength: 0 }, meta: {} };
   }
 
   const recent = klines.slice(-lookback);
@@ -32,9 +42,14 @@ function computeDisplacement(klines, atr, lookback = 3, config = {}) {
     }
   }
 
+  // Graded strength: 0 at threshold (1.5x ATR), 1.0 at 4.0x ATR
+  const strength = detected ? Math.min(Math.max((maxMagnitude - 1.5) / 2.5, 0), 1.0) : 0;
+  // Score blends: detected gives at least 0.4 (presence bonus) + up to 0.6 from strength
+  const score = detected ? 0.4 + strength * 0.6 : neutralDefault;
+
   return {
-    score: detected ? 1.0 : neutralDefault,
-    raw: { detected, magnitude: maxMagnitude },
+    score,
+    raw: { detected, magnitude: maxMagnitude, strength },
     meta: {}
   };
 }

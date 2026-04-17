@@ -3,10 +3,25 @@ const { computeDisplacement } = require('../displacement');
 describe('computeDisplacement', () => {
   test('detects displacement when body > 70% of range and range > 1.5x ATR', () => {
     // Big body candle: body = 9 (90% of range 10), range = 10 > 1.5 * 5 = 7.5
+    // v24.0 graded: magnitude = 10/5 = 2.0, strength = (2.0-1.5)/2.5 = 0.2
+    // score = 0.4 + 0.2 * 0.6 = 0.52
     const klines = [{ open: 100, high: 110, low: 100, close: 109, volume: 1000 }];
     const result = computeDisplacement(klines, 5);
-    expect(result.score).toBe(1.0);
+    expect(result.score).toBeGreaterThan(0.4);
+    expect(result.score).toBeLessThanOrEqual(1.0);
     expect(result.raw.detected).toBe(true);
+    expect(result.raw.strength).toBeGreaterThan(0);
+  });
+
+  test('stronger displacement gets higher score', () => {
+    // Huge candle: range = 20, ATR = 5 → magnitude = 4.0 → strength = (4.0-1.5)/2.5 = 1.0
+    const hugeKlines = [{ open: 100, high: 120, low: 100, close: 119, volume: 1000 }];
+    const hugeResult = computeDisplacement(hugeKlines, 5);
+    // Normal candle: range = 10, ATR = 5 → magnitude = 2.0 → strength = 0.2
+    const normalKlines = [{ open: 100, high: 110, low: 100, close: 109, volume: 1000 }];
+    const normalResult = computeDisplacement(normalKlines, 5);
+    expect(hugeResult.score).toBeGreaterThan(normalResult.score);
+    expect(hugeResult.raw.strength).toBeGreaterThan(normalResult.raw.strength);
   });
 
   test('no displacement when body < 70% of range', () => {

@@ -97,6 +97,47 @@ async function initSignalSchema(dbPool) {
         );
     `);
     console.log('✅ strategy_enabled table ready');
+
+    // 5. walk_forward_results — per-fold metrics from walk-forward validation
+    await dbPool.query(`
+        CREATE TABLE IF NOT EXISTS walk_forward_results (
+            id SERIAL PRIMARY KEY,
+            strategy_name TEXT NOT NULL,
+            asset_class TEXT NOT NULL,
+            fold_index INT NOT NULL,
+            train_sharpe NUMERIC(8,3),
+            test_sharpe NUMERIC(8,3),
+            sharpe_decay NUMERIC(8,3),
+            test_win_rate NUMERIC(5,4),
+            test_profit_factor NUMERIC(8,3),
+            test_trade_count INT,
+            test_total_pnl NUMERIC(12,4),
+            test_max_drawdown_pct NUMERIC(8,3),
+            run_id TEXT NOT NULL,
+            tested_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_wf_strategy_run
+            ON walk_forward_results (strategy_name, run_id);
+    `);
+    console.log('✅ walk_forward_results table ready');
+
+    // 6. strategy_alerts — auto-generated alerts for strategy health
+    await dbPool.query(`
+        CREATE TABLE IF NOT EXISTS strategy_alerts (
+            id SERIAL PRIMARY KEY,
+            strategy_name TEXT NOT NULL,
+            alert_type TEXT NOT NULL,
+            severity TEXT NOT NULL CHECK (severity IN ('info','warning','critical')),
+            message TEXT NOT NULL,
+            details JSONB,
+            acknowledged BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_alerts_unacked
+            ON strategy_alerts (strategy_name, acknowledged)
+            WHERE acknowledged = FALSE;
+    `);
+    console.log('✅ strategy_alerts table ready');
 }
 
 module.exports = { initSignalSchema };

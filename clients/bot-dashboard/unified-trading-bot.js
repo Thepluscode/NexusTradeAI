@@ -1844,13 +1844,18 @@ const isDisplacementCandle = sharedSignals
     ? (klines, atr, lookback) => sharedSignals.isDisplacementCandle(klines, atr, lookback, 'stock')
     : () => false;
 
+// [v24.0] Graded displacement — returns { detected, strength (0-1), magnitude }
+const getDisplacementAnalysis = sharedSignals?.getDisplacementAnalysis
+    ? (klines, atr, lookback) => sharedSignals.getDisplacementAnalysis(klines, atr, lookback, 'stock')
+    : () => ({ detected: false, strength: 0, magnitude: 0 });
+
 const calculateVolumeProfile = sharedSignals
     ? (klines, numBuckets) => sharedSignals.calculateVolumeProfile(klines, numBuckets, 'stock')
     : () => null;
 
 const detectFairValueGaps = sharedSignals
     ? (klines, lookback) => sharedSignals.detectFairValueGaps(klines, lookback, 'stock')
-    : () => ({ bullish: [], bearish: [] });
+    : () => ({ bullish: [], bearish: [], score: 0 });
 
 // [Phase 3] Committee Aggregator — delegates to shared module (services/signals/committee-scorer.js)
 // [v23.0] Consolidation: this function is now a thin wrapper around the unified scorer.
@@ -3510,11 +3515,14 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
 
         // [Phase 1] Signal quality filters — order flow imbalance and displacement candle
         const orderFlowImbalance = calculateOrderFlowImbalance(bars, 20);
-        const hasDisplacement = isDisplacementCandle(bars, atr, 3);
+        const displacementAnalysis = getDisplacementAnalysis(bars, atr, 3);
+        const hasDisplacement = displacementAnalysis.detected;
+        const displacementStrength = displacementAnalysis.strength;
 
         // [Phase 2] Volume Profile and Fair Value Gap analysis
         const volumeProfile = calculateVolumeProfile(bars, 50);
         const fvg = detectFairValueGaps(bars, 20);
+        const fvgScore = fvg.score || 0;
 
         // ===== [v19.0] VWAP REVERSAL — PRIMARY STRATEGY (backtested 52.69% CAGR, Sharpe 3.48) =====
         // Mean-reversion: buy when price drops below VWAP lower band (1.5σ) with RSI oversold
@@ -3573,9 +3581,9 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                                 config: MOMENTUM_CONFIG.tier1,
                                 entryVolume: volumeToday,
                                 atrStop: stopLoss, atrTarget: takeProfit, atrPct,
-                                orderFlowImbalance, hasDisplacement,
+                                orderFlowImbalance, hasDisplacement, displacementStrength,
                                 volumeProfile: volumeProfile ? { vah: volumeProfile.vah, val: volumeProfile.val, poc: volumeProfile.poc } : null,
-                                fvgCount: fvg.bullish.length + fvg.bearish.length,
+                                fvgCount: fvg.bullish.length + fvg.bearish.length, fvgScore,
                                 vwapLowerBand: vwapData.lowerBand,
                                 vwapUpperBand: vwapData.upperBand
                             };
@@ -3704,9 +3712,9 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                                     atrTarget,  // [v3.2] ATR-based target price (null if not applicable)
                                     atrPct,
                                     orderFlowImbalance,
-                                    hasDisplacement,
+                                    hasDisplacement, displacementStrength,
                                     volumeProfile: volumeProfile ? { vah: volumeProfile.vah, val: volumeProfile.val, poc: volumeProfile.poc } : null,
-                                    fvgCount: fvg.bullish.length + fvg.bearish.length
+                                    fvgCount: fvg.bullish.length + fvg.bearish.length, fvgScore
                                 });
                             }
                         }
@@ -3790,9 +3798,9 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                                 atrTarget,
                                 atrPct,
                                 orderFlowImbalance,
-                                hasDisplacement,
+                                hasDisplacement, displacementStrength,
                                 volumeProfile: volumeProfile ? { vah: volumeProfile.vah, val: volumeProfile.val, poc: volumeProfile.poc } : null,
-                                fvgCount: fvg.bullish.length + fvg.bearish.length
+                                fvgCount: fvg.bullish.length + fvg.bearish.length, fvgScore
                             });
                         }
                     }
@@ -3869,9 +3877,9 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                                 atrTarget,
                                 atrPct,
                                 orderFlowImbalance,
-                                hasDisplacement,
+                                hasDisplacement, displacementStrength,
                                 volumeProfile: volumeProfile ? { vah: volumeProfile.vah, val: volumeProfile.val, poc: volumeProfile.poc } : null,
-                                fvgCount: fvg.bullish.length + fvg.bearish.length,
+                                fvgCount: fvg.bullish.length + fvg.bearish.length, fvgScore,
                                 vwapDistance: parseFloat(vwapDistance.toFixed(5))
                             });
                             console.log(`[VWAP Reclaim] ${symbol} — reclaimed VWAP ($${vwap.toFixed(2)}) within ${(vwapDistance * 100).toFixed(3)}%, vol ${volumeRatio.toFixed(2)}x, RSI ${numericRsi.toFixed(1)}, score ${score.toFixed(3)}`);
@@ -3961,9 +3969,9 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                             atrTarget,
                             atrPct,
                             orderFlowImbalance,
-                            hasDisplacement,
+                            hasDisplacement, displacementStrength,
                             volumeProfile: volumeProfile ? { vah: volumeProfile.vah, val: volumeProfile.val, poc: volumeProfile.poc } : null,
-                            fvgCount: fvg.bullish.length + fvg.bearish.length,
+                            fvgCount: fvg.bullish.length + fvg.bearish.length, fvgScore,
                             rsi2  // expose for logging / monitoring
                         });
                         console.log(`[RSI(2) MeanRev] ${symbol} — RSI(2) ${rsi2.toFixed(1)} (oversold), price $${current.toFixed(2)} vs SMA50 $${sma50Daily.toFixed(2)} (+${((current / sma50Daily - 1) * 100).toFixed(1)}%), score ${score.toFixed(3)}`);

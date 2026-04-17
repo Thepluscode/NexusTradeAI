@@ -72,13 +72,19 @@ const EXTRACTORS = {
       present: signal.orderFlowImbalance !== undefined
     },
     displacement: {
-      score: signal.hasDisplacement ? 1.0 : 0,
-      present: !!signal.hasDisplacement
+      // v24.0: graded — use displacementStrength (0-1) from computeDisplacement().raw.strength
+      score: signal.displacementStrength != null
+        ? signal.displacementStrength
+        : (signal.hasDisplacement ? 0.7 : 0),  // fallback: legacy boolean → 0.7 if present
+      present: !!(signal.hasDisplacement || signal.displacementStrength > 0)
     },
     volumeProfile: extractVP(signal.volumeProfile, signal.price),
     fvg: {
-      score: (signal.fvgCount || 0) > 0 ? 1.0 : 0,
-      present: (signal.fvgCount || 0) > 0
+      // v24.0: graded — use fvgScore (0-1) from computeFVG().score if available
+      score: signal.fvgScore != null
+        ? signal.fvgScore
+        : Math.min((signal.fvgCount || 0) / 3, 1.0),  // fallback: count-based grading
+      present: (signal.fvgCount || 0) > 0 || (signal.fvgScore || 0) > 0
     },
     volumeRatio: {
       score: Math.min(parseFloat(signal.volumeRatio || 1) / 3, 1.0),
@@ -102,13 +108,19 @@ const EXTRACTORS = {
         present: signal.orderFlowImbalance !== undefined
       },
       displacement: {
-        score: signal.hasDisplacement ? 1.0 : 0,
-        present: !!signal.hasDisplacement
+        // v24.0: graded
+        score: signal.displacementStrength != null
+          ? signal.displacementStrength
+          : (signal.hasDisplacement ? 0.7 : 0),
+        present: !!(signal.hasDisplacement || signal.displacementStrength > 0)
       },
       volumeProfile: extractDirectionalVP(signal),
       fvg: {
-        score: (signal.fvgCount || 0) > 0 ? 1.0 : 0,
-        present: (signal.fvgCount || 0) > 0
+        // v24.0: graded
+        score: signal.fvgScore != null
+          ? signal.fvgScore
+          : Math.min((signal.fvgCount || 0) / 3, 1.0),
+        present: (signal.fvgCount || 0) > 0 || (signal.fvgScore || 0) > 0
       },
       macd: {
         score: signal.macdHistogram != null
@@ -134,13 +146,19 @@ const EXTRACTORS = {
         present: signal.orderFlowImbalance !== undefined
       },
       displacement: {
-        score: signal.hasDisplacement ? 1.0 : 0,
-        present: !!signal.hasDisplacement
+        // v24.0: graded
+        score: signal.displacementStrength != null
+          ? signal.displacementStrength
+          : (signal.hasDisplacement ? 0.7 : 0),
+        present: !!(signal.hasDisplacement || signal.displacementStrength > 0)
       },
       volumeProfile: extractVP(signal.volumeProfileData, signal.price),
       fvg: {
-        score: (signal.fvgCount || 0) > 0 ? 1.0 : 0,
-        present: (signal.fvgCount || 0) > 0
+        // v24.0: graded
+        score: signal.fvgScore != null
+          ? signal.fvgScore
+          : Math.min((signal.fvgCount || 0) / 3, 1.0),
+        present: (signal.fvgCount || 0) > 0 || (signal.fvgScore || 0) > 0
       },
       volumeRatio: {
         score: Math.min(parseFloat(signal.volumeRatio || 1) / 3, 1.0),
