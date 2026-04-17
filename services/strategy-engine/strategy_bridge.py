@@ -594,6 +594,341 @@ if FASTAPI_AVAILABLE:
             "timestamp": datetime.now().isoformat()
         }
 
+    @app.post("/ml/features")
+    def ml_features(req: SignalRequest):
+        """
+        [v23.3] Rich feature vector for ML signal scoring.
+
+        Extracts 30+ engineered features across categories: momentum, volatility,
+        volume, microstructure, candle patterns, regime proxies. This is the
+        foundation for future /ml/score (XGBoost/RF signal scoring) — bots capture
+        these with each signal so we build labelled training data over time.
+
+        Requires ≥60 bars.
+        """
+        if len(req.prices) < 60:
+            raise HTTPException(status_code=400, detail="Need at least 60 bars for feature extraction")
+
+        # Vectorize inputs
+        opens = np.array([p.open for p in req.prices])
+        highs = np.array([p.high for p in req.prices])
+        lows = np.array([p.low for p in req.prices])
+        closes = np.array([p.close for p in req.prices])
+        volumes = np.array([p.volume or 0 for p in req.prices])
+
+        # --- MOMENTUM FEATURES ---
+        returns = np.diff(closes) / np.clip(closes[:-1], 1e-9, None)
+        ret_1 = float(returns[-1]) if len(returns) > 0 else 0.0
+        ret_5 = float((closes[-1] - closes[-6]) / closes[-6]) if len(closes) >= 6 else 0.0
+        ret_10 = float((closes[-1] - closes[-11]) / closes[-11]) if len(closes) >= 11 else 0.0
+        ret_20 = float((closes[-1] - closes[-21]) / closes[-21]) if len(closes) >= 21 else 0.0
+
+        # EMAs
+        def ema(vals, period):
+            if len(vals) < period:
+                return float(np.mean(vals))
+            k = 2.0 / (period + 1)
+            e = float(vals[0])
+            for v in vals[1:]:
+                e = v * k + e * (1 - k)
+            return e
+        ema_9 = ema(closes, 9)
+        ema_21 = ema(closes, 21)
+        ema_50 = ema(closes, 50)
+        ema_9_21_cross = float((ema_9 - ema_21) / ema_21) if ema_21 > 0 else 0.0
+        ema_21_50_cross = float((ema_21 - ema_50) / ema_50) if ema_50 > 0 else 0.0
+
+        # RSI-14 (Wilder smoothing)
+        def rsi(vals, period=14):
+            if len(vals) < period + 1:
+                return 50.0
+            deltas = np.diff(vals)
+            gains = np.where(deltas > 0, deltas, 0)
+            losses = np.where(deltas < 0, -deltas, 0)
+            avg_gain = np.mean(gains[:period])
+            avg_loss = np.mean(losses[:period])
+            for g, l in zip(gains[period:], losses[period:]):
+                avg_gain = (avg_gain * (period - 1) + g) / period
+                avg_loss = (avg_loss * (period - 1) + l) / period
+            if avg_loss == 0:
+                return 100.0
+            rs = avg_gain / avg_loss
+            return float(100 - 100 / (1 + rs))
+        rsi_14 = rsi(closes, 14)
+        rsi_2 = rsi(closes[-10:], 2) if len(closes) >= 10 else 50.0
+
+        # MACD (12/26/9)
+        ema_12 = ema(closes, 12)
+        ema_26 = ema(closes, 26)
+        macd_line = ema_12 - ema_26
+        macd_signal = ema(np.array([ema(closes[:i+1], 12) - ema(closes[:i+1], 26) for i in range(max(26, len(closes)-9), len(closes))]), 9) if len(closes) >= 35 else 0.0
+        macd_hist = macd_line - macd_signal
+
+        # --- VOLATILITY FEATURES ---
+        vol_20 = float(np.std(returns[-20:])) if len(returns) >= 20 else float(np.std(returns)) if len(returns) > 0 else 0.0
+        vol_60 = float(np.std(returns[-60:])) if len(returns) >= 60 else vol_20
+        annualized_vol = vol_60 * np.sqrt(252)
+        vol_ratio_20_60 = (vol_20 / vol_60) if vol_60 > 0 else 1.0
+
+        # ATR (14)
+        tr = np.maximum(highs[1:] - lows[1:],
+                        np.maximum(np.abs(highs[1:] - closes[:-1]),
+                                   np.abs(lows[1:] - closes[:-1])))
+        atr_14 = float(np.mean(tr[-14:])) if len(tr) >= 14 else float(np.mean(tr)) if len(tr) > 0 else 0.0
+        atr_pct = float(atr_14 / closes[-1]) if closes[-1] > 0 else 0.0
+
+        # Parkinson volatility (high-low estimator)
+        hl_ratio = np.log(highs / np.clip(lows, 1e-9, None))
+        parkinson_vol = float(np.sqrt(np.mean(hl_ratio[-20:]**2) / (4 * np.log(2)))) if len(hl_ratio) >= 20 else 0.0
+
+        # --- VOLUME FEATURES ---
+        avg_vol_20 = float(np.mean(volumes[-20:])) if len(volumes) >= 20 else float(np.mean(volumes)) if len(volumes) > 0 else 0.0
+        current_vol = float(volumes[-1]) if len(volumes) > 0 else 0.0
+        vol_ratio = (current_vol / avg_vol_20) if avg_vol_20 > 0 else 1.0
+        vol_trend = float((np.mean(volumes[-5:]) - np.mean(volumes[-20:])) / np.mean(volumes[-20:])) if len(volumes) >= 20 and np.mean(volumes[-20:]) > 0 else 0.0
+
+        # --- PRICE POSITION FEATURES ---
+        sma_20 = float(np.mean(closes[-20:])) if len(closes) >= 20 else float(closes[-1])
+        sma_50 = float(np.mean(closes[-50:])) if len(closes) >= 50 else float(closes[-1])
+        bb_upper = sma_20 + 2 * vol_20 * closes[-1]
+        bb_lower = sma_20 - 2 * vol_20 * closes[-1]
+        bb_position = (closes[-1] - bb_lower) / (bb_upper - bb_lower) if (bb_upper - bb_lower) > 0 else 0.5
+
+        dist_sma20 = float((closes[-1] - sma_20) / sma_20) if sma_20 > 0 else 0.0
+        dist_sma50 = float((closes[-1] - sma_50) / sma_50) if sma_50 > 0 else 0.0
+
+        # Range position
+        daily_high = float(np.max(highs[-20:])) if len(highs) >= 20 else float(np.max(highs))
+        daily_low = float(np.min(lows[-20:])) if len(lows) >= 20 else float(np.min(lows))
+        range_position = (closes[-1] - daily_low) / (daily_high - daily_low) if (daily_high - daily_low) > 0 else 0.5
+
+        # --- CANDLE PATTERN FEATURES ---
+        body = abs(closes[-1] - opens[-1])
+        upper_shadow = highs[-1] - max(opens[-1], closes[-1])
+        lower_shadow = min(opens[-1], closes[-1]) - lows[-1]
+        total_range = highs[-1] - lows[-1]
+        body_pct = float(body / total_range) if total_range > 0 else 0.0
+        upper_shadow_pct = float(upper_shadow / total_range) if total_range > 0 else 0.0
+        lower_shadow_pct = float(lower_shadow / total_range) if total_range > 0 else 0.0
+        is_bullish = 1 if closes[-1] > opens[-1] else 0
+
+        # Recent bullish/bearish bars
+        recent_bulls = int(sum(closes[-5:] > opens[-5:])) if len(closes) >= 5 else 0
+        recent_bars = int(min(5, len(closes)))
+
+        # --- MICROSTRUCTURE PROXIES ---
+        # Order flow imbalance proxy: (close - low) / (high - low) * volume
+        close_position = (closes[-1] - lows[-1]) / total_range if total_range > 0 else 0.5
+        order_flow_proxy = float(close_position * current_vol / avg_vol_20) if avg_vol_20 > 0 else 0.0
+
+        # Gap (open vs prev close)
+        gap_pct = float((opens[-1] - closes[-2]) / closes[-2]) if len(closes) >= 2 and closes[-2] > 0 else 0.0
+
+        features = {
+            # Momentum (6)
+            "return_1d": round(ret_1, 6),
+            "return_5d": round(ret_5, 6),
+            "return_10d": round(ret_10, 6),
+            "return_20d": round(ret_20, 6),
+            "ema_9_21_cross": round(ema_9_21_cross, 6),
+            "ema_21_50_cross": round(ema_21_50_cross, 6),
+
+            # Momentum oscillators (3)
+            "rsi_14": round(rsi_14, 3),
+            "rsi_2": round(rsi_2, 3),
+            "macd_histogram": round(macd_hist, 8),
+
+            # Volatility (5)
+            "annualized_vol": round(float(annualized_vol), 6),
+            "vol_20": round(vol_20, 6),
+            "vol_60": round(vol_60, 6),
+            "vol_ratio_20_60": round(float(vol_ratio_20_60), 4),
+            "parkinson_vol": round(parkinson_vol, 6),
+
+            # Range / bands (4)
+            "atr_14": round(atr_14, 6),
+            "atr_pct": round(atr_pct, 6),
+            "bb_position": round(float(bb_position), 4),
+            "range_position": round(float(range_position), 4),
+
+            # Price vs means (2)
+            "dist_sma20": round(dist_sma20, 6),
+            "dist_sma50": round(dist_sma50, 6),
+
+            # Volume (3)
+            "volume_ratio": round(float(vol_ratio), 3),
+            "volume_trend": round(vol_trend, 4),
+            "volume_current": round(current_vol, 2),
+
+            # Candle patterns (5)
+            "body_pct": round(body_pct, 3),
+            "upper_shadow_pct": round(upper_shadow_pct, 3),
+            "lower_shadow_pct": round(lower_shadow_pct, 3),
+            "is_bullish": is_bullish,
+            "recent_bulls_5": recent_bulls,
+
+            # Microstructure (2)
+            "order_flow_proxy": round(order_flow_proxy, 4),
+            "gap_pct": round(gap_pct, 6),
+        }
+
+        return {
+            "symbol": req.symbol,
+            "features": features,
+            "bars_analyzed": len(closes),
+            "feature_count": len(features),
+            "model": "feature-extractor-v1",
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    # Module-level cache for learned model weights (fit from training data)
+    _ml_score_model_cache = {
+        "weights": None,
+        "fitted_at": None,
+        "n_train": 0,
+        "feature_keys": None,
+    }
+
+    def _fit_logistic_from_evaluations(evaluations, feature_keys):
+        """
+        Fit a simple logistic regression (gradient descent) on trade outcomes.
+        evaluations: list of dicts with .signals.feature_snapshot and .pnl.
+        Returns weights dict or None if insufficient data.
+        """
+        X, y = [], []
+        for ev in evaluations:
+            snap = (ev.get("signals") or {}).get("feature_snapshot")
+            if not snap:
+                continue
+            pnl = ev.get("pnl")
+            if pnl is None:
+                continue
+            row = [float(snap.get(k, 0) or 0) for k in feature_keys]
+            X.append(row)
+            y.append(1 if pnl > 0 else 0)
+        if len(X) < 30:
+            return None
+        X = np.array(X, dtype=float)
+        y = np.array(y, dtype=float)
+        # Standardise features (zero-mean, unit variance)
+        means = X.mean(axis=0)
+        stds = X.std(axis=0) + 1e-9
+        X_std = (X - means) / stds
+        # Gradient descent
+        w = np.zeros(X_std.shape[1])
+        b = 0.0
+        lr = 0.05
+        for _ in range(300):
+            z = X_std @ w + b
+            p = 1.0 / (1.0 + np.exp(-np.clip(z, -30, 30)))
+            grad_w = X_std.T @ (p - y) / len(y)
+            grad_b = float((p - y).mean())
+            w -= lr * grad_w
+            b -= lr * grad_b
+        return {"w": w.tolist(), "b": float(b), "means": means.tolist(), "stds": stds.tolist()}
+
+    @app.post("/ml/score")
+    def ml_score(req: dict):
+        """
+        [v23.3] Predict win probability for a trade setup using logistic regression.
+
+        Input: { feature_snapshot: {key: value, ...}, asset_class: 'stock'|... }
+        Output: { win_probability, confidence_tier, model_source, n_train }
+
+        Bootstraps: if no training data yet, returns null win_probability and
+        falls back to Platt calibration (already in bot).
+        Upgrade path: replace this logistic with XGBoost once we have 500+ trades.
+        """
+        features = req.get("feature_snapshot") or req.get("features") or {}
+        if not features:
+            raise HTTPException(status_code=400, detail="feature_snapshot required")
+
+        feature_keys = sorted(features.keys())
+        x = np.array([float(features.get(k, 0) or 0) for k in feature_keys])
+
+        model = _ml_score_model_cache.get("weights")
+        if not model or _ml_score_model_cache.get("feature_keys") != feature_keys:
+            return {
+                "win_probability": None,
+                "confidence_tier": "no_model",
+                "model_source": "untrained",
+                "n_train": 0,
+                "reason": "No trained model yet — use Platt calibration in bot",
+                "timestamp": datetime.now().isoformat(),
+            }
+
+        means = np.array(model["means"])
+        stds = np.array(model["stds"])
+        w = np.array(model["w"])
+        b = model["b"]
+        x_std = (x - means) / (stds + 1e-9)
+        z = float(x_std @ w + b)
+        p = 1.0 / (1.0 + np.exp(-max(min(z, 30.0), -30.0)))
+
+        n_train = _ml_score_model_cache.get("n_train", 0)
+        tier = "high" if n_train >= 200 else "medium" if n_train >= 100 else "low"
+
+        return {
+            "win_probability": round(p, 4),
+            "confidence_tier": tier,
+            "model_source": "logistic_v1",
+            "n_train": n_train,
+            "fitted_at": _ml_score_model_cache.get("fitted_at"),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    @app.post("/ml/fit")
+    def ml_fit(req: dict):
+        """
+        [v23.3] Fit /ml/score model from provided training evaluations.
+        This is a stateless trigger — bot sends its evaluations array with
+        feature_snapshots and outcomes; bridge fits the model and caches it.
+
+        Typically called once on bot startup + periodically (e.g., every 50 trades).
+        """
+        evaluations = req.get("evaluations") or []
+        if len(evaluations) < 30:
+            return {
+                "fitted": False,
+                "reason": f"Need at least 30 evaluations, got {len(evaluations)}",
+                "timestamp": datetime.now().isoformat(),
+            }
+
+        # Determine feature keys from first evaluation with a feature_snapshot
+        feature_keys = None
+        for ev in evaluations:
+            snap = (ev.get("signals") or {}).get("feature_snapshot")
+            if snap:
+                feature_keys = sorted(snap.keys())
+                break
+        if feature_keys is None:
+            return {
+                "fitted": False,
+                "reason": "No evaluations contain feature_snapshot",
+                "timestamp": datetime.now().isoformat(),
+            }
+
+        weights = _fit_logistic_from_evaluations(evaluations, feature_keys)
+        if weights is None:
+            return {
+                "fitted": False,
+                "reason": "Insufficient labelled evaluations",
+                "timestamp": datetime.now().isoformat(),
+            }
+
+        _ml_score_model_cache["weights"] = weights
+        _ml_score_model_cache["feature_keys"] = feature_keys
+        _ml_score_model_cache["n_train"] = len(evaluations)
+        _ml_score_model_cache["fitted_at"] = datetime.now().isoformat()
+
+        return {
+            "fitted": True,
+            "n_train": len(evaluations),
+            "feature_count": len(feature_keys),
+            "model_source": "logistic_v1",
+            "timestamp": datetime.now().isoformat(),
+        }
+
     @app.post("/pairs/analyze")
     def analyze_pair(req: PairAnalysisRequest):
         """Analyze a pair for trading opportunities"""
