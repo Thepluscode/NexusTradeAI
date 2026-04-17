@@ -1073,6 +1073,9 @@ function buildStockTradeTags(signal = {}, strategy, tier) {
             // [v23.3] ML training data — feature vector at entry time
             featureSnapshot: signal.featureSnapshot ?? null,
             mlRegime: signal.mlRegime ?? null,
+            // [v23.4] Sentiment at entry time
+            sentimentScore: signal.sentimentScore ?? null,
+            sentimentLabel: signal.sentimentLabel ?? null,
         }
     };
 }
@@ -2091,6 +2094,28 @@ const _ML_REGIME_CACHE_TTL_MS = 5 * 60 * 1000;
 // [v23.3] Feature snapshot for ML training data collection
 const _featureCache = new Map();
 const _FEATURE_CACHE_TTL_MS = 5 * 60 * 1000;
+
+// [v23.4] Sentiment cache — RSS-based sentiment from strategy bridge
+const _sentimentCache = new Map();
+const _SENTIMENT_CACHE_TTL_MS = 10 * 60 * 1000; // 10 min (news doesn't change fast)
+
+async function querySentiment(symbol) {
+    try {
+        const cached = _sentimentCache.get(symbol);
+        if (cached && Date.now() - cached.timestamp < _SENTIMENT_CACHE_TTL_MS) {
+            return cached.result;
+        }
+        const response = await axios.get(
+            `${BRIDGE_URL}/agent/sentiment/${encodeURIComponent(symbol)}?asset_class=stock`,
+            { timeout: 5000 }
+        );
+        const result = response.data;
+        _sentimentCache.set(symbol, { result, timestamp: Date.now() });
+        return result;
+    } catch (e) {
+        return null; // non-blocking
+    }
+}
 
 async function queryMLFeatures(symbol, bars) {
     try {
@@ -3150,6 +3175,22 @@ async function scanMomentumBreakouts() {
                         }
                     } catch (_eqErr) { /* non-fatal */ }
 
+                    // [v23.4] Sentiment-based sizing — strong bearish sentiment reduces size
+                    try {
+                        const cachedSent = _sentimentCache.get(mover.symbol);
+                        if (cachedSent && Date.now() - cachedSent.timestamp < _SENTIMENT_CACHE_TTL_MS) {
+                            const sentScore = cachedSent.result.sentiment_score;
+                            mover.sentimentScore = sentScore;
+                            mover.sentimentLabel = cachedSent.result.sentiment_label;
+                            // Strong bearish sentiment → reduce size (never amplify)
+                            if (sentScore < -0.3) {
+                                const sentMult = Math.max(0.5, 1.0 + sentScore); // -0.3 → 0.7x, -0.5 → 0.5x
+                                mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * sentMult;
+                                console.log(`[SENTIMENT] ${mover.symbol} size ×${sentMult.toFixed(2)} — ${cachedSent.result.sentiment_label} (${sentScore.toFixed(2)}, ${cachedSent.result.headline_count} headlines)`);
+                            }
+                        }
+                    } catch (_sentErr) { /* non-fatal */ }
+
                     // [v23.3] Attach cached feature snapshot + ML win probability for training
                     try {
                         const cachedFeat = _featureCache.get(mover.symbol);
@@ -3337,20 +3378,19 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                 if (registryFired || inlineFired) {
                     console.log(`[SHADOW] ${symbol}: inline=${inlineFired ? 'ORB' : 'none'} registry=${registryCandidates.map(c => c.strategy).join(',') || 'none'} diag=${JSON.stringify(shadowDiag)}`);
 
-                    // [v23.2] Pre-fetch ML regime + features in parallel — populates caches
-                    // for the sizing step later. Fire-and-forget; never blocks.
+                    // [v23.2+] Pre-fetch ML regime + features + sentiment in parallel
+                    // Populates caches for the sizing step. Fire-and-forget; never blocks.
                     Promise.allSettled([
                         queryMLRegime(symbol, bars),
                         queryMLFeatures(symbol, bars),
-                    ]).then(([regResult, featResult]) => {
+                        querySentiment(symbol),
+                    ]).then(([regResult, featResult, sentResult]) => {
                         const mlReg = regResult.status === 'fulfilled' ? regResult.value : null;
                         const mlFeat = featResult.status === 'fulfilled' ? featResult.value : null;
-                        if (mlReg) {
-                            console.log(`[ML_REGIME] ${symbol}: ${mlReg.regime} conf=${mlReg.confidence} size_mult=${mlReg.position_size_multiplier}`);
-                        }
-                        if (mlFeat) {
-                            console.log(`[ML_FEATURES] ${symbol}: pre-fetched ${mlFeat.feature_count} features`);
-                        }
+                        const sent = sentResult.status === 'fulfilled' ? sentResult.value : null;
+                        if (mlReg) console.log(`[ML_REGIME] ${symbol}: ${mlReg.regime} conf=${mlReg.confidence} size_mult=${mlReg.position_size_multiplier}`);
+                        if (mlFeat) console.log(`[ML_FEATURES] ${symbol}: pre-fetched ${mlFeat.feature_count} features`);
+                        if (sent && sent.sentiment_score !== 0) console.log(`[SENTIMENT] ${symbol}: ${sent.sentiment_label} (${sent.sentiment_score.toFixed(2)}, ${sent.headline_count} headlines)`);
                     });
                 }
             } catch (shadowErr) {
