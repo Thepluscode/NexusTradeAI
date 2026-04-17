@@ -241,6 +241,8 @@ function buildForexTradeTags(signal = {}, tier, direction, session) {
             hasDisplacement: signal.hasDisplacement ?? false,
             fvgCount: signal.fvgCount ?? 0,
             marketRegime: signal.marketRegime ?? null,
+            featureSnapshot: signal.featureSnapshot ?? null,
+            mlRegime: signal.mlRegime ?? null,
         }
     };
 }
@@ -3034,6 +3036,23 @@ async function closePositionWithReason(pair, reason) {
                 guardrails.recordOutcome(exitPnl > 0);
                 // Feed trade outcome to Monte Carlo position sizer (as decimal, e.g. 0.05 for +5%)
                 monteCarloSizer.addTrade(exitPct / 100);
+
+                // [v23.3] Learning loop refit trigger
+                if (globalThis._forexMlTradesSinceRefit !== undefined) {
+                    globalThis._forexMlTradesSinceRefit++;
+                    if (globalThis._forexMlTradesSinceRefit >= 50) {
+                        globalThis._forexMlTradesSinceRefit = 0;
+                        const evals = globalThis._forexTradeEvaluations || [];
+                        axios.post(`${BRIDGE_URL}/ml/fit`, {
+                            evaluations: evals.slice(-200).map(e => ({
+                                signals: { feature_snapshot: e.signals?.feature_snapshot || null },
+                                pnl: e.pnl || 0,
+                            }))
+                        }, { timeout: 10000 }).then(r => {
+                            if (r.data?.fitted) console.log(`[ML_SCORE] Forex refit: ${r.data.n_train} samples`);
+                        }).catch(err => console.warn(`[ML_SCORE] Forex refit failed: ${err.message}`));
+                    }
+                }
             }
 
             // [Phase 4] Trade evaluation — log signal effectiveness for weight optimization
@@ -5126,6 +5145,35 @@ app.listen(PORT, async () => {
     } catch (e) {
         console.warn('[Calibrator] Forex Platt fit failed:', e.message);
     }
+
+    // [v23.3] Learning loop — fit /ml/score model from historical evaluations
+    try {
+        const evals = globalThis._forexTradeEvaluations || [];
+        const evalsWithData = evals.filter(e => e.signals?.committeeConfidence != null);
+        if (evalsWithData.length >= 30) {
+            const fitPayload = evalsWithData.map(e => ({
+                signals: { feature_snapshot: e.signals?.feature_snapshot || {
+                    rsi_14: 50, return_20d: parseFloat(e.signals?.committeeConfidence || 0),
+                    annualized_vol: 0.10, volume_ratio: 1,
+                }},
+                pnl: e.pnl || 0,
+            }));
+            const fitResp = await axios.post(`${BRIDGE_URL}/ml/fit`,
+                { evaluations: fitPayload }, { timeout: 10000 }
+            ).catch(() => null);
+            if (fitResp?.data?.fitted) {
+                console.log(`[ML_SCORE] Forex: trained model from ${fitResp.data.n_train} evaluations`);
+                globalThis._forexMlScoreFitted = true;
+            } else {
+                console.log(`[ML_SCORE] Forex: not fitted — ${fitResp?.data?.reason || 'bridge unavailable'}`);
+            }
+        } else {
+            console.log(`[ML_SCORE] Forex: need ${30 - evalsWithData.length} more evaluations for model fit (have ${evalsWithData.length})`);
+        }
+    } catch (e) {
+        console.warn('[ML_SCORE] Forex learning loop init failed:', e.message);
+    }
+    globalThis._forexMlTradesSinceRefit = 0;
 
     // Optimize weights now that evaluations are loaded (replaces the old 10s setTimeout)
     setTimeout(() => {
