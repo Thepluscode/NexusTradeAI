@@ -1084,13 +1084,18 @@ const isDisplacementCandle = sharedSignals
     ? (klines, atr, lookback) => sharedSignals.isDisplacementCandle(klines, atr, lookback, 'crypto')
     : () => false;
 
+// [v24.0] Graded displacement — returns { detected, strength (0-1), magnitude }
+const getDisplacementAnalysis = sharedSignals?.getDisplacementAnalysis
+    ? (klines, atr, lookback) => sharedSignals.getDisplacementAnalysis(klines, atr, lookback, 'crypto')
+    : () => ({ detected: false, strength: 0, magnitude: 0 });
+
 const calculateVolumeProfile = sharedSignals
     ? (klines, numBuckets) => sharedSignals.calculateVolumeProfile(klines, numBuckets, 'crypto')
     : () => null;
 
 const detectFairValueGaps = sharedSignals
     ? (klines, lookback) => sharedSignals.detectFairValueGaps(klines, lookback, 'crypto')
-    : () => ({ bullish: [], bearish: [] });
+    : () => ({ bullish: [], bearish: [], score: 0 });
 
 // ============================================================================
 // [Phase 3] COMMITTEE AGGREGATOR + REGIME — unified confidence & market conditions
@@ -2143,11 +2148,14 @@ class CryptoTradingEngine {
 
             // [Phase 1] Signal quality filters — order flow imbalance and displacement candle
             const orderFlowImbalance = calculateOrderFlowImbalance(data.klines, 20);
-            const hasDisplacement = isDisplacementCandle(data.klines, data.atr, 3);
+            const displacementAnalysis = getDisplacementAnalysis(data.klines, data.atr, 3);
+            const hasDisplacement = displacementAnalysis.detected;
+            const displacementStrength = displacementAnalysis.strength;
 
             // [Phase 2] Volume Profile and Fair Value Gap analysis
             const volumeProfile = calculateVolumeProfile(data.klines, 50);
             const fvg = detectFairValueGaps(data.klines, 20);
+            const fvgScore = fvg.score || 0;
 
             // Momentum calculation
             const momentum = (data.currentPrice - sma20) / sma20;
@@ -2219,9 +2227,9 @@ class CryptoTradingEngine {
                         profitTargetPercent: atrRisk.targetPct * 100,
                         // [Phase 1/2] Attach analysis data for committee scoring
                         orderFlowImbalance,
-                        hasDisplacement,
+                        hasDisplacement, displacementStrength,
                         volumeProfileData: volumeProfile ? { vah: volumeProfile.vah, val: volumeProfile.val, poc: volumeProfile.poc } : null,
-                        fvgCount: fvg.bullish.length + fvg.bearish.length
+                        fvgCount: fvg.bullish.length + fvg.bearish.length, fvgScore
                     };
                     let pullbackScore = scoreCryptoSignal({
                         strategy: pullbackSignal.strategy,
@@ -2371,9 +2379,9 @@ class CryptoTradingEngine {
                                 profitTargetPercent: ((target - data.currentPrice) / data.currentPrice) * 100,
                                 boxHigh: box.high, boxLow: box.low, boxMidline: box.midline,
                                 confirmation,
-                                orderFlowImbalance, hasDisplacement,
+                                orderFlowImbalance, hasDisplacement, displacementStrength,
                                 volumeProfileData: volumeProfile ? { vah: volumeProfile.vah, val: volumeProfile.val, poc: volumeProfile.poc } : null,
-                                fvgCount: fvg.bullish.length + fvg.bearish.length, score: 0
+                                fvgCount: fvg.bullish.length + fvg.bearish.length, fvgScore, score: 0
                             };
                             let boxScore = confirmation * boxRegimeProfile.quality * 1.10; // 10% priority over other strategies
                             if (hasDisplacement) boxScore *= 1.15;
@@ -2410,9 +2418,9 @@ class CryptoTradingEngine {
                                 profitTargetPercent: ((data.currentPrice - target) / data.currentPrice) * 100,
                                 boxHigh: box.high, boxLow: box.low, boxMidline: box.midline,
                                 confirmation, direction: 'short',
-                                orderFlowImbalance, hasDisplacement,
+                                orderFlowImbalance, hasDisplacement, displacementStrength,
                                 volumeProfileData: volumeProfile ? { vah: volumeProfile.vah, val: volumeProfile.val, poc: volumeProfile.poc } : null,
-                                fvgCount: fvg.bullish.length + fvg.bearish.length, score: 0
+                                fvgCount: fvg.bullish.length + fvg.bearish.length, fvgScore, score: 0
                             };
                             let boxScore = confirmation * boxRegimeProfile.quality * 1.10;
                             if (hasDisplacement) boxScore *= 1.15;

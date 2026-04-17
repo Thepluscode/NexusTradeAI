@@ -1675,6 +1675,11 @@ const isDisplacementCandle = sharedSignals
     ? (candles, atr, lookback) => sharedSignals.isDisplacementCandle(candles, atr, lookback, 'forex')
     : () => false;
 
+// [v24.0] Graded displacement — returns { detected, strength (0-1), magnitude }
+const getDisplacementAnalysis = sharedSignals?.getDisplacementAnalysis
+    ? (candles, atr, lookback) => sharedSignals.getDisplacementAnalysis(candles, atr, lookback, 'forex')
+    : () => ({ detected: false, strength: 0, magnitude: 0 });
+
 const calculateVolumeProfile = sharedSignals
     ? (candles, numBuckets) => sharedSignals.calculateVolumeProfile(candles, numBuckets, 'forex')
     : () => null;
@@ -1763,7 +1768,19 @@ function detectFairValueGaps(candles, lookback = 20) {
         }
     }
 
-    return { bullish: bullishGaps, bearish: bearishGaps };
+    // [v24.0] Graded scoring: count + size components
+    const totalCount = bullishGaps.length + bearishGaps.length;
+    const allGaps = [...bullishGaps, ...bearishGaps];
+    let score = 0;
+    if (totalCount > 0) {
+        const countScore = Math.min(totalCount / 3, 1.0);
+        const refPrice = parseFloat(candles[candles.length - 1]?.mid?.c || 1);
+        const avgGapSize = allGaps.reduce((s, g) => s + g.gapSize, 0) / allGaps.length;
+        const sizeScore = Math.min((avgGapSize / refPrice) * 20, 1.0);
+        score = 0.6 * countScore + 0.4 * sizeScore;
+    }
+
+    return { bullish: bullishGaps, bearish: bearishGaps, score: parseFloat(score.toFixed(4)) };
 }
 
 // [Phase 3] Committee Aggregator for Forex — delegates to shared module
@@ -2288,19 +2305,22 @@ async function analyzePair(pair) {
 
     // [Phase 1] Order flow imbalance and displacement candle detection
     const orderFlowImbalance = calculateOrderFlowImbalance(candles, 20);
-    const hasDisplacement = isDisplacementCandle(candles, atr, 3);
+    const displacementAnalysis = getDisplacementAnalysis(candles, atr, 3);
+    const hasDisplacement = displacementAnalysis.detected;
+    const displacementStrength = displacementAnalysis.strength;
 
     // [Phase 2] Volume Profile and Fair Value Gap analysis
     const volumeProfile = calculateVolumeProfile(candles, 40);
     const fvg = detectFairValueGaps(candles, 20);
+    const fvgScore = fvg.score || 0;
 
     return {
         pair, currentPrice, sma10, sma20, sma50, rsi, atr,
         atrPct, bb, macd, pullback,
         isUptrend, isDowntrend, trendStrength,
         lastCandleBullish, lastCandleBearish,
-        orderFlowImbalance, hasDisplacement,
-        volumeProfile, fvg
+        orderFlowImbalance, hasDisplacement, displacementStrength,
+        volumeProfile, fvg, fvgScore
     };
 }
 
@@ -2494,9 +2514,9 @@ async function scanForSignals(heldPositions = positions) {
                             marketRegime: forexRegime.regime,
                             macdHistogram: macd ? macd.histogram : null,
                             orderFlowImbalance: analysis.orderFlowImbalance,
-                            hasDisplacement: analysis.hasDisplacement,
+                            hasDisplacement: analysis.hasDisplacement, displacementStrength: analysis.displacementStrength,
                             volumeProfile: analysis.volumeProfile ? { vah: analysis.volumeProfile.vah, val: analysis.volumeProfile.val, poc: analysis.volumeProfile.poc } : null,
-                            fvgCount: analysis.fvg ? analysis.fvg.bullish.length + analysis.fvg.bearish.length : 0,
+                            fvgCount: analysis.fvg ? analysis.fvg.bullish.length + analysis.fvg.bearish.length : 0, fvgScore: analysis.fvgScore || 0,
                             session: session.name,
                             boxRange: box.range,
                             dynamicRR,
@@ -2552,9 +2572,9 @@ async function scanForSignals(heldPositions = positions) {
                             marketRegime: forexRegime.regime,
                             macdHistogram: macd ? macd.histogram : null,
                             orderFlowImbalance: analysis.orderFlowImbalance,
-                            hasDisplacement: analysis.hasDisplacement,
+                            hasDisplacement: analysis.hasDisplacement, displacementStrength: analysis.displacementStrength,
                             volumeProfile: analysis.volumeProfile ? { vah: analysis.volumeProfile.vah, val: analysis.volumeProfile.val, poc: analysis.volumeProfile.poc } : null,
-                            fvgCount: analysis.fvg ? analysis.fvg.bullish.length + analysis.fvg.bearish.length : 0,
+                            fvgCount: analysis.fvg ? analysis.fvg.bullish.length + analysis.fvg.bearish.length : 0, fvgScore: analysis.fvgScore || 0,
                             session: session.name,
                             boxRange: box.range,
                             dynamicRR,
@@ -2612,9 +2632,9 @@ async function scanForSignals(heldPositions = positions) {
                                     marketRegime: forexRegime.regime,
                                     macdHistogram: macd ? macd.histogram : null,
                                     orderFlowImbalance: analysis.orderFlowImbalance,
-                                    hasDisplacement: analysis.hasDisplacement,
+                                    hasDisplacement: analysis.hasDisplacement, displacementStrength: analysis.displacementStrength,
                                     volumeProfile: analysis.volumeProfile ? { vah: analysis.volumeProfile.vah, val: analysis.volumeProfile.val, poc: analysis.volumeProfile.poc } : null,
-                                    fvgCount: analysis.fvg ? analysis.fvg.bullish.length + analysis.fvg.bearish.length : 0,
+                                    fvgCount: analysis.fvg ? analysis.fvg.bullish.length + analysis.fvg.bearish.length : 0, fvgScore: analysis.fvgScore || 0,
                                     session: session.name,
                                     h4ADX: h4Data.adx,
                                     h4RSI,
@@ -2646,9 +2666,9 @@ async function scanForSignals(heldPositions = positions) {
                                     marketRegime: forexRegime.regime,
                                     macdHistogram: macd ? macd.histogram : null,
                                     orderFlowImbalance: analysis.orderFlowImbalance,
-                                    hasDisplacement: analysis.hasDisplacement,
+                                    hasDisplacement: analysis.hasDisplacement, displacementStrength: analysis.displacementStrength,
                                     volumeProfile: analysis.volumeProfile ? { vah: analysis.volumeProfile.vah, val: analysis.volumeProfile.val, poc: analysis.volumeProfile.poc } : null,
-                                    fvgCount: analysis.fvg ? analysis.fvg.bullish.length + analysis.fvg.bearish.length : 0,
+                                    fvgCount: analysis.fvg ? analysis.fvg.bullish.length + analysis.fvg.bearish.length : 0, fvgScore: analysis.fvgScore || 0,
                                     session: session.name,
                                     h4ADX: h4Data.adx,
                                     h4RSI,

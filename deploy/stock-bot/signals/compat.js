@@ -13,6 +13,7 @@ const { computeOrderFlow } = require('./order-flow');
 const { computeDisplacement } = require('./displacement');
 const { computeVolumeProfile } = require('./volume-profile');
 const { computeFVG } = require('./fvg-detector');
+const { computeLiquiditySweep } = require('./liquidity-sweep');
 
 function normalize(klines, botType) {
   if (!klines || !klines.length) return [];
@@ -64,6 +65,22 @@ function isDisplacementCandle(klines, atr, lookback = 3, botType = 'crypto') {
   const bars = normalize(klines, botType);
   const result = computeDisplacement(bars, atr, lookback);
   return result.raw.detected;
+}
+
+/**
+ * [v24.0] Graded displacement — returns full displacement analysis with
+ * magnitude-based strength score instead of binary detected/not.
+ * Returns: { detected: boolean, strength: number (0-1), magnitude: number }
+ */
+function getDisplacementAnalysis(klines, atr, lookback = 3, botType = 'crypto') {
+  if (!klines || !klines.length || !atr) return { detected: false, strength: 0, magnitude: 0 };
+  const bars = normalize(klines, botType);
+  const result = computeDisplacement(bars, atr, lookback);
+  return {
+    detected: result.raw.detected,
+    strength: result.raw.strength,
+    magnitude: result.raw.magnitude,
+  };
 }
 
 /**
@@ -121,25 +138,50 @@ function calculateVolumeProfile(klines, numBuckets = 50, botType = 'crypto') {
 
 /**
  * Drop-in replacement for inline detectFairValueGaps().
- * Returns: {bullish: [...], bearish: [...]} — arrays of gap objects.
+ * Returns: {bullish: [...], bearish: [...], score: number} — arrays of gap objects
+ * plus the graded 0-1 score from computeFVG().
+ *
+ * [v24.0] Now includes `score` field — the graded FVG quality score
+ * based on gap count (60%) and average gap size relative to price (40%).
  *
  * NOTE: This is for crypto/stock only. Forex has additional body-ratio
  * filter and "relaxed FVG" logic that must stay inline in the forex bot.
  */
 function detectFairValueGaps(klines, lookback = 20, botType = 'crypto') {
-  if (!klines || klines.length < 3) return { bullish: [], bearish: [] };
+  if (!klines || klines.length < 3) return { bullish: [], bearish: [], score: 0 };
   const bars = normalize(klines, botType);
   const result = computeFVG(bars, { lookback });
   return {
     bullish: result.raw.gaps.filter(g => g.type === 'bullish'),
-    bearish: result.raw.gaps.filter(g => g.type === 'bearish')
+    bearish: result.raw.gaps.filter(g => g.type === 'bearish'),
+    score: result.score,
+  };
+}
+
+/**
+ * [v24.0] Liquidity sweep detection — identifies stop hunts at swing levels.
+ * Returns: { detected, strength (0-1), bullishSweeps, bearishSweeps, sweepCount }
+ */
+function detectLiquiditySweep(klines, atr, config = {}, botType = 'crypto') {
+  if (!klines || !klines.length || !atr) return { detected: false, strength: 0, bullishSweeps: [], bearishSweeps: [], sweepCount: 0, score: 0 };
+  const bars = normalize(klines, botType);
+  const result = computeLiquiditySweep(bars, atr, config);
+  return {
+    detected: result.raw.detected,
+    strength: result.raw.strength,
+    bullishSweeps: result.raw.bullishSweeps,
+    bearishSweeps: result.raw.bearishSweeps,
+    sweepCount: result.raw.sweepCount,
+    score: result.score,
   };
 }
 
 module.exports = {
   calculateOrderFlowImbalance,
   isDisplacementCandle,
+  getDisplacementAnalysis,
   calculateVolumeProfile,
   detectFairValueGaps,
+  detectLiquiditySweep,
   normalize
 };
