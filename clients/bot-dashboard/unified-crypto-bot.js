@@ -674,6 +674,8 @@ function buildCryptoTradeTags(signal = {}, tier) {
             hasDisplacement: signal.hasDisplacement ?? false,
             fvgCount: signal.fvgCount ?? 0,
             marketRegime: signal.marketRegime ?? null,
+            featureSnapshot: signal.featureSnapshot ?? null,
+            mlRegime: signal.mlRegime ?? null,
         }
     };
 }
@@ -3249,6 +3251,24 @@ class CryptoTradingEngine {
             // Feed trade outcome to Monte Carlo position sizer (as decimal, e.g. 0.05 for +5%)
             this.monteCarloSizer.addTrade(pnlPercent / 100);
 
+            // [v23.3] Learning loop refit trigger — every 50 trades, retrain /ml/score
+            if (globalThis._cryptoMlTradesSinceRefit !== undefined) {
+                globalThis._cryptoMlTradesSinceRefit++;
+                if (globalThis._cryptoMlTradesSinceRefit >= 50) {
+                    globalThis._cryptoMlTradesSinceRefit = 0;
+                    const bridgeUrl = this._getBridgeUrl();
+                    const evals = globalThis._cryptoTradeEvaluations || [];
+                    axios.post(`${bridgeUrl}/ml/fit`, {
+                        evaluations: evals.slice(-200).map(e => ({
+                            signals: { feature_snapshot: e.signals?.feature_snapshot || null },
+                            pnl: e.pnl || 0,
+                        }))
+                    }, { timeout: 10000 }).then(r => {
+                        if (r.data?.fitted) console.log(`[ML_SCORE] Crypto refit: ${r.data.n_train} samples`);
+                    }).catch(err => console.warn(`[ML_SCORE] Crypto refit failed: ${err.message}`));
+                }
+            }
+
             // Persist close to DB (fire-and-forget)
             // pnlPercent is already *100 (e.g. 5.77 for +5.77%), so store it as-is.
             // loadCryptoEvaluationsFromDB reads pnl_pct back and uses it as a decimal (pnlPct),
@@ -4967,6 +4987,36 @@ app.listen(PORT, async () => {
     } catch (e) {
         console.warn('[Calibrator] Crypto shared Platt fit failed:', e.message);
     }
+
+    // [v23.3] Learning loop — fit /ml/score model from historical evaluations
+    try {
+        const bridgeUrl = engine._getBridgeUrl();
+        const evals = globalThis._cryptoTradeEvaluations || [];
+        const evalsWithData = evals.filter(e => e.signals?.committeeConfidence != null);
+        if (evalsWithData.length >= 30) {
+            const fitPayload = evalsWithData.map(e => ({
+                signals: { feature_snapshot: e.signals?.feature_snapshot || {
+                    rsi_14: 50, return_20d: parseFloat(e.signals?.committeeConfidence || 0),
+                    annualized_vol: 0.20, volume_ratio: parseFloat(e.signals?.components?.volumeRatio || 0) * 3 || 1,
+                }},
+                pnl: e.pnl || 0,
+            }));
+            const fitResp = await axios.post(`${bridgeUrl}/ml/fit`,
+                { evaluations: fitPayload }, { timeout: 10000 }
+            ).catch(() => null);
+            if (fitResp?.data?.fitted) {
+                console.log(`[ML_SCORE] Crypto: trained model from ${fitResp.data.n_train} evaluations`);
+                globalThis._cryptoMlScoreFitted = true;
+            } else {
+                console.log(`[ML_SCORE] Crypto: not fitted — ${fitResp?.data?.reason || 'bridge unavailable'}`);
+            }
+        } else {
+            console.log(`[ML_SCORE] Crypto: need ${30 - evalsWithData.length} more evaluations for model fit (have ${evalsWithData.length})`);
+        }
+    } catch (e) {
+        console.warn('[ML_SCORE] Crypto learning loop init failed:', e.message);
+    }
+    globalThis._cryptoMlTradesSinceRefit = 0;
 
     // FIRST: load local state (daily counters, operational state like demoMode)
     engine.loadState();
