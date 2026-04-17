@@ -1051,6 +1051,9 @@ function buildStockTradeTags(signal = {}, strategy, tier) {
             hasDisplacement: signal.hasDisplacement ?? false,
             fvgCount: signal.fvgCount ?? 0,
             marketRegime: signal.marketRegime ?? null,
+            // [v23.3] ML training data — feature vector at entry time
+            featureSnapshot: signal.featureSnapshot ?? null,
+            mlRegime: signal.mlRegime ?? null,
         }
     };
 }
@@ -2065,6 +2068,37 @@ async function queryStrategyBridge(symbol, bars, assetClass = 'stock') {
 // existing ATR-based 3-state regime for comparison.
 const _mlRegimeCache = new Map();
 const _ML_REGIME_CACHE_TTL_MS = 5 * 60 * 1000;
+
+// [v23.3] Feature snapshot for ML training data collection
+const _featureCache = new Map();
+const _FEATURE_CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function queryMLFeatures(symbol, bars) {
+    try {
+        if (!bars || bars.length < 60) return null;
+        const cached = _featureCache.get(symbol);
+        if (cached && Date.now() - cached.timestamp < _FEATURE_CACHE_TTL_MS) {
+            return cached.result;
+        }
+        const prices = bars.slice(-100).map(b => ({
+            timestamp: b.t || new Date().toISOString(),
+            open: parseFloat(b.o) || 0,
+            high: parseFloat(b.h) || 0,
+            low: parseFloat(b.l) || 0,
+            close: parseFloat(b.c) || 0,
+            volume: parseFloat(b.v) || 0,
+        }));
+        const response = await axios.post(`${BRIDGE_URL}/ml/features`,
+            { symbol, prices, asset_class: 'stock' },
+            { timeout: 5000 }
+        );
+        const result = response.data;
+        _featureCache.set(symbol, { result, timestamp: Date.now() });
+        return result;
+    } catch (e) {
+        return null; // non-blocking
+    }
+}
 
 async function queryMLRegime(symbol, bars) {
     try {
@@ -3097,6 +3131,15 @@ async function scanMomentumBreakouts() {
                         }
                     } catch (_eqErr) { /* non-fatal */ }
 
+                    // [v23.3] Attach cached feature snapshot for ML training data
+                    // Pre-fetched in shadow block above; just read from cache here.
+                    try {
+                        const cachedFeat = _featureCache.get(mover.symbol);
+                        if (cachedFeat && Date.now() - cachedFeat.timestamp < _FEATURE_CACHE_TTL_MS) {
+                            mover.featureSnapshot = cachedFeat.result.features;
+                        }
+                    } catch (_featErr) { /* non-fatal */ }
+
                     await executeTrade(mover, mover.strategy || 'momentum');
                 }
             } else {
@@ -3253,17 +3296,20 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
                 if (registryFired || inlineFired) {
                     console.log(`[SHADOW] ${symbol}: inline=${inlineFired ? 'ORB' : 'none'} registry=${registryCandidates.map(c => c.strategy).join(',') || 'none'} diag=${JSON.stringify(shadowDiag)}`);
 
-                    // [v23.2] When a signal fires, ALSO log the ML regime — gives us A/B
-                    // data on whether ML regime agrees with inline/registry decisions.
-                    // Fire-and-forget; never blocks trading.
-                    queryMLRegime(symbol, bars).then(mlReg => {
+                    // [v23.2] Pre-fetch ML regime + features in parallel — populates caches
+                    // for the sizing step later. Fire-and-forget; never blocks.
+                    Promise.allSettled([
+                        queryMLRegime(symbol, bars),
+                        queryMLFeatures(symbol, bars),
+                    ]).then(([regResult, featResult]) => {
+                        const mlReg = regResult.status === 'fulfilled' ? regResult.value : null;
+                        const mlFeat = featResult.status === 'fulfilled' ? featResult.value : null;
                         if (mlReg) {
-                            console.log(`[ML_REGIME] ${symbol}: ${mlReg.regime} conf=${mlReg.confidence} size_mult=${mlReg.position_size_multiplier} features=${JSON.stringify(mlReg.features)}`);
-                        } else {
-                            console.log(`[ML_REGIME] ${symbol}: unavailable (bridge down or insufficient bars)`);
+                            console.log(`[ML_REGIME] ${symbol}: ${mlReg.regime} conf=${mlReg.confidence} size_mult=${mlReg.position_size_multiplier}`);
                         }
-                    }).catch(err => {
-                        console.warn(`[ML_REGIME] ${symbol}: query failed - ${err.message}`);
+                        if (mlFeat) {
+                            console.log(`[ML_FEATURES] ${symbol}: pre-fetched ${mlFeat.feature_count} features`);
+                        }
                     });
                 }
             } catch (shadowErr) {
