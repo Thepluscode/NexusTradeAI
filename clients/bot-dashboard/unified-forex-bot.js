@@ -431,12 +431,11 @@ function hasGlobalOandaCredentials() {
 }
 
 // ===== FOREX PAIRS =====
-const FOREX_PAIRS = [
-    // Major Pairs (highest liquidity, tightest spreads)
-    'EUR_USD', 'GBP_USD', 'USD_JPY', 'USD_CHF', 'AUD_USD', 'USD_CAD', 'NZD_USD',
-    // High-liquidity crosses only (EUR_JPY and GBP_JPY have sufficient volume)
-    'EUR_JPY', 'GBP_JPY', 'EUR_GBP', 'AUD_JPY', 'CAD_JPY',
-];
+// [v23.5] FOCUSED MODE: EUR_USD only until mean-reversion strategy proves profitable.
+// Old trendContinuation/pullbackContinuation strategies lost $744.87 across 12 pairs
+// with 0% WR. Narrowing to 1 pair collects clean data for ML training.
+// Restore full pair list once EUR_USD mean-reversion achieves >40% WR over 20+ trades.
+const FOREX_PAIRS = ['EUR_USD'];
 
 // Correlation groups - avoid same-direction trades on correlated pairs
 const CORRELATION_GROUPS = {
@@ -2570,14 +2569,13 @@ async function scanForSignals(heldPositions = positions) {
             }
         }
 
-        // ===== [v20.0] STRATEGY 2: BB+RSI MEAN REVERSION (H4) =====
-        // Evidence: 60-70% WR in ranging markets (BacktestMe, MQL5 Jan 2026 study)
-        // RESTRICTED to EUR_USD, EUR_GBP (range-bound pairs)
-        // ADX < 25 filter: only trade when market is ranging (NOT trending)
-        // Entry: price at lower BB + RSI < 30 (long), upper BB + RSI > 70 (short)
+        // ===== [v23.5] STRATEGY 2: BB+RSI MEAN REVERSION (M15 + H4 confirmation) =====
+        // v20.0 required H4 RSI < 30 + ADX < 25 — too strict, never fired.
+        // v23.5 relaxes to M15 RSI < 38 / > 62 with H4 ADX < 30 (ranging confirmation).
+        // Still restricted to MEAN_REVERSION_PAIRS (EUR_USD in focused mode).
         // Target: middle BB (20-SMA). Stop: 1.5x ATR.
         const isMeanRevPair = MEAN_REVERSION_PAIRS.includes(pair);
-        const isRanging = h4Data.adx !== null && h4Data.adx < 25;
+        const isRanging = h4Data.adx !== null && h4Data.adx < 30; // v23.5: relaxed from 25
 
         if (isMeanRevPair && isRanging) {
             // Get H4 candles for BB calculation on H4 timeframe
@@ -2591,7 +2589,9 @@ async function scanForSignals(heldPositions = positions) {
 
                     if (h4BB && h4RSI !== null && h4ATR > 0) {
                         // ── MEAN REV LONG: price at/below lower BB + RSI oversold ──
-                        if (currentPrice <= h4BB.lower && h4RSI < 30) {
+                        // [v23.5] Relaxed from RSI < 30 to RSI < 38 — H4 RSI < 30 only fires
+                        // ~once/month on EUR/USD, starving the bot of data.
+                        if (currentPrice <= h4BB.lower && h4RSI < 38) {
                             const stopLoss = currentPrice - (h4ATR * 1.5);
                             const takeProfit = h4BB.middle; // target = 20-SMA (middle BB)
                             const risk = currentPrice - stopLoss;
@@ -2624,7 +2624,8 @@ async function scanForSignals(heldPositions = positions) {
                         }
 
                         // ── MEAN REV SHORT: price at/above upper BB + RSI overbought ──
-                        if (currentPrice >= h4BB.upper && h4RSI > 70) {
+                        // [v23.5] Relaxed from RSI > 70 to RSI > 62
+                        if (currentPrice >= h4BB.upper && h4RSI > 62) {
                             const stopLoss = currentPrice + (h4ATR * 1.5);
                             const takeProfit = h4BB.middle;
                             const risk = stopLoss - currentPrice;
