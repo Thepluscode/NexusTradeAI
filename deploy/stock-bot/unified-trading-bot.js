@@ -882,6 +882,25 @@ function recordTradeClose(symbol, entryPrice, exitPrice, shares, reason) {
     // Feed trade outcome to Monte Carlo position sizer (as decimal, e.g. 0.05 for +5%)
     monteCarloSizer.addTrade(pnlPct / 100);
 
+    // [v23.3] Learning loop refit trigger — every 50 trades, retrain /ml/score model
+    if (globalThis._mlScoreTradesSinceRefit !== undefined) {
+        globalThis._mlScoreTradesSinceRefit++;
+        if (globalThis._mlScoreTradesSinceRefit >= 50) {
+            globalThis._mlScoreTradesSinceRefit = 0;
+            console.log('[ML_SCORE] 50 new trades — triggering model refit');
+            const evals = globalThis._tradeEvaluations || [];
+            axios.post(`${BRIDGE_URL}/ml/fit`, {
+                evaluations: evals.slice(-200).map(e => ({
+                    signals: { feature_snapshot: e.signals?.feature_snapshot || null },
+                    pnl: e.pnl || 0,
+                }))
+            }, { timeout: 10000 }).then(r => {
+                if (r.data?.fitted) console.log(`[ML_SCORE] Refit complete: ${r.data.n_train} samples`);
+                else console.log(`[ML_SCORE] Refit skipped: ${r.data?.reason || 'unknown'}`);
+            }).catch(err => console.warn(`[ML_SCORE] Refit failed: ${err.message}`));
+        }
+    }
+
     savePerfData();
 }
 
@@ -3131,12 +3150,34 @@ async function scanMomentumBreakouts() {
                         }
                     } catch (_eqErr) { /* non-fatal */ }
 
-                    // [v23.3] Attach cached feature snapshot for ML training data
-                    // Pre-fetched in shadow block above; just read from cache here.
+                    // [v23.3] Attach cached feature snapshot + ML win probability for training
                     try {
                         const cachedFeat = _featureCache.get(mover.symbol);
                         if (cachedFeat && Date.now() - cachedFeat.timestamp < _FEATURE_CACHE_TTL_MS) {
                             mover.featureSnapshot = cachedFeat.result.features;
+
+                            // [v23.3] Query /ml/score for win probability (if model is trained)
+                            if (globalThis._mlScoreFitted) {
+                                try {
+                                    const scoreResp = await axios.post(`${BRIDGE_URL}/ml/score`,
+                                        { feature_snapshot: cachedFeat.result.features },
+                                        { timeout: 3000 }
+                                    );
+                                    if (scoreResp.data?.win_probability != null) {
+                                        mover.mlWinProbability = scoreResp.data.win_probability;
+                                        mover.mlConfidenceTier = scoreResp.data.confidence_tier;
+                                        console.log(`[ML_SCORE] ${mover.symbol}: P(win)=${scoreResp.data.win_probability.toFixed(3)} (${scoreResp.data.confidence_tier}, n=${scoreResp.data.n_train})`);
+
+                                        // Apply ML score as advisory size adjustment (reduce if P(win) < 0.40)
+                                        if (scoreResp.data.win_probability < 0.35 && scoreResp.data.confidence_tier !== 'low') {
+                                            mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * 0.6;
+                                            console.log(`[ML_SCORE] ${mover.symbol}: P(win) < 0.35 → size ×0.6 (ML warns against this trade)`);
+                                        }
+                                    }
+                                } catch (mlScoreErr) {
+                                    console.warn(`[ML_SCORE] ${mover.symbol}: score query failed - ${mlScoreErr.message}`);
+                                }
+                            }
                         }
                     } catch (_featErr) { /* non-fatal */ }
 
@@ -7199,6 +7240,44 @@ app.listen(PORT, async () => {
     } catch (e) {
         console.warn('[Calibrator] Platt scaling fit failed:', e.message);
     }
+
+    // [v23.3] LEARNING LOOP — fit /ml/score model from historical evaluations
+    // Sends evaluations (with feature_snapshots + outcomes) to bridge for logistic training.
+    // Model trains on accumulated data; /ml/score then returns real win probabilities.
+    // Also sets up periodic refit every 50 new trades.
+    try {
+        const evals = globalThis._tradeEvaluations || [];
+        const evalsWithFeatures = evals.filter(e => e.signals?.feature_snapshot || e.signals?.committeeConfidence);
+        if (evalsWithFeatures.length >= 30) {
+            const fitPayload = evalsWithFeatures.map(e => ({
+                signals: { feature_snapshot: e.signals?.feature_snapshot || {
+                    // Fallback: construct minimal feature set from available committee data
+                    rsi_14: parseFloat(e.signals?.components?.momentum || 0) * 100 || 50,
+                    return_20d: parseFloat(e.signals?.committeeConfidence || 0),
+                    annualized_vol: 0.15,
+                    volume_ratio: parseFloat(e.signals?.components?.volumeRatio || 0) * 3 || 1,
+                }},
+                pnl: e.pnl || 0,
+            }));
+            const fitResponse = await axios.post(`${BRIDGE_URL}/ml/fit`,
+                { evaluations: fitPayload },
+                { timeout: 10000 }
+            ).catch(() => null);
+            if (fitResponse?.data?.fitted) {
+                console.log(`[ML_SCORE] Trained logistic model from ${fitResponse.data.n_train} evaluations (${fitResponse.data.feature_count} features)`);
+                globalThis._mlScoreFitted = true;
+            } else {
+                console.log(`[ML_SCORE] Model not fitted: ${fitResponse?.data?.reason || 'bridge unavailable'}`);
+            }
+        } else {
+            console.log(`[ML_SCORE] Need ${30 - evalsWithFeatures.length} more evaluations for initial model fit (have ${evalsWithFeatures.length})`);
+        }
+    } catch (e) {
+        console.warn('[ML_SCORE] Learning loop init failed:', e.message);
+    }
+
+    // Periodic refit: every 50 new closed trades, re-train the model
+    globalThis._mlScoreTradesSinceRefit = 0;
 
     // ── Hydrate perfData from DB so stats survive redeploys ──
     if (dbPool && perfData.totalTrades === 0) {
