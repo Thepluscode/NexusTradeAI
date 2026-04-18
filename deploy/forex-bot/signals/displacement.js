@@ -43,9 +43,11 @@ function computeDisplacement(klines, atr, lookback = 3, config = {}) {
   }
 
   // Graded strength: 0 at threshold (1.5x ATR), 1.0 at 4.0x ATR
+  // Fully proportional — no artificial floor. A barely-qualifying displacement
+  // should score near 0, not 0.4. The committee scorer's "present" flag already
+  // handles the binary "displacement exists" signal separately.
   const strength = detected ? Math.min(Math.max((maxMagnitude - 1.5) / 2.5, 0), 1.0) : 0;
-  // Score blends: detected gives at least 0.4 (presence bonus) + up to 0.6 from strength
-  const score = detected ? 0.4 + strength * 0.6 : neutralDefault;
+  const score = detected ? strength : neutralDefault;
 
   return {
     score,

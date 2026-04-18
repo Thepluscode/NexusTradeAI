@@ -178,28 +178,48 @@ function checkUnmitigated(gap, bars, gapBarIndex) {
 }
 
 /**
- * Factor 2: CANDLE REACTION — when price reaches the gap, does it respect it?
- * Returns 1.0 if candle closed inside gap or reversed, 0.0 if it blew through.
- * Returns 0.8 if gap hasn't been tested yet (neutral — we don't know).
+ * Factor 2: CANDLE REACTION — when price returns to test the gap, does it respect it?
+ *
+ * This checks the *retest* behavior, not the initial formation:
+ *   - Skip bars immediately after gap formation (bars i+3 to i+5 are part of the move)
+ *   - Wait for price to actually *return* to the gap zone from a distance
+ *   - If it closes inside the gap or reverses: gap is valid (1.0)
+ *   - If it blows through: gap is invalid (0.0)
+ *   - If gap hasn't been retested yet: untested (0.6 — neutral, can't score what hasn't happened)
+ *
+ * "Return" defined as: price moved away from gap (at least 1 bar with no overlap),
+ * then came back to touch it.
  */
 function checkCandleReaction(gap, bars, gapBarIndex) {
+  let movedAway = false;
+
   for (let i = gapBarIndex + 3; i < bars.length; i++) {
     if (gap.type === 'bullish') {
-      // Price reached the gap zone
-      if (bars[i].low <= gap.gapHigh) {
-        // Did it close inside the gap or above it? (respecting the gap)
+      // Check if price has moved away from the gap (trading above gapHigh)
+      if (bars[i].low > gap.gapHigh) {
+        movedAway = true;
+        continue;
+      }
+      // Price is now touching or inside the gap zone
+      if (movedAway && bars[i].low <= gap.gapHigh) {
+        // Did it close inside the gap or above gapLow? (respecting the gap)
         if (bars[i].close >= gap.gapLow) return 1.0;
-        // Blew through
+        // Blew through the gap entirely
         return 0.0;
       }
     } else {
-      if (bars[i].high >= gap.gapLow) {
+      if (bars[i].high < gap.gapLow) {
+        movedAway = true;
+        continue;
+      }
+      if (movedAway && bars[i].high >= gap.gapLow) {
         if (bars[i].close <= gap.gapHigh) return 1.0;
         return 0.0;
       }
     }
   }
-  return 0.8; // not tested yet — slightly positive (fresh gap)
+  // Gap hasn't been retested yet — can't score reaction
+  return 0.6;
 }
 
 /**
@@ -270,33 +290,62 @@ function checkFibonacciPosition(gap, moveLow, moveHigh, moveRange) {
 
 /**
  * Factor 6: BREAK OF STRUCTURE — before the gap formed, price must have broken
- * a previous swing high (for bullish) or swing low (for bearish).
- * Returns 1.0 if BOS occurred, 0.2 if not.
+ * the *most recent* previous swing high (for bullish) or swing low (for bearish).
+ *
+ * BOS is specific: it's not "did price ever exceed any swing" — it's "did the
+ * impulse move that created this FVG break the most recent structure?"
+ *
+ * Logic:
+ *   1. Find the most recent swing high/low BEFORE the gap formation
+ *   2. Check if any bar from that swing up to the gap broke it
+ *   3. The break must have occurred before or during the gap formation, not after
+ *
+ * Returns 1.0 if most recent swing was broken, 0.5 if older swing broken, 0.1 if none.
  */
 function checkBreakOfStructure(gap, bars, gapBarIndex, swingHighs, swingLows) {
-  const gapFormationBar = bars[gapBarIndex + 1]; // the candle that created the gap
-  if (!gapFormationBar) return 0.2;
-
   if (gap.type === 'bullish') {
-    // Check if any bar in the formation area broke a previous swing high
-    for (const swing of swingHighs) {
-      // Swing must be before the gap
-      if (swing.index >= gapBarIndex) continue;
-      // Check if the gap candle or candle before it broke this swing high
-      for (let i = Math.max(0, gapBarIndex - 2); i <= gapBarIndex + 2 && i < bars.length; i++) {
-        if (bars[i].high > swing.price) return 1.0;
+    // Find the most recent swing high before the gap
+    const priorSwings = swingHighs
+      .filter(s => s.index < gapBarIndex)
+      .sort((a, b) => b.index - a.index); // most recent first
+
+    if (priorSwings.length === 0) return 0.1;
+
+    // Check most recent swing first
+    const mostRecent = priorSwings[0];
+    // Check if bars between the swing and gap formation broke this swing high
+    for (let i = mostRecent.index + 1; i <= gapBarIndex + 2 && i < bars.length; i++) {
+      if (bars[i].high > mostRecent.price) return 1.0;
+    }
+
+    // Check 2nd most recent — weaker signal
+    if (priorSwings.length >= 2) {
+      const secondRecent = priorSwings[1];
+      for (let i = secondRecent.index + 1; i <= gapBarIndex + 2 && i < bars.length; i++) {
+        if (bars[i].high > secondRecent.price) return 0.5;
       }
     }
   } else {
-    for (const swing of swingLows) {
-      if (swing.index >= gapBarIndex) continue;
-      for (let i = Math.max(0, gapBarIndex - 2); i <= gapBarIndex + 2 && i < bars.length; i++) {
-        if (bars[i].low < swing.price) return 1.0;
+    const priorSwings = swingLows
+      .filter(s => s.index < gapBarIndex)
+      .sort((a, b) => b.index - a.index);
+
+    if (priorSwings.length === 0) return 0.1;
+
+    const mostRecent = priorSwings[0];
+    for (let i = mostRecent.index + 1; i <= gapBarIndex + 2 && i < bars.length; i++) {
+      if (bars[i].low < mostRecent.price) return 1.0;
+    }
+
+    if (priorSwings.length >= 2) {
+      const secondRecent = priorSwings[1];
+      for (let i = secondRecent.index + 1; i <= gapBarIndex + 2 && i < bars.length; i++) {
+        if (bars[i].low < secondRecent.price) return 0.5;
       }
     }
   }
 
-  return 0.2; // no break of structure found
+  return 0.1; // no break of structure found
 }
 
 /**
