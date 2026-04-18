@@ -1,144 +1,167 @@
 'use strict';
 
 /**
- * Liquidity Sweep Detection — identifies stop hunts at key levels.
+ * Liquidity Sweep Detection — identifies institutional stop hunts at key levels.
  *
- * A liquidity sweep occurs when price briefly pierces a support/resistance
- * level (where stop losses cluster), then reverses — indicating institutional
- * accumulation/distribution. This is a high-probability reversal signal.
+ * A liquidity sweep is when price pierces a swing high/low (where retail stop
+ * losses cluster), triggers those stops, then reverses with displacement.
+ * This is a high-probability reversal signal used by institutional traders.
  *
- * Bullish sweep (buy signal):
- *   1. Price sweeps below a recent swing low (stop hunt below support)
- *   2. Wick extends below the low but body closes above it
- *   3. Subsequent candle confirms reversal (closes higher)
+ * Detection criteria (all required for a valid sweep):
+ *   1. APPROACH — price must be trading near the swing level and approach it
+ *      (not gap through from far away)
+ *   2. PIERCE — wick extends past the swing level
+ *   3. REJECTION — candle body closes on the opposite side of the level
+ *      (the sweep was rejected, stops were taken but price reversed)
+ *   4. VOLUME SPIKE — sweep candle volume > 1.5x average (stops triggering = volume)
+ *   5. DISPLACEMENT CONFIRMATION — at least one of the next N candles shows
+ *      a strong directional move away from the level (body > 60% of range,
+ *      range > 1x ATR). This is NOT just "any close higher/lower" — it must
+ *      be an impulsive move confirming institutional reversal intent.
  *
- * Bearish sweep (sell signal):
- *   1. Price sweeps above a recent swing high (stop hunt above resistance)
- *   2. Wick extends above the high but body closes below it
- *   3. Subsequent candle confirms reversal (closes lower)
+ * Directional output:
+ *   - Bullish sweep: stop hunt below support → long signal
+ *   - Bearish sweep: stop hunt above resistance → short signal
+ *   - The caller filters by their desired trade direction
  *
- * Scoring:
- *   - Sweep depth (how far past the level): deeper = stronger
- *   - Recovery speed (how quickly price recovered): faster = stronger
- *   - Volume confirmation: high volume on sweep candle = stronger
- *   - Multiple sweeps in same area: stronger signal
+ * Scoring factors:
+ *   - Sweep depth relative to ATR (30%): deeper sweep = more stops triggered
+ *   - Volume spike ratio (25%): higher volume = more conviction
+ *   - Displacement strength (25%): stronger reversal = more institutional commitment
+ *   - Wick-to-body ratio (20%): longer wick vs body = cleaner rejection
  *
  * @param {Array<{open,high,low,close,volume}>} bars — OHLCV bars (normalized)
+ * @param {number} atr — current ATR value
  * @param {Object} config
- * @param {number} config.swingLookback — bars to find swing highs/lows (default 10)
- * @param {number} config.confirmBars — bars after sweep to confirm reversal (default 2)
- * @param {number} config.minSweepATRRatio — minimum sweep depth as ATR fraction (default 0.3)
- * @param {number} config.neutralDefault — score when no sweep detected (default 0.3)
  * @returns {{ score: number, raw: Object, meta: Object }}
  */
 function computeLiquiditySweep(bars, atr, config = {}) {
     const {
         swingLookback = 10,
-        confirmBars = 2,
+        confirmBars = 3,
         minSweepATRRatio = 0.3,
+        minVolumeSpikeRatio = 1.5,
         neutralDefault = 0.3,
+        approachBars = 5,          // bars before sweep that must be near the level
+        approachDistanceATR = 3.0, // max distance from level in ATR units to count as "approaching"
     } = config;
 
-    if (!bars || bars.length < swingLookback + confirmBars + 3 || !atr || atr <= 0) {
+    const minBarsNeeded = swingLookback + confirmBars + approachBars + 3;
+    if (!bars || bars.length < minBarsNeeded || !atr || atr <= 0) {
         return {
             score: neutralDefault,
-            raw: { bullishSweeps: [], bearishSweeps: [], detected: false, strength: 0 },
+            raw: { bullishSweeps: [], bearishSweeps: [], detected: false, strength: 0, sweepCount: 0 },
             meta: {},
         };
     }
 
-    // Step 1: Find swing lows and swing highs in the lookback window
+    // Pre-compute average volume for spike detection
+    const avgVolume = bars.reduce((s, b) => s + (b.volume || 0), 0) / bars.length;
+
     const swingLows = findSwingLows(bars, swingLookback);
     const swingHighs = findSwingHighs(bars, swingLookback);
 
     const bullishSweeps = [];
     const bearishSweeps = [];
 
-    // Step 2: Check recent bars for sweeps of those levels
-    // Only check the last (confirmBars + 3) bars for fresh sweeps
-    const checkStart = Math.max(swingLookback, bars.length - (confirmBars + 5));
+    // Only check recent bars for fresh sweeps
+    const checkStart = Math.max(swingLookback + approachBars, bars.length - (confirmBars + 8));
 
-    for (let i = checkStart; i < bars.length - confirmBars; i++) {
+    for (let i = checkStart; i < bars.length - 1; i++) {
         const bar = bars[i];
+        const barVolume = bar.volume || 0;
 
-        // Bullish sweep: wick below swing low, body closes above
+        // ─── BULLISH SWEEP: stop hunt below swing low ───
         for (const swingLow of swingLows) {
-            if (swingLow.index >= i) continue; // swing must be before current bar
-            if (bar.low < swingLow.price && bar.close > swingLow.price) {
-                const sweepDepth = (swingLow.price - bar.low) / atr;
-                if (sweepDepth < minSweepATRRatio) continue;
+            if (swingLow.index >= i - 1) continue; // swing must be well before current bar
 
-                // Check reversal confirmation: next N bars should close higher
-                let confirmed = false;
-                for (let j = 1; j <= confirmBars && i + j < bars.length; j++) {
-                    if (bars[i + j].close > bar.close) {
-                        confirmed = true;
-                        break;
-                    }
-                }
+            // 1. APPROACH: price must have been near the level in preceding bars
+            const approaching = checkApproach(bars, i, swingLow.price, 'below', approachBars, atr, approachDistanceATR);
+            if (!approaching) continue;
 
-                if (confirmed) {
-                    const wickRatio = bar.close - bar.open !== 0
-                        ? (swingLow.price - bar.low) / Math.abs(bar.close - bar.open)
-                        : 1.0;
-                    bullishSweeps.push({
-                        barIndex: i,
-                        swingLevel: swingLow.price,
-                        sweepLow: bar.low,
-                        sweepDepth,
-                        wickRatio: Math.min(wickRatio, 5),
-                        direction: 'bullish',
-                    });
-                }
-            }
+            // 2. PIERCE: wick goes below the swing low
+            if (bar.low >= swingLow.price) continue;
+
+            // 3. REJECTION: body closes above the swing low
+            if (bar.close <= swingLow.price) continue;
+
+            // Sweep depth
+            const sweepDepth = (swingLow.price - bar.low) / atr;
+            if (sweepDepth < minSweepATRRatio) continue;
+
+            // 4. VOLUME SPIKE: sweep candle has elevated volume
+            const volumeSpikeRatio = avgVolume > 0 ? barVolume / avgVolume : 0;
+            const hasVolume = volumeSpikeRatio >= minVolumeSpikeRatio;
+
+            // 5. DISPLACEMENT CONFIRMATION: strong reversal candle after sweep
+            const displacement = checkDisplacementConfirmation(bars, i, atr, confirmBars, 'bullish');
+            if (!displacement.confirmed) continue;
+
+            const wickLength = swingLow.price - bar.low;
+            const bodyLength = Math.abs(bar.close - bar.open);
+            const wickRatio = bodyLength > 0 ? wickLength / bodyLength : wickLength;
+
+            bullishSweeps.push({
+                barIndex: i,
+                swingLevel: swingLow.price,
+                sweepExtreme: bar.low,
+                sweepDepth: parseFloat(sweepDepth.toFixed(4)),
+                wickRatio: parseFloat(Math.min(wickRatio, 10).toFixed(2)),
+                volumeSpikeRatio: parseFloat(volumeSpikeRatio.toFixed(2)),
+                hasVolume,
+                displacementStrength: displacement.strength,
+                direction: 'bullish',
+            });
         }
 
-        // Bearish sweep: wick above swing high, body closes below
+        // ─── BEARISH SWEEP: stop hunt above swing high ───
         for (const swingHigh of swingHighs) {
-            if (swingHigh.index >= i) continue;
-            if (bar.high > swingHigh.price && bar.close < swingHigh.price) {
-                const sweepDepth = (bar.high - swingHigh.price) / atr;
-                if (sweepDepth < minSweepATRRatio) continue;
+            if (swingHigh.index >= i - 1) continue;
 
-                let confirmed = false;
-                for (let j = 1; j <= confirmBars && i + j < bars.length; j++) {
-                    if (bars[i + j].close < bar.close) {
-                        confirmed = true;
-                        break;
-                    }
-                }
+            const approaching = checkApproach(bars, i, swingHigh.price, 'above', approachBars, atr, approachDistanceATR);
+            if (!approaching) continue;
 
-                if (confirmed) {
-                    const wickRatio = bar.close - bar.open !== 0
-                        ? (bar.high - swingHigh.price) / Math.abs(bar.close - bar.open)
-                        : 1.0;
-                    bearishSweeps.push({
-                        barIndex: i,
-                        swingLevel: swingHigh.price,
-                        sweepHigh: bar.high,
-                        sweepDepth,
-                        wickRatio: Math.min(wickRatio, 5),
-                        direction: 'bearish',
-                    });
-                }
-            }
+            if (bar.high <= swingHigh.price) continue;
+            if (bar.close >= swingHigh.price) continue;
+
+            const sweepDepth = (bar.high - swingHigh.price) / atr;
+            if (sweepDepth < minSweepATRRatio) continue;
+
+            const volumeSpikeRatio = avgVolume > 0 ? barVolume / avgVolume : 0;
+            const hasVolume = volumeSpikeRatio >= minVolumeSpikeRatio;
+
+            const displacement = checkDisplacementConfirmation(bars, i, atr, confirmBars, 'bearish');
+            if (!displacement.confirmed) continue;
+
+            const wickLength = bar.high - swingHigh.price;
+            const bodyLength = Math.abs(bar.close - bar.open);
+            const wickRatio = bodyLength > 0 ? wickLength / bodyLength : wickLength;
+
+            bearishSweeps.push({
+                barIndex: i,
+                swingLevel: swingHigh.price,
+                sweepExtreme: bar.high,
+                sweepDepth: parseFloat(sweepDepth.toFixed(4)),
+                wickRatio: parseFloat(Math.min(wickRatio, 10).toFixed(2)),
+                volumeSpikeRatio: parseFloat(volumeSpikeRatio.toFixed(2)),
+                hasVolume,
+                displacementStrength: displacement.strength,
+                direction: 'bearish',
+            });
         }
     }
 
     const allSweeps = [...bullishSweeps, ...bearishSweeps];
     const detected = allSweeps.length > 0;
 
-    // Graded scoring: depth (50%) + wick ratio (30%) + recency (20%)
+    // Scoring: depth (30%) + volume (25%) + displacement (25%) + wick ratio (20%)
     let strength = 0;
     if (detected) {
-        const best = allSweeps.reduce((a, b) => a.sweepDepth > b.sweepDepth ? a : b);
-        const depthScore = Math.min(best.sweepDepth / 1.5, 1.0);  // caps at 1.5x ATR sweep
-        const wickScore = Math.min(best.wickRatio / 3, 1.0);       // caps at 3:1 wick:body
-        const recency = 1 - (bars.length - 1 - best.barIndex) / bars.length;
-        strength = depthScore * 0.5 + wickScore * 0.3 + recency * 0.2;
+        const best = allSweeps.reduce((a, b) => scoreSweep(a) > scoreSweep(b) ? a : b);
+        strength = scoreSweep(best);
     }
 
-    const score = detected ? 0.3 + strength * 0.7 : neutralDefault;
+    const score = detected ? Math.min(strength, 1.0) : neutralDefault;
 
     return {
         score: parseFloat(score.toFixed(4)),
@@ -149,16 +172,92 @@ function computeLiquiditySweep(bars, atr, config = {}) {
             strength: parseFloat(strength.toFixed(4)),
             sweepCount: allSweeps.length,
         },
-        meta: { swingLookback, confirmBars },
+        meta: { swingLookback, confirmBars, approachBars },
     };
 }
 
 /**
- * Find swing lows: a bar whose low is lower than N bars on each side.
+ * Score an individual sweep on 4 factors.
+ */
+function scoreSweep(sweep) {
+    const depthScore = Math.min(sweep.sweepDepth / 1.5, 1.0);
+    const volumeScore = sweep.hasVolume ? Math.min(sweep.volumeSpikeRatio / 3, 1.0) : 0.2;
+    const dispScore = sweep.displacementStrength;
+    const wickScore = Math.min(sweep.wickRatio / 3, 1.0);
+
+    return depthScore * 0.30 + volumeScore * 0.25 + dispScore * 0.25 + wickScore * 0.20;
+}
+
+/**
+ * Check if price was approaching a level in the bars before the sweep.
+ * "Approaching" means bars were trading within approachDistanceATR of the level,
+ * moving toward it — NOT gapping through from far away.
+ *
+ * @param {'below'|'above'} side — which side of the level to check approach from
+ */
+function checkApproach(bars, sweepIndex, level, side, approachBars, atr, approachDistanceATR) {
+    const maxDist = atr * approachDistanceATR;
+    let nearCount = 0;
+    let movingToward = false;
+
+    for (let j = Math.max(0, sweepIndex - approachBars); j < sweepIndex; j++) {
+        const dist = side === 'below'
+            ? bars[j].low - level   // positive = above the level (approaching from above)
+            : level - bars[j].high; // positive = below the level (approaching from below)
+
+        if (dist >= 0 && dist <= maxDist) {
+            nearCount++;
+        }
+    }
+
+    // At least 2 of the preceding bars must be near the level
+    if (nearCount >= 2) movingToward = true;
+    return movingToward;
+}
+
+/**
+ * Check for displacement confirmation after the sweep candle.
+ * A displacement candle has:
+ *   - Body > 60% of range (strong directional commitment)
+ *   - Range > 1.0× ATR (significant move, not just noise)
+ *   - Closes in the expected direction (higher for bullish, lower for bearish)
+ *
+ * This is stricter than "any close higher" — it requires institutional-grade
+ * follow-through, not just a doji or small candle.
+ *
+ * @returns {{ confirmed: boolean, strength: number }}
+ */
+function checkDisplacementConfirmation(bars, sweepIndex, atr, confirmBars, direction) {
+    for (let j = 1; j <= confirmBars && sweepIndex + j < bars.length; j++) {
+        const bar = bars[sweepIndex + j];
+        const range = bar.high - bar.low;
+        if (range === 0) continue;
+
+        const body = Math.abs(bar.close - bar.open);
+        const bodyRatio = body / range;
+        const rangeToATR = range / atr;
+        const correctDirection = direction === 'bullish'
+            ? bar.close > bar.open  // bullish candle
+            : bar.close < bar.open; // bearish candle
+
+        if (bodyRatio > 0.6 && rangeToATR > 1.0 && correctDirection) {
+            // Strength: how impulsive was the displacement?
+            const strength = Math.min((rangeToATR - 1.0) / 2.0, 1.0);
+            return { confirmed: true, strength: parseFloat(strength.toFixed(3)) };
+        }
+    }
+
+    return { confirmed: false, strength: 0 };
+}
+
+/**
+ * Find swing lows: a bar whose low is lower than N/2 bars on each side.
  */
 function findSwingLows(bars, lookback) {
     const swings = [];
     const halfLook = Math.floor(lookback / 2);
+    if (halfLook < 1) return swings;
+
     for (let i = halfLook; i < bars.length - halfLook; i++) {
         let isSwingLow = true;
         for (let j = i - halfLook; j <= i + halfLook; j++) {
@@ -176,11 +275,13 @@ function findSwingLows(bars, lookback) {
 }
 
 /**
- * Find swing highs: a bar whose high is higher than N bars on each side.
+ * Find swing highs: a bar whose high is higher than N/2 bars on each side.
  */
 function findSwingHighs(bars, lookback) {
     const swings = [];
     const halfLook = Math.floor(lookback / 2);
+    if (halfLook < 1) return swings;
+
     for (let i = halfLook; i < bars.length - halfLook; i++) {
         let isSwingHigh = true;
         for (let j = i - halfLook; j <= i + halfLook; j++) {
@@ -197,4 +298,4 @@ function findSwingHighs(bars, lookback) {
     return swings;
 }
 
-module.exports = { computeLiquiditySweep, findSwingLows, findSwingHighs };
+module.exports = { computeLiquiditySweep, findSwingLows, findSwingHighs, checkApproach, checkDisplacementConfirmation, scoreSweep };
