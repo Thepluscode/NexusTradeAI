@@ -160,21 +160,31 @@ function computeStats(trades) {
 
 /**
  * Annualized Sharpe ratio from per-trade return percentages.
- * Assumes ~252 trading days, ~6.5 trades/day average = ~1638 trades/year.
- * Uses trades/year = max(trades.length, 1) scaled to annualize.
+ *
+ * Proper annualization: Sharpe = (mean_return / std_return) * sqrt(trades_per_year)
+ *
+ * trades_per_year is estimated from the sample:
+ *   - For backtests with bar-level timing: assume ~6.5 trades/day × 252 days ≈ 1638/year
+ *   - This is a constant scaling factor — it does NOT depend on sample size
+ *   - Sample size affects confidence (SE of Sharpe ≈ 1/sqrt(N)), not the ratio itself
+ *
+ * For small samples (< 30 trades), Sharpe is unreliable regardless of formula.
+ * We flag this via the caller (Gate B requires 30+ OOS trades).
  */
+const ASSUMED_TRADES_PER_YEAR = 252; // conservative: ~1 trade/trading day
+
 function computeSharpe(returns) {
     if (returns.length < 2) return 0;
     const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
     const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (returns.length - 1);
     const std = Math.sqrt(variance);
     if (std === 0) return 0;
-    // Per-trade Sharpe × sqrt(N) for annualization
-    return (mean / std) * Math.sqrt(Math.min(returns.length, 252));
+    return (mean / std) * Math.sqrt(ASSUMED_TRADES_PER_YEAR);
 }
 
 /**
- * Sortino ratio — like Sharpe but only penalizes downside deviation.
+ * Sortino ratio — penalizes only downside deviation.
+ * Same annualization approach as Sharpe.
  */
 function computeSortino(returns) {
     if (returns.length < 2) return 0;
@@ -184,7 +194,7 @@ function computeSortino(returns) {
     const downsideVariance = downsideReturns.reduce((s, r) => s + r ** 2, 0) / downsideReturns.length;
     const downsideStd = Math.sqrt(downsideVariance);
     if (downsideStd === 0) return 0;
-    return (mean / downsideStd) * Math.sqrt(Math.min(returns.length, 252));
+    return (mean / downsideStd) * Math.sqrt(ASSUMED_TRADES_PER_YEAR);
 }
 
 /**

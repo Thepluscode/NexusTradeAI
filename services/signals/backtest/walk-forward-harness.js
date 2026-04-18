@@ -57,7 +57,14 @@ function walkForward(strategy, bars, options = {}) {
     let start = 0;
     while (start + windowSize <= totalBars) {
         const trainSlice = bars.slice(start, start + trainBars);
-        const testSlice = bars.slice(start + trainBars, start + trainBars + testBars);
+
+        // OOS slice includes trailing `lookback` bars from training window
+        // so indicators (EMA, RSI, ATR) are warm when the test window starts.
+        // Without this, the first `lookback` bars of each test fold produce
+        // no trades, wasting data and biasing results.
+        const testStart = start + trainBars - lookback;
+        const testEnd = start + trainBars + testBars;
+        const testSlice = bars.slice(testStart, testEnd);
 
         // Run strategy on training data
         const trainResult = simulateTrades(strategy, trainSlice, {
@@ -65,6 +72,8 @@ function walkForward(strategy, bars, options = {}) {
         });
 
         // Run strategy on test data (out-of-sample)
+        // The first `lookback` bars are warmup — simulateTrades skips them
+        // automatically (it starts evaluating at index `lookback`)
         const testResult = simulateTrades(strategy, testSlice, {
             lookback, maxHoldBars, assetClass, contextOverrides,
         });

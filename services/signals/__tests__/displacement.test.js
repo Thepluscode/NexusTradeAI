@@ -3,14 +3,16 @@ const { computeDisplacement } = require('../displacement');
 describe('computeDisplacement', () => {
   test('detects displacement when body > 70% of range and range > 1.5x ATR', () => {
     // Big body candle: body = 9 (90% of range 10), range = 10 > 1.5 * 5 = 7.5
-    // v24.0 graded: magnitude = 10/5 = 2.0, strength = (2.0-1.5)/2.5 = 0.2
-    // score = 0.4 + 0.2 * 0.6 = 0.52
+    // v24.1 graded: magnitude = 10/5 = 2.0, strength = (2.0-1.5)/2.5 = 0.2
+    // score = strength = 0.2 (fully proportional, no artificial floor)
     const klines = [{ open: 100, high: 110, low: 100, close: 109, volume: 1000 }];
     const result = computeDisplacement(klines, 5);
-    expect(result.score).toBeGreaterThan(0.4);
+    expect(result.score).toBeGreaterThan(0);
     expect(result.score).toBeLessThanOrEqual(1.0);
     expect(result.raw.detected).toBe(true);
     expect(result.raw.strength).toBeGreaterThan(0);
+    // Proportional: score equals strength (no floor)
+    expect(result.score).toBeCloseTo(result.raw.strength, 4);
   });
 
   test('stronger displacement gets higher score', () => {

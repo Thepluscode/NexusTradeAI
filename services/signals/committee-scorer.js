@@ -72,10 +72,12 @@ const EXTRACTORS = {
       present: signal.orderFlowImbalance !== undefined
     },
     displacement: {
-      // v24.0: graded — use displacementStrength (0-1) from computeDisplacement().raw.strength
+      // v24.1: graded — use displacementStrength (0-1) from computeDisplacement().raw.strength
+      // Fallback for legacy callers that only pass hasDisplacement (boolean):
+      // use 0.5 (midpoint) since we can't know the actual magnitude
       score: signal.displacementStrength != null
         ? signal.displacementStrength
-        : (signal.hasDisplacement ? 0.7 : 0),  // fallback: legacy boolean → 0.7 if present
+        : (signal.hasDisplacement ? 0.5 : 0),
       present: !!(signal.hasDisplacement || signal.displacementStrength > 0)
     },
     volumeProfile: extractVP(signal.volumeProfile, signal.price),
