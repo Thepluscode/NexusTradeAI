@@ -104,10 +104,29 @@ describe('cryptoMomentum strategy', () => {
     });
 
     describe('candidate output', () => {
-        test('returns tier1 candidate with correct stops/targets', () => {
+        test('ATR-based: uses 1.5× ATR for stop, floored at tier minimum', () => {
             const result = momo.evaluate([], {
                 currentPrice: 100,
-                percentChange: 0.8, // 0.8%
+                percentChange: 0.8,
+                rsi: 55,
+                volumeRatio: 1.5,
+                ema9: 99, sma20: 98,
+                btcBullish: true,
+                isBtc: false,
+                atr: 3, atrPct: 0.03, // 3% ATR
+            });
+            expect(result.candidate).toBeDefined();
+            expect(result.candidate.tier).toBe('tier1');
+            // stopPct = max(0.03 * 1.5, 0.02) = max(0.045, 0.02) = 0.045 (4.5%)
+            expect(result.candidate.stopLossPercent).toBeCloseTo(4.5, 1);
+            expect(result.candidate.atrBased).toBe(true);
+            expect(result.candidate.rewardRisk).toBe(2.0);
+        });
+
+        test('fallback: uses tier minimum when ATR unavailable', () => {
+            const result = momo.evaluate([], {
+                currentPrice: 100,
+                percentChange: 0.8,
                 rsi: 55,
                 volumeRatio: 1.5,
                 ema9: 99, sma20: 98,
@@ -116,10 +135,22 @@ describe('cryptoMomentum strategy', () => {
             });
             expect(result.candidate).toBeDefined();
             expect(result.candidate.tier).toBe('tier1');
-            expect(result.candidate.stopLossPercent).toBeCloseTo(7, 5);
-            expect(result.candidate.profitTargetPercent).toBeCloseTo(14, 5);
-            expect(result.candidate.stopLoss).toBeCloseTo(93, 1);
-            expect(result.candidate.takeProfit).toBeCloseTo(114, 1);
+            // No ATR → tier1 minStopPct = 2%
+            expect(result.candidate.stopLossPercent).toBeCloseTo(2, 1);
+            expect(result.candidate.atrBased).toBe(false);
+        });
+
+        test('stop never wider than 10%', () => {
+            const result = momo.evaluate([], {
+                currentPrice: 100,
+                percentChange: 0.8,
+                rsi: 55,
+                volumeRatio: 1.5,
+                ema9: 99, sma20: 98,
+                btcBullish: true,
+                atr: 20, atrPct: 0.20, // 20% ATR (extreme)
+            });
+            expect(result.candidate.stopLossPercent).toBeLessThanOrEqual(10);
         });
 
         test('returns tier2 candidate for 1.5%+ momentum', () => {
@@ -130,10 +161,11 @@ describe('cryptoMomentum strategy', () => {
                 volumeRatio: 2.0,
                 ema9: 990, sma20: 980,
                 btcBullish: true,
+                atr: 30, atrPct: 0.03,
             });
             expect(result.candidate.tier).toBe('tier2');
-            expect(result.candidate.stopLossPercent).toBeCloseTo(8, 5);
-            expect(result.candidate.profitTargetPercent).toBeCloseTo(16, 5);
+            // tier2 minStopPct = 3%, ATR-based = max(0.03*1.5, 0.03) = 4.5%
+            expect(result.candidate.stopLossPercent).toBeCloseTo(4.5, 1);
         });
 
         test('returns tier3 candidate for 3%+ momentum', () => {

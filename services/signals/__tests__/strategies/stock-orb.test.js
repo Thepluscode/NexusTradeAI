@@ -173,20 +173,53 @@ describe('stockOrb strategy', () => {
             expect(result.candidate.takeProfit).toBeGreaterThan(101);
         });
 
-        test('stopLoss is 2.5% below entry', () => {
-            const bars = makeOrbSetup({ openingHigh: 100, currentPrice: 100.5 });
+        test('ATR-based stop: uses 1.5× ATR when ATR available', () => {
+            const bars = makeOrbSetup({ openingHigh: 100, currentPrice: 101 });
             const result = orb.evaluate(bars, {
-                orbWindowOverride: true, currentPrice: 100.5, vwap: 100, rsi: 55,
+                orbWindowOverride: true, currentPrice: 101, vwap: 100, rsi: 55,
+                atr: 1.5, atrPct: 0.015, // 1.5% ATR
             });
-            expect(result.candidate.stopLoss).toBeCloseTo(100.5 * 0.975, 2);
+            // stopPct = max(0.015 * 1.5, 0.01) = 0.0225 (2.25%)
+            // stopLoss = 101 * (1 - 0.0225) = 98.73
+            expect(result.candidate.stopLoss).toBeCloseTo(101 - (101 * 0.0225), 1);
+            expect(result.candidate.atrBased).toBe(true);
+            expect(result.candidate.rewardRisk).toBeGreaterThanOrEqual(2.0);
         });
 
-        test('takeProfit is 5.0% above entry (2:1 R:R)', () => {
+        test('fallback to 2% stop when ATR unavailable', () => {
             const bars = makeOrbSetup({ openingHigh: 100, currentPrice: 100.5 });
             const result = orb.evaluate(bars, {
                 orbWindowOverride: true, currentPrice: 100.5, vwap: 100, rsi: 55,
             });
-            expect(result.candidate.takeProfit).toBeCloseTo(100.5 * 1.05, 2);
+            // No ATR → fallback 2% stop
+            expect(result.candidate.stopLoss).toBeCloseTo(100.5 * 0.98, 1);
+            expect(result.candidate.atrBased).toBe(false);
+        });
+
+        test('stop never narrower than 1% (minStopPct)', () => {
+            const bars = makeOrbSetup({ openingHigh: 100, currentPrice: 101 });
+            const result = orb.evaluate(bars, {
+                orbWindowOverride: true, currentPrice: 101, vwap: 100, rsi: 55,
+                atr: 0.2, atrPct: 0.002, // very low ATR (0.2%)
+            });
+            // atrPct * 1.5 = 0.003, but minStopPct = 0.01 → use 1%
+            expect(result.candidate.stopLossPercent).toBeGreaterThanOrEqual(1.0);
+        });
+
+        test('stop never wider than 6% (maxStopPct)', () => {
+            const bars = makeOrbSetup({ openingHigh: 100, currentPrice: 101 });
+            const result = orb.evaluate(bars, {
+                orbWindowOverride: true, currentPrice: 101, vwap: 100, rsi: 55,
+                atr: 10, atrPct: 0.10, // 10% ATR (very volatile)
+            });
+            expect(result.candidate.stopLossPercent).toBeLessThanOrEqual(6.0);
+        });
+
+        test('dynamic R:R: lower vol gets higher R:R', () => {
+            expect(orb._dynamicRewardRisk(0.003)).toBeCloseTo(3.0, 1); // low vol
+            expect(orb._dynamicRewardRisk(0.02)).toBeCloseTo(2.0, 1);  // high vol
+            expect(orb._dynamicRewardRisk(0.01)).toBeGreaterThan(2.0);  // mid vol
+            expect(orb._dynamicRewardRisk(0.01)).toBeLessThan(3.0);
         });
 
         test('score weighted: 35% breakout + 30% volume + 20% RSI + 15% regime', () => {
