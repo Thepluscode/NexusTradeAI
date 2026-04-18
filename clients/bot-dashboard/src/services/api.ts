@@ -33,10 +33,19 @@ export const SERVICE_URLS = {
   aiService:  import.meta.env.VITE_AI_SERVICE_URL  || 'https://nexus-strategy-bridge-production.up.railway.app',
 };
 
-// ── Safe localStorage helpers ────────────────────────────────────────────────
-function safeParseUser(): { id?: string; email?: string } {
+// ── Safe user extraction from JWT ────────────────────────────────────────────
+// Previous implementation read from localStorage('nexus_user') which was NEVER
+// written — causing every request to fall back to userId=1 (the admin account).
+// Now decodes from the JWT directly, consistent with useAuth.ts.
+function safeParseUser(): { id?: number | string; email?: string } {
   try {
-    return JSON.parse(localStorage.getItem('nexus_user') || '{}');
+    const token = localStorage.getItem('nexus_access_token');
+    if (!token) return {};
+    // JWT is base64url: header.payload.signature — decode the payload
+    const payloadB64 = token.split('.')[1];
+    if (!payloadB64) return {};
+    const payload = JSON.parse(atob(payloadB64));
+    return { id: payload.sub, email: payload.email };
   } catch {
     return {};
   }
@@ -791,7 +800,8 @@ class APIClient {
     if (!this.apiSecret) return { keys: [], total: 0 };
     try {
       const user = safeParseUser();
-      const userId = user.id || 1;
+      const userId = user.id;
+      if (!userId) throw new Error('Not authenticated — no user ID found in token');
       const response = await this.aiService.get('/api/v1/keys', {
         params: { user_id: userId },
         headers: { 'X-API-Secret': this.apiSecret },
@@ -805,7 +815,8 @@ class APIClient {
 
   async createAPIKey(name: string, tier: string): Promise<Record<string, unknown>> {
     const user = safeParseUser();
-    const userId = user.id || 1;
+    const userId = user.id;
+    if (!userId) throw new Error('Not authenticated — no user ID found in token');
     const response = await this.aiService.post('/api/v1/keys',
       { user_id: userId, name, tier },
       { headers: { 'X-API-Secret': this.apiSecret }, timeout: 10000 },
@@ -815,7 +826,8 @@ class APIClient {
 
   async revokeAPIKey(keyId: number): Promise<Record<string, unknown>> {
     const user = safeParseUser();
-    const userId = user.id || 1;
+    const userId = user.id;
+    if (!userId) throw new Error('Not authenticated — no user ID found in token');
     const response = await this.aiService.delete(`/api/v1/keys/${keyId}`, {
       params: { user_id: userId },
       headers: { 'X-API-Secret': this.apiSecret },
@@ -829,7 +841,8 @@ class APIClient {
     }
     try {
       const user = safeParseUser();
-      const userId = user.id || 1;
+      const userId = user.id;
+      if (!userId) throw new Error('Not authenticated — no user ID found in token');
       const response = await this.aiService.get('/api/v1/usage', {
         params: { user_id: userId },
         headers: { 'X-API-Secret': this.apiSecret },
@@ -845,7 +858,8 @@ class APIClient {
 
   async createCheckout(tier: 'pro' | 'enterprise'): Promise<{ checkout_url: string; session_id: string }> {
     const user = safeParseUser();
-    const userId = user.id || 1;
+    const userId = user.id;
+    if (!userId) throw new Error('Not authenticated — no user ID found in token');
     const response = await this.aiService.post('/api/v1/billing/checkout',
       { user_id: userId, tier, email: user.email },
       { headers: { 'X-API-Secret': this.apiSecret }, timeout: 15000 },
@@ -855,7 +869,8 @@ class APIClient {
 
   async createBillingPortal(): Promise<{ portal_url: string }> {
     const user = safeParseUser();
-    const userId = user.id || 1;
+    const userId = user.id;
+    if (!userId) throw new Error('Not authenticated — no user ID found in token');
     const response = await this.aiService.post('/api/v1/billing/portal',
       { user_id: userId },
       { headers: { 'X-API-Secret': this.apiSecret }, timeout: 15000 },
