@@ -74,6 +74,17 @@ try {
 }
 if (sharedRegimeDetector) console.log('[INIT] 4-state regime detector loaded');
 
+// [v24.8] Portfolio intelligence + [v24.7] Event calendar
+let portfolioIntelligence, eventCalendar;
+try { portfolioIntelligence = require('./signals/portfolio-intelligence'); } catch (e) {
+    try { portfolioIntelligence = require('../../services/signals/portfolio-intelligence'); } catch (_) { portfolioIntelligence = null; }
+}
+try { eventCalendar = require('./signals/event-calendar'); } catch (e) {
+    try { eventCalendar = require('../../services/signals/event-calendar'); } catch (_) { eventCalendar = null; }
+}
+if (portfolioIntelligence) console.log('[INIT] Portfolio intelligence loaded');
+if (eventCalendar) console.log('[INIT] Economic event calendar loaded');
+
 // Load .env from project root (Railway injects env vars directly, so dotenv is a no-op there)
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
@@ -2366,6 +2377,19 @@ async function checkPortfolioRisk() {
 }
 
 async function scanForSignals(heldPositions = positions) {
+    // [v24.7] Economic event calendar — ECB/NFP affect forex heavily
+    if (eventCalendar) {
+        const eventCheck = eventCalendar.checkEventProximity(new Date(), 'forex');
+        if (eventCheck.nearEvent && eventCheck.action === 'block') {
+            console.log(`🛑 [EVENT CALENDAR] ${eventCheck.event.name} in ${eventCheck.minutesUntil} min — BLOCKING forex entries`);
+            return [];
+        }
+        globalThis._forexEventSizeMultiplier = eventCheck.sizeMultiplier;
+        if (eventCheck.nearEvent) {
+            console.log(`⚠️ [EVENT CALENDAR] ${eventCheck.event.name} ${eventCheck.minutesUntil > 0 ? 'in' : 'ago'} ${Math.abs(eventCheck.minutesUntil)} min — forex size ×${eventCheck.sizeMultiplier}`);
+        }
+    }
+
     const signals = [];
     const session = getCurrentSession();
 

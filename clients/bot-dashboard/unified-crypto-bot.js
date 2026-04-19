@@ -84,6 +84,17 @@ try {
 }
 if (sharedRegimeDetector) console.log('[INIT] 4-state regime detector loaded');
 
+// [v24.8] Portfolio intelligence + [v24.7] Event calendar
+let portfolioIntelligence, eventCalendar;
+try { portfolioIntelligence = require('./signals/portfolio-intelligence'); } catch (e) {
+    try { portfolioIntelligence = require('../../services/signals/portfolio-intelligence'); } catch (_) { portfolioIntelligence = null; }
+}
+try { eventCalendar = require('./signals/event-calendar'); } catch (e) {
+    try { eventCalendar = require('../../services/signals/event-calendar'); } catch (_) { eventCalendar = null; }
+}
+if (portfolioIntelligence) console.log('[INIT] Portfolio intelligence loaded');
+if (eventCalendar) console.log('[INIT] Economic event calendar loaded');
+
 // Load .env from project root (Railway injects env vars directly, so dotenv is a no-op there)
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
@@ -2061,6 +2072,19 @@ class CryptoTradingEngine {
     // ========================================================================
 
     async scanForOpportunities(cryptoRegime = null) {
+        // [v24.7] Economic event calendar — CPI affects crypto
+        if (eventCalendar) {
+            const eventCheck = eventCalendar.checkEventProximity(new Date(), 'crypto');
+            if (eventCheck.nearEvent && eventCheck.action === 'block') {
+                console.log(`🛑 [EVENT CALENDAR] ${eventCheck.event.name} in ${eventCheck.minutesUntil} min — BLOCKING crypto entries`);
+                return [];
+            }
+            this._eventSizeMultiplier = eventCheck.sizeMultiplier;
+            if (eventCheck.nearEvent) {
+                console.log(`⚠️ [EVENT CALENDAR] ${eventCheck.event.name} ${eventCheck.minutesUntil > 0 ? 'in' : 'ago'} ${Math.abs(eventCheck.minutesUntil)} min — size ×${eventCheck.sizeMultiplier}`);
+            }
+        }
+
         const opportunities = [];
         const scanSymbols = await this.refreshSupportedSymbols();
 
