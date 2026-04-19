@@ -73,6 +73,17 @@ try {
         sharedIndicators = null;
     }
 }
+// [v24.3] 4-state regime detector
+let sharedRegimeDetector;
+try {
+    sharedRegimeDetector = require('./signals/regime-detector');
+} catch (e) {
+    try { sharedRegimeDetector = require('../../services/signals/regime-detector'); } catch (_) {
+        sharedRegimeDetector = null;
+    }
+}
+if (sharedRegimeDetector) console.log('[INIT] 4-state regime detector loaded');
+
 // Load .env from project root (Railway injects env vars directly, so dotenv is a no-op there)
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
@@ -3457,11 +3468,43 @@ class CryptoTradingEngine {
                     await this.managePositions();
                 }
 
-                // [Phase 3] Detect crypto regime from BTC klines — refreshes every scan cycle
+                // [v24.3] 4-state regime detection from BTC klines
                 const btcKlines = await this.kraken.getKlines('XBTUSD', '5m', 100).catch(() => null);
-                const cryptoRegime = detectCryptoRegime(btcKlines);
-                if (cryptoRegime.regime !== 'medium' || cryptoRegime.isTrending) {
-                    console.log(`[Regime] Crypto market: ${cryptoRegime.adjustments.label}${cryptoRegime.isTrending ? ' TRENDING' : ''} (ATR%: ${(cryptoRegime.atrPct * 100).toFixed(3)}%, trend: ${cryptoRegime.trendRatio}, size: x${cryptoRegime.adjustments.positionSizeMultiplier}, threshold: x${cryptoRegime.adjustments.scoreThresholdMultiplier}${cryptoRegime.isTrending ? ', meanRev: BLOCKED' : ''})`);
+                let cryptoRegime;
+                if (sharedRegimeDetector && btcKlines && btcKlines.length > 30) {
+                    // Normalize Kraken klines to {open, high, low, close, volume}
+                    const normalizedBtc = btcKlines.map(b => ({
+                        open: parseFloat(b.open || b.o || 0),
+                        high: parseFloat(b.high || b.h || 0),
+                        low: parseFloat(b.low || b.l || 0),
+                        close: parseFloat(b.close || b.c || 0),
+                        volume: parseFloat(b.volume || b.v || 0),
+                    }));
+                    const regimeResult = sharedRegimeDetector.detectRegime(normalizedBtc, {
+                        lowVolThreshold: 0.8,    // crypto has higher baseline vol
+                        highVolThreshold: 3.0,   // crypto crisis threshold
+                    });
+                    // Merge with legacy interface so downstream code works
+                    cryptoRegime = {
+                        ...regimeResult,
+                        regime: regimeResult.raw.volatility === 'high' ? 'high' : regimeResult.raw.volatility === 'low' ? 'low' : 'medium',
+                        atrPct: regimeResult.atrPercent / 100,
+                        trendRatio: Math.abs(regimeResult.emaSlope) * 100,
+                        isTrending: regimeResult.raw.trendStrength === 'strong',
+                        // Strategy routing from 4-state system
+                        strategyRouting: {
+                            momentumWeight: regimeResult.regime === 'TRENDING_UP' ? 1.2 : (regimeResult.regime === 'TRENDING_DOWN' ? 0.6 : 0.8),
+                            pullbackWeight: regimeResult.regime === 'MEAN_REVERTING' ? 0.3 : 1.0,
+                            meanReversionWeight: regimeResult.regime === 'MEAN_REVERTING' ? 1.5 : 0.3,
+                        },
+                    };
+                    const adj = regimeResult.adjustments;
+                    console.log(`[Regime] Crypto: ${adj.label} (ATR: ${regimeResult.atrPercent.toFixed(2)}%, ADX: ${regimeResult.adx}, conf: ${regimeResult.confidence.toFixed(2)}) — size:x${adj.positionSizeMultiplier} dirs:${adj.allowedDirections.join('/')}`);
+                } else {
+                    cryptoRegime = detectCryptoRegime(btcKlines);
+                    if (cryptoRegime.regime !== 'medium' || cryptoRegime.isTrending) {
+                        console.log(`[Regime] Crypto (legacy): ${cryptoRegime.adjustments.label} (ATR%: ${(cryptoRegime.atrPct * 100).toFixed(3)}%)`);
+                    }
                 }
 
                 // [Phase 3.5] Portfolio-level risk check (cross-bot)
