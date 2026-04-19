@@ -161,20 +161,20 @@ function scoreGapValidity(gap, bars, gapBarIndex, swingHighs, swingLows, moveHig
  * Returns 1.0 if gap is completely unfilled, 0.0 if fully filled.
  */
 function checkUnmitigated(gap, bars, gapBarIndex) {
-  // Check bars after the gap formation (index + 3 onward)
+  // Track worst mitigation level across all bars after formation.
+  // Don't return early on partial fill — a later bar might fully mitigate.
+  let worstScore = 1.0; // 1.0 = fully unmitigated
+
   for (let i = gapBarIndex + 3; i < bars.length; i++) {
     if (gap.type === 'bullish') {
-      // If any bar's low goes below gapLow, the gap has been mitigated
-      if (bars[i].low <= gap.gapLow) return 0.0;
-      // Partial fill: bar enters the gap but doesn't fully fill it
-      if (bars[i].low < gap.gapHigh && bars[i].low > gap.gapLow) return 0.5;
+      if (bars[i].low <= gap.gapLow) return 0.0; // fully mitigated — can exit immediately
+      if (bars[i].low < gap.gapHigh && bars[i].low > gap.gapLow) worstScore = Math.min(worstScore, 0.5);
     } else {
-      // Bearish: if any bar's high goes above gapHigh, mitigated
       if (bars[i].high >= gap.gapHigh) return 0.0;
-      if (bars[i].high > gap.gapLow && bars[i].high < gap.gapHigh) return 0.5;
+      if (bars[i].high > gap.gapLow && bars[i].high < gap.gapHigh) worstScore = Math.min(worstScore, 0.5);
     }
   }
-  return 1.0; // fully unmitigated
+  return worstScore;
 }
 
 /**
