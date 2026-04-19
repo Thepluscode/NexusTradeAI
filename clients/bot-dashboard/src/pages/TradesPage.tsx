@@ -408,7 +408,7 @@ export default function TradesPage() {
                                                 <TableCell sx={{ color: 'text.secondary', fontSize: '0.8rem' }}>{t.strategy ?? '—'}</TableCell>
                                                 <TableCell sx={{ color: 'text.secondary', fontSize: '0.8rem' }}>{t.regime ?? '—'}</TableCell>
                                                 <TableCell align="right" sx={{ fontVariantNumeric: 'tabular-nums', fontSize: '0.82rem' }}>
-                                                    {t.signal_score != null ? Number(t.signal_score).toFixed(3) : '—'}
+                                                    {t.signal_score != null ? Math.min(Number(t.signal_score), 1.0).toFixed(3) : '—'}
                                                 </TableCell>
                                                 <TableCell>
                                                     <Chip label={t.status} size="small"
@@ -434,7 +434,7 @@ export default function TradesPage() {
                                                 <TableCell align="right">
                                                     {t.pnl_pct != null ? (
                                                         <Typography variant="body2" fontWeight={600} color={pnlColor(t.pnl_pct)}>
-                                                            {Number.isFinite(parseFloat(t.pnl_pct)) ? `${parseFloat(t.pnl_pct).toFixed(2)}%` : '—'}
+                                                            {Number.isFinite(parseFloat(t.pnl_pct)) ? `${(parseFloat(t.pnl_pct) * 100).toFixed(2)}%` : '—'}
                                                         </Typography>
                                                     ) : (
                                                         <Typography variant="body2" color="text.disabled">—</Typography>
@@ -561,7 +561,7 @@ export default function TradesPage() {
                                                         </TableCell>
                                                         <TableCell align="right">
                                                             <Typography variant="body2" color={pnlColor(r.avg_pnl_pct)}>
-                                                                {parseFloat(r.avg_pnl_pct ?? '0').toFixed(2)}%
+                                                                {(parseFloat(r.avg_pnl_pct ?? '0') * 100).toFixed(2)}%
                                                             </Typography>
                                                         </TableCell>
                                                     </TableRow>
@@ -607,7 +607,7 @@ export default function TradesPage() {
                                                         </TableCell>
                                                         <TableCell align="right">
                                                             <Typography variant="body2" color={pnlColor(r.avg_pnl_pct)}>
-                                                                {parseFloat(r.avg_pnl_pct ?? '0').toFixed(2)}%
+                                                                {(parseFloat(r.avg_pnl_pct ?? '0') * 100).toFixed(2)}%
                                                             </Typography>
                                                         </TableCell>
                                                         <TableCell align="right">{r.avg_hold_hours ?? '—'}</TableCell>
@@ -654,7 +654,7 @@ export default function TradesPage() {
                                                         </TableCell>
                                                         <TableCell align="right">
                                                             <Typography variant="body2" color={pnlColor(r.avg_pnl_pct)}>
-                                                                {parseFloat(r.avg_pnl_pct ?? '0').toFixed(2)}%
+                                                                {(parseFloat(r.avg_pnl_pct ?? '0') * 100).toFixed(2)}%
                                                             </Typography>
                                                         </TableCell>
                                                         <TableCell align="right">
@@ -704,7 +704,7 @@ export default function TradesPage() {
                                                         </TableCell>
                                                         <TableCell align="right">
                                                             <Typography variant="body2" color={pnlColor(r.avg_pnl_pct)}>
-                                                                {parseFloat(r.avg_pnl_pct ?? '0').toFixed(2)}%
+                                                                {(parseFloat(r.avg_pnl_pct ?? '0') * 100).toFixed(2)}%
                                                             </Typography>
                                                         </TableCell>
                                                         <TableCell align="right">
@@ -754,7 +754,7 @@ export default function TradesPage() {
                                                         </TableCell>
                                                         <TableCell align="right">
                                                             <Typography variant="body2" color={pnlColor(r.avg_pnl_pct)}>
-                                                                {parseFloat(r.avg_pnl_pct ?? '0').toFixed(2)}%
+                                                                {(parseFloat(r.avg_pnl_pct ?? '0') * 100).toFixed(2)}%
                                                             </Typography>
                                                         </TableCell>
                                                         <TableCell align="right">

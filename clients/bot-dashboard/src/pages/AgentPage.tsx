@@ -333,7 +333,7 @@ function DecisionHistoryTable({ decisions }: { decisions: AgentDecisionRow[] }) 
                   fontFamily: 'monospace', fontSize: '0.75rem',
                   color: d.pnl_pct != null ? (d.pnl_pct >= 0 ? '#22c55e' : '#ef4444') : 'text.secondary',
                 }}>
-                  {d.pnl_pct != null ? `${d.pnl_pct >= 0 ? '+' : ''}${Number(d.pnl_pct).toFixed(2)}%` : '—'}
+                  {d.pnl_pct != null ? `${d.pnl_pct >= 0 ? '+' : ''}${(Number(d.pnl_pct) * 100).toFixed(2)}%` : '—'}
                 </TableCell>
                 <TableCell align="right" sx={{
                   fontFamily: 'monospace', fontSize: '0.75rem',
