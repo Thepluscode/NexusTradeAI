@@ -43,23 +43,53 @@ import {
 import darkTheme from './theme';
 import { Toaster } from 'react-hot-toast';
 
-// Pages — lazy-loaded for code splitting
-const OverviewPage = lazy(() => import('./pages/OverviewPage'));
-const StockBotPage = lazy(() => import('./pages/StockBotPage'));
-const ForexBotPage = lazy(() => import('./pages/ForexBotPage'));
-const CryptoBotPage = lazy(() => import('./pages/CryptoBotPage'));
-const BacktestPage = lazy(() => import('./pages/BacktestPage'));
-const TradesPage = lazy(() => import('./pages/TradesPage'));
-const SettingsPage = lazy(() => import('./pages/SettingsPage'));
-const LoginPage = lazy(() => import('./pages/LoginPage'));
-const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'));
-const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage'));
-const AdminPage = lazy(() => import('./pages/AdminPage'));
-const AgentPage = lazy(() => import('./pages/AgentPage'));
-const APIPage = lazy(() => import('./pages/APIPage'));
-const DocsPage = lazy(() => import('./pages/DocsPage'));
-const SignalsPage = lazy(() => import('./pages/SignalsPage'));
-const LandingPage = lazy(() => import('./pages/LandingPage'));
+// Retry wrapper for lazy imports — handles stale chunks after deploys.
+// When Railway deploys new code, old chunk URLs (e.g. StockBotPage-3XUrkXiD.js)
+// no longer exist. Without this, users see a white screen until they hard-refresh.
+// This retries once, and if still failing, does a full page reload to get fresh chunks.
+function lazyRetry<T extends React.ComponentType>(
+  importFn: () => Promise<{ default: T }>
+) {
+  return lazy(() =>
+    importFn().catch(() => {
+      // First retry — network blip or transient CDN issue
+      return new Promise<{ default: T }>((resolve, reject) => {
+        setTimeout(() => {
+          importFn()
+            .then(resolve)
+            .catch(() => {
+              // Stale chunk — force reload to get new asset manifest
+              const reloaded = sessionStorage.getItem('nexus_chunk_reload');
+              if (!reloaded) {
+                sessionStorage.setItem('nexus_chunk_reload', '1');
+                window.location.reload();
+              }
+              // Already reloaded once — don't loop, surface the error
+              reject(new Error('Failed to load page after deploy — please clear cache'));
+            });
+        }, 1000);
+      });
+    })
+  );
+}
+
+// Pages — lazy-loaded with stale-chunk recovery
+const OverviewPage = lazyRetry(() => import('./pages/OverviewPage'));
+const StockBotPage = lazyRetry(() => import('./pages/StockBotPage'));
+const ForexBotPage = lazyRetry(() => import('./pages/ForexBotPage'));
+const CryptoBotPage = lazyRetry(() => import('./pages/CryptoBotPage'));
+const BacktestPage = lazyRetry(() => import('./pages/BacktestPage'));
+const TradesPage = lazyRetry(() => import('./pages/TradesPage'));
+const SettingsPage = lazyRetry(() => import('./pages/SettingsPage'));
+const LoginPage = lazyRetry(() => import('./pages/LoginPage'));
+const ForgotPasswordPage = lazyRetry(() => import('./pages/ForgotPasswordPage'));
+const ResetPasswordPage = lazyRetry(() => import('./pages/ResetPasswordPage'));
+const AdminPage = lazyRetry(() => import('./pages/AdminPage'));
+const AgentPage = lazyRetry(() => import('./pages/AgentPage'));
+const APIPage = lazyRetry(() => import('./pages/APIPage'));
+const DocsPage = lazyRetry(() => import('./pages/DocsPage'));
+const SignalsPage = lazyRetry(() => import('./pages/SignalsPage'));
+const LandingPage = lazyRetry(() => import('./pages/LandingPage'));
 import ProtectedRoute from './components/ProtectedRoute';
 import { useAuth } from './hooks/useAuth';
 
@@ -675,6 +705,11 @@ class PageErrorBoundary extends React.Component<
 }
 
 function App() {
+  // Clear stale-chunk reload flag so future deploys can auto-retry
+  useEffect(() => {
+    sessionStorage.removeItem('nexus_chunk_reload');
+  }, []);
+
   return (
     <HelmetProvider>
     <QueryClientProvider client={queryClient}>
