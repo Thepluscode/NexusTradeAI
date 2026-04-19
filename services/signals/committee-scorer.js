@@ -19,20 +19,21 @@
 
 const BOT_COMPONENTS = {
   stock: {
-    // [v24.4] Added sentiment + crossAsset as optional components (Phase 3 alpha generation)
-    components: ['momentum', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'volumeRatio', 'sentiment', 'crossAsset'],
+    // [v24.5] 9 components: 6 core + sentiment + crossAsset + mlScore
+    // mlScore is optional — absent when bridge is down or model not trained (skip, no penalty)
+    components: ['momentum', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'volumeRatio', 'sentiment', 'crossAsset', 'mlScore'],
     threshold: 0.25,
-    weights: { momentum: 0.22, orderFlow: 0.18, displacement: 0.13, volumeProfile: 0.13, fvg: 0.09, volumeRatio: 0.10, sentiment: 0.08, crossAsset: 0.07 }
+    weights: { momentum: 0.20, orderFlow: 0.16, displacement: 0.12, volumeProfile: 0.12, fvg: 0.08, volumeRatio: 0.09, sentiment: 0.07, crossAsset: 0.06, mlScore: 0.10 }
   },
   forex: {
-    components: ['trend', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'macd', 'sentiment', 'crossAsset'],
+    components: ['trend', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'macd', 'sentiment', 'crossAsset', 'mlScore'],
     threshold: 0.50,
-    weights: { trend: 0.22, orderFlow: 0.18, displacement: 0.13, volumeProfile: 0.13, fvg: 0.09, macd: 0.10, sentiment: 0.08, crossAsset: 0.07 }
+    weights: { trend: 0.20, orderFlow: 0.16, displacement: 0.12, volumeProfile: 0.12, fvg: 0.08, macd: 0.09, sentiment: 0.07, crossAsset: 0.06, mlScore: 0.10 }
   },
   crypto: {
-    components: ['momentum', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'volumeRatio', 'sentiment', 'crossAsset'],
+    components: ['momentum', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'volumeRatio', 'sentiment', 'crossAsset', 'mlScore'],
     threshold: 0.50,
-    weights: { momentum: 0.22, orderFlow: 0.18, displacement: 0.13, volumeProfile: 0.15, fvg: 0.12, volumeRatio: 0.05, sentiment: 0.08, crossAsset: 0.07 }
+    weights: { momentum: 0.20, orderFlow: 0.16, displacement: 0.12, volumeProfile: 0.13, fvg: 0.10, volumeRatio: 0.05, sentiment: 0.07, crossAsset: 0.07, mlScore: 0.10 }
   }
 };
 
@@ -106,6 +107,12 @@ const EXTRACTORS = {
     crossAsset: {
       score: signal.crossAssetScore != null ? signal.crossAssetScore : 0,
       present: signal.crossAssetScore != null
+    },
+    // [v24.5] ML score — win probability from strategy bridge /ml/score
+    // Optional: absent when bridge offline or model not yet trained (< 30 trades)
+    mlScore: {
+      score: signal.mlWinProbability != null ? signal.mlWinProbability : 0,
+      present: signal.mlWinProbability != null && signal.mlConfidenceTier !== 'none'
     }
   }),
 
