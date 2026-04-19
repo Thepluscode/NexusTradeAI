@@ -60,9 +60,12 @@ function dynamicRewardRisk(atrPct) {
 
 function isInORBWindow(now) {
     if (!now) now = new Date();
-    const isMarketDay = now.getDay() >= 1 && now.getDay() <= 5;
+    // Convert to US Eastern time — Railway runs UTC, market is EST/EDT
+    const estString = now.toLocaleString('en-US', { timeZone: 'America/New_York' });
+    const estDate = new Date(estString);
+    const isMarketDay = estDate.getDay() >= 1 && estDate.getDay() <= 5;
     if (!isMarketDay) return false;
-    const timeInMinutes = now.getHours() * 60 + now.getMinutes();
+    const timeInMinutes = estDate.getHours() * 60 + estDate.getMinutes();
     const marketOpen = 9 * 60 + 30;
     const orbEnd = marketOpen + ORB_CONFIG.openingRangeMinutes;
     const entryCutoff = ORB_CONFIG.entryCutoffHour * 60;

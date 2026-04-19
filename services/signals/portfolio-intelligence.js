@@ -233,11 +233,40 @@ function computeCapitalAllocation(botPerformance, config = {}) {
         allocations[b.bot] = minAllocation;
     }
 
-    // Normalize so allocations sum to 1.0
+    // Normalize so allocations sum to 1.0, then re-enforce max cap
     const totalAlloc = Object.values(allocations).reduce((s, v) => s + v, 0);
     if (totalAlloc > 0) {
         for (const key of Object.keys(allocations)) {
-            allocations[key] = parseFloat((allocations[key] / totalAlloc).toFixed(3));
+            allocations[key] = allocations[key] / totalAlloc;
+        }
+        // Re-enforce maxAllocation after normalization — iterative capping
+        let capped = true;
+        while (capped) {
+            capped = false;
+            let excess = 0;
+            let uncappedCount = 0;
+            for (const key of Object.keys(allocations)) {
+                if (allocations[key] > maxAllocation) {
+                    excess += allocations[key] - maxAllocation;
+                    allocations[key] = maxAllocation;
+                    capped = true;
+                } else {
+                    uncappedCount++;
+                }
+            }
+            // Redistribute excess to uncapped bots
+            if (excess > 0 && uncappedCount > 0) {
+                const perBot = excess / uncappedCount;
+                for (const key of Object.keys(allocations)) {
+                    if (allocations[key] < maxAllocation) {
+                        allocations[key] = Math.min(maxAllocation, allocations[key] + perBot);
+                    }
+                }
+            }
+        }
+        // Final rounding
+        for (const key of Object.keys(allocations)) {
+            allocations[key] = parseFloat(allocations[key].toFixed(3));
         }
     }
 

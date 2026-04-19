@@ -204,17 +204,20 @@ function computeMicrostructure(bars, config = {}) {
     const vpin = computeVPIN(bars, config);
     const toxicity = computeTradeFlowToxicity(bars, config.lookback || 20);
 
-    let score = 0.5;
+    let weightedSum = 0;
     let totalWeight = 0;
 
     if (vpin.present) {
-        score += (vpin.score - 0.5) * 0.50; // VPIN contributes 50%
+        weightedSum += vpin.score * 0.50;
         totalWeight += 0.50;
     }
     if (toxicity.present) {
-        score += (toxicity.score - 0.5) * 0.50; // Toxicity contributes 50%
+        weightedSum += toxicity.score * 0.50;
         totalWeight += 0.50;
     }
+
+    // Normalize by actual weight present — full [0, 1] range
+    const score = totalWeight > 0 ? weightedSum / totalWeight : 0.5;
 
     return {
         score: parseFloat(Math.max(0, Math.min(1, score)).toFixed(4)),

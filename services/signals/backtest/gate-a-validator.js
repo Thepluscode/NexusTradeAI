@@ -23,7 +23,7 @@ function validateGateA(trades) {
     const winRate = trades && trades.length > 0 ? wins.length / trades.length : 0;
     const totalWin = wins.reduce((s, t) => s + t.pnl, 0);
     const totalLoss = Math.abs(losses.reduce((s, t) => s + t.pnl, 0));
-    const profitFactor = totalLoss > 0 ? totalWin / totalLoss : 0;
+    const profitFactor = totalLoss > 0 ? totalWin / totalLoss : (totalWin > 0 ? Infinity : 0);
 
     if (trades && trades.length >= 15) {
         if (winRate < 0.40) {

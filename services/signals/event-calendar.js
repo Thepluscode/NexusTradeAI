@@ -122,6 +122,15 @@ function checkEventProximity(now = new Date(), assetClass = 'stock', config = {}
         }
     }
 
+    // Warn if all events are in the past (calendar expired)
+    const lastEventDate = EVENTS_2026[EVENTS_2026.length - 1];
+    if (lastEventDate) {
+        const lastMs = new Date(`${lastEventDate.date}T${lastEventDate.time}:00Z`).getTime();
+        if (nowMs > lastMs + 24 * 60 * 60 * 1000) {
+            return { nearEvent: false, action: 'calendar_expired', sizeMultiplier: 1.0, warning: 'Event calendar exhausted — update EVENTS_2026 for next year' };
+        }
+    }
+
     return { nearEvent: false, action: 'normal', sizeMultiplier: 1.0 };
 }
 

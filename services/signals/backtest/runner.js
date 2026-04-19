@@ -26,38 +26,56 @@ function simulateTrades(strategy, bars, options = {}) {
     }
 
     const trades = [];
-    let position = null; // { entry_price, stopLoss, takeProfit, entry_bar_index }
+    let position = null; // { entry_price, stopLoss, takeProfit, entry_bar_index, direction }
 
     for (let i = lookback; i < bars.length; i++) {
         const currentBar = bars[i];
 
-        // Manage open position
+        // Manage open position — supports both long and short
         if (position) {
-            // Check stop loss (did bar low breach stop?)
-            if (currentBar.l <= position.stopLoss) {
+            const isLong = position.direction !== 'short';
+
+            // Check stop loss
+            const stopHit = isLong
+                ? currentBar.l <= position.stopLoss    // long: low breaches stop
+                : currentBar.h >= position.stopLoss;   // short: high breaches stop
+
+            if (stopHit) {
+                const pnl = isLong
+                    ? position.stopLoss - position.entry_price
+                    : position.entry_price - position.stopLoss;
                 trades.push({
                     entry_price: position.entry_price,
                     exit_price: position.stopLoss,
-                    pnl: position.stopLoss - position.entry_price,
+                    pnl,
                     exit_reason: 'stop_loss',
                     entry_bar_index: position.entry_bar_index,
                     exit_bar_index: i,
                     hold_bars: i - position.entry_bar_index,
+                    direction: position.direction,
                 });
                 position = null;
                 continue;
             }
 
-            // Check take profit (did bar high reach target?)
-            if (currentBar.h >= position.takeProfit) {
+            // Check take profit
+            const tpHit = isLong
+                ? currentBar.h >= position.takeProfit   // long: high reaches target
+                : currentBar.l <= position.takeProfit;   // short: low reaches target
+
+            if (tpHit) {
+                const pnl = isLong
+                    ? position.takeProfit - position.entry_price
+                    : position.entry_price - position.takeProfit;
                 trades.push({
                     entry_price: position.entry_price,
                     exit_price: position.takeProfit,
-                    pnl: position.takeProfit - position.entry_price,
+                    pnl,
                     exit_reason: 'take_profit',
                     entry_bar_index: position.entry_bar_index,
                     exit_bar_index: i,
                     hold_bars: i - position.entry_bar_index,
+                    direction: position.direction,
                 });
                 position = null;
                 continue;
@@ -66,14 +84,18 @@ function simulateTrades(strategy, bars, options = {}) {
             // Check time stop (held too long)
             if (i - position.entry_bar_index >= maxHoldBars) {
                 const exitPrice = currentBar.c;
+                const pnl = isLong
+                    ? exitPrice - position.entry_price
+                    : position.entry_price - exitPrice;
                 trades.push({
                     entry_price: position.entry_price,
                     exit_price: exitPrice,
-                    pnl: exitPrice - position.entry_price,
+                    pnl,
                     exit_reason: 'time_stop',
                     entry_bar_index: position.entry_bar_index,
                     exit_bar_index: i,
                     hold_bars: i - position.entry_bar_index,
+                    direction: position.direction,
                 });
                 position = null;
                 continue;
@@ -96,6 +118,7 @@ function simulateTrades(strategy, bars, options = {}) {
                 stopLoss: result.candidate.stopLoss,
                 takeProfit: result.candidate.takeProfit,
                 entry_bar_index: i,
+                direction: result.candidate.direction || 'long', // default long for backward compat
             };
         }
     }
@@ -103,14 +126,19 @@ function simulateTrades(strategy, bars, options = {}) {
     // Close any remaining position at last bar
     if (position) {
         const lastBar = bars[bars.length - 1];
+        const isLong = position.direction !== 'short';
+        const pnl = isLong
+            ? lastBar.c - position.entry_price
+            : position.entry_price - lastBar.c;
         trades.push({
             entry_price: position.entry_price,
             exit_price: lastBar.c,
-            pnl: lastBar.c - position.entry_price,
+            pnl,
             exit_reason: 'end_of_data',
             entry_bar_index: position.entry_bar_index,
             exit_bar_index: bars.length - 1,
             hold_bars: bars.length - 1 - position.entry_bar_index,
+            direction: position.direction,
         });
     }
 

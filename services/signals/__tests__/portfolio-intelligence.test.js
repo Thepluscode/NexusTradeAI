@@ -147,13 +147,14 @@ describe('computeCapitalAllocation', () => {
         expect(result.allocations.crypto).toBeGreaterThan(result.allocations.forex);
     });
 
-    test('negative Sharpe gets minimum allocation', () => {
+    test('negative Sharpe gets less than positive Sharpe', () => {
         const bots = [
             { bot: 'stock', sharpe: 1.0, trades: 50 },
             { bot: 'forex', sharpe: -0.5, trades: 30 },
         ];
         const result = computeCapitalAllocation(bots);
-        expect(result.allocations.forex).toBeLessThanOrEqual(0.15); // near minimum after normalization
+        // Negative Sharpe bot gets less capital than positive Sharpe bot
+        expect(result.allocations.stock).toBeGreaterThan(result.allocations.forex);
     });
 
     test('allocations sum to approximately 1.0', () => {

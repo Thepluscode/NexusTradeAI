@@ -163,6 +163,11 @@ const EXTRACTORS = {
       crossAsset: {
         score: signal.crossAssetScore != null ? signal.crossAssetScore : 0,
         present: signal.crossAssetScore != null
+      },
+      // [v24.8 fix] Was missing — forex ML scores were silently ignored
+      mlScore: {
+        score: signal.mlWinProbability != null ? signal.mlWinProbability : 0,
+        present: signal.mlWinProbability != null && signal.mlConfidenceTier !== 'none'
       }
     };
   },
