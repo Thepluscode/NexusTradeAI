@@ -63,6 +63,17 @@ try {
         sharedIndicators = null;
     }
 }
+// [v24.3] 4-state regime detector
+let sharedRegimeDetector;
+try {
+    sharedRegimeDetector = require('./signals/regime-detector');
+} catch (e) {
+    try { sharedRegimeDetector = require('../../services/signals/regime-detector'); } catch (_) {
+        sharedRegimeDetector = null;
+    }
+}
+if (sharedRegimeDetector) console.log('[INIT] 4-state regime detector loaded');
+
 // Load .env from project root (Railway injects env vars directly, so dotenv is a no-op there)
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 

@@ -113,6 +113,17 @@ try {
         sharedIndicators = null;
     }
 }
+// [v24.3] 4-state regime detector — replaces inline 3-bucket ATR-only detector
+let sharedRegimeDetector;
+try {
+    sharedRegimeDetector = require('./signals/regime-detector');
+} catch (e) {
+    try { sharedRegimeDetector = require('../../services/signals/regime-detector'); } catch (_) {
+        sharedRegimeDetector = null;
+    }
+}
+if (sharedRegimeDetector) console.log('[INIT] 4-state regime detector loaded');
+
 // Load .env from project root (Railway injects env vars directly, so dotenv is a no-op there)
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
@@ -2849,10 +2860,26 @@ async function scanMomentumBreakouts() {
                     limit: 200
                 });
                 if (spyBars1m && spyBars1m.length > 20) {
-                    // Pass 1-min bars to regime detector (ATR-based; fine-grained resolution is OK there)
-                    globalThis._marketRegime = detectMarketRegime(spyBars1m);
+                    // [v24.3] 4-state regime detector — uses ATR + ADX + EMA slope
+                    if (sharedRegimeDetector) {
+                        // Normalize Alpaca {o,h,l,c} to shared module {open,high,low,close}
+                        const normalizedSpy = spyBars1m.map(b => ({
+                            open: parseFloat(b.o), high: parseFloat(b.h),
+                            low: parseFloat(b.l), close: parseFloat(b.c),
+                            volume: parseFloat(b.v || 0),
+                        }));
+                        globalThis._marketRegime = sharedRegimeDetector.detectRegime(normalizedSpy);
+                    } else {
+                        // Fallback to inline 3-state detector
+                        globalThis._marketRegime = detectMarketRegime(spyBars1m);
+                    }
                     globalThis._marketRegimeUpdated = Date.now();
-                    console.log(`[Regime] Market: ${globalThis._marketRegime.adjustments.label} (ATR: ${globalThis._marketRegime.atrPct}%) — size:x${globalThis._marketRegime.adjustments.positionSizeMultiplier} threshold:x${globalThis._marketRegime.adjustments.scoreThresholdMultiplier} maxPos:${globalThis._marketRegime.adjustments.maxPositions}`);
+                    const adj = globalThis._marketRegime.adjustments;
+                    console.log(`[Regime] Market: ${adj.label} (ATR: ${globalThis._marketRegime.atrPercent || globalThis._marketRegime.atrPct || 0}%, ADX: ${globalThis._marketRegime.adx || '?'}, conf: ${globalThis._marketRegime.confidence || '?'}) — size:x${adj.positionSizeMultiplier} threshold:x${adj.scoreThresholdMultiplier} maxPos:${adj.maxPositions}${adj.allowedDirections ? ' dirs:' + adj.allowedDirections.join('/') : ''}`);
+                    // [v24.3] Directional gate: if regime is TRENDING_DOWN, block long entries
+                    if (globalThis._marketRegime.regime === 'TRENDING_DOWN') {
+                        console.log(`⚠️ [Regime] TRENDING_DOWN detected — long entries will be blocked`);
+                    }
 
                     // [Tier3 Fix] SPY Trend Hard Gate — aggregate to 5-min bars to reduce noise
                     // SMA20 on 5-min = 100 minutes of trend context (vs noisy 20-minute SMA on 1-min bars)
@@ -2973,6 +3000,20 @@ async function scanMomentumBreakouts() {
                         }
                         // SAFETY-REVIEWED: relative strength override — strong individual catalyst overrides broad market weakness
                         console.log(`[SPY GATE] ${mover.symbol}: Market bearish but RELATIVE STRENGTH detected (vol=${volRatio.toFixed(1)}x, chg=${pctChange.toFixed(1)}%) — allowing through`);
+                    }
+                    // [v24.3] Regime directional gate — block long entries in TRENDING_DOWN regime
+                    if (globalThis._marketRegime && globalThis._marketRegime.regime === 'TRENDING_DOWN') {
+                        const regimeConf = globalThis._marketRegime.confidence || 0;
+                        if (regimeConf > 0.4) {
+                            scanDiagnostics._block('regime_trending_down');
+                            console.log(`[REGIME GATE] ${mover.symbol}: TRENDING_DOWN (conf: ${regimeConf.toFixed(2)}) — blocking LONG entry`);
+                            continue;
+                        }
+                    }
+                    // [v24.3] Regime position sizing — apply regime multiplier to allocation factor
+                    if (globalThis._marketRegime && globalThis._marketRegime.adjustments) {
+                        mover._regimeSizeMultiplier = globalThis._marketRegime.adjustments.positionSizeMultiplier;
+                        mover._regimeConfidence = globalThis._marketRegime.confidence || 1.0;
                     }
                     // [v11.0] ORB daily limit — max 2 ORB trades per day
                     if ((mover.tier === 'orb' || mover.strategy === 'openingRangeBreakout') && orbTradesToday >= 2) {
