@@ -19,19 +19,20 @@
 
 const BOT_COMPONENTS = {
   stock: {
-    components: ['momentum', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'volumeRatio'],
-    threshold: 0.25, // v22.0: lowered because absent=skip deflates scores; 0.25 is equivalent to old 0.45 with neutralDefaults
-    weights: { momentum: 0.25, orderFlow: 0.20, displacement: 0.15, volumeProfile: 0.15, fvg: 0.10, volumeRatio: 0.15 }
+    // [v24.4] Added sentiment + crossAsset as optional components (Phase 3 alpha generation)
+    components: ['momentum', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'volumeRatio', 'sentiment', 'crossAsset'],
+    threshold: 0.25,
+    weights: { momentum: 0.22, orderFlow: 0.18, displacement: 0.13, volumeProfile: 0.13, fvg: 0.09, volumeRatio: 0.10, sentiment: 0.08, crossAsset: 0.07 }
   },
   forex: {
-    components: ['trend', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'macd'],
+    components: ['trend', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'macd', 'sentiment', 'crossAsset'],
     threshold: 0.50,
-    weights: { trend: 0.25, orderFlow: 0.20, displacement: 0.15, volumeProfile: 0.15, fvg: 0.10, macd: 0.15 }
+    weights: { trend: 0.22, orderFlow: 0.18, displacement: 0.13, volumeProfile: 0.13, fvg: 0.09, macd: 0.10, sentiment: 0.08, crossAsset: 0.07 }
   },
   crypto: {
-    components: ['momentum', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'volumeRatio'],
+    components: ['momentum', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'volumeRatio', 'sentiment', 'crossAsset'],
     threshold: 0.50,
-    weights: { momentum: 0.25, orderFlow: 0.20, displacement: 0.15, volumeProfile: 0.20, fvg: 0.15, volumeRatio: 0.05 }
+    weights: { momentum: 0.22, orderFlow: 0.18, displacement: 0.13, volumeProfile: 0.15, fvg: 0.12, volumeRatio: 0.05, sentiment: 0.08, crossAsset: 0.07 }
   }
 };
 
@@ -91,6 +92,20 @@ const EXTRACTORS = {
     volumeRatio: {
       score: Math.min(parseFloat(signal.volumeRatio || 1) / 3, 1.0),
       present: true
+    },
+    // [v24.4] Sentiment — from RSS/news analysis via strategy bridge
+    sentiment: {
+      // sentimentScore ranges from -1 (very bearish) to +1 (very bullish)
+      // Normalize to 0-1 for committee: -1 → 0.0, 0 → 0.5, +1 → 1.0
+      score: signal.sentimentScore != null
+        ? Math.max(0, Math.min(1, (signal.sentimentScore + 1) / 2))
+        : 0,
+      present: signal.sentimentScore != null
+    },
+    // [v24.4] Cross-asset — VIX + correlation + inter-market divergence
+    crossAsset: {
+      score: signal.crossAssetScore != null ? signal.crossAssetScore : 0,
+      present: signal.crossAssetScore != null
     }
   }),
 
@@ -131,6 +146,16 @@ const EXTRACTORS = {
             : Math.min(1, Math.max(0, -signal.macdHistogram * 10000 + 0.5)))
           : 0,
         present: signal.macdHistogram != null
+      },
+      sentiment: {
+        score: signal.sentimentScore != null
+          ? Math.max(0, Math.min(1, (signal.sentimentScore + 1) / 2))
+          : 0,
+        present: signal.sentimentScore != null
+      },
+      crossAsset: {
+        score: signal.crossAssetScore != null ? signal.crossAssetScore : 0,
+        present: signal.crossAssetScore != null
       }
     };
   },
@@ -165,6 +190,16 @@ const EXTRACTORS = {
       volumeRatio: {
         score: Math.min(parseFloat(signal.volumeRatio || 1) / 3, 1.0),
         present: true
+      },
+      sentiment: {
+        score: signal.sentimentScore != null
+          ? Math.max(0, Math.min(1, (signal.sentimentScore + 1) / 2))
+          : 0,
+        present: signal.sentimentScore != null
+      },
+      crossAsset: {
+        score: signal.crossAssetScore != null ? signal.crossAssetScore : 0,
+        present: signal.crossAssetScore != null
       }
     };
   }
