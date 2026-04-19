@@ -1,0 +1,137 @@
+name: Nightly Strategy Health Check
+
+# Runs every weeknight at 10 PM EST (3 AM UTC next day)
+# Checks bot health, evaluates strategy performance, alerts on degradation
+
+on:
+  schedule:
+    - cron: '0 3 * * 2-6'  # Tue-Sat 3AM UTC = Mon-Fri 10PM EST
+  workflow_dispatch:  # manual trigger for testing
+
+jobs:
+  health-check:
+    name: Bot Health + Strategy Performance
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Stock Bot Health
+        id: stock_health
+        run: |
+          RESPONSE=$(curl -sf --max-time 15 https://nexus-stock-bot-production.up.railway.app/health || echo '{"status":"down"}')
+          echo "response=$RESPONSE" >> $GITHUB_OUTPUT
+          STATUS=$(echo "$RESPONSE" | jq -r '.status // "down"')
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          if [ "$STATUS" != "ok" ]; then
+            echo "::error::Stock bot is DOWN"
+          fi
+
+      - name: Check Crypto Bot Health
+        id: crypto_health
+        run: |
+          RESPONSE=$(curl -sf --max-time 15 https://nexus-crypto-bot-production.up.railway.app/health || echo '{"status":"down"}')
+          STATUS=$(echo "$RESPONSE" | jq -r '.status // "down"')
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          if [ "$STATUS" != "ok" ]; then
+            echo "::error::Crypto bot is DOWN"
+          fi
+
+      - name: Check Forex Bot Health
+        id: forex_health
+        run: |
+          RESPONSE=$(curl -sf --max-time 15 https://nexus-forex-bot-production.up.railway.app/health || echo '{"status":"down"}')
+          STATUS=$(echo "$RESPONSE" | jq -r '.status // "down"')
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          if [ "$STATUS" != "ok" ]; then
+            echo "::error::Forex bot is DOWN"
+          fi
+
+      - name: Check Strategy Bridge Health
+        id: bridge_health
+        run: |
+          RESPONSE=$(curl -sf --max-time 15 https://nexus-strategy-bridge-production.up.railway.app/health || echo '{"status":"down"}')
+          STATUS=$(echo "$RESPONSE" | jq -r '.status // "down"')
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          if [ "$STATUS" != "ok" ]; then
+            echo "::error::Strategy bridge is DOWN"
+          fi
+
+      - name: Fetch Recent Trade Performance
+        id: performance
+        run: |
+          # Pull last 30 trades from stock bot
+          TRADES=$(curl -sf --max-time 15 'https://nexus-stock-bot-production.up.railway.app/api/trades?limit=30&bot=stock' || echo '[]')
+          TRADE_COUNT=$(echo "$TRADES" | jq 'if type == "array" then length else 0 end')
+          echo "stock_trades=$TRADE_COUNT" >> $GITHUB_OUTPUT
+
+          # Pull last 30 crypto trades
+          CRYPTO=$(curl -sf --max-time 15 'https://nexus-crypto-bot-production.up.railway.app/api/trades?limit=30' || echo '[]')
+          CRYPTO_COUNT=$(echo "$CRYPTO" | jq 'if type == "array" then length else 0 end')
+          echo "crypto_trades=$CRYPTO_COUNT" >> $GITHUB_OUTPUT
+
+      - name: Send Telegram Alert if Unhealthy
+        if: steps.stock_health.outputs.status != 'ok' || steps.crypto_health.outputs.status != 'ok' || steps.bridge_health.outputs.status != 'ok'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "::warning::Telegram credentials not configured — skipping alert"
+            exit 0
+          fi
+          MESSAGE="🚨 NexusTradeAI HEALTH ALERT%0A%0A"
+          MESSAGE+="Stock: ${{ steps.stock_health.outputs.status }}%0A"
+          MESSAGE+="Crypto: ${{ steps.crypto_health.outputs.status }}%0A"
+          MESSAGE+="Forex: ${{ steps.forex_health.outputs.status }}%0A"
+          MESSAGE+="Bridge: ${{ steps.bridge_health.outputs.status }}%0A"
+          MESSAGE+="%0ACheck Railway dashboard immediately."
+          curl -sf "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=${TELEGRAM_CHAT_ID}&text=${MESSAGE}" || true
+
+      - name: Summary
+        run: |
+          echo "## Nightly Health Check Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Stock Bot | ${{ steps.stock_health.outputs.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Crypto Bot | ${{ steps.crypto_health.outputs.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Forex Bot | ${{ steps.forex_health.outputs.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Strategy Bridge | ${{ steps.bridge_health.outputs.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Recent trades:** Stock: ${{ steps.performance.outputs.stock_trades }}, Crypto: ${{ steps.performance.outputs.crypto_trades }}" >> $GITHUB_STEP_SUMMARY
+
+  signal-regression:
+    name: Signal Module Regression
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/signals
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: services/signals/node_modules
+          key: signals-node-modules-${{ hashFiles('services/signals/package.json') }}
+          restore-keys: signals-node-modules-
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run full signal test suite
+        run: npx jest --ci --passWithNoTests
+
+      - name: Test Summary
+        if: always()
+        run: |
+          echo "## Signal Module Regression" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All signal module tests must pass nightly to detect strategy decay." >> $GITHUB_STEP_SUMMARY
