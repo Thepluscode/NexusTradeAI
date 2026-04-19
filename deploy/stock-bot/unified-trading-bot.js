@@ -124,6 +124,28 @@ try {
 }
 if (sharedRegimeDetector) console.log('[INIT] 4-state regime detector loaded');
 
+// [v24.8] Portfolio intelligence — cross-bot correlation + equity curve sizing
+let portfolioIntelligence;
+try {
+    portfolioIntelligence = require('./signals/portfolio-intelligence');
+} catch (e) {
+    try { portfolioIntelligence = require('../../services/signals/portfolio-intelligence'); } catch (_) {
+        portfolioIntelligence = null;
+    }
+}
+if (portfolioIntelligence) console.log('[INIT] Portfolio intelligence loaded');
+
+// [v24.7] Economic event calendar — pause around FOMC/NFP/CPI
+let eventCalendar;
+try {
+    eventCalendar = require('./signals/event-calendar');
+} catch (e) {
+    try { eventCalendar = require('../../services/signals/event-calendar'); } catch (_) {
+        eventCalendar = null;
+    }
+}
+if (eventCalendar) console.log('[INIT] Economic event calendar loaded');
+
 // Load .env from project root (Railway injects env vars directly, so dotenv is a no-op there)
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
@@ -2835,6 +2857,26 @@ async function checkPortfolioRisk() {
 
 async function scanMomentumBreakouts() {
     try {
+        // [v24.7] Economic event calendar check — pause around FOMC/NFP/CPI
+        if (eventCalendar) {
+            const eventCheck = eventCalendar.checkEventProximity(new Date(), 'stock');
+            if (eventCheck.nearEvent) {
+                if (eventCheck.action === 'block') {
+                    console.log(`🛑 [EVENT CALENDAR] ${eventCheck.event.name} in ${eventCheck.minutesUntil} min — BLOCKING new entries`);
+                    return [];
+                }
+                if (eventCheck.action === 'reduce') {
+                    globalThis._eventSizeMultiplier = eventCheck.sizeMultiplier;
+                    console.log(`⚠️ [EVENT CALENDAR] ${eventCheck.event.name} in ${eventCheck.minutesUntil} min — reducing size to ${(eventCheck.sizeMultiplier * 100).toFixed(0)}%`);
+                } else if (eventCheck.action === 'reduce_post') {
+                    globalThis._eventSizeMultiplier = eventCheck.sizeMultiplier;
+                    console.log(`📊 [EVENT CALENDAR] ${eventCheck.event.name} just occurred — post-event reduction ${(eventCheck.sizeMultiplier * 100).toFixed(0)}%`);
+                }
+            } else {
+                globalThis._eventSizeMultiplier = 1.0;
+            }
+        }
+
         // Drawdown circuit breaker — block new entries if drawdown limit exceeded
         if (perfData.maxDrawdown >= MAX_DRAWDOWN_PCT) {
             console.log(`🛑 [DRAWDOWN BREAKER] ${perfData.maxDrawdown.toFixed(1)}% >= limit ${MAX_DRAWDOWN_PCT}% — no new entries`);
@@ -3167,6 +3209,21 @@ async function scanMomentumBreakouts() {
                     } catch (mlErr) {
                         console.warn(`[ML_REGIME] ${mover.symbol}: apply failed - ${mlErr.message}`);
                     }
+                    // [v24.8] Equity curve sizing — anti-martingale (bet less when losing)
+                    if (portfolioIntelligence && perfData.equityHistory && perfData.equityHistory.length >= 20) {
+                        try {
+                            const eqSizing = portfolioIntelligence.computeEquityCurveSizing(perfData.equityHistory);
+                            if (eqSizing.multiplier < 1.0) {
+                                mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * eqSizing.multiplier;
+                                console.log(`[EQUITY CURVE] ${mover.symbol} size ×${eqSizing.multiplier.toFixed(2)} (${eqSizing.phase}, DD: ${eqSizing.drawdownPct.toFixed(1)}%)`);
+                            }
+                        } catch (_eqErr) { /* non-fatal */ }
+                    }
+                    // [v24.7] Event calendar sizing
+                    if (globalThis._eventSizeMultiplier != null && globalThis._eventSizeMultiplier < 1.0) {
+                        mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * globalThis._eventSizeMultiplier;
+                    }
+
                     // [v10.1] Re-entry validation — if this is a re-entry, require extra confirmation
                     if (profitProtectReentrySymbols.has(mover.symbol)) {
                         const reentryCheck = isStockReentryValid(mover.symbol, mover);
