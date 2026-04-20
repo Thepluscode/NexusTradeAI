@@ -95,6 +95,21 @@ try { eventCalendar = require('./signals/event-calendar'); } catch (e) {
 if (portfolioIntelligence) console.log('[INIT] Portfolio intelligence loaded');
 if (eventCalendar) console.log('[INIT] Economic event calendar loaded');
 
+// [v24.12] Cross-asset, microstructure, liquidity sweep
+let crossAssetModule, microstructureModule, liquiditySweepModule;
+try { crossAssetModule = require('./signals/cross-asset'); } catch (e) {
+    try { crossAssetModule = require('../../services/signals/cross-asset'); } catch (_) { crossAssetModule = null; }
+}
+try { microstructureModule = require('./signals/microstructure'); } catch (e) {
+    try { microstructureModule = require('../../services/signals/microstructure'); } catch (_) { microstructureModule = null; }
+}
+try { liquiditySweepModule = require('./signals/liquidity-sweep'); } catch (e) {
+    try { liquiditySweepModule = require('../../services/signals/liquidity-sweep'); } catch (_) { liquiditySweepModule = null; }
+}
+if (crossAssetModule) console.log('[INIT] Cross-asset signal module loaded');
+if (microstructureModule) console.log('[INIT] Microstructure (VPIN) module loaded');
+if (liquiditySweepModule) console.log('[INIT] Liquidity sweep module loaded');
+
 // Load .env from project root (Railway injects env vars directly, so dotenv is a no-op there)
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
@@ -3693,6 +3708,50 @@ class CryptoTradingEngine {
                                 continue;
                             }
                         }
+                        // [v24.12] Enrich signal with Phase 3 alpha sources before committee scoring
+                        try {
+                            // Cross-asset: use BTC regime as crypto-wide risk gauge
+                            if (crossAssetModule && cryptoRegime) {
+                                const vixProxy = cryptoRegime.atrPct ? cryptoRegime.atrPct * 1000 : null; // crypto ATR→fear scaling
+                                const crossAsset = crossAssetModule.computeCrossAssetScore({ vixLevel: vixProxy });
+                                signal.crossAssetScore = crossAsset.score;
+                                if (crossAsset.riskMultiplier < 1.0) {
+                                    signal.sizingFactor = (signal.sizingFactor || 1.0) * crossAsset.riskMultiplier;
+                                    console.log(`[CROSS-ASSET] ${signal.symbol} size ×${crossAsset.riskMultiplier.toFixed(2)} (fear zone: ${crossAsset.components?.vix?.zone || '?'})`);
+                                }
+                            }
+                            // Microstructure: VPIN from klines already fetched
+                            if (microstructureModule && data.klines && data.klines.length >= 20) {
+                                const normalizedBars = data.klines.map(b => ({
+                                    open: parseFloat(b.open || b.o || 0), high: parseFloat(b.high || b.h || 0),
+                                    low: parseFloat(b.low || b.l || 0), close: parseFloat(b.close || b.c || 0),
+                                    volume: parseFloat(b.volume || b.v || 0),
+                                }));
+                                const micro = microstructureModule.computeMicrostructure(normalizedBars);
+                                if (micro.present && micro.toxicity?.raw?.direction === 'distribution') {
+                                    signal.sizingFactor = (signal.sizingFactor || 1.0) * 0.7;
+                                    console.log(`[MICROSTRUCTURE] ${signal.symbol} DISTRIBUTION — size ×0.70`);
+                                } else if (micro.present && micro.toxicity?.raw?.direction === 'accumulation') {
+                                    console.log(`[MICROSTRUCTURE] ${signal.symbol} ACCUMULATION confirmed (VPIN: ${micro.vpin?.raw?.vpin?.toFixed(3) || '?'})`);
+                                }
+                            }
+                            // Liquidity sweep
+                            if (liquiditySweepModule && data.klines && data.klines.length >= 25) {
+                                const normalizedBars = data.klines.map(b => ({
+                                    open: parseFloat(b.open || b.o || 0), high: parseFloat(b.high || b.h || 0),
+                                    low: parseFloat(b.low || b.l || 0), close: parseFloat(b.close || b.c || 0),
+                                    volume: parseFloat(b.volume || b.v || 0),
+                                }));
+                                const sweep = liquiditySweepModule.computeLiquiditySweep(normalizedBars, data.atr || 1);
+                                if (sweep.raw.detected && sweep.raw.bullishSweeps.length > 0) {
+                                    signal.sizingFactor = (signal.sizingFactor || 1.0) * 1.15;
+                                    console.log(`[LIQUIDITY SWEEP] ${signal.symbol} BULLISH sweep — size ×1.15`);
+                                }
+                            }
+                        } catch (alphaErr) {
+                            console.warn(`[ALPHA] ${signal.symbol}: enrichment failed — ${alphaErr.message}`);
+                        }
+
                         // [Phase 3] Committee aggregator — unified confidence from all signal sources
                         // threshold uses auto-optimized value (falls back to 0.50 default)
                         const committee = computeCryptoCommitteeScore(signal);
@@ -3734,7 +3793,12 @@ class CryptoTradingEngine {
                         const committeeForQualifier = { ...committee, calibrated: calibratedConf };
                         const cxQualifier = qualifyEntry(
                             committeeForQualifier,
-                            { threshold: MIN_SIGNAL_CONFIDENCE, avgWinPct: cxAvgWinPct, avgLossPct: cxAvgLossPct, minPositiveComponents: 2 },
+                            {
+                                threshold: MIN_SIGNAL_CONFIDENCE, avgWinPct: cxAvgWinPct, avgLossPct: cxAvgLossPct, minPositiveComponents: 2,
+                                regimeConfidence: cryptoRegime?.confidence || null,
+                                regimeSizeMultiplier: cryptoRegime?.adjustments?.positionSizeMultiplier || null,
+                                mlWinProbability: signal.mlWinProbability || null,
+                            },
                             { costPct: CRYPTO_ROUND_TRIP_COST * 100 }
                         );
                         if (!cxQualifier.qualified) {
