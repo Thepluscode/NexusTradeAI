@@ -146,6 +146,27 @@ try {
 }
 if (eventCalendar) console.log('[INIT] Economic event calendar loaded');
 
+// [v24.12] Cross-asset, microstructure, liquidity sweep — Phase 3 alpha modules
+let crossAssetModule, microstructureModule, liquiditySweepModule;
+try {
+    crossAssetModule = require('./signals/cross-asset');
+} catch (e) {
+    try { crossAssetModule = require('../../services/signals/cross-asset'); } catch (_) { crossAssetModule = null; }
+}
+try {
+    microstructureModule = require('./signals/microstructure');
+} catch (e) {
+    try { microstructureModule = require('../../services/signals/microstructure'); } catch (_) { microstructureModule = null; }
+}
+try {
+    liquiditySweepModule = require('./signals/liquidity-sweep');
+} catch (e) {
+    try { liquiditySweepModule = require('../../services/signals/liquidity-sweep'); } catch (_) { liquiditySweepModule = null; }
+}
+if (crossAssetModule) console.log('[INIT] Cross-asset signal module loaded');
+if (microstructureModule) console.log('[INIT] Microstructure (VPIN) module loaded');
+if (liquiditySweepModule) console.log('[INIT] Liquidity sweep module loaded');
+
 // Load .env from project root (Railway injects env vars directly, so dotenv is a no-op there)
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
@@ -3119,6 +3140,75 @@ async function scanMomentumBreakouts() {
                             continue;
                         }
                     }
+                    // [v24.12] Enrich mover with Phase 3 alpha signals before committee scoring
+                    try {
+                        // Cross-asset: VIX fear gauge (use cached regime ATR% as proxy for vol level)
+                        if (crossAssetModule) {
+                            const vixProxy = globalThis._marketRegime?.atrPercent
+                                ? globalThis._marketRegime.atrPercent * 10 // rough ATR→VIX scaling
+                                : null;
+                            const crossAsset = crossAssetModule.computeCrossAssetScore({ vixLevel: vixProxy });
+                            mover.crossAssetScore = crossAsset.score;
+                            mover._crossAssetRiskMult = crossAsset.riskMultiplier;
+                            if (crossAsset.riskMultiplier < 1.0) {
+                                mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * crossAsset.riskMultiplier;
+                                console.log(`[CROSS-ASSET] ${mover.symbol} size ×${crossAsset.riskMultiplier.toFixed(2)} (VIX zone: ${crossAsset.components?.vix?.zone || '?'})`);
+                            }
+                        }
+                        // Microstructure: VPIN + trade flow toxicity (from bars already fetched)
+                        if (microstructureModule && bars && bars.length >= 20) {
+                            const normalizedBars = bars.map(b => ({
+                                open: parseFloat(b.o), high: parseFloat(b.h),
+                                low: parseFloat(b.l), close: parseFloat(b.c),
+                                volume: parseFloat(b.v || 0),
+                            }));
+                            const micro = microstructureModule.computeMicrostructure(normalizedBars);
+                            if (micro.present) {
+                                // Directional check: for longs, we want buy-side toxicity (accumulation)
+                                const toxDir = micro.toxicity?.raw?.direction;
+                                if (toxDir === 'distribution') {
+                                    // Smart money selling — reduce confidence for longs
+                                    mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * 0.7;
+                                    console.log(`[MICROSTRUCTURE] ${mover.symbol} DISTRIBUTION detected — size ×0.70`);
+                                } else if (toxDir === 'accumulation') {
+                                    console.log(`[MICROSTRUCTURE] ${mover.symbol} ACCUMULATION confirmed (VPIN: ${micro.vpin?.raw?.vpin?.toFixed(3) || '?'})`);
+                                }
+                            }
+                        }
+                        // Liquidity sweep: check if recent price action swept a swing level
+                        if (liquiditySweepModule && bars && bars.length >= 25) {
+                            const normalizedBars = bars.map(b => ({
+                                open: parseFloat(b.o), high: parseFloat(b.h),
+                                low: parseFloat(b.l), close: parseFloat(b.c),
+                                volume: parseFloat(b.v || 0),
+                            }));
+                            const atrVal = atr || 1;
+                            const sweep = liquiditySweepModule.computeLiquiditySweep(normalizedBars, atrVal);
+                            if (sweep.raw.detected) {
+                                const bullSweeps = sweep.raw.bullishSweeps.length;
+                                const bearSweeps = sweep.raw.bearishSweeps.length;
+                                if (bullSweeps > 0) {
+                                    // Bullish sweep = stop hunt below support → bullish for longs
+                                    mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * 1.15;
+                                    console.log(`[LIQUIDITY SWEEP] ${mover.symbol} BULLISH sweep detected (${bullSweeps}) — size ×1.15 (institutional accumulation)`);
+                                }
+                                if (bearSweeps > 0 && (mover.direction || 'long') === 'long') {
+                                    // Bearish sweep while going long = conflict → reduce size
+                                    mover.agentSizeMultiplier = (mover.agentSizeMultiplier || 1.0) * 0.6;
+                                    console.log(`[LIQUIDITY SWEEP] ${mover.symbol} BEARISH sweep conflicts with LONG — size ×0.60`);
+                                }
+                            }
+                        }
+                        // ML win probability from cached /ml/score result
+                        const cachedMlScore = _featureCache.get(mover.symbol);
+                        if (cachedMlScore && cachedMlScore.result?.win_probability != null) {
+                            mover.mlWinProbability = cachedMlScore.result.win_probability;
+                            mover.mlConfidenceTier = cachedMlScore.result.confidence_tier || 'none';
+                        }
+                    } catch (alphaErr) {
+                        console.warn(`[ALPHA] ${mover.symbol}: enrichment failed — ${alphaErr.message}`);
+                    }
+
                     // [Phase 3] Committee aggregator — unified confidence from all signal sources
                     const committee = computeCommitteeScore(mover);
                     const committeeThreshold = optimizedParams?.committeeThreshold || 0.25; // [v22.0] lowered from 0.40 — absent signals now score 0 not 0.5
@@ -3154,7 +3244,12 @@ async function scanMomentumBreakouts() {
                     const avgLossPct = losses.length ? losses.reduce((s, e) => s + Math.abs(e.pnlPct || 0), 0) / losses.length * 100 : 1.5;
                     const qualifier = qualifyEntry(
                         committee,
-                        { threshold: committeeThreshold, avgWinPct, avgLossPct, minPositiveComponents: 2 },
+                        {
+                            threshold: committeeThreshold, avgWinPct, avgLossPct, minPositiveComponents: 2,
+                            regimeConfidence: globalThis._marketRegime?.confidence || null,
+                            regimeSizeMultiplier: globalThis._marketRegime?.adjustments?.positionSizeMultiplier || null,
+                            mlWinProbability: mover.mlWinProbability || null,
+                        },
                         { costPct: TOTAL_ROUND_TRIP_COST * 100 }
                     );
                     if (!qualifier.qualified) {
