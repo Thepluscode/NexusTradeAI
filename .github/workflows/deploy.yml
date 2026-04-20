@@ -159,10 +159,18 @@ jobs:
                        momentum.js trend.js order-flow.js volume-profile.js volume-ratio.js \
                        displacement.js fvg-detector.js macd.js regime-detector.js \
                        entry-qualifier.js confidence-calibrator.js cost-model.js multi-timeframe.js \
-                       strategy-registry.js strategy-context.js; do
+                       strategy-registry.js strategy-context.js schema.js \
+                       cross-asset.js microstructure.js liquidity-sweep.js \
+                       portfolio-intelligence.js event-calendar.js; do
               cp "services/signals/$SIG" "$BOT_DIR/signals/$SIG" 2>/dev/null || true
             done
             cp services/signals/auto-optimizer.js "$BOT_DIR/auto-optimizer.js" 2>/dev/null || true
+
+            # [v24.12] Backtest modules
+            mkdir -p "$BOT_DIR/signals/backtest"
+            for BT in runner.js gate-a-validator.js gate-b-validator.js walk-forward-harness.js; do
+              cp "services/signals/backtest/$BT" "$BOT_DIR/signals/backtest/$BT" 2>/dev/null || true
+            done
 
             # [v23.1] Strategy modules — registry plugin architecture
             mkdir -p "$BOT_DIR/signals/strategies"
