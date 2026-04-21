@@ -985,12 +985,18 @@ const CRYPTO_CONFIG = {
     // [v14.0] Trailing Stops — widened activation from +3% to +5% for crypto volatility
     // v16.0 started at +3% (0.6x risk) → locked 0.5% then got stopped on normal retraces
     // Crypto 5-min candles routinely pull back 2-3%; starting at +3% = too many premature exits
+    // [v24.12] Trailing stops — earlier activation to lock profits.
+    // Old: started at +3.5% which most crypto trades never reached.
+    // Data: 30% WR with most exits at "Time Stop" = trades going flat.
+    // New: breakeven at +1%, escalate from there.
     trailingStops: [
-        { profit: 0.035, stopDistance: 0.03 }, // [v17.0] At +3.5%: trail by 3% → lock ~0.5% (was +5%, too late with fixed breakeven lock)
-        { profit: 0.08, stopDistance: 0.045 }, // At +8%: trail by 4.5% → lock ~3.5%
-        { profit: 0.12, stopDistance: 0.055 }, // At +12%: trail by 5.5% → lock ~6.5%
-        { profit: 0.20, stopDistance: 0.08 },  // At +20%: trail by 8% → lock ~12%
-        { profit: 0.30, stopDistance: 0.12 }   // At +30%: trail by 12% → lock ~18%
+        { profit: 0.01,  stopDistance: 0.01 },  // +1%: trail to BREAKEVEN
+        { profit: 0.02,  stopDistance: 0.015 }, // +2%: lock 0.5%
+        { profit: 0.035, stopDistance: 0.02 },  // +3.5%: lock 1.5%
+        { profit: 0.05,  stopDistance: 0.025 }, // +5%: lock 2.5%
+        { profit: 0.08,  stopDistance: 0.035 }, // +8%: lock 4.5%
+        { profit: 0.12,  stopDistance: 0.05 },  // +12%: lock 7%
+        { profit: 0.20,  stopDistance: 0.08 },  // +20%: lock 12%
     ],
 
     // Scan Interval (5 min for crypto)
@@ -3097,15 +3103,17 @@ class CryptoTradingEngine {
                 }
             }
 
-            // ===== [v18.0] TWO-PHASE TIME STOP (replicates theplus-bot) =====
-            // Crypto: Phase 1 at 2 hours (trail to BE), Phase 2 at 4 hours (hard close)
-            // Crypto moves faster than forex/stocks — shorter windows
+            // ===== [v24.12] TWO-PHASE TIME STOP — extended for momentum trades =====
+            // Old: 2h soft + 4h hard → killed winners that needed time to play out.
+            // Data: most "Time Stop" exits were flat/small profit that could have run.
+            // New: 4h soft (trail to BE) + 8h hard close (doubled from 4h).
+            // The trailing stops now activate at +1%, so winners are protected earlier.
             if (position.entryBars === undefined) position.entryBars = 0;
             position.entryBars++;
             const minutesHeld = position.entryBars;
 
-            // Phase 1: Soft time stop at 120 min (2 hours) — trail to breakeven
-            if (minutesHeld >= 120 && !position.timeStopTrailed) {
+            // Phase 1: Soft time stop at 240 min (4 hours) — trail to breakeven
+            if (minutesHeld >= 240 && !position.timeStopTrailed) {
                 position.timeStopTrailed = true;
                 if (pnlUSD > 0) {
                     const beStop = position.entry;
@@ -3120,9 +3128,9 @@ class CryptoTradingEngine {
                 }
             }
 
-            // Phase 2: Hard time stop at 240 min (4 hours)
-            if (minutesHeld >= 240) {
-                console.log(`⏰ [TIME-STOP] ${symbol}: 4h HARD CLOSE — held ${minutesHeld} min, P&L $${pnlUSD.toFixed(2)}`);
+            // Phase 2: Hard time stop at 480 min (8 hours) — doubled from 4h
+            if (minutesHeld >= 480) {
+                console.log(`⏰ [TIME-STOP] ${symbol}: 8h HARD CLOSE — held ${minutesHeld} min, P&L $${pnlUSD.toFixed(2)}`);
                 this.profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: position.direction || 'long', entry: position.entry || currentPrice });
                 await this.closePosition(symbol, currentPrice, `Time Stop (${minutesHeld} min, P&L $${pnlUSD.toFixed(2)})`);
                 (this._userTelegram || telegramAlerts).send(
