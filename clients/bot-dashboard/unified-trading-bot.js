@@ -680,7 +680,8 @@ globalThis._tradeEvaluations = [];
 
 // ── [Improvement 2] Weight Auto-Learning ─────────────────────────────────
 const WEIGHTS_FILE = path.join(__dirname, 'data', 'stock-weights.json');
-const DEFAULT_WEIGHTS = { momentum: 0.25, orderFlow: 0.20, displacement: 0.15, volumeProfile: 0.15, fvg: 0.10, volumeRatio: 0.15 };
+// [v24.15] 9-component weights — must match committee-scorer.js BOT_COMPONENTS.stock
+const DEFAULT_WEIGHTS = { momentum: 0.20, orderFlow: 0.16, displacement: 0.12, volumeProfile: 0.12, fvg: 0.08, volumeRatio: 0.09, sentiment: 0.07, crossAsset: 0.06, mlScore: 0.10 };
 
 function loadWeights() {
     try {
