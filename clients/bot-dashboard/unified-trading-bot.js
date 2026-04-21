@@ -1504,12 +1504,18 @@ const EXIT_CONFIG = {
     // Start at +0.5% (stocks move more than forex but still need early protection)
     // [v13.0] Trailing starts at 1x risk (2% stop → trail from +2%)
     // Old +0.5% start was 0.25x risk — too tight, noise-triggered exits
+    // [v24.12] Trailing stops — much earlier activation for intraday trades.
+    // Old: started at +3% which most ORB trades never reached.
+    // New: starts at +0.5% (breakeven trail), escalates through profit levels.
+    // This is the #1 fix for "End of Day" losses — lock in gains early.
     trailingStopLevels: [
-        { gainThreshold: 0.03,  lockPercent: 0.30 },   // +3.0% (1.2x risk): lock 30% → stop at +0.9% (v17.0: was +2%, too tight)
-        { gainThreshold: 0.035, lockPercent: 0.45 },   // +3.5% (1.75x): lock 45%
-        { gainThreshold: 0.05,  lockPercent: 0.60 },   // +5.0%: lock 60%
-        { gainThreshold: 0.08,  lockPercent: 0.75 },   // +8.0%: lock 75%
-        { gainThreshold: 0.12,  lockPercent: 0.85 },   // +12.0%: lock 85%
+        { gainThreshold: 0.005, lockPercent: 0.00 },   // +0.5%: trail to BREAKEVEN (stop at entry)
+        { gainThreshold: 0.01,  lockPercent: 0.20 },   // +1.0%: lock 20% → stop at +0.2%
+        { gainThreshold: 0.015, lockPercent: 0.35 },   // +1.5%: lock 35% → stop at +0.525%
+        { gainThreshold: 0.02,  lockPercent: 0.50 },   // +2.0%: lock 50% → stop at +1.0%
+        { gainThreshold: 0.03,  lockPercent: 0.60 },   // +3.0%: lock 60% → stop at +1.8%
+        { gainThreshold: 0.05,  lockPercent: 0.75 },   // +5.0%: lock 75%
+        { gainThreshold: 0.08,  lockPercent: 0.85 },   // +8.0%: lock 85%
     ],
 
     // Momentum reversal thresholds
