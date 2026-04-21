@@ -3689,6 +3689,15 @@ class CryptoTradingEngine {
                             console.log(`[Guardrail] ${signal.symbol} BLOCKED — score ${(signal.score || 0).toFixed(2)} < ${MIN_SIGNAL_SCORE}`);
                             continue;
                         }
+                        // [v24.14] Regime directional gate — block longs when regime says "shorts only"
+                        // Crypto bot is long-only, so in TRENDING_DOWN we sit out entirely.
+                        if (cryptoRegime?.regime === 'TRENDING_DOWN' || cryptoRegime?.adjustments?.allowedDirections?.length === 1 && !cryptoRegime.adjustments.allowedDirections.includes('long')) {
+                            const dir = signal.direction || 'long';
+                            if (dir === 'long') {
+                                console.log(`🛑 [REGIME GATE] ${signal.symbol}: TRENDING_DOWN regime — blocking LONG (long-only bot sits out bearish markets)`);
+                                continue;
+                            }
+                        }
                         // [v23.0] Removed agent-confidence gate — agent confidence was anti-predictive
                         // (17% WR when approved vs 29% overall). Committee confidence threshold already
                         // enforced earlier in scan logic is the correct predictor.
