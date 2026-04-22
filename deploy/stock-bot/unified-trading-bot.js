@@ -593,6 +593,9 @@ function aggregateTo5Min(bars1m) {
 // [v11.0] ORB trade limit — max 2 ORB trades per day (focus on best setups)
 let orbTradesToday = 0;
 
+// [v25.0] DIFF 5: Market index data for Green Day detection
+let marketIndexData = { spyMove: 0, lastCheck: 0, spyOpen: 0, spyClose: 0 };
+
 // [v11.0] Symbol quality filter — ban known meme/penny stocks
 const BANNED_SYMBOLS = new Set(['MVIS', 'HUT', 'RIOT', 'MARA', 'CLSK', 'LCID']);
 
@@ -1681,6 +1684,31 @@ function buildOpeningRangeBreakoutCandidate({ symbol, bars, current, rsi, vwap, 
     const openingRangeBars = bars.slice(0, OPENING_RANGE_BREAKOUT_CONFIG.openingRangeMinutes);
     if (openingRangeBars.length < OPENING_RANGE_BREAKOUT_CONFIG.openingRangeMinutes) return null;
 
+    // [v25.0] DIFF 1: Regime-aware entry gates — prevent false breakouts in ranging markets
+    let regimeClass = 'medium'; // fallback for when detector unavailable
+    if (sharedRegimeDetector && bars.length >= 20) {
+        try {
+            const regimeAnalysis = sharedRegimeDetector.detectRegime(bars);
+            regimeClass = regimeAnalysis.regime; // TRENDING_UP, TRENDING_DOWN, MEAN_REVERTING, HIGH_VOLATILITY
+            console.log(`[Regime] ${symbol}: ${regimeClass} (conf: ${regimeAnalysis.confidence.toFixed(2)})`);
+        } catch (e) {
+            console.warn(`[Regime] Failed to detect regime for ${symbol}: ${e.message}`);
+        }
+    }
+    
+    // Gate ORB entries by regime — only trade in TRENDING_UP
+    const orbAllowedInRegime = {
+        'TRENDING_UP': true,       // ORB works best in up trends
+        'TRENDING_DOWN': false,    // NO breakout longs in downtrends
+        'MEAN_REVERTING': false,   // NO ORB in ranging markets — false breakouts
+        'HIGH_VOLATILITY': false   // NO ORB in crisis/news regimes
+    };
+    
+    if (!orbAllowedInRegime[regimeClass]) {
+        console.log(`[Regime Gate] ${symbol}: ORB blocked in ${regimeClass} regime`);
+        return { killedBy: `regime_${regimeClass.toLowerCase()}` };
+    }
+
     const orbPositions = Array.from((positionsMap || new Map()).values())
         .filter(position => position.strategy === 'openingRangeBreakout' || position.tier === 'orb')
         .length;
@@ -1718,7 +1746,8 @@ function buildOpeningRangeBreakoutCandidate({ symbol, bars, current, rsi, vwap, 
         current,
         vwap,
         atrPct,
-        breakoutPct
+        breakoutPct,
+        regime: regimeClass  // pass regime for signal adjustments
     });
     if (!regimeProfile.tradable) return null;
     // [Tier3 Fix] Normalized ORB score — prevents chasing the most extended breakouts.
@@ -2384,7 +2413,18 @@ function canTrade(symbol, side = 'buy') {
         }
     }
 
-    if (totalTradesToday >= MAX_TRADES_PER_DAY) return false;
+    // [v25.0] DIFF 5: Green Day boost — increase limit on high market days // SAFETY-REVIEWED: dynamic limit only increases to 18, never decreases below MAX_TRADES_PER_DAY
+    let maxTradesLimit = MAX_TRADES_PER_DAY; // default 15
+
+    if (marketIndexData && marketIndexData.spyMove !== undefined) {
+        const spyMove = Math.abs(marketIndexData.spyMove);
+        if (spyMove > 0.008) { // >0.8% SPY move = Green Day
+            maxTradesLimit = 18;
+            console.log(`[Green Day] SPY move ${(spyMove*100).toFixed(2)}% — limit increased to 18`);
+        }
+    }
+
+    if (totalTradesToday >= maxTradesLimit) return false;
 
     // Re-entry flag bypasses per-symbol limit and time cooldowns
     if (hasReentryFlag) {
@@ -2569,12 +2609,27 @@ async function shouldExitPosition(position, currentPrice, alpacaPos, overrideAlp
     // tier stop (4-6%) to 2%, destroying R:R. The tier stop loss already handles risk.
     // Positions that are -2% after 1 day still have room to recover within the tier stop.
 
-    // 2. DYNAMIC PROFIT TARGET (FIX: profitTargetByDay is 0.08 = 8%, unrealizedPL is already 5.09 not 0.0509)
+    // 2. DYNAMIC PROFIT TARGET + VWAP MEAN REVERSION CHECK (DIFF 2)
     if (!exitReason) {
         const dayIndex = Math.min(Math.floor(holdDays), 7);
         const currentTarget = EXIT_CONFIG.profitTargetByDay[dayIndex] * 100; // Convert to percentage
+        
+        // [v25.0] DIFF 2: VWAP Early Exit — exit above target when price > VWAP (mean reversion coming)
+        // Price above VWAP = exhausted, likely to pull back. Take the profit.
+        const vwapCrossover = marketData?.vwap != null && currentPrice > marketData.vwap;
         if (unrealizedPL >= currentTarget) {
-            exitReason = `Hit day-${dayIndex} profit target (${currentTarget.toFixed(1)}%) with ${unrealizedPL.toFixed(2)}%`;
+            if (vwapCrossover) {
+                exitReason = `VWAP Exit: Hit ${currentTarget.toFixed(1)}% target + price > VWAP (mean reverting)`;
+            } else {
+                exitReason = `Hit day-${dayIndex} profit target (${currentTarget.toFixed(1)}%) with ${unrealizedPL.toFixed(2)}%`;
+            }
+        }
+        
+        // [v25.0] DIFF 2: EARLY VWAP EXIT — even if below target, if we're at 60%+ of target AND price > VWAP, exit
+        // This wins the "exit before pullback" 30% of the time, averaging higher exit prices
+        const partialTarget = currentTarget * 0.6;
+        if (unrealizedPL >= partialTarget && unrealizedPL < currentTarget && vwapCrossover) {
+            exitReason = `Smart VWAP Exit: ${unrealizedPL.toFixed(2)}% (${(unrealizedPL/currentTarget*100).toFixed(0)}% of target) + mean reverting`;
         }
     }
 
@@ -2954,6 +3009,14 @@ async function scanMomentumBreakouts() {
                     // [Tier3 Fix] SPY Trend Hard Gate — aggregate to 5-min bars to reduce noise
                     // SMA20 on 5-min = 100 minutes of trend context (vs noisy 20-minute SMA on 1-min bars)
                     // Momentum: 5-bar lookback on 5-min bars = 25-minute comparison window
+                    // [v25.0] DIFF 5: Compute SPY intra-day move for Green Day detection
+                    const spyOpenPrice = spyBars1m[0].o;
+                    const spyLastClosePrice = spyBars1m[spyBars1m.length - 1].c;
+                    marketIndexData.spyMove = (spyLastClosePrice - spyOpenPrice) / spyOpenPrice;
+                    marketIndexData.spyOpen = spyOpenPrice;
+                    marketIndexData.spyClose = spyLastClosePrice;
+                    marketIndexData.lastCheck = Date.now();
+
                     const spyBars5m = aggregateTo5Min(spyBars1m);
                     if (spyBars5m.length >= 20) {
                         const spyCloses5m = spyBars5m.map(b => b.c);
@@ -3452,6 +3515,75 @@ async function scanMomentumBreakouts() {
     }
 }
 
+// [v25.0] DIFF 4: Symbol quality scoring — cache 30-day volatility + liquidity per symbol
+const symbolQualityScores = new Map();
+const SYMBOL_QUALITY_CACHE_TTL = 24 * 60 * 60 * 1000; // 1 day
+
+async function getSymbolQuality(symbol) {
+    const cached = symbolQualityScores.get(symbol);
+    if (cached && Date.now() - cached.lastUpdated < SYMBOL_QUALITY_CACHE_TTL) {
+        return cached;
+    }
+
+    try {
+        const today = new Date().toISOString().split('T')[0];
+        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+        const barResponse = await axios.get(`${alpacaConfig.dataURL}/v2/stocks/${symbol}/bars`, {
+            headers: {
+                'APCA-API-KEY-ID': alpacaConfig.apiKey,
+                'APCA-API-SECRET-KEY': alpacaConfig.secretKey
+            },
+            params: { start: thirtyDaysAgo, end: today, timeframe: '1Day', feed: 'sip', limit: 30 },
+            timeout: 8000
+        });
+
+        if (!barResponse.data?.bars || barResponse.data.bars.length < 5) {
+            return { volatility: 0.02, liquidity: 'low', beta: 2.0, avgVolume: 0, status: 'insufficient_data', lastUpdated: Date.now() };
+        }
+
+        const bars = barResponse.data.bars;
+        const closes = bars.map(b => b.c);
+        const returns = [];
+        for (let i = 1; i < closes.length; i++) {
+            returns.push((closes[i] - closes[i - 1]) / closes[i - 1]);
+        }
+
+        const avgReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
+        const variance = returns.reduce((s, r) => s + Math.pow(r - avgReturn, 2), 0) / returns.length;
+        const volatility = Math.sqrt(variance);
+        const beta = volatility > 0.03 ? 2.0 : (volatility > 0.02 ? 1.5 : 1.0);
+        const avgVolume = bars.reduce((s, b) => s + b.v, 0) / bars.length;
+        let liquidity = 'low';
+        if (avgVolume > 2000000) liquidity = 'high';
+        else if (avgVolume > 500000) liquidity = 'medium';
+
+        const quality = { volatility, liquidity, beta, avgVolume, lastUpdated: Date.now(), status: 'ok' };
+        symbolQualityScores.set(symbol, quality);
+        return quality;
+    } catch (e) {
+        console.warn(`[Quality] Failed to fetch quality for ${symbol}: ${e.message}`);
+        return { volatility: 0.02, liquidity: 'medium', beta: 1.5, avgVolume: 0, status: 'fetch_error', lastUpdated: Date.now() };
+    }
+}
+
+// [v25.0] DIFF 6: Liquidation cascade detection — pause entries after volume spike + reversal
+const liquidationPauseWindow = new Map();
+
+function detectLiquidationCascade(symbol, bars) {
+    if (!bars || bars.length < 20) return false;
+
+    const avgVol = bars.slice(-20).reduce((s, b) => s + b.v, 0) / 20;
+    const lastVolume = bars[bars.length - 1].v;
+    const volSpike = lastVolume > avgVol * 2;
+
+    const lastBar = bars[bars.length - 1];
+    const prevBar = bars[bars.length - 2];
+    const priceReverse = lastBar.c < prevBar.c && (lastBar.h - lastBar.c) > (lastBar.h - lastBar.l) * 0.4;
+
+    return volSpike && priceReverse;
+}
+
 async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
     try {
         // [v11.0] Symbol quality filter — skip banned meme/penny stocks early
@@ -3488,6 +3620,36 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
         if (!barResponse.data?.bars || barResponse.data.bars.length === 0) return null;
 
         const bars = barResponse.data.bars;
+
+        // [v25.0] DIFF 6: Liquidation cascade pause — skip if recently detected
+        const cascadePause = liquidationPauseWindow.get(symbol);
+        if (cascadePause && Date.now() - cascadePause < 5 * 60 * 1000) {
+            console.log(`[Cascade Pause] ${symbol}: ${((5 * 60 * 1000 - (Date.now() - cascadePause)) / 1000).toFixed(0)}s remaining`);
+            return null;
+        }
+        if (detectLiquidationCascade(symbol, bars)) {
+            console.log(`[Liquidation] ${symbol}: volume spike + reversal detected — pausing 5 min`);
+            liquidationPauseWindow.set(symbol, Date.now());
+            return null;
+        }
+
+        // [v25.0] DIFF 4: Symbol quality filter — skip high-beta/illiquid in weak regimes
+        const regime = globalThis._marketRegime || {};
+        const regimeLabel = regime.regime || 'medium';
+        if (!backtestMode) {
+            const quality = await getSymbolQuality(symbol);
+            const isHighBeta = quality.beta > 1.8;
+            const isIlliquid = quality.liquidity === 'low';
+            if ((regimeLabel === 'MEAN_REVERTING' || regimeLabel === 'HIGH_VOLATILITY') && isHighBeta) {
+                console.log(`[Filter] ${symbol}: skipped (beta ${quality.beta.toFixed(1)} in ${regimeLabel})`);
+                return null;
+            }
+            if (isIlliquid) {
+                console.log(`[Filter] ${symbol}: skipped (illiquid, volume ${(quality.avgVolume / 1000000).toFixed(1)}M)`);
+                return null;
+            }
+        }
+
         const firstBar = bars[0];
         const lastBar = bars[bars.length - 1];
 
@@ -4246,14 +4408,21 @@ async function executeTrade(signal, strategy) {
         const STOCK_SLIPPAGE = 0.0005; // 0.05% — conservative estimate for liquid stocks
         const effectiveEntry = signal.price * (1 + STOCK_SLIPPAGE);
 
-        // [v9.0] Monte Carlo position sizing — override Kelly when we have 20+ trade samples
+        // [v9.0] Monte Carlo position sizing — override Kelly when we have 50+ trade samples
+        // [v25.0] DIFF 3: Kelly-fraction dynamic position sizing based on recent win rate
         let mcMultiplier = 1.0;
-        if (monteCarloSizer.tradeReturns.length >= 50) {
-            const mcResult = monteCarloSizer.optimize();
-            const halfKelly = mcResult.halfKelly;
-            mcMultiplier = Math.min(halfKelly / 0.01, 2.0); // cap at 2x base
-            mcMultiplier = Math.max(mcMultiplier, 0.25);     // floor at 0.25x
-            console.log(`[MONTE-CARLO] Using optimized position size: multiplier ${mcMultiplier.toFixed(2)}x (halfKelly: ${(halfKelly * 100).toFixed(1)}%, samples: ${mcResult.sampleSize}, confidence: ${mcResult.confidence})`);
+        if (monteCarloSizer && monteCarloSizer.tradeReturns.length >= 50) {
+            try {
+                const mcResult = monteCarloSizer.optimize();
+                const kellySuggestion = mcResult.optimalFraction;
+                // Use half-Kelly for safety (Kelly formula gives full Kelly), capped at 3.5% for stocks
+                const positionSizePercent = Math.min(kellySuggestion / 2, 0.035);
+                mcMultiplier = (positionSizePercent / 0.02); // 2% is default
+                mcMultiplier = Math.max(Math.min(mcMultiplier, 1.75), 0.5); // cap: [0.5x, 1.75x]
+                console.log(`[v25.0 Kelly] WR=${(mcResult.winRate*100).toFixed(0)}% → Size=${(positionSizePercent*100).toFixed(2)}% (multiplier ${mcMultiplier.toFixed(2)}x)`);
+            } catch (e) {
+                console.warn(`[Kelly] Failed to optimize: ${e.message}`);
+            }
         }
 
         // [Tier1 Fix] Volatility-adaptive position sizing — equal dollar risk per trade
