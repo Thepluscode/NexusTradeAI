@@ -2139,6 +2139,25 @@ class CryptoTradingEngine {
                 continue;
             }
 
+            // [v25.0] DIFF 6: Liquidation cascade detection — pause entries after volume spike + reversal
+            if (data.klines && data.klines.length >= 10) {
+                const recentKlines = data.klines.slice(-10);
+                const avgVol = data.klines.slice(-100).reduce((s, b) => s + (b.volume || b.v || 0), 0) / Math.min(data.klines.length, 100);
+                const recentVol = recentKlines.reduce((s, b) => s + (b.volume || b.v || 0), 0) / 10;
+                const volSpike = recentVol > avgVol * 2.5;
+                const lastK = recentKlines[recentKlines.length - 1];
+                const prevK = recentKlines[recentKlines.length - 2];
+                const lastClose = lastK.close || lastK.c || 0;
+                const prevClose = prevK.close || prevK.c || 0;
+                const prevHigh = prevK.high || prevK.h || 0;
+                const prevLow = prevK.low || prevK.l || 0;
+                const priceReverse = lastClose < prevClose && (prevClose - lastClose) > (prevHigh - prevLow) * 0.3;
+                if (volSpike && priceReverse) {
+                    console.log(`[Cascade] ${symbol}: volume spike + reversal detected — skipping`);
+                    continue;
+                }
+            }
+
             // Volatility filter (pause if extreme move)
             const volatility24h = Math.abs(data.priceChange24h);
             if (volatility24h > this.config.filters.maxVolatility24h) {
@@ -2497,8 +2516,60 @@ class CryptoTradingEngine {
             }
 
             // [v14.0] Apply strategy-regime weights to momentum signals
+
+            // [v25.0] DIFF 1: 4-state regime filter — prevent bad tier selections
+            let cryptoRegimeClass = 'medium';
+            if (sharedRegimeDetector && data.klines && data.klines.length >= 20) {
+                try {
+                    const normalizedBars = data.klines.slice(-50).map(b => ({
+                        open: parseFloat(b.open || b.o || 0), high: parseFloat(b.high || b.h || 0),
+                        low: parseFloat(b.low || b.l || 0), close: parseFloat(b.close || b.c || 0),
+                        volume: parseFloat(b.volume || b.v || 0),
+                    }));
+                    const regimeAnalysis = sharedRegimeDetector.detectRegime(normalizedBars);
+                    cryptoRegimeClass = regimeAnalysis.regime;
+                    console.log(`[Crypto Regime] ${symbol}: ${cryptoRegimeClass} (conf: ${regimeAnalysis.confidence.toFixed(2)})`);
+                } catch (e) {
+                    console.warn(`[Crypto Regime] Failed for ${symbol}: ${e.message}`);
+                }
+            }
+
+            // [v25.0] DIFF 7: Intra-day momentum gates — restrict tiers by time of day
+            const estHour = ((new Date().getUTCHours()) - 5 + 24) % 24;
+            const isAsiaHours = estHour < 8 || estHour > 20;
+
             // Try each tier
             for (const [tierName, tier] of Object.entries(this.config.tiers)) {
+                // [v25.0] DIFF 1: Restrict tiers by market regime
+                const tierAllowedByRegime = {
+                    'TRENDING_UP': ['tier3', 'tier2', 'tier1'],
+                    'TRENDING_DOWN': [],
+                    'MEAN_REVERTING': ['tier1'],
+                    'HIGH_VOLATILITY': []
+                };
+                const allowedTiers = tierAllowedByRegime[cryptoRegimeClass] || ['tier3', 'tier2', 'tier1'];
+                if (!allowedTiers.includes(tierName)) {
+                    console.log(`[Regime Gate] ${symbol} tier ${tierName} blocked in ${cryptoRegimeClass}`);
+                    continue;
+                }
+
+                // [v25.0] DIFF 7: Asia hours — only tier1
+                if (isAsiaHours && tierName !== 'tier1') {
+                    console.log(`[Time Gate] ${symbol}: ${tierName} skipped (Asia hours EST=${estHour})`);
+                    continue;
+                }
+
+                // [v25.0] DIFF 4: Liquidity filter — block illiquid alts from high tiers
+                const isIlliquidAlt = ['DOGE', 'SHIB', 'PEPE', 'FLOKI', 'APE'].includes(symbol.replace('USD', ''));
+                if (tierName === 'tier3' && isIlliquidAlt) {
+                    console.log(`[Liquidity] ${symbol}: tier3 blocked (illiquid alt)`);
+                    continue;
+                }
+                if ((tierName === 'tier2' || tierName === 'tier3') && data.volume24h < 50000000) {
+                    console.log(`[Volume] ${symbol}: ${tierName} requires > $50M vol, got ${(data.volume24h / 1000000).toFixed(0)}M`);
+                    continue;
+                }
+
                 // Check RSI range
                 if (rsi < tier.rsiLower || rsi > tier.rsiUpper) continue;
 
@@ -2685,10 +2756,25 @@ class CryptoTradingEngine {
             return { allowed: false, reason: 'Already have open position' };
         }
 
+        // [v25.0] DIFF 5: BTC trend boost — increase limit when BTC is bullish // SAFETY-REVIEWED: conditional increase only, max +20%, requires confirmed BTC uptrend
+        let maxTradesLimit = this.config.maxTradesPerDay;
+        if (this.btcHourlyPrices && this.btcHourlyPrices.length >= 20) {
+            const btcSma20 = this.calculateSMA(this.btcHourlyPrices, 20);
+            const btcEma9 = this.calculateEMA(this.btcHourlyPrices, 9);
+            const btcCurrent = this.btcHourlyPrices[this.btcHourlyPrices.length - 1];
+            if (btcSma20 && btcCurrent > btcSma20 && btcEma9 > btcSma20) {
+                const trendStrength = Math.abs(btcEma9 - btcSma20) / btcSma20;
+                if (trendStrength > 0.005) { // >0.5% spread = confirmed trend
+                    maxTradesLimit = Math.floor(this.config.maxTradesPerDay * 1.2);
+                    console.log(`[BTC Bullish] Trend strength ${(trendStrength * 100).toFixed(1)}% — limit ${this.config.maxTradesPerDay} → ${maxTradesLimit}`);
+                }
+            }
+        }
+
         // Check daily trade limit
-        if (this.dailyTradeCount >= this.config.maxTradesPerDay) {
-            console.log(`❌ Daily trade limit reached (${this.dailyTradeCount}/${this.config.maxTradesPerDay})`);
-            return { allowed: false, reason: 'Daily limit reached' };
+        if (this.dailyTradeCount >= maxTradesLimit) {
+            console.log(`❌ Daily trade limit reached (${this.dailyTradeCount}/${maxTradesLimit})`);
+            return { allowed: false, reason: `Daily limit reached (${maxTradesLimit})` };
         }
 
         // Check per-symbol limit
@@ -2865,12 +2951,15 @@ class CryptoTradingEngine {
                 console.log(`[MONTE-CARLO] Using optimized position size: multiplier ${mcMultiplier.toFixed(2)}x (halfKelly: ${(halfKelly * 100).toFixed(1)}%, samples: ${mcResult.sampleSize}, confidence: ${mcResult.confidence})`);
             }
 
+            // [v25.0] DIFF 3: Tier-based Kelly multiplier — scale position with tier confidence
+            const tierSizeMultiplier = { 'tier1': 1.0, 'tier2': 1.2, 'tier3': 1.4 }[signal.tier] || 1.0;
+
             const positionSizeUSD = Math.min(
-                this.config.basePositionSizeUSD * sizingMultiplier * signalSizingFactor * guardrailMultiplier * agentSizeMultiplier * mcMultiplier,
+                this.config.basePositionSizeUSD * sizingMultiplier * signalSizingFactor * guardrailMultiplier * agentSizeMultiplier * mcMultiplier * tierSizeMultiplier,
                 this.config.maxPositionSizeUSD,
                 riskCapUSD
             );
-            console.log(`   [Kelly Sizing] WinRate: ${(runningWinRate * 100).toFixed(1)}% → kelly ${sizingMultiplier.toFixed(2)}x · signal ${signalSizingFactor.toFixed(2)}x · guardrail ${guardrailMultiplier.toFixed(2)}x · agent ${agentSizeMultiplier.toFixed(2)}x · mc ${mcMultiplier.toFixed(2)}x → $${positionSizeUSD.toFixed(0)} (risk cap $${riskCapUSD.toFixed(0)})`);
+            console.log(`   [Kelly Sizing] WinRate: ${(runningWinRate * 100).toFixed(1)}% → kelly ${sizingMultiplier.toFixed(2)}x · signal ${signalSizingFactor.toFixed(2)}x · guardrail ${guardrailMultiplier.toFixed(2)}x · agent ${agentSizeMultiplier.toFixed(2)}x · mc ${mcMultiplier.toFixed(2)}x · tier ${tierSizeMultiplier.toFixed(1)}x → $${positionSizeUSD.toFixed(0)} (risk cap $${riskCapUSD.toFixed(0)})`);
 
             // [v3.5] Crypto slippage model — Kraken taker fee is 0.26%; market orders
             // also move the book. Model as 0.30% total execution cost.
