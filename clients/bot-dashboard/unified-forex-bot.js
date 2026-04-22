@@ -453,11 +453,10 @@ function hasGlobalOandaCredentials() {
 }
 
 // ===== FOREX PAIRS =====
-// [v23.5] FOCUSED MODE: EUR_USD only until mean-reversion strategy proves profitable.
-// Old trendContinuation/pullbackContinuation strategies lost $744.87 across 12 pairs
-// with 0% WR. Narrowing to 1 pair collects clean data for ML training.
-// Restore full pair list once EUR_USD mean-reversion achieves >40% WR over 20+ trades.
-const FOREX_PAIRS = ['EUR_USD'];
+// [v25.0] DIFF 2: Re-enable strategy-specific pairs for v25.0 regime-routed strategies.
+// v23.5 restricted to EUR_USD only (focused mode). Now each pair is routed to its
+// best strategy by regime gate — breakout pairs only fire in trending, MR in ranging.
+const FOREX_PAIRS = ['EUR_USD', 'GBP_USD', 'USD_CHF', 'EUR_GBP'];
 
 // Correlation groups - avoid same-direction trades on correlated pairs
 const CORRELATION_GROUPS = {
@@ -1183,9 +1182,17 @@ function canTrade(pair, direction = 'long') {
         }
     }
 
+    // [v25.0] DIFF 3: London/NY Overlap boost — increase daily limit during best session // SAFETY-REVIEWED: conditional increase only, max 12, requires London/NY Overlap session
+    let maxTradesLimit = MAX_TRADES_PER_DAY; // default 10
+    const currentSession = getCurrentSession();
+    if (currentSession.name === 'London/NY Overlap') {
+        maxTradesLimit = 12;
+        console.log(`[Session Boost] London/NY Overlap — limit increased to 12`);
+    }
+
     // Check daily limit
-    if (totalTradesToday >= MAX_TRADES_PER_DAY) {
-        return { allowed: false, reason: `Daily limit (${MAX_TRADES_PER_DAY})` };
+    if (totalTradesToday >= maxTradesLimit) {
+        return { allowed: false, reason: `Daily limit (${maxTradesLimit})` };
     }
 
     // Check per-pair limit — BYPASSED if profit-protect re-entry flag is active
@@ -2438,6 +2445,43 @@ async function scanForSignals(heldPositions = positions) {
     const forexRegime = detectForexRegime(validAnalyses);
     console.log(`[Regime] Forex: ${forexRegime.adjustments.label} (avg ATR: ${forexRegime.avgAtrPct || '?'}%) — size:×${forexRegime.adjustments.positionSizeMultiplier} maxPos:${forexRegime.adjustments.maxPositions}`);
 
+    // [v25.0] DIFF 1+6: 4-state regime detection for strategy routing
+    let forexRegimeClass = 'medium'; // fallback
+    if (sharedRegimeDetector && validAnalyses.length > 0) {
+        try {
+            // Use first pair's M15 candles as market proxy
+            const proxyCandles = validAnalyses[0].candles || validAnalyses[0].bars;
+            if (proxyCandles && proxyCandles.length >= 20) {
+                const normalizedBars = proxyCandles.slice(-50).map(b => ({
+                    open: parseFloat(b.open || b.mid?.o || b.o || 0),
+                    high: parseFloat(b.high || b.mid?.h || b.h || 0),
+                    low: parseFloat(b.low || b.mid?.l || b.l || 0),
+                    close: parseFloat(b.close || b.mid?.c || b.c || 0),
+                    volume: parseFloat(b.volume || b.v || 1000),
+                }));
+                const regimeAnalysis = sharedRegimeDetector.detectRegime(normalizedBars);
+                forexRegimeClass = regimeAnalysis.regime;
+                console.log(`[4-State Regime] Forex: ${forexRegimeClass} (conf: ${regimeAnalysis.confidence.toFixed(2)})`);
+            }
+        } catch (e) {
+            console.warn(`[4-State Regime] Detection failed: ${e.message}`);
+        }
+    }
+
+    // [v25.0] DIFF 6: Strategy-regime routing map
+    // Breakout needs directional move, mean reversion needs ranging
+    const strategyAllowedByRegime = {
+        'TRENDING_UP': { boxBreakout: true, meanReversion: false },
+        'TRENDING_DOWN': { boxBreakout: true, meanReversion: false },
+        'MEAN_REVERTING': { boxBreakout: false, meanReversion: true },
+        'HIGH_VOLATILITY': { boxBreakout: false, meanReversion: false }
+    };
+    const allowedStrategies = strategyAllowedByRegime[forexRegimeClass] || { boxBreakout: true, meanReversion: true };
+    if (forexRegimeClass === 'HIGH_VOLATILITY') {
+        console.log(`[Regime Gate] HIGH_VOLATILITY — sitting out this cycle`);
+        return signals;
+    }
+
     // [Phase 3.5] Portfolio-level risk check (cross-bot)
     const portfolioRisk = await checkPortfolioRisk();
     if (portfolioRisk.totalPositions >= 12) {
@@ -2464,6 +2508,23 @@ async function scanForSignals(heldPositions = positions) {
 
         const config = MOMENTUM_CONFIG[tier];
 
+        // [v25.0] DIFF 4: M15 spike detection — pause pair after volume spike + reversal
+        if (analysis.candles && analysis.candles.length >= 10) {
+            const recentCandles = analysis.candles.slice(-10);
+            const avgVol = analysis.candles.slice(-30).reduce((s, c) => s + (parseFloat(c.volume || 0) || 1), 0) / Math.min(analysis.candles.length, 30);
+            const lastVol = parseFloat(recentCandles[recentCandles.length - 1].volume || 0) || 1;
+            const volSpike = lastVol > avgVol * 2.5;
+            const lastC = parseFloat(recentCandles[recentCandles.length - 1].mid?.c || recentCandles[recentCandles.length - 1].close || 0);
+            const prevC = parseFloat(recentCandles[recentCandles.length - 2].mid?.c || recentCandles[recentCandles.length - 2].close || 0);
+            const prevH = parseFloat(recentCandles[recentCandles.length - 2].mid?.h || recentCandles[recentCandles.length - 2].high || 0);
+            const prevL = parseFloat(recentCandles[recentCandles.length - 2].mid?.l || recentCandles[recentCandles.length - 2].low || 0);
+            const priceReverse = lastC < prevC && (prevC - lastC) > (prevH - prevL) * 0.3;
+            if (volSpike && priceReverse) {
+                console.log(`[Spike] ${pair}: M15 volume spike + reversal — skipping this cycle`);
+                continue;
+            }
+        }
+
         // [v8.1] Detect flip-reversal candidate
         const existingPos = heldPositions.get(pair);
         const isFlipCandidate = !!existingPos;
@@ -2488,8 +2549,12 @@ async function scanForSignals(heldPositions = positions) {
         const h4Data = await getH4TrendAndADX(pair);
 
         // ===== [v20.0] STRATEGY 1: LONDON BREAKOUT (Asian Box → London session) =====
+        // [v25.0] DIFF 6: Regime gate — only fire breakout in trending regimes
+        if (!allowedStrategies.boxBreakout) {
+            // Skip breakout section entirely when regime is MEAN_REVERTING
+        } else {
         // Evidence: 50-58% WR on GBP/USD (QuantifiedStrategies.com)
-        // RESTRICTED to GBP_USD, USD_CHF only — loses money on EUR/USD
+        // RESTRICTED to GBP_USD, USD_CHF only �� loses money on EUR/USD
         // H4 200-SMA trend filter: only long above SMA200, short below
         const box = sessionBoxes.get(pair);
         const isBreakoutPair = LONDON_BREAKOUT_PAIRS.includes(pair);
@@ -2623,8 +2688,13 @@ async function scanForSignals(heldPositions = positions) {
                 }
             }
         }
+        } // end DIFF 6 breakout regime gate
 
         // ===== [v23.5] STRATEGY 2: BB+RSI MEAN REVERSION (M15 + H4 confirmation) =====
+        // [v25.0] DIFF 6: Regime gate — only fire mean reversion in ranging regimes
+        if (!allowedStrategies.meanReversion) {
+            // Skip MR section when regime is TRENDING
+        } else {
         // v20.0 required H4 RSI < 30 + ADX < 25 — too strict, never fired.
         // v23.5 relaxes to M15 RSI < 38 / > 62 with H4 ADX < 30 (ranging confirmation).
         // Still restricted to MEAN_REVERSION_PAIRS (EUR_USD in focused mode).
@@ -2719,6 +2789,7 @@ async function scanForSignals(heldPositions = positions) {
         } else if (isMeanRevPair && h4Data.adx !== null) {
             console.log(`[MR] ${pair}: ADX ${h4Data.adx.toFixed(1)} >= 25 — trending, skip mean reversion`);
         }
+        } // end DIFF 6 mean reversion regime gate
     }
 
     signals.sort((a, b) => (b.score || 0) - (a.score || 0));
@@ -2761,6 +2832,9 @@ async function executeTrade(signal) {
     // [v3.9] Session multiplier: reduced from 1.5→1.15 to cut exposure during overlap
     const sessionMultiplier = signal.session === 'London/NY Overlap' ? 1.15 : 1.0;
 
+    // [v25.0] DIFF 7: Strategy-based Kelly multiplier — breakout has higher historical edge
+    const strategyMultiplier = signal.strategy === 'boxBreakout' ? 1.2 : 1.0;
+
     // [v9.0] Monte Carlo position sizing — override when 20+ trade samples available
     let mcMultiplier = 1.0;
     if (monteCarloSizer.tradeReturns.length >= 20) {
@@ -2775,9 +2849,10 @@ async function executeTrade(signal) {
     // Old: balance * config.positionSize (0.8-1.5%) — too large, losses compound fast
     // New: risk 0.25% of equity, then calculate position size from stop distance
     const riskPerTrade = 0.0025; // 0.25% of equity per trade
-    const riskDollars = balance * riskPerTrade * sessionMultiplier * mcMultiplier;
+    const riskDollars = balance * riskPerTrade * sessionMultiplier * mcMultiplier * strategyMultiplier;
     const stopDistance = Math.abs(signal.entry - signal.stopLoss);
-    const positionValue = stopDistance > 0 ? riskDollars / (stopDistance / signal.entry) : balance * config.positionSize * sessionMultiplier * mcMultiplier;
+    const positionValue = stopDistance > 0 ? riskDollars / (stopDistance / signal.entry) : balance * config.positionSize * sessionMultiplier * mcMultiplier * strategyMultiplier;
+    console.log(`   [Sizing] ${signal.pair}: session ${sessionMultiplier.toFixed(2)}x · mc ${mcMultiplier.toFixed(2)}x · strategy ${strategyMultiplier.toFixed(1)}x → risk $${riskDollars.toFixed(2)}`);
 
     // [v7.3] Calculate units — OANDA units = base currency units.
     // If base is USD (e.g. USD_JPY), positionValue is already in USD → units = positionValue.
@@ -3259,6 +3334,33 @@ async function managePositions() {
         }
 
         // ===== END PROFIT PROTECTION =====
+
+        // ===== [v25.0] DIFF 5: Smart BB Exit — exit mean reversion when RSI neutralizes near target =====
+        // If this is a mean reversion trade and we're at 60%+ of target with RSI back in neutral zone,
+        // momentum is exhausted — take profit before it reverses.
+        if (localPos.strategy === 'meanReversion' && localPos.takeProfit && unrealizedPL > 0) {
+            const targetDistance = Math.abs(localPos.takeProfit - entryPrice);
+            const currentDistance = isLong ? (currentPrice - entryPrice) : (entryPrice - currentPrice);
+            const progressPct = targetDistance > 0 ? currentDistance / targetDistance : 0;
+
+            if (progressPct >= 0.6) {
+                // Check current RSI — neutral zone means mean reversion is exhausting
+                try {
+                    const m15Candles = await getCandles(pair, 'M15', 20);
+                    if (m15Candles.length >= 14) {
+                        const currentRSI = calculateRSI(m15Candles, 14);
+                        if (currentRSI !== null && currentRSI >= 45 && currentRSI <= 55) {
+                            console.log(`[Smart BB Exit] ${pair}: ${(progressPct * 100).toFixed(0)}% to target + RSI ${currentRSI.toFixed(1)} (neutral) — taking profit`);
+                            profitProtectReentryPairs.set(pair, { timestamp: Date.now(), direction: localPos.direction || (isLong ? 'long' : 'short'), entry: entryPrice });
+                            await closePositionWithReason(pair, `Smart BB Exit: ${(progressPct * 100).toFixed(0)}% to BB middle + RSI neutralized (${currentRSI.toFixed(1)})`);
+                            continue;
+                        }
+                    }
+                } catch (e) {
+                    // Non-blocking — skip smart exit this cycle
+                }
+            }
+        }
 
         // ===== [v18.0] PARTIAL TAKE-PROFIT (replicates theplus-bot 1R/2R system) =====
         // At 1R profit: close 33%, move stop to breakeven
