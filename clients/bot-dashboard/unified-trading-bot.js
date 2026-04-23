@@ -719,7 +719,8 @@ function optimizeCommitteeWeights() {
         return null;
     }
 
-    const signalKeys = ['momentum', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'volumeRatio'];
+    // [v24.15] Must match 9-component DEFAULT_WEIGHTS
+    const signalKeys = Object.keys(DEFAULT_WEIGHTS);
     const edges = {};
 
     for (const key of signalKeys) {
@@ -814,7 +815,8 @@ function detectSignalDecay() {
     if (evals.length < 20) return null;
 
     const recent = evals.slice(-20);
-    const signalKeys = ['momentum', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'volumeRatio'];
+    // [v24.15] Must match 9-component DEFAULT_WEIGHTS
+    const signalKeys = Object.keys(DEFAULT_WEIGHTS);
     const decayWarnings = [];
 
     for (const key of signalKeys) {
