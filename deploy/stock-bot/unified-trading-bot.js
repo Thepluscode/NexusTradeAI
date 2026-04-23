@@ -4615,16 +4615,25 @@ async function executeTrade(signal, strategy) {
     }
 }
 
+// Process-wide symbol lock: prevents Engine 1 and Engine 3 (same Node process,
+// same Alpaca account) from both submitting a sell for the same position.
+// Without this, the second engine's sell is rejected with 422
+// "qty must be > 0" (Alpaca's phrasing when available qty is 0 due to a pending
+// sell). Released in finally to survive any throw.
+const closingSymbols = new Set();
+
 async function closePosition(symbol, qty, reason = 'Manual') {
-    // Guard: Alpaca rejects qty<=0 with 422 "qty must be > 0". Can happen when
-    // multi-engine contention leaves a stale position snapshot with qty already
-    // zeroed, or during settlement lag. Skip instead of spamming 422s.
     const numQty = parseFloat(qty);
     if (!(numQty > 0)) {
         console.warn(`[closePosition] ${symbol}: skipping sell — invalid qty "${qty}" (reason: ${reason})`);
         positions.delete(symbol);
         return;
     }
+    if (closingSymbols.has(symbol)) {
+        console.log(`[closePosition] ${symbol}: already closing in another caller — skipping (reason: ${reason})`);
+        return;
+    }
+    closingSymbols.add(symbol);
     try {
         // Get current price for P&L recording before closing
         let currentPrice = null;
@@ -4760,6 +4769,8 @@ async function closePosition(symbol, qty, reason = 'Manual') {
         // Ensure position is removed from Map even if Alpaca order submission fails,
         // so the bot is not permanently blocked from re-entering this symbol.
         positions.delete(symbol);
+    } finally {
+        closingSymbols.delete(symbol);
     }
 }
 
@@ -6202,58 +6213,65 @@ class UserTradingEngine {
     }
 
     async closePosition(symbol, qty, reason = 'Manual') {
-        // Guard: Alpaca rejects qty<=0 with 422 "qty must be > 0". Same race as
-        // the module-level closePosition — skip the bad POST.
         const numQty = parseFloat(qty);
         if (!(numQty > 0)) {
             console.warn(`[Engine ${this.userId}] closePosition ${symbol}: skipping — invalid qty "${qty}" (reason: ${reason})`);
             this.positions.delete(symbol);
             return;
         }
-        let currentPrice = null;
-        const position = this.positions.get(symbol);
+        if (closingSymbols.has(symbol)) {
+            console.log(`[Engine ${this.userId}] closePosition ${symbol}: already closing in another caller — skipping (reason: ${reason})`);
+            return;
+        }
+        closingSymbols.add(symbol);
         try {
-            const posUrl = `${this.alpacaConfig.baseURL}/v2/positions/${symbol}`;
-            const posRes = await axios.get(posUrl, {
+            let currentPrice = null;
+            const position = this.positions.get(symbol);
+            try {
+                const posUrl = `${this.alpacaConfig.baseURL}/v2/positions/${symbol}`;
+                const posRes = await axios.get(posUrl, {
+                    headers: { 'APCA-API-KEY-ID': this.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': this.alpacaConfig.secretKey }
+                });
+                currentPrice = parseFloat(posRes.data.current_price);
+            } catch (e) {
+                // 404 here is normal (position already closed); log non-404s for diagnosis
+                if (e.response?.status !== 404) {
+                    console.warn(`[closePosition] fetch price failed ${symbol}: ${e.message} status=${e.response?.status}`);
+                }
+            }
+            const isCrypto = /USD$/.test(symbol) && symbol.length <= 8;
+            await axios.post(`${this.alpacaConfig.baseURL}/v2/orders`, {
+                symbol, qty: parseFloat(qty), side: 'sell', type: 'market',
+                time_in_force: isCrypto ? 'gtc' : 'day'
+            }, {
                 headers: { 'APCA-API-KEY-ID': this.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': this.alpacaConfig.secretKey }
             });
-            currentPrice = parseFloat(posRes.data.current_price);
-        } catch (e) {
-            // 404 here is normal (position already closed); log non-404s for diagnosis
-            if (e.response?.status !== 404) {
-                console.warn(`[closePosition] fetch price failed ${symbol}: ${e.message} status=${e.response?.status}`);
+            if (position && currentPrice) {
+                const STOCK_EXIT_SLIPPAGE = 0.0005;
+                const adjustedExitPrice = currentPrice * (1 - STOCK_EXIT_SLIPPAGE);
+                const closeMetrics = resolveClosedTradeMetrics(position, qty, adjustedExitPrice);
+                if (closeMetrics) {
+                    this.recordTradeClose(symbol, closeMetrics.entryPrice, closeMetrics.exitPrice, closeMetrics.shares, reason);
+                    // [v17.1] Store decimal pnlPct in DB (0.05 = 5%), not percentage (5.0)
+                    this.dbTradeClose(position?.dbTradeId, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct / 100, reason).catch(e => console.warn('⚠️  DB operation failed:', e?.message || String(e)));
+                } else {
+                    console.warn(`⚠️ [Engine ${this.userId}] Skipping DB close write for ${symbol}: unresolved close metrics`);
+                }
             }
-        }
-        const isCrypto = /USD$/.test(symbol) && symbol.length <= 8;
-        await axios.post(`${this.alpacaConfig.baseURL}/v2/orders`, {
-            symbol, qty: parseFloat(qty), side: 'sell', type: 'market',
-            time_in_force: isCrypto ? 'gtc' : 'day'
-        }, {
-            headers: { 'APCA-API-KEY-ID': this.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': this.alpacaConfig.secretKey }
-        });
-        if (position && currentPrice) {
-            const STOCK_EXIT_SLIPPAGE = 0.0005;
-            const adjustedExitPrice = currentPrice * (1 - STOCK_EXIT_SLIPPAGE);
-            const closeMetrics = resolveClosedTradeMetrics(position, qty, adjustedExitPrice);
-            if (closeMetrics) {
-                this.recordTradeClose(symbol, closeMetrics.entryPrice, closeMetrics.exitPrice, closeMetrics.shares, reason);
-                // [v17.1] Store decimal pnlPct in DB (0.05 = 5%), not percentage (5.0)
-                this.dbTradeClose(position?.dbTradeId, closeMetrics.exitPrice, closeMetrics.pnlUsd, closeMetrics.pnlPct / 100, reason).catch(e => console.warn('⚠️  DB operation failed:', e?.message || String(e)));
-            } else {
-                console.warn(`⚠️ [Engine ${this.userId}] Skipping DB close write for ${symbol}: unresolved close metrics`);
+            const tradeRecord = { time: Date.now(), side: 'sell', reason };
+            const recent = this.recentTrades.get(symbol) || [];
+            recent.push(tradeRecord);
+            if (recent.length > 10) recent.shift();
+            this.recentTrades.set(symbol, recent);
+            if (reason && (reason.includes('Stop') || reason.toLowerCase().includes('stop loss'))) {
+                this.stoppedOutSymbols.set(symbol, Date.now());
             }
+            this.positions.delete(symbol);
+            this.savePerfData();
+            console.log(`✅ [Engine ${this.userId}] Position closed: ${symbol} (${reason})`);
+        } finally {
+            closingSymbols.delete(symbol);
         }
-        const tradeRecord = { time: Date.now(), side: 'sell', reason };
-        const recent = this.recentTrades.get(symbol) || [];
-        recent.push(tradeRecord);
-        if (recent.length > 10) recent.shift();
-        this.recentTrades.set(symbol, recent);
-        if (reason && (reason.includes('Stop') || reason.toLowerCase().includes('stop loss'))) {
-            this.stoppedOutSymbols.set(symbol, Date.now());
-        }
-        this.positions.delete(symbol);
-        this.savePerfData();
-        console.log(`✅ [Engine ${this.userId}] Position closed: ${symbol} (${reason})`);
     }
 
     async managePositions() {
