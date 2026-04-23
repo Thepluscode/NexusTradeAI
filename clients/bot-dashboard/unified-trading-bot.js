@@ -4616,6 +4616,15 @@ async function executeTrade(signal, strategy) {
 }
 
 async function closePosition(symbol, qty, reason = 'Manual') {
+    // Guard: Alpaca rejects qty<=0 with 422 "qty must be > 0". Can happen when
+    // multi-engine contention leaves a stale position snapshot with qty already
+    // zeroed, or during settlement lag. Skip instead of spamming 422s.
+    const numQty = parseFloat(qty);
+    if (!(numQty > 0)) {
+        console.warn(`[closePosition] ${symbol}: skipping sell — invalid qty "${qty}" (reason: ${reason})`);
+        positions.delete(symbol);
+        return;
+    }
     try {
         // Get current price for P&L recording before closing
         let currentPrice = null;
@@ -6193,6 +6202,14 @@ class UserTradingEngine {
     }
 
     async closePosition(symbol, qty, reason = 'Manual') {
+        // Guard: Alpaca rejects qty<=0 with 422 "qty must be > 0". Same race as
+        // the module-level closePosition — skip the bad POST.
+        const numQty = parseFloat(qty);
+        if (!(numQty > 0)) {
+            console.warn(`[Engine ${this.userId}] closePosition ${symbol}: skipping — invalid qty "${qty}" (reason: ${reason})`);
+            this.positions.delete(symbol);
+            return;
+        }
         let currentPrice = null;
         const position = this.positions.get(symbol);
         try {
