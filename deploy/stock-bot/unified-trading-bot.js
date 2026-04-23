@@ -3520,11 +3520,13 @@ async function scanMomentumBreakouts() {
 // [v25.0] DIFF 4: Symbol quality scoring — cache 30-day volatility + liquidity per symbol
 const symbolQualityScores = new Map();
 const SYMBOL_QUALITY_CACHE_TTL = 24 * 60 * 60 * 1000; // 1 day
+const SYMBOL_QUALITY_ERROR_TTL = 10 * 60 * 1000; // 10 min — back off on rate limits instead of retrying every scan
 
 async function getSymbolQuality(symbol) {
     const cached = symbolQualityScores.get(symbol);
-    if (cached && Date.now() - cached.lastUpdated < SYMBOL_QUALITY_CACHE_TTL) {
-        return cached;
+    if (cached) {
+        const ttl = cached.status === 'ok' ? SYMBOL_QUALITY_CACHE_TTL : SYMBOL_QUALITY_ERROR_TTL;
+        if (Date.now() - cached.lastUpdated < ttl) return cached;
     }
 
     try {
@@ -3541,7 +3543,9 @@ async function getSymbolQuality(symbol) {
         });
 
         if (!barResponse.data?.bars || barResponse.data.bars.length < 5) {
-            return { volatility: 0.02, liquidity: 'low', beta: 2.0, avgVolume: 0, status: 'insufficient_data', lastUpdated: Date.now() };
+            const insufficient = { volatility: 0.02, liquidity: 'low', beta: 2.0, avgVolume: 0, status: 'insufficient_data', lastUpdated: Date.now() };
+            symbolQualityScores.set(symbol, insufficient);
+            return insufficient;
         }
 
         const bars = barResponse.data.bars;
@@ -3565,7 +3569,9 @@ async function getSymbolQuality(symbol) {
         return quality;
     } catch (e) {
         console.warn(`[Quality] Failed to fetch quality for ${symbol}: ${e.message}`);
-        return { volatility: 0.02, liquidity: 'medium', beta: 1.5, avgVolume: 0, status: 'fetch_error', lastUpdated: Date.now() };
+        const errorQuality = { volatility: 0.02, liquidity: 'medium', beta: 1.5, avgVolume: 0, status: 'fetch_error', lastUpdated: Date.now() };
+        symbolQualityScores.set(symbol, errorQuality);
+        return errorQuality;
     }
 }
 
