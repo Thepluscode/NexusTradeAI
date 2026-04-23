@@ -2898,7 +2898,10 @@ async function managePositions() {
         }
 
     } catch (error) {
-        console.error('❌ Position management error:', error.message);
+        const status = error.response?.status;
+        const body = error.response?.data;
+        const endpoint = error.config?.url?.split('/').slice(-2).join('/');
+        console.error(`❌ Position management error: ${error.message} [${endpoint || 'unknown'}] body=${body ? JSON.stringify(body).slice(0, 200) : 'none'}`);
     }
 }
 
@@ -3520,14 +3523,18 @@ async function scanMomentumBreakouts() {
 // [v25.0] DIFF 4: Symbol quality scoring — cache 30-day volatility + liquidity per symbol
 const symbolQualityScores = new Map();
 const SYMBOL_QUALITY_CACHE_TTL = 24 * 60 * 60 * 1000; // 1 day
-const SYMBOL_QUALITY_ERROR_TTL = 10 * 60 * 1000; // 10 min — back off on rate limits instead of retrying every scan
+const SYMBOL_QUALITY_ERROR_TTL = 10 * 60 * 1000; // 10 min — back off on rate limits
+const SYMBOL_QUALITY_FEED_DENIED_TTL = 6 * 60 * 60 * 1000; // 6h — Alpaca 403 means symbol not in paper feed; won't change soon
+
+function qualityCacheTtl(status) {
+    if (status === 'ok') return SYMBOL_QUALITY_CACHE_TTL;
+    if (status === 'feed_denied') return SYMBOL_QUALITY_FEED_DENIED_TTL;
+    return SYMBOL_QUALITY_ERROR_TTL;
+}
 
 async function getSymbolQuality(symbol) {
     const cached = symbolQualityScores.get(symbol);
-    if (cached) {
-        const ttl = cached.status === 'ok' ? SYMBOL_QUALITY_CACHE_TTL : SYMBOL_QUALITY_ERROR_TTL;
-        if (Date.now() - cached.lastUpdated < ttl) return cached;
-    }
+    if (cached && Date.now() - cached.lastUpdated < qualityCacheTtl(cached.status)) return cached;
 
     try {
         const today = new Date().toISOString().split('T')[0];
@@ -3568,8 +3575,19 @@ async function getSymbolQuality(symbol) {
         symbolQualityScores.set(symbol, quality);
         return quality;
     } catch (e) {
-        console.warn(`[Quality] Failed to fetch quality for ${symbol}: ${e.message}`);
-        const errorQuality = { volatility: 0.02, liquidity: 'medium', beta: 1.5, avgVolume: 0, status: 'fetch_error', lastUpdated: Date.now() };
+        const httpStatus = e.response?.status;
+        const isFeedDenied = httpStatus === 403 || httpStatus === 401;
+        if (!isFeedDenied) {
+            console.warn(`[Quality] Failed to fetch quality for ${symbol}: ${e.message} status=${httpStatus}`);
+        }
+        const errorQuality = {
+            volatility: 0.02,
+            liquidity: 'medium',
+            beta: 1.5,
+            avgVolume: 0,
+            status: isFeedDenied ? 'feed_denied' : 'fetch_error',
+            lastUpdated: Date.now()
+        };
         symbolQualityScores.set(symbol, errorQuality);
         return errorQuality;
     }
@@ -6183,7 +6201,12 @@ class UserTradingEngine {
                 headers: { 'APCA-API-KEY-ID': this.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': this.alpacaConfig.secretKey }
             });
             currentPrice = parseFloat(posRes.data.current_price);
-        } catch {}
+        } catch (e) {
+            // 404 here is normal (position already closed); log non-404s for diagnosis
+            if (e.response?.status !== 404) {
+                console.warn(`[closePosition] fetch price failed ${symbol}: ${e.message} status=${e.response?.status}`);
+            }
+        }
         const isCrypto = /USD$/.test(symbol) && symbol.length <= 8;
         await axios.post(`${this.alpacaConfig.baseURL}/v2/orders`, {
             symbol, qty: parseFloat(qty), side: 'sell', type: 'market',
@@ -6282,7 +6305,10 @@ class UserTradingEngine {
                 }
             }
         } catch (error) {
-            console.error(`❌ [Engine ${this.userId}] Position management error:`, error.message);
+            const status = error.response?.status;
+            const body = error.response?.data;
+            const endpoint = error.config?.url?.split('/').slice(-2).join('/');
+            console.error(`❌ [Engine ${this.userId}] Position management error: ${error.message} [${endpoint || 'unknown'}] status=${status} body=${body ? JSON.stringify(body).slice(0, 200) : 'none'}`);
         }
     }
 
