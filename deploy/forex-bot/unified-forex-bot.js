@@ -2900,6 +2900,22 @@ async function executeTrade(signal) {
         console.log(`   [AgentSize] Units adjusted: ${prevUnits} → ${units} (multiplier=${signal.agentSizeMultiplier.toFixed(2)})`);
     }
 
+    // [v25.1] SAFETY-REVIEWED: final absolute notional cap. Prevents multiplier
+    // stacking (session × MC × strategy × agent) from inflating a position past
+    // sane limits. Ref trade #159: EUR_USD short grew to 155K units / $178K
+    // notional (−$435 loss, 58% of all forex losses). Applies AFTER every other
+    // sizing cap as a last-line defense. Tune via MAX_NOTIONAL_PCT (default 10%).
+    const MAX_NOTIONAL_PCT = parseFloat(process.env.MAX_NOTIONAL_PCT || '0.10');
+    const maxNotional = balance * MAX_NOTIONAL_PCT;
+    const currentNotional = Math.abs(units) * (_baseCurrency === 'USD' ? 1 : effectiveEntry);
+    if (currentNotional > maxNotional && maxNotional > 0) {
+        const capUnits = _baseCurrency === 'USD'
+            ? Math.floor(maxNotional)
+            : Math.floor(maxNotional / effectiveEntry);
+        console.log(`   [NotionalCap] ${_pair}: ${Math.abs(units)} → ${capUnits} units (notional $${currentNotional.toFixed(0)} → $${(capUnits * (_baseCurrency === 'USD' ? 1 : effectiveEntry)).toFixed(0)}, cap ${(MAX_NOTIONAL_PCT * 100).toFixed(0)}% of $${balance.toFixed(0)})`);
+        units = signal.direction === 'long' ? capUnits : -capUnits;
+    }
+
     // [v15.0] Safety guard: never submit an order with 0 units — would be accepted by OANDA
     // but creates a 0-unit position entry that corrupts the dashboard display.
     if (Math.abs(units) < 1) {
@@ -5447,10 +5463,13 @@ app.listen(PORT, async () => {
     // Any DB row still 'open' for a pair we don't track = orphaned on restart.
     // Two passes: (1) system-level recent orphans (user_id IS NULL, >5 min old),
     //             (2) stale orphans from any user_id open longer than stalePositionDays.
+    // [v25.1] SAFETY-REVIEWED: orphans are now backfilled from OANDA transaction
+    // history where possible — preserves real exit price + pnl instead of zeroing.
+    // Falls back to entry-price/pnl=0 only when OANDA has no matching closed trade.
     try {
         if (dbPool) {
             const orphaned = await dbPool.query(
-                `SELECT id, symbol FROM trades WHERE bot='forex' AND status='open'
+                `SELECT id, symbol, direction, entry_price, entry_time FROM trades WHERE bot='forex' AND status='open'
                  AND (
                    (user_id IS NULL AND entry_time < NOW() - INTERVAL '5 minutes')
                    OR entry_time < NOW() - make_interval(days => $1)
@@ -5459,18 +5478,54 @@ app.listen(PORT, async () => {
             );
             const toClose = orphaned.rows.filter(row => !positions.has(row.symbol));
             if (toClose.length > 0) {
+                // [v25.1] Backfill real exit data from OANDA for each orphan before closing.
+                // Sequential per-pair to avoid OANDA rate limits; failures fall back to pnl=0.
+                const resolved = [];
+                for (const row of toClose) {
+                    let exitPrice = parseFloat(row.entry_price);
+                    let realPnl = 0;
+                    let exitPct = 0;
+                    let reason = 'orphaned_restart';
+                    try {
+                        const closed = await oandaRequest('get',
+                            `/v3/accounts/${oandaConfig.accountId}/trades?instrument=${row.symbol}&state=CLOSED&count=5`);
+                        const entryTs = row.entry_time ? new Date(row.entry_time).getTime() : 0;
+                        // Pick most recent OANDA trade whose open timestamp >= db entry_time − 10min.
+                        const match = (closed?.trades || []).find(t => {
+                            const openedAt = t.openTime ? new Date(t.openTime).getTime() : 0;
+                            return openedAt >= (entryTs - 10 * 60 * 1000);
+                        }) || (closed?.trades || [])[0];
+                        if (match) {
+                            exitPrice = parseFloat(match.closePrice ?? match.averageClosePrice ?? exitPrice);
+                            realPnl = parseFloat(match.realizedPL ?? 0);
+                            const entryP = parseFloat(row.entry_price);
+                            exitPct = entryP > 0 && exitPrice > 0
+                                ? ((row.direction === 'long'
+                                    ? (exitPrice - entryP) / entryP
+                                    : (entryP - exitPrice) / entryP))
+                                : 0;
+                            reason = realPnl !== 0
+                                ? (realPnl < 0 ? 'Stop Loss (orphan-backfill)' : 'Take Profit (orphan-backfill)')
+                                : 'orphaned_restart';
+                        }
+                    } catch (e) {
+                        console.warn(`⚠️ OANDA backfill failed for orphan ${row.symbol} (id=${row.id}): ${e.message}`);
+                    }
+                    resolved.push({ id: row.id, symbol: row.symbol, exitPrice, realPnl, exitPct, reason });
+                }
                 const client = await dbPool.connect();
                 try {
                     await client.query('BEGIN');
-                    for (const row of toClose) {
+                    for (const r of resolved) {
                         await client.query(
-                            `UPDATE trades SET status='closed', exit_price=entry_price, pnl_usd=0, pnl_pct=0,
-                             close_reason='orphaned_restart', exit_time=NOW() WHERE id=$1`,
-                            [row.id]
+                            `UPDATE trades SET status='closed', exit_price=$2, pnl_usd=$3, pnl_pct=$4,
+                             close_reason=$5, exit_time=NOW() WHERE id=$1`,
+                            [r.id, r.exitPrice, r.realPnl, r.exitPct, r.reason]
                         );
                     }
                     await client.query('COMMIT');
-                    console.log(`🧹 Closed ${toClose.length} orphaned DB trade(s) from previous session`);
+                    const backfilled = resolved.filter(r => r.reason !== 'orphaned_restart').length;
+                    console.log(`🧹 Closed ${resolved.length} orphaned DB trade(s) from previous session (${backfilled} backfilled from OANDA, ${resolved.length - backfilled} pnl=0 fallback)`);
                 } catch (e) {
                     await client.query('ROLLBACK').catch(err => console.warn('[ALERT]', err.message));
                     console.warn('⚠️ Orphaned cleanup rolled back:', e.message);
