@@ -7716,6 +7716,47 @@ app.listen(PORT, async () => {
         return [];
     });
 
+    // [v25.2] SAFETY-REVIEWED: hydrate anti-churning counters from DB on startup.
+    // Without this, Railway redeploy during market hours resets totalTradesToday
+    // to 0 and can bypass MAX_TRADES_PER_DAY — the SMX-incident protection.
+    // Uses EST day boundary to match resetDailyCounters() logic (line 5862).
+    try {
+        if (dbPool) {
+            const todayStr = getESTDate().toDateString();
+            const r = await dbPool.query(
+                `SELECT symbol, entry_time, entry_price, quantity, tier
+                 FROM trades WHERE bot='stock' AND entry_time >= NOW() - INTERVAL '36 hours'
+                 ORDER BY entry_time ASC`
+            );
+            let hydratedToday = 0;
+            for (const row of r.rows) {
+                const rowEst = new Date(new Date(row.entry_time).toLocaleString('en-US', { timeZone: 'America/New_York' }));
+                if (rowEst.toDateString() !== todayStr) continue;
+                totalTradesToday++;
+                hydratedToday++;
+                tradesPerSymbol.set(row.symbol, (tradesPerSymbol.get(row.symbol) || 0) + 1);
+                const ageMs = Date.now() - new Date(row.entry_time).getTime();
+                if (ageMs < 60 * 60 * 1000) {
+                    const rec = recentTrades.get(row.symbol) || [];
+                    rec.push({
+                        time: new Date(row.entry_time).getTime(),
+                        side: 'buy',
+                        price: parseFloat(row.entry_price || 0),
+                        shares: parseFloat(row.quantity || 0),
+                        tier: row.tier || 'tier1',
+                    });
+                    if (rec.length > 10) rec.shift();
+                    recentTrades.set(row.symbol, rec);
+                }
+            }
+            if (hydratedToday > 0) {
+                console.log(`📊 [Hydrate] Anti-churning from DB: totalTradesToday=${hydratedToday}, symbols=${tradesPerSymbol.size}, recent-cooldown=${recentTrades.size}`);
+            }
+        }
+    } catch (e) {
+        console.warn('⚠️  Anti-churning hydration failed:', e.message);
+    }
+
     // [v23.0] Replay historical trade returns into Monte Carlo sizer so it survives Railway restarts
     // Without this, every redeploy resets the sizer's 50-sample threshold — sizing never activates.
     try {

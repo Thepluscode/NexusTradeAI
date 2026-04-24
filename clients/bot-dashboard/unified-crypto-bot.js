@@ -2954,12 +2954,24 @@ class CryptoTradingEngine {
             // [v25.0] DIFF 3: Tier-based Kelly multiplier — scale position with tier confidence
             const tierSizeMultiplier = { 'tier1': 1.0, 'tier2': 1.2, 'tier3': 1.4 }[signal.tier] || 1.0;
 
-            const positionSizeUSD = Math.min(
+            let positionSizeUSD = Math.min(
                 this.config.basePositionSizeUSD * sizingMultiplier * signalSizingFactor * guardrailMultiplier * agentSizeMultiplier * mcMultiplier * tierSizeMultiplier,
                 this.config.maxPositionSizeUSD,
                 riskCapUSD
             );
             console.log(`   [Kelly Sizing] WinRate: ${(runningWinRate * 100).toFixed(1)}% → kelly ${sizingMultiplier.toFixed(2)}x · signal ${signalSizingFactor.toFixed(2)}x · guardrail ${guardrailMultiplier.toFixed(2)}x · agent ${agentSizeMultiplier.toFixed(2)}x · mc ${mcMultiplier.toFixed(2)}x · tier ${tierSizeMultiplier.toFixed(1)}x → $${positionSizeUSD.toFixed(0)} (risk cap $${riskCapUSD.toFixed(0)})`);
+
+            // [v25.2] SAFETY-REVIEWED: final absolute notional cap. Mirrors the forex +
+            // stock bot fixes. Crypto has highest multiplier stack (up to 6 multipliers
+            // including tier boost) so defensive cap is warranted. Tune via
+            // CRYPTO_MAX_NOTIONAL_PCT (default 10% of equity).
+            const CRYPTO_MAX_NOTIONAL_PCT = parseFloat(process.env.CRYPTO_MAX_NOTIONAL_PCT || '0.10');
+            const cryptoEquity = this.config.accountEquity || this.config.maxPositionSizeUSD * 10 || 10000;
+            const maxCryptoNotional = cryptoEquity * CRYPTO_MAX_NOTIONAL_PCT;
+            if (positionSizeUSD > maxCryptoNotional && maxCryptoNotional > 0) {
+                console.log(`   [NotionalCap] ${signal.symbol}: $${positionSizeUSD.toFixed(0)} → $${maxCryptoNotional.toFixed(0)} (cap ${(CRYPTO_MAX_NOTIONAL_PCT * 100).toFixed(0)}% of $${cryptoEquity.toFixed(0)})`);
+                positionSizeUSD = maxCryptoNotional;
+            }
 
             // [v3.5] Crypto slippage model — Kraken taker fee is 0.26%; market orders
             // also move the book. Model as 0.30% total execution cost.
@@ -5355,6 +5367,41 @@ app.listen(PORT, async () => {
             }
         } catch (err) {
             console.error('[HYDRATE] Failed to restore positions:', err.message);
+        }
+
+        // [v25.2] SAFETY-REVIEWED: hydrate anti-churning counters from DB on startup.
+        // Without this, Railway redeploy resets dailyTradeCount to 0 and could bypass
+        // MAX_TRADES_PER_DAY. Crypto trades 24/7 so uses UTC day boundary.
+        // Excludes orphaned_restart rows (they weren't real entries from this session).
+        try {
+            const todayUTC = new Date().toISOString().slice(0, 10);
+            const r = await dbPool.query(
+                `SELECT symbol, entry_time, tier, close_reason
+                 FROM trades WHERE bot='crypto' AND entry_time >= NOW() - INTERVAL '36 hours'
+                 ORDER BY entry_time ASC`
+            );
+            let hydratedToday = 0;
+            for (const row of r.rows) {
+                if (row.close_reason === 'orphaned_restart') continue;
+                const rowUTC = new Date(row.entry_time).toISOString().slice(0, 10);
+                if (rowUTC !== todayUTC) continue;
+                engine.dailyTradeCount++;
+                hydratedToday++;
+                const entryMs = new Date(row.entry_time).getTime();
+                engine.tradesToday.push({
+                    symbol: row.symbol,
+                    tier: row.tier || 'tier1',
+                    time: entryMs,
+                });
+                // Populate lastTradeTime for cooldown tracking
+                const prev = engine.lastTradeTime.get(row.symbol) || 0;
+                if (entryMs > prev) engine.lastTradeTime.set(row.symbol, entryMs);
+            }
+            if (hydratedToday > 0) {
+                console.log(`📊 [Hydrate] Crypto anti-churning from DB: dailyTradeCount=${hydratedToday}, lastTradeTime=${engine.lastTradeTime.size} pairs`);
+            }
+        } catch (err) {
+            console.error('[HYDRATE] Crypto anti-churning hydration failed:', err.message);
         }
     }
 

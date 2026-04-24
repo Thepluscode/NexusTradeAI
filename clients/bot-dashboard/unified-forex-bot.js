@@ -5538,6 +5538,48 @@ app.listen(PORT, async () => {
         console.warn('⚠️  DB reconciliation failed:', e.message);
     }
 
+    // [v25.2] SAFETY-REVIEWED: hydrate anti-churning counters from DB on startup.
+    // Without this, Railway redeploy resets totalTradesToday to 0 and could bypass
+    // MAX_TRADES_PER_DAY — the SMX-incident protection. UTC day boundary to match
+    // resetDailyCounters() logic (line 3958). Excludes orphaned_restart rows.
+    try {
+        if (dbPool) {
+            const todayUTC = new Date().toISOString().slice(0, 10);
+            const r = await dbPool.query(
+                `SELECT symbol, entry_time, entry_price, quantity, tier, direction, close_reason
+                 FROM trades WHERE bot='forex' AND entry_time >= NOW() - INTERVAL '36 hours'
+                 ORDER BY entry_time ASC`
+            );
+            let hydratedToday = 0;
+            for (const row of r.rows) {
+                if (row.close_reason === 'orphaned_restart') continue;
+                const rowUTC = new Date(row.entry_time).toISOString().slice(0, 10);
+                if (rowUTC !== todayUTC) continue;
+                totalTradesToday++;
+                hydratedToday++;
+                tradesPerPair.set(row.symbol, (tradesPerPair.get(row.symbol) || 0) + 1);
+                const ageMs = Date.now() - new Date(row.entry_time).getTime();
+                if (ageMs < 60 * 60 * 1000) {
+                    const rec = recentTrades.get(row.symbol) || [];
+                    rec.push({
+                        time: new Date(row.entry_time).getTime(),
+                        side: row.direction === 'short' ? 'sell' : 'buy',
+                        price: parseFloat(row.entry_price || 0),
+                        units: parseFloat(row.quantity || 0),
+                        tier: row.tier || 'tier1',
+                    });
+                    if (rec.length > 10) rec.shift();
+                    recentTrades.set(row.symbol, rec);
+                }
+            }
+            if (hydratedToday > 0) {
+                console.log(`📊 [Hydrate] Forex anti-churning from DB: totalTradesToday=${hydratedToday}, pairs=${tradesPerPair.size}, recent-cooldown=${recentTrades.size}`);
+            }
+        }
+    } catch (e) {
+        console.warn('⚠️  Forex anti-churning hydration failed:', e.message);
+    }
+
     // ── Hydrate perfData from DB so stats survive redeploys ──
     if (dbPool && simTotalTrades === 0) {
         try {
