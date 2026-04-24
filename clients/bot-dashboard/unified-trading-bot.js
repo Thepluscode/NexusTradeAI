@@ -4469,6 +4469,19 @@ async function executeTrade(signal, strategy) {
             shares = maxSharesByEquity;
         }
 
+        // [v25.1] SAFETY-REVIEWED: final absolute notional cap. Prevents multiplier
+        // stacking (kelly × MC × regime × agent) from inflating a stock position past
+        // sane limits. Mirrors the forex bot fix. Tune via STOCK_MAX_NOTIONAL_PCT
+        // (default 15% — equities have no leverage so slightly more generous than forex).
+        const STOCK_MAX_NOTIONAL_PCT = parseFloat(process.env.STOCK_MAX_NOTIONAL_PCT || '0.15');
+        const maxStockNotional = equity * STOCK_MAX_NOTIONAL_PCT;
+        const currentStockNotional = shares * effectiveEntry;
+        if (currentStockNotional > maxStockNotional && maxStockNotional > 0) {
+            const capShares = Math.floor(maxStockNotional / effectiveEntry);
+            console.log(`   [NotionalCap] ${signal.symbol}: ${shares} → ${capShares} shares (notional $${currentStockNotional.toFixed(0)} → $${(capShares * effectiveEntry).toFixed(0)}, cap ${(STOCK_MAX_NOTIONAL_PCT * 100).toFixed(0)}% of $${equity.toFixed(0)})`);
+            shares = capShares;
+        }
+
         if (shares < 1) {
             console.log(`⚠️  [SKIP] ${signal.symbol}: position too small — 0 shares (atrPct=${(atrPct * 100).toFixed(2)}%, maxDollarRisk=$${maxDollarRisk.toFixed(0)}, price=$${signal.price})`);
             return null;
@@ -6384,6 +6397,14 @@ class UserTradingEngine {
             const stopLossPct = config.stopLoss || 0.04;
             const maxRiskShares = Math.floor((equity * RISK_PER_TRADE) / (effectiveEntry * stopLossPct));
             if (maxRiskShares > 0 && shares > maxRiskShares) shares = maxRiskShares;
+            // [v25.1] SAFETY-REVIEWED: final absolute notional cap — same defense as module-level path
+            const STOCK_MAX_NOTIONAL_PCT = parseFloat(process.env.STOCK_MAX_NOTIONAL_PCT || '0.15');
+            const maxStockNotional = equity * STOCK_MAX_NOTIONAL_PCT;
+            if (shares * effectiveEntry > maxStockNotional && maxStockNotional > 0) {
+                const capShares = Math.floor(maxStockNotional / effectiveEntry);
+                console.log(`   [NotionalCap] [Engine ${this.userId}] ${signal.symbol}: ${shares} → ${capShares} shares (cap ${(STOCK_MAX_NOTIONAL_PCT * 100).toFixed(0)}% of $${equity.toFixed(0)})`);
+                shares = capShares;
+            }
             if (shares < 1) return null;
             // [v12.0] ATR-based stops: 1.5x ATR min distance, 3x ATR target for 2:1 R:R
             const eAtrStopPct = signal.atrPct ? Math.max(config.stopLoss, signal.atrPct * 1.5) : config.stopLoss;
