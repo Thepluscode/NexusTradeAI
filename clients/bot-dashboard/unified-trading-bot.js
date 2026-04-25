@@ -5517,7 +5517,13 @@ app.post('/api/config/mode', requireApiSecret, async (req, res) => {
         if (!['paper', 'live'].includes(mode)) {
             return res.status(400).json({ success: false, error: 'mode must be "paper" or "live"' });
         }
-        const value = mode === 'live' ? 'true' : 'false';
+        // Paper-only invariant (CARL [trading-safety].3). Hard block live mode regardless
+        // of caller authorization — this endpoint must never route orders to a live broker.
+        if (mode === 'live') {
+            console.error('[config/mode] rejected mode=live — paper-only invariant');
+            return res.status(403).json({ success: false, error: 'Live trading is disabled — paper only.' });
+        }
+        const value = 'false';
         process.env.REAL_TRADING_ENABLED = value;
         await persistEnvVar('REAL_TRADING_ENABLED', value);
         console.log(`⚙️  Trading mode switched to: ${mode.toUpperCase()}`);
