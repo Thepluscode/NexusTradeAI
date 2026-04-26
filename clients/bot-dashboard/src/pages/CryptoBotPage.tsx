@@ -48,6 +48,10 @@ interface Position {
     unrealizedPnL?: number;   // crypto bot field name
     unrealizedPL?: number;
     unrealizedPnLPct?: number;
+    // strategy + entry timing (shown in card header)
+    strategy?: string;
+    entryTime?: string | number | Date;
+    openTime?: string | number | Date;
 }
 
 interface BotStatus {
@@ -581,6 +585,27 @@ export default function CryptoBotPage() {
                                                 color="success"
                                             />
                                         </Box>
+                                        {(() => {
+                                            const entryTs = pos.entryTime ?? pos.openTime;
+                                            if (!pos.strategy && !entryTs) return null;
+                                            return (
+                                                <Box sx={{ display: 'flex', gap: 0.5, mb: 0.75, flexWrap: 'wrap', alignItems: 'center' }}>
+                                                    {pos.strategy && (
+                                                        <Chip
+                                                            label={String(pos.strategy).toUpperCase()}
+                                                            size="small"
+                                                            variant="outlined"
+                                                            sx={{ fontSize: '0.65rem', height: 20, fontWeight: 600 }}
+                                                        />
+                                                    )}
+                                                    {entryTs && (
+                                                        <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
+                                                            Entered {new Date(entryTs).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                                        </Typography>
+                                                    )}
+                                                </Box>
+                                            );
+                                        })()}
                                         <Typography variant="body2" color="text.secondary">
                                             {(pos.quantity ?? pos.qty ?? 0).toFixed(4)} @ ${(pos.entry ?? pos.entryPrice ?? 0).toFixed(2)}
                                         </Typography>

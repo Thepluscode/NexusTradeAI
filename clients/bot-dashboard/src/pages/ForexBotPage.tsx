@@ -44,6 +44,10 @@ interface Position {
     stopLoss?: number;
     takeProfit?: number;
     tier?: string;
+    // strategy + entry timing (shown in card header)
+    strategy?: string;
+    entryTime?: string | number | Date;
+    openTime?: string | number | Date;
 }
 
 interface BotStatus {
@@ -561,6 +565,27 @@ export default function ForexBotPage() {
                                             <Typography variant="body2" color="text.secondary">
                                                 {qty} units @ {ep.toFixed(5)}
                                             </Typography>
+                                            {(() => {
+                                                const entryTs = pos.entryTime ?? pos.openTime;
+                                                if (!pos.strategy && !entryTs) return null;
+                                                return (
+                                                    <Box sx={{ display: 'flex', gap: 0.5, mt: 0.75, flexWrap: 'wrap', alignItems: 'center' }}>
+                                                        {pos.strategy && (
+                                                            <Chip
+                                                                label={String(pos.strategy).toUpperCase()}
+                                                                size="small"
+                                                                variant="outlined"
+                                                                sx={{ fontSize: '0.65rem', height: 20, fontWeight: 600 }}
+                                                            />
+                                                        )}
+                                                        {entryTs && (
+                                                            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
+                                                                Entered {new Date(entryTs).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                                            </Typography>
+                                                        )}
+                                                    </Box>
+                                                );
+                                            })()}
                                             <Box sx={{ display: 'flex', alignItems: 'center', mt: 1 }}>
                                                 {pnl >= 0 ? (
                                                     <TrendingUp sx={{ color: '#10b981', mr: 0.5 }} />
