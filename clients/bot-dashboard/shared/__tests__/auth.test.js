@@ -31,10 +31,11 @@ describe('requireApiSecret', () => {
     const origEnv = process.env.NEXUS_API_SECRET;
     afterEach(() => { process.env.NEXUS_API_SECRET = origEnv; });
 
-    test('allows request when NEXUS_API_SECRET is not configured', (done) => {
+    test('rejects request when NEXUS_API_SECRET is not configured (fail-closed)', () => {
         delete process.env.NEXUS_API_SECRET;
         const { req, res } = mockReqRes();
-        requireApiSecret(req, res, () => done());
+        requireApiSecret(req, res, () => { throw new Error('should not call next'); });
+        expect(res._status).toBe(401);
     });
 
     test('allows request with correct Bearer secret', (done) => {
