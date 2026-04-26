@@ -7377,6 +7377,40 @@ app.post('/api/admin/trades/repair-pnl', requireJwtOrApiSecret, async (req, res)
     }
 });
 
+// Admin: assign legacy NULL-user trades to a specific user. Closed-only by
+// default — leaves live open positions alone so per-user engines aren't
+// disturbed mid-trade. One-time fix for trades created before user_id
+// attribution shipped.
+app.post('/api/admin/trades/assign-user', requireJwtOrApiSecret, async (req, res) => {
+    if (req.user?.role && req.user.role !== 'admin') {
+        return res.status(403).json({ success: false, error: 'Admin only' });
+    }
+    if (!dbPool) return res.status(503).json({ success: false, error: 'No DB' });
+    try {
+        const userId = parseInt(req.body?.userId, 10);
+        if (!Number.isFinite(userId) || userId <= 0) {
+            return res.status(400).json({ success: false, error: 'userId (positive integer) required in body' });
+        }
+        const includeOpen = req.body?.includeOpen === true;
+        const userExists = await dbPool.query('SELECT id FROM users WHERE id=$1', [userId]);
+        if (userExists.rows.length === 0) {
+            return res.status(404).json({ success: false, error: `user_id ${userId} does not exist` });
+        }
+        const statusFilter = includeOpen ? '' : "AND status='closed'";
+        const r = await dbPool.query(
+            `UPDATE trades SET user_id = $1
+             WHERE user_id IS NULL ${statusFilter}
+             RETURNING id`,
+            [userId]
+        );
+        console.log(`[admin/assign-user] reassigned ${r.rows.length} trade(s) to user ${userId} (includeOpen=${includeOpen})`);
+        res.json({ success: true, updated: r.rows.length, userId, includeOpen });
+    } catch (e) {
+        console.error('[admin/assign-user] error:', e.message);
+        res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+});
+
 // Admin: list all users + their engine status (admin role required)
 app.get('/api/admin/users', requireJwt, async (req, res) => {
     if (req.user?.role !== 'admin') return res.status(403).json({ success: false, error: 'Admin only' });
