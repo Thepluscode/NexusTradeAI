@@ -19,7 +19,12 @@ const rateLimit = require('express-rate-limit');
 
 function requireApiSecret(req, res, next) {
     const secret = process.env.NEXUS_API_SECRET;
-    if (!secret) return next(); // not configured — allow (startup / local dev)
+    if (!secret) {
+        // Fail closed: missing secret is a misconfiguration, not an auth grant.
+        // Previous behavior was `return next()` which silently bypassed all admin endpoints.
+        console.error('[auth] NEXUS_API_SECRET is not configured — denying admin request');
+        return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
     const auth = req.headers.authorization || '';
     if (auth === `Bearer ${secret}`) return next();
     return res.status(401).json({ success: false, error: 'Unauthorized' });
