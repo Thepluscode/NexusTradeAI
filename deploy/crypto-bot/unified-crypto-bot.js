@@ -3211,9 +3211,17 @@ class CryptoTradingEngine {
             // Data: most "Time Stop" exits were flat/small profit that could have run.
             // New: 4h soft (trail to BE) + 8h hard close (doubled from 4h).
             // The trailing stops now activate at +1%, so winners are protected earlier.
+            // [Bugfix 2026-04-26] minutesHeld used to be `entryBars` (tick counter),
+            // which resets to 0 on every Railway redeploy and never accumulated to
+            // 480. Switched to actual elapsed time from position.entryTime/openTime
+            // (persisted via DB hydration) so time stops fire correctly post-restart.
+            // Keep entryBars increment for any callers that still read it.
             if (position.entryBars === undefined) position.entryBars = 0;
             position.entryBars++;
-            const minutesHeld = position.entryBars;
+            const entryAt = position.entryTime || position.openTime;
+            const minutesHeld = entryAt
+                ? Math.floor((Date.now() - new Date(entryAt).getTime()) / 60000)
+                : position.entryBars; // fallback if timestamp missing
 
             // Phase 1: Soft time stop at 240 min (4 hours) — trail to breakeven
             if (minutesHeld >= 240 && !position.timeStopTrailed) {
