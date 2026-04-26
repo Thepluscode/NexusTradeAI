@@ -3432,10 +3432,14 @@ async function managePositions() {
         // ===== [v18.0] TWO-PHASE TIME STOP (replicates theplus-bot time_stop logic) =====
         // Phase 1: After 3 hours (soft) — trail stop to breakeven if profitable
         // Phase 2: After 6 hours (hard) — force close regardless of P&L
-        // Bot scans every 60s, so entryBars ≈ minutes held
+        // [Bugfix 2026-04-26] minutesHeld used to be `entryBars` tick counter, which
+        // reset on every Railway redeploy. Now uses real elapsed time from entryTime.
         if (localPos.entryBars === undefined) localPos.entryBars = 0;
         localPos.entryBars++;
-        const minutesHeld = localPos.entryBars; // ~1 bar per minute (60s scan)
+        const fxEntryAt = localPos.entryTime || localPos.openTime;
+        const minutesHeld = fxEntryAt
+            ? Math.floor((Date.now() - new Date(fxEntryAt).getTime()) / 60000)
+            : localPos.entryBars; // fallback if timestamp missing
 
         // Phase 1: Soft time stop at 180 min (3 hours) — trail to breakeven
         if (minutesHeld >= 180 && !localPos.timeStopTrailed) {

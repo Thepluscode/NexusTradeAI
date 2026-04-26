@@ -2879,9 +2879,15 @@ async function managePositions() {
 
             // ===== [v18.0] TWO-PHASE TIME STOP (replicates theplus-bot) =====
             // Stock market: Phase 1 at 4 hours (trail to breakeven), Phase 2 at 6.5 hours (full session hard close)
+            // [Bugfix 2026-04-26] minutesHeld used to be `entryBars` (tick counter),
+            // which resets to 0 on every Railway redeploy and never accumulated.
+            // Switched to actual elapsed time from position.entryTime/openTime.
             if (position.entryBars === undefined) position.entryBars = 0;
             position.entryBars++;
-            const minutesHeld = position.entryBars;
+            const stockEntryAt = position.entryTime || position.openTime;
+            const minutesHeld = stockEntryAt
+                ? Math.floor((Date.now() - new Date(stockEntryAt).getTime()) / 60000)
+                : position.entryBars;
 
             // Phase 1: Soft time stop at 240 min (4 hours) — trail to breakeven
             if (minutesHeld >= 240 && !position.timeStopTrailed) {
