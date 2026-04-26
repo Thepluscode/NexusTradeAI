@@ -2711,6 +2711,11 @@ function updateTrailingStop(position, currentPrice, unrealizedPL) {
     return stopUpdated;
 }
 
+// Track which Alpaca API keys have already had cover-orphan-shorts run in this
+// process, so repeat callers (per-user engines pointing at the same account)
+// don't all race to cover the same short and log noisy "insufficient qty" errors.
+const _coveredApiKeys = new Set();
+
 // One-shot startup cleanup: cover any orphan short positions (qty < 0) by
 // submitting buy-to-cover orders. Bot is long-only, so a short can only exist
 // as residue from a prior over-sell bug. Paper API only — refuses to run
@@ -2721,6 +2726,10 @@ async function coverOrphanShorts(config, label = 'global') {
         console.warn(`[OrphanCover ${label}] Refusing to run — baseURL is not paper-api.alpaca.markets`);
         return;
     }
+    if (_coveredApiKeys.has(config.apiKey)) {
+        return; // Already covered for this Alpaca account in this process
+    }
+    _coveredApiKeys.add(config.apiKey);
     const MAX_COVER_QTY = 1000; // safety cap against bad data
     try {
         const res = await axios.get(`${config.baseURL}/v2/positions`, {
