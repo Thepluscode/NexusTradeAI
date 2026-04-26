@@ -1683,10 +1683,15 @@ if FASTAPI_AVAILABLE:
             await agent_orchestrator.learning_agent.load_from_db()
             await agent_orchestrator.scan_engine.load_from_db()
             await agent_supervisor.load_from_db()
+            sig_patterns = sum(
+                1 for p in agent_orchestrator.scan_engine.patterns.values()
+                if p.is_significant()
+            )
             logger.info(
                 f"[Startup] Recovery complete: "
                 f"{len(agent_orchestrator.learning_agent._recent_lessons)} lessons, "
-                f"{len(agent_orchestrator.scan_engine.patterns)} patterns, "
+                f"{len(agent_orchestrator.scan_engine.patterns)} patterns "
+                f"({sig_patterns} significant), "
                 f"{len(agent_supervisor._state)} bandit contexts"
             )
         except Exception as e:
