@@ -40,6 +40,7 @@ interface Position {
     stopLoss?: number;
     takeProfit?: number;
     tier?: string;
+    direction?: string;  // 'long' or 'short' on crypto bot status
     // generic fields (forex-style)
     qty?: number;
     side?: string;
@@ -575,21 +576,36 @@ export default function CryptoBotPage() {
                                     }}
                                 >
                                     <CardContent>
-                                        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                                        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1, alignItems: 'center', gap: 1 }}>
                                             <Typography variant="h6" sx={{ fontWeight: 700 }}>
                                                 {pos.symbol}
                                             </Typography>
-                                            <Chip
-                                                label={pos.tier?.toUpperCase() ?? pos.side?.toUpperCase() ?? 'LONG'}
-                                                size="small"
-                                                color="success"
-                                            />
+                                            {(() => {
+                                                const dir = (pos.direction || pos.side || 'long').toLowerCase();
+                                                const isLong = dir !== 'short';
+                                                return (
+                                                    <Chip
+                                                        label={dir.toUpperCase()}
+                                                        size="small"
+                                                        color={isLong ? 'success' : 'error'}
+                                                        sx={{ fontWeight: 700 }}
+                                                    />
+                                                );
+                                            })()}
                                         </Box>
                                         {(() => {
                                             const entryTs = pos.entryTime ?? pos.openTime;
-                                            if (!pos.strategy && !entryTs) return null;
+                                            if (!pos.strategy && !entryTs && !pos.tier) return null;
                                             return (
                                                 <Box sx={{ display: 'flex', gap: 0.5, mb: 0.75, flexWrap: 'wrap', alignItems: 'center' }}>
+                                                    {pos.tier && (
+                                                        <Chip
+                                                            label={pos.tier.toUpperCase()}
+                                                            size="small"
+                                                            variant="outlined"
+                                                            sx={{ fontSize: '0.65rem', height: 20, fontWeight: 600 }}
+                                                        />
+                                                    )}
                                                     {pos.strategy && (
                                                         <Chip
                                                             label={String(pos.strategy).toUpperCase()}
