@@ -2726,9 +2726,22 @@ async function managePositions() {
 
         if (response.data.length === 0) return;
 
-        console.log(`\n📊 Managing ${response.data.length} positions...`);
+        // Filter out orphan shorts (qty <= 0). Bot is long-only — any non-positive
+        // qty is residue from a prior over-sell. closePosition's `numQty > 0` guard
+        // would reject these every tick, spamming logs.
+        const validPositions = response.data.filter(p => parseFloat(p.qty) > 0);
+        if (validPositions.length < response.data.length) {
+            const orphans = response.data.filter(p => parseFloat(p.qty) <= 0).map(p => `${p.symbol}(${p.qty})`).join(', ');
+            if (!managePositions._loggedOrphans || managePositions._loggedOrphans !== orphans) {
+                console.warn(`[ManagePositions] Skipping ${response.data.length - validPositions.length} orphan position(s): ${orphans}. Cover via Alpaca dashboard or buy-to-cover.`);
+                managePositions._loggedOrphans = orphans;
+            }
+        }
+        if (validPositions.length === 0) return;
 
-        for (const alpacaPos of response.data) {
+        console.log(`\n📊 Managing ${validPositions.length} positions...`);
+
+        for (const alpacaPos of validPositions) {
             const symbol = alpacaPos.symbol;
             const currentPrice = parseFloat(alpacaPos.current_price);
             const avgEntry = parseFloat(alpacaPos.avg_entry_price);
@@ -6305,7 +6318,17 @@ class UserTradingEngine {
                 headers: { 'APCA-API-KEY-ID': this.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': this.alpacaConfig.secretKey }
             });
             if (response.data.length === 0) return;
-            for (const alpacaPos of response.data) {
+            // Skip orphan shorts (qty <= 0) — bot is long-only.
+            const validPositions = response.data.filter(p => parseFloat(p.qty) > 0);
+            if (validPositions.length < response.data.length) {
+                const orphans = response.data.filter(p => parseFloat(p.qty) <= 0).map(p => `${p.symbol}(${p.qty})`).join(', ');
+                if (this._loggedOrphans !== orphans) {
+                    console.warn(`[Engine ${this.userId}] Skipping ${response.data.length - validPositions.length} orphan position(s): ${orphans}. Cover via Alpaca dashboard or buy-to-cover.`);
+                    this._loggedOrphans = orphans;
+                }
+            }
+            if (validPositions.length === 0) return;
+            for (const alpacaPos of validPositions) {
                 const symbol = alpacaPos.symbol;
                 const currentPrice = parseFloat(alpacaPos.current_price);
                 const avgEntry = parseFloat(alpacaPos.avg_entry_price);
