@@ -2711,6 +2711,46 @@ function updateTrailingStop(position, currentPrice, unrealizedPL) {
     return stopUpdated;
 }
 
+// One-shot startup cleanup: cover any orphan short positions (qty < 0) by
+// submitting buy-to-cover orders. Bot is long-only, so a short can only exist
+// as residue from a prior over-sell bug. Paper API only — refuses to run
+// against any non-paper Alpaca endpoint.
+async function coverOrphanShorts(config, label = 'global') {
+    if (!config?.apiKey || !config?.secretKey || !config?.baseURL) return;
+    if (!config.baseURL.includes('paper-api.alpaca.markets')) {
+        console.warn(`[OrphanCover ${label}] Refusing to run — baseURL is not paper-api.alpaca.markets`);
+        return;
+    }
+    const MAX_COVER_QTY = 1000; // safety cap against bad data
+    try {
+        const res = await axios.get(`${config.baseURL}/v2/positions`, {
+            headers: { 'APCA-API-KEY-ID': config.apiKey, 'APCA-API-SECRET-KEY': config.secretKey }
+        });
+        const orphans = (res.data || []).filter(p => parseFloat(p.qty) < 0);
+        if (orphans.length === 0) return;
+        console.log(`[OrphanCover ${label}] Found ${orphans.length} orphan short position(s); covering...`);
+        for (const p of orphans) {
+            const qty = Math.abs(parseFloat(p.qty));
+            if (!(qty > 0) || qty > MAX_COVER_QTY) {
+                console.warn(`[OrphanCover ${label}] Skipping ${p.symbol}: qty ${p.qty} out of safe range (1..${MAX_COVER_QTY})`);
+                continue;
+            }
+            try {
+                await axios.post(`${config.baseURL}/v2/orders`, {
+                    symbol: p.symbol, qty, side: 'buy', type: 'market', time_in_force: 'day'
+                }, {
+                    headers: { 'APCA-API-KEY-ID': config.apiKey, 'APCA-API-SECRET-KEY': config.secretKey }
+                });
+                console.log(`[OrphanCover ${label}] ✅ Covered ${p.symbol}: bought ${qty} share(s) to flatten short`);
+            } catch (e) {
+                console.warn(`[OrphanCover ${label}] ❌ Cover order failed for ${p.symbol}: ${e.response?.data?.message || e.message}`);
+            }
+        }
+    } catch (e) {
+        console.warn(`[OrphanCover ${label}] Position fetch failed: ${e.message}`);
+    }
+}
+
 async function managePositions() {
     if (!hasGlobalAlpacaCredentials()) {
         return;
@@ -2726,9 +2766,22 @@ async function managePositions() {
 
         if (response.data.length === 0) return;
 
-        console.log(`\n📊 Managing ${response.data.length} positions...`);
+        // Filter out orphan shorts (qty <= 0). Bot is long-only — any non-positive
+        // qty is residue from a prior over-sell. closePosition's `numQty > 0` guard
+        // would reject these every tick, spamming logs.
+        const validPositions = response.data.filter(p => parseFloat(p.qty) > 0);
+        if (validPositions.length < response.data.length) {
+            const orphans = response.data.filter(p => parseFloat(p.qty) <= 0).map(p => `${p.symbol}(${p.qty})`).join(', ');
+            if (!managePositions._loggedOrphans || managePositions._loggedOrphans !== orphans) {
+                console.warn(`[ManagePositions] Skipping ${response.data.length - validPositions.length} orphan position(s): ${orphans}. Cover via Alpaca dashboard or buy-to-cover.`);
+                managePositions._loggedOrphans = orphans;
+            }
+        }
+        if (validPositions.length === 0) return;
 
-        for (const alpacaPos of response.data) {
+        console.log(`\n📊 Managing ${validPositions.length} positions...`);
+
+        for (const alpacaPos of validPositions) {
             const symbol = alpacaPos.symbol;
             const currentPrice = parseFloat(alpacaPos.current_price);
             const avgEntry = parseFloat(alpacaPos.avg_entry_price);
@@ -6305,7 +6358,17 @@ class UserTradingEngine {
                 headers: { 'APCA-API-KEY-ID': this.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': this.alpacaConfig.secretKey }
             });
             if (response.data.length === 0) return;
-            for (const alpacaPos of response.data) {
+            // Skip orphan shorts (qty <= 0) — bot is long-only.
+            const validPositions = response.data.filter(p => parseFloat(p.qty) > 0);
+            if (validPositions.length < response.data.length) {
+                const orphans = response.data.filter(p => parseFloat(p.qty) <= 0).map(p => `${p.symbol}(${p.qty})`).join(', ');
+                if (this._loggedOrphans !== orphans) {
+                    console.warn(`[Engine ${this.userId}] Skipping ${response.data.length - validPositions.length} orphan position(s): ${orphans}. Cover via Alpaca dashboard or buy-to-cover.`);
+                    this._loggedOrphans = orphans;
+                }
+            }
+            if (validPositions.length === 0) return;
+            for (const alpacaPos of validPositions) {
                 const symbol = alpacaPos.symbol;
                 const currentPrice = parseFloat(alpacaPos.current_price);
                 const avgEntry = parseFloat(alpacaPos.avg_entry_price);
@@ -6936,6 +6999,8 @@ async function getOrCreateEngine(userId) {
             { TELEGRAM_BOT_TOKEN: tgCreds.TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID: tgCreds.TELEGRAM_CHAT_ID });
         engineRegistry.set(key, engine);
         console.log(`🔧 [EngineRegistry] Engine registered for user ${userId} (${engineRegistry.size} total)`);
+        // One-shot: cover orphan shorts on this user's Alpaca account (paper-only, capped).
+        coverOrphanShorts(engine.alpacaConfig, `user ${userId}`).catch(e => console.warn(`OrphanCover error for user ${userId}:`, e.message));
         return engine;
     } catch (e) {
         console.warn(`⚠️  [EngineRegistry] Failed to create engine for user ${userId}:`, e.message);
@@ -7721,6 +7786,12 @@ app.listen(PORT, async () => {
 
     // [v6.2] Hydrate agent metadata from DB (survives Railway ephemeral FS wipes)
     await hydrateAgentMetadataFromDB().catch(e => console.warn('Agent hydration error:', e.message));
+
+    // One-shot: cover any orphan short positions left by prior over-sell bugs.
+    // Long-only bot; shorts can only exist as residue. Paper API only.
+    if (hasGlobalAlpacaCredentials()) {
+        coverOrphanShorts(alpacaConfig, 'global').catch(e => console.warn('OrphanCover error:', e.message));
+    }
 
     // [Persistence] Load evaluations from DB so weight optimizer survives Railway redeploys
     globalThis._tradeEvaluations = await loadEvaluationsFromDB().catch(e => {
