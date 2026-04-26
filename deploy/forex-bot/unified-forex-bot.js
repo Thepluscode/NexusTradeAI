@@ -5502,14 +5502,30 @@ app.listen(PORT, async () => {
                     let exitPct = 0;
                     let reason = 'orphaned_restart';
                     try {
+                        // [Bugfix 2026-04-26] count was 5 — orphans older than the last 5
+                        // OANDA trades for the instrument fell out of the search and got
+                        // recorded at pnl=0. 21 of 27 forex closed trades were orphaned
+                        // this way. Bumped to 50 + tightened match to ±5min openTime
+                        // window with direction check. No more "fall back to most recent"
+                        // — that was returning unrelated trades' PnL.
                         const closed = await oandaRequest('get',
-                            `/v3/accounts/${oandaConfig.accountId}/trades?instrument=${row.symbol}&state=CLOSED&count=5`);
+                            `/v3/accounts/${oandaConfig.accountId}/trades?instrument=${row.symbol}&state=CLOSED&count=50`);
                         const entryTs = row.entry_time ? new Date(row.entry_time).getTime() : 0;
-                        // Pick most recent OANDA trade whose open timestamp >= db entry_time − 10min.
-                        const match = (closed?.trades || []).find(t => {
-                            const openedAt = t.openTime ? new Date(t.openTime).getTime() : 0;
-                            return openedAt >= (entryTs - 10 * 60 * 1000);
-                        }) || (closed?.trades || [])[0];
+                        const dbDirection = (row.direction || 'long').toLowerCase();
+                        const oandaDir = (t) => {
+                            const u = parseFloat(t.initialUnits || t.currentUnits || 0);
+                            return u >= 0 ? 'long' : 'short';
+                        };
+                        // Find OANDA trades whose openTime is within ±5min of db entry_time
+                        // AND whose direction matches. Pick the one with closest openTime.
+                        const candidates = (closed?.trades || [])
+                            .map(t => {
+                                const openedAt = t.openTime ? new Date(t.openTime).getTime() : 0;
+                                return { t, openedAt, delta: Math.abs(openedAt - entryTs) };
+                            })
+                            .filter(c => c.delta <= 5 * 60 * 1000 && oandaDir(c.t) === dbDirection)
+                            .sort((a, b) => a.delta - b.delta);
+                        const match = candidates[0]?.t;
                         if (match) {
                             exitPrice = parseFloat(match.closePrice ?? match.averageClosePrice ?? exitPrice);
                             realPnl = parseFloat(match.realizedPL ?? 0);
@@ -5521,7 +5537,9 @@ app.listen(PORT, async () => {
                                 : 0;
                             reason = realPnl !== 0
                                 ? (realPnl < 0 ? 'Stop Loss (orphan-backfill)' : 'Take Profit (orphan-backfill)')
-                                : 'orphaned_restart';
+                                : 'Closed Flat (orphan-backfill)';
+                        } else {
+                            console.warn(`⚠️ Orphan ${row.symbol} id=${row.id}: no matching OANDA trade within 5min of ${row.entry_time} — recording as orphaned_restart pnl=0`);
                         }
                     } catch (e) {
                         console.warn(`⚠️ OANDA backfill failed for orphan ${row.symbol} (id=${row.id}): ${e.message}`);
