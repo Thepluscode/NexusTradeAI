@@ -3818,6 +3818,17 @@ class CryptoTradingEngine {
                             console.log(`[Regime] ${signal.symbol} BLOCKED — score ${(signal.score || 0).toFixed(2)} < ${regimeScoreThreshold.toFixed(2)} (regime: ${cryptoRegime.adjustments.label})`);
                             continue;
                         }
+                        // [HighVolFilter] Backfill (n=69 momentum trades) showed vol_ratio>3.0
+                        // entries lost $174 net (n=46), while vol_ratio<=3.0 entries returned
+                        // +$177 (n=21). Cliff is at 3.0 — entries 2.0–3.0 actually win at 71%.
+                        // Off by default; flip CRYPTO_HIGH_VOL_FILTER=true on Railway to enable.
+                        // Threshold tunable via CRYPTO_HIGH_VOL_THRESHOLD env var.
+                        const HIGH_VOL_FILTER_ON = process.env.CRYPTO_HIGH_VOL_FILTER === 'true';
+                        const HIGH_VOL_THRESHOLD = parseFloat(process.env.CRYPTO_HIGH_VOL_THRESHOLD || '3.0');
+                        if (HIGH_VOL_FILTER_ON && signal.strategy === 'momentum' && (signal.volumeRatio || 0) > HIGH_VOL_THRESHOLD) {
+                            console.log(`[Guardrail] ${signal.symbol} BLOCKED — high_vol_filter (vol=${(signal.volumeRatio || 0).toFixed(2)} > ${HIGH_VOL_THRESHOLD}, strategy=momentum). Backfill: 46 such trades lost $174 net.`);
+                            continue;
+                        }
                         // [Phase 1] Order flow confirmation — block only when flow actively opposes trade direction
                         // Previous threshold (< 0.1) blocked nearly all trades in balanced markets where imbalance is typically 0.01-0.08
                         if (signal.orderFlowImbalance !== undefined) {
