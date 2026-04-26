@@ -46,6 +46,10 @@ interface Position {
     pnl?: number;
     unrealizedPLPct?: number;
     unrealized_plpc?: string;
+    // strategy + entry timing (shown in card header)
+    strategy?: string;
+    entryTime?: string | number | Date;
+    openTime?: string | number | Date;
 }
 
 interface BotStatus {
@@ -710,6 +714,27 @@ export default function StockBotPage() {
                                                 <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.72rem' }}>
                                                     {(pos.qty ?? pos.quantity ?? 0)} shares · entry ${entryPrice.toFixed(2)}
                                                 </Typography>
+                                                {(() => {
+                                                    const entryTs = pos.entryTime ?? pos.openTime;
+                                                    if (!pos.strategy && !entryTs) return null;
+                                                    return (
+                                                        <Box sx={{ display: 'flex', gap: 0.5, mt: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                                                            {pos.strategy && (
+                                                                <Chip
+                                                                    label={String(pos.strategy).toUpperCase()}
+                                                                    size="small"
+                                                                    variant="outlined"
+                                                                    sx={{ fontSize: '0.6rem', height: 18, fontWeight: 600 }}
+                                                                />
+                                                            )}
+                                                            {entryTs && (
+                                                                <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                                                                    {new Date(entryTs).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                                                </Typography>
+                                                            )}
+                                                        </Box>
+                                                    );
+                                                })()}
                                                 <Box sx={{ display: 'flex', alignItems: 'center', mt: 1, gap: 0.5 }}>
                                                     {isGreen
                                                         ? <TrendingUp sx={{ color: '#10b981', fontSize: 18 }} />
