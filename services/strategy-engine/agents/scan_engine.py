@@ -278,6 +278,14 @@ class ScanEngine:
                 return
             async with pool.acquire() as conn:
                 for p in self.patterns.values():
+                    # asyncpg requires datetime for TIMESTAMPTZ — empty/invalid
+                    # ISO strings raised silently and dropped the whole batch.
+                    last_seen_dt = None
+                    if p.last_seen:
+                        try:
+                            last_seen_dt = datetime.fromisoformat(p.last_seen)
+                        except (ValueError, TypeError):
+                            last_seen_dt = None
                     await conn.execute("""
                         INSERT INTO scan_patterns
                             (pattern_id, pattern_type, asset_class, description,
@@ -295,7 +303,7 @@ class ScanEngine:
                         p.description, p.occurrences, p.wins, p.losses,
                         p.win_rate, p.avg_pnl, p.avg_r_multiple, p.confidence,
                         p.actionable_lesson or "", json.dumps(p.symbols),
-                        p.last_seen or "")
+                        last_seen_dt)
             logger.info(f"Synced {len(self.patterns)} patterns to DB")
         except Exception as e:
             logger.error(f"Pattern DB sync error: {e}")
@@ -316,6 +324,10 @@ class ScanEngine:
                         syms = row["symbols"]
                         if isinstance(syms, str):
                             syms = json.loads(syms)
+                        # last_seen comes back as datetime — convert to ISO string
+                        # to match in-memory format (set by datetime.now().isoformat()).
+                        ls = row["last_seen"]
+                        ls_str = ls.isoformat() if hasattr(ls, "isoformat") else (ls or "")
                         self.patterns[pid] = TrackedPattern(
                             pattern_id=pid,
                             pattern_type=row["pattern_type"],
@@ -329,7 +341,7 @@ class ScanEngine:
                             confidence=float(row["confidence"] or 0),
                             actionable_lesson=row["actionable_lesson"],
                             symbols=syms if isinstance(syms, list) else [],
-                            last_seen=row["last_seen"] or "",
+                            last_seen=ls_str,
                         )
                         loaded += 1
                 if loaded:

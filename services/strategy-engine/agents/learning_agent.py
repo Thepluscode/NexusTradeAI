@@ -243,13 +243,24 @@ class LearningAgent:
                 return
             async with pool.acquire() as conn:
                 for l in self._recent_lessons:
+                    # asyncpg requires datetime for TIMESTAMPTZ — empty/invalid
+                    # ISO strings raised silently and dropped the whole batch.
+                    ts_raw = l.get("timestamp")
+                    ts_dt = None
+                    if ts_raw:
+                        try:
+                            ts_dt = datetime.fromisoformat(ts_raw)
+                        except (ValueError, TypeError):
+                            ts_dt = None
+                    if ts_dt is None:
+                        ts_dt = datetime.now()
                     await conn.execute("""
                         INSERT INTO agent_lessons
                             (timestamp, symbol, asset_class, direction, pnl_pct,
                              pattern_type, actionable_lesson, confidence, regime, exit_reason)
                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                         ON CONFLICT DO NOTHING
-                    """, l.get("timestamp", ""), l.get("symbol", ""),
+                    """, ts_dt, l.get("symbol", ""),
                         l.get("asset_class", "stock"), l.get("direction", ""),
                         l.get("pnl_pct", 0), l.get("pattern_type", ""),
                         l.get("actionable_lesson", ""), l.get("confidence_in_lesson", 0),
@@ -272,8 +283,10 @@ class LearningAgent:
                 """)
                 if rows and len(self._recent_lessons) == 0:
                     for row in reversed(rows):  # oldest first
+                        ts_raw = row["timestamp"]
+                        ts_str = ts_raw.isoformat() if hasattr(ts_raw, "isoformat") else str(ts_raw)
                         self._recent_lessons.append({
-                            "timestamp": str(row["timestamp"]),
+                            "timestamp": ts_str,
                             "symbol": row["symbol"],
                             "asset_class": row["asset_class"],
                             "direction": row["direction"],
