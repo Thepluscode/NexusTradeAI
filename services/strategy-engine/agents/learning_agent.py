@@ -230,6 +230,9 @@ class LearningAgent:
                             self._recent_lessons.append(json.loads(line.strip()))
                         except json.JSONDecodeError:
                             continue
+                # Keep total_lessons in sync with what's actually in memory so
+                # /agent/stats doesn't report 0 lessons when 20 are loaded.
+                self.total_lessons = len(self._recent_lessons)
                 logger.info(f"Loaded {len(self._recent_lessons)} lessons from history")
         except Exception as e:
             logger.error(f"Failed to load lessons: {e}")
