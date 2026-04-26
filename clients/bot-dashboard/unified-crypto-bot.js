@@ -609,6 +609,7 @@ async function initTradeDb() {
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS regime VARCHAR(50);
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS signal_score DECIMAL(10,3);
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS entry_context JSONB DEFAULT '{}'::jsonb;
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS decision_run_id INTEGER;
             CREATE INDEX IF NOT EXISTS idx_trades_bot ON trades(bot);
             CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
             CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time);
@@ -723,10 +724,11 @@ async function dbCryptoOpen(symbol, tier, entry, stopLoss, takeProfit, quantity,
         const tags = buildCryptoTradeTags(signal, tier);
         const r = await dbPool.query(
             `INSERT INTO trades (bot,symbol,direction,tier,strategy,regime,status,entry_price,quantity,
-             position_size_usd,stop_loss,take_profit,entry_time,signal_score,entry_context,rsi,volume_ratio,momentum_pct)
-             VALUES ('crypto',$1,'long',$2,$3,$4,'open',$5,$6,$7,$8,$9,NOW(),$10,$11::jsonb,$12,$13,$14) RETURNING id`,
+             position_size_usd,stop_loss,take_profit,entry_time,signal_score,entry_context,rsi,volume_ratio,momentum_pct,decision_run_id)
+             VALUES ('crypto',$1,'long',$2,$3,$4,'open',$5,$6,$7,$8,$9,NOW(),$10,$11::jsonb,$12,$13,$14,$15) RETURNING id`,
             [symbol, tier, tags.strategy, tags.regime, entry, quantity, positionSize, stopLoss, takeProfit,
-             tags.score, JSON.stringify(tags.context), signal.rsi || null, signal.volumeRatio || null, signal.momentum || null]
+             tags.score, JSON.stringify(tags.context), signal.rsi || null, signal.volumeRatio || null, signal.momentum || null,
+             signal.decisionRunId || null]
         );
         return r.rows[0]?.id;
     } catch (e) { console.warn('DB crypto open failed:', e.message); return null; }
@@ -4885,7 +4887,7 @@ async function getOrCreateCryptoEngine(userId) {
         if (dbPool) {
             try {
                 const dbOpen = await dbPool.query(
-                    `SELECT id, symbol, entry_price, quantity, stop_loss, take_profit, entry_time
+                    `SELECT id, symbol, entry_price, quantity, stop_loss, take_profit, entry_time, decision_run_id
                      FROM trades WHERE bot='crypto' AND status='open' AND user_id=$1`, [userId]
                 );
                 for (const row of dbOpen.rows) {
@@ -4903,6 +4905,7 @@ async function getOrCreateCryptoEngine(userId) {
                         stopLossPercent: ep > 0 ? ((ep - sl) / ep) * 100 : 5,
                         openTime: row.entry_time ? new Date(row.entry_time) : new Date(),
                         entryTime: row.entry_time ? new Date(row.entry_time) : new Date(),
+                        decisionRunId: row.decision_run_id != null ? row.decision_run_id : null,
                         tier: 'restored',
                         restored: true,
                     });
@@ -5359,6 +5362,7 @@ app.listen(PORT, async () => {
                             unrealizedPnL: (currentPrice - entryP) * qty,
                             unrealizedPnLPct: entryP > 0 ? ((currentPrice - entryP) / entryP) * 100 : 0,
                             dbTradeId: row.id,
+                            decisionRunId: row.decision_run_id != null ? row.decision_run_id : null,
                             restored: true,
                         });
                         console.log(`[HYDRATE] Restored open position: ${row.symbol} @ ${row.entry_price}`);

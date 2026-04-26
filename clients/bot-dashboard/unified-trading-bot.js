@@ -368,6 +368,7 @@ async function initDb() {
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS agent_approved BOOLEAN DEFAULT false;
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS agent_confidence REAL;
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS agent_reason TEXT;
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS decision_run_id INTEGER;
             CREATE INDEX IF NOT EXISTS idx_trades_bot ON trades(bot);
             CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
             CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time);
@@ -543,16 +544,19 @@ async function hydrateAgentMetadataFromDB() {
     if (!dbPool) return;
     try {
         const dbResult = await dbPool.query(
-            'SELECT id, symbol, agent_approved, agent_confidence, agent_reason FROM trades WHERE bot=$1 AND status=$2',
+            'SELECT id, symbol, agent_approved, agent_confidence, agent_reason, decision_run_id FROM trades WHERE bot=$1 AND status=$2',
             ['stock', 'open']
         );
         let hydrated = 0;
         for (const row of dbResult.rows) {
             const existing = positions.get(row.symbol);
-            if (existing && !existing.agentConfidence) {
+            if (existing && (!existing.agentConfidence || !existing.decisionRunId)) {
                 existing.agentApproved = row.agent_approved;
                 existing.agentConfidence = row.agent_confidence;
                 existing.agentReason = row.agent_reason;
+                if (!existing.decisionRunId && row.decision_run_id != null) {
+                    existing.decisionRunId = row.decision_run_id;
+                }
                 if (!existing.dbTradeId) existing.dbTradeId = row.id;
                 hydrated++;
             }
@@ -973,14 +977,15 @@ async function dbTradeOpen(symbol, entryPrice, shares, config, signal, tier, str
         const r = await dbPool.query(
             `INSERT INTO trades (bot,symbol,direction,tier,strategy,regime,status,entry_price,quantity,
              position_size_usd,stop_loss,take_profit,entry_time,signal_score,entry_context,rsi,volume_ratio,momentum_pct,
-             agent_approved,agent_confidence,agent_reason)
-             VALUES ('stock',$1,'long',$2,$3,$4,'open',$5,$6,$7,$8,$9,NOW(),$10,$11::jsonb,$12,$13,$14,$15,$16,$17) RETURNING id`,
+             agent_approved,agent_confidence,agent_reason,decision_run_id)
+             VALUES ('stock',$1,'long',$2,$3,$4,'open',$5,$6,$7,$8,$9,NOW(),$10,$11::jsonb,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
             [symbol, tier, tags.strategy, tags.regime, entryPrice, shares, shares * entryPrice,
              config.stopLoss ? entryPrice * (1 - config.stopLoss) : null,
              config.profitTarget ? entryPrice * (1 + config.profitTarget) : null,
              tags.score, JSON.stringify(tags.context),
              signal.rsi || null, signal.volumeRatio || null, signal.percentChange || null,
-             signal.agentApproved || false, signal.agentConfidence || null, signal.agentReason || null]
+             signal.agentApproved || false, signal.agentConfidence || null, signal.agentReason || null,
+             signal.decisionRunId || null]
         );
         return r.rows[0]?.id;
     } catch (e) { console.warn('DB open failed:', e.message); return null; }
@@ -6133,14 +6138,15 @@ class UserTradingEngine {
             const r = await dbPool.query(
                 `INSERT INTO trades (user_id,bot,symbol,direction,tier,strategy,regime,status,entry_price,quantity,
                  position_size_usd,stop_loss,take_profit,entry_time,signal_score,entry_context,rsi,volume_ratio,momentum_pct,
-                 agent_approved,agent_confidence,agent_reason)
-                 VALUES ($1,'stock',$2,'long',$3,$4,$5,'open',$6,$7,$8,$9,$10,NOW(),$11,$12::jsonb,$13,$14,$15,$16,$17,$18) RETURNING id`,
+                 agent_approved,agent_confidence,agent_reason,decision_run_id)
+                 VALUES ($1,'stock',$2,'long',$3,$4,$5,'open',$6,$7,$8,$9,$10,NOW(),$11,$12::jsonb,$13,$14,$15,$16,$17,$18,$19) RETURNING id`,
                 [this.userId, symbol, tier, tags.strategy, tags.regime, entryPrice, shares, shares * entryPrice,
                  config.stopLoss ? entryPrice * (1 - config.stopLoss) : null,
                  config.profitTarget ? entryPrice * (1 + config.profitTarget) : null,
                  tags.score, JSON.stringify(tags.context),
                  signal.rsi || null, signal.volumeRatio || null, signal.percentChange || null,
-                 signal.agentApproved || false, signal.agentConfidence || null, signal.agentReason || null]
+                 signal.agentApproved || false, signal.agentConfidence || null, signal.agentReason || null,
+                 signal.decisionRunId || null]
             );
             return r.rows[0]?.id;
         } catch (e) { console.warn('DB open failed:', e.message); return null; }

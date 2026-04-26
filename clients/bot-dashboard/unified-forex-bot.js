@@ -177,6 +177,7 @@ async function initTradeDb() {
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS regime VARCHAR(50);
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS signal_score DECIMAL(10,3);
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS entry_context JSONB DEFAULT '{}'::jsonb;
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS decision_run_id INTEGER;
             CREATE INDEX IF NOT EXISTS idx_trades_bot ON trades(bot);
             CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
             CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time);
@@ -277,10 +278,11 @@ async function dbForexOpen(pair, direction, tier, entry, stopLoss, takeProfit, u
         const tags = buildForexTradeTags(signal, tier, direction, session);
         const r = await dbPool.query(
             `INSERT INTO trades (bot,symbol,direction,tier,strategy,regime,status,entry_price,quantity,
-             position_size_usd,stop_loss,take_profit,entry_time,session,signal_score,entry_context,rsi,momentum_pct)
-             VALUES ('forex',$1,$2,$3,$4,$5,'open',$6,$7,$8,$9,$10,NOW(),$11,$12,$13::jsonb,$14,$15) RETURNING id`,
+             position_size_usd,stop_loss,take_profit,entry_time,session,signal_score,entry_context,rsi,momentum_pct,decision_run_id)
+             VALUES ('forex',$1,$2,$3,$4,$5,'open',$6,$7,$8,$9,$10,NOW(),$11,$12,$13::jsonb,$14,$15,$16) RETURNING id`,
             [pair, direction, tier, tags.strategy, tags.regime, entry, absUnits, positionSizeUsd, stopLoss, takeProfit,
-             session || null, tags.score, JSON.stringify(tags.context), signal.rsi || null, signal.trendStrength || null]
+             session || null, tags.score, JSON.stringify(tags.context), signal.rsi || null, signal.trendStrength || null,
+             signal.decisionRunId || null]
         );
         return r.rows[0]?.id;
     } catch (e) { console.warn('DB forex open failed:', e.message); return null; }
@@ -4762,10 +4764,11 @@ class UserForexEngine {
             const tags = buildForexTradeTags(signal, tier, direction, session);
             const r = await dbPool.query(
                 `INSERT INTO trades (user_id,bot,symbol,direction,tier,strategy,regime,status,entry_price,quantity,
-                 position_size_usd,stop_loss,take_profit,entry_time,session,signal_score,entry_context,rsi,momentum_pct)
-                 VALUES ($1,'forex',$2,$3,$4,$5,$6,'open',$7,$8,$9,$10,$11,NOW(),$12,$13,$14::jsonb,$15,$16) RETURNING id`,
+                 position_size_usd,stop_loss,take_profit,entry_time,session,signal_score,entry_context,rsi,momentum_pct,decision_run_id)
+                 VALUES ($1,'forex',$2,$3,$4,$5,$6,'open',$7,$8,$9,$10,$11,NOW(),$12,$13,$14::jsonb,$15,$16,$17) RETURNING id`,
                 [this.userId, pair, direction, tier, tags.strategy, tags.regime, entry, absUnits, positionSizeUsd, stopLoss, takeProfit,
-                 session || null, tags.score, JSON.stringify(tags.context), signal.rsi || null, signal.trendStrength || null]
+                 session || null, tags.score, JSON.stringify(tags.context), signal.rsi || null, signal.trendStrength || null,
+                 signal.decisionRunId || null]
             );
             return r.rows[0]?.id;
         } catch (e) { console.warn('DB forex open failed:', e.message); return null; }
@@ -5412,13 +5415,17 @@ app.listen(PORT, async () => {
                 console.log(`🔄 Restored position: ${instrument} LONG ${longUnits} units @ ${avgPrice} (peakPL: $${Math.max(0, hydratedPL).toFixed(2)}, wasPositive: ${hydratedPL > 15})`);
                 // Ensure restored position has a DB trade row
                 if (dbPool) {
-                    const existing = await dbPool.query(`SELECT id FROM trades WHERE bot='forex' AND symbol=$1 AND status='open' AND user_id IS NULL`, [instrument]);
+                    const existing = await dbPool.query(`SELECT id, decision_run_id FROM trades WHERE bot='forex' AND symbol=$1 AND status='open' AND user_id IS NULL`, [instrument]);
                     if (existing.rows.length === 0) {
                         dbForexOpen(instrument, 'long', 'tier1', avgPrice, stopLong, tpLong, longUnits, 'restored', {})
                             .then(id => { const pos = positions.get(instrument); if (pos) pos.dbTradeId = id; console.log(`📝 [DB] Restored ${instrument} LONG persisted (id: ${id})`); })
                             .catch(e => console.warn(`⚠️  [DB] Restored ${instrument} persistence failed:`, e.message));
                     } else {
-                        const pos = positions.get(instrument); if (pos) pos.dbTradeId = existing.rows[0].id;
+                        const pos = positions.get(instrument);
+                        if (pos) {
+                            pos.dbTradeId = existing.rows[0].id;
+                            if (existing.rows[0].decision_run_id != null) pos.decisionRunId = existing.rows[0].decision_run_id;
+                        }
                         console.log(`📝 [DB] Restored ${instrument} LONG already in DB (id: ${existing.rows[0].id})`);
                     }
                 }
@@ -5441,13 +5448,17 @@ app.listen(PORT, async () => {
                 console.log(`🔄 Restored position: ${instrument} SHORT ${Math.abs(shortUnits)} units @ ${avgPrice} (peakPL: $${Math.max(0, hydratedPL).toFixed(2)}, wasPositive: ${hydratedPL > 15})`);
                 // Ensure restored position has a DB trade row
                 if (dbPool) {
-                    const existing = await dbPool.query(`SELECT id FROM trades WHERE bot='forex' AND symbol=$1 AND status='open' AND user_id IS NULL`, [instrument]);
+                    const existing = await dbPool.query(`SELECT id, decision_run_id FROM trades WHERE bot='forex' AND symbol=$1 AND status='open' AND user_id IS NULL`, [instrument]);
                     if (existing.rows.length === 0) {
                         dbForexOpen(instrument, 'short', 'tier1', avgPrice, stopShort, tpShort, shortUnits, 'restored', {})
                             .then(id => { const pos = positions.get(instrument); if (pos) pos.dbTradeId = id; console.log(`📝 [DB] Restored ${instrument} SHORT persisted (id: ${id})`); })
                             .catch(e => console.warn(`⚠️  [DB] Restored ${instrument} persistence failed:`, e.message));
                     } else {
-                        const pos = positions.get(instrument); if (pos) pos.dbTradeId = existing.rows[0].id;
+                        const pos = positions.get(instrument);
+                        if (pos) {
+                            pos.dbTradeId = existing.rows[0].id;
+                            if (existing.rows[0].decision_run_id != null) pos.decisionRunId = existing.rows[0].decision_run_id;
+                        }
                         console.log(`📝 [DB] Restored ${instrument} SHORT already in DB (id: ${existing.rows[0].id})`);
                     }
                 }
