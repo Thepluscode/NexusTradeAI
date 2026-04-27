@@ -2400,7 +2400,58 @@ async function checkPortfolioRisk() {
     return risks;
 }
 
+// [Bugfix 2026-04-27] Maintain Asian session boxes. Was inline in tradingLoop()
+// only, but per-user engines bypass tradingLoop and call scanForSignals
+// directly, so boxes were never built when per-user engines run. Now called
+// from scanForSignals() so both loops populate the same module-level Map.
+// (lastBoxBuildDate is module-level at line 491.)
+async function maintainSessionBoxes() {
+    try {
+        const utcHour = new Date().getUTCHours();
+        const todayStr = new Date().toISOString().slice(0, 10);
+        if (lastBoxBuildDate !== todayStr) {
+            sessionBoxes.clear();
+            lastBoxBuildDate = todayStr;
+            console.log(`📦 [BOX] New day ${todayStr} — boxes reset`);
+        }
+        if (utcHour < 7) {
+            const boxBuildPromises = FOREX_PAIRS.map(async pair => {
+                try {
+                    const candles = await getCandles(pair, 'M15', 50);
+                    if (!candles || candles.length < 4) return;
+                    const box = buildSessionBox(candles, 0, 7);
+                    if (box && box.range > 0) {
+                        const minRange = pair.includes('JPY') ? 0.050 : 0.0010;
+                        const maxRange = pair.includes('JPY') ? 1.500 : 0.0100;
+                        if (box.range >= minRange && box.range <= maxRange) {
+                            sessionBoxes.set(pair, {
+                                ...box, isComplete: false, date: todayStr,
+                                longTaken: false, shortTaken: false
+                            });
+                        }
+                    }
+                } catch { /* skip pair on error */ }
+            });
+            await Promise.allSettled(boxBuildPromises);
+        }
+        if (utcHour >= 7) {
+            for (const [pair, box] of sessionBoxes) {
+                if (!box.isComplete && box.date === todayStr) {
+                    box.isComplete = true;
+                    const pipDiv = pair.includes('JPY') ? 0.01 : 0.0001;
+                    console.log(`📦 [BOX LOCKED] ${pair}: ${box.low.toFixed(5)} — ${box.high.toFixed(5)} (${(box.range / pipDiv).toFixed(1)} pips) | Mid: ${box.midline.toFixed(5)}`);
+                }
+            }
+        }
+    } catch (e) { console.warn(`[Box] maintain failed: ${e.message}`); }
+}
+
 async function scanForSignals(heldPositions = positions) {
+    // [Bugfix 2026-04-27] Build/lock Asian boxes here so per-user engines also
+    // populate sessionBoxes (they don't run the global tradingLoop). Idempotent —
+    // safe to call from both global and per-user paths.
+    await maintainSessionBoxes();
+
     // [v24.7] Economic event calendar — ECB/NFP affect forex heavily
     if (eventCalendar) {
         const eventCheck = eventCalendar.checkEventProximity(new Date(), 'forex');
@@ -3674,55 +3725,11 @@ async function tradingLoop() {
     }
 
     try {
-        // [v19.0] Build Asian session boxes during Tokyo session (00:00-06:00 UTC)
-        // Once London opens (07:00+), boxes are locked and used for breakout entries
-        const utcHour = new Date().getUTCHours();
-        const todayStr = new Date().toISOString().slice(0, 10);
+        // [Bugfix 2026-04-27] Box build moved into scanForSignals() so per-user
+        // engines (which bypass tradingLoop entirely) also populate sessionBoxes.
+        // scanForSignals() calls maintainSessionBoxes() at the top.
 
-        // Reset boxes at start of new day
-        if (lastBoxBuildDate !== todayStr) {
-            sessionBoxes.clear();
-            lastBoxBuildDate = todayStr;
-            console.log(`📦 [BOX] New day ${todayStr} — boxes reset`);
-        }
-
-        // During Asian session (00:00-06:59 UTC), build/update boxes from M15 candles
-        if (utcHour < 7) {
-            const boxBuildPromises = FOREX_PAIRS.map(async pair => {
-                try {
-                    const candles = await getCandles(pair, 'M15', 50);
-                    if (!candles || candles.length < 4) return;
-                    const box = buildSessionBox(candles, 0, 7);
-                    if (box && box.range > 0) {
-                        // Minimum box range: 10 pips for most pairs, 50 pips for JPY pairs
-                        const minRange = pair.includes('JPY') ? 0.050 : 0.0010;
-                        const maxRange = pair.includes('JPY') ? 1.500 : 0.0100;
-                        if (box.range >= minRange && box.range <= maxRange) {
-                            sessionBoxes.set(pair, {
-                                ...box, isComplete: false, date: todayStr,
-                                longTaken: false, shortTaken: false
-                            });
-                        }
-                    }
-                } catch { /* skip pair on error */ }
-            });
-            await Promise.allSettled(boxBuildPromises);
-            const builtCount = Array.from(sessionBoxes.values()).filter(b => b.date === todayStr).length;
-            console.log(`📦 [BOX] Asian session building: ${builtCount} boxes (${FOREX_PAIRS.length} pairs scanned)`);
-        }
-
-        // At London open (07:00+ UTC), lock boxes as complete
-        if (utcHour >= 7) {
-            for (const [pair, box] of sessionBoxes) {
-                if (!box.isComplete && box.date === todayStr) {
-                    box.isComplete = true;
-                    const pipDiv = pair.includes('JPY') ? 0.01 : 0.0001;
-                    console.log(`📦 [BOX LOCKED] ${pair}: ${box.low.toFixed(5)} — ${box.high.toFixed(5)} (${(box.range / pipDiv).toFixed(1)} pips) | Mid: ${box.midline.toFixed(5)}`);
-                }
-            }
-        }
-
-        // Scan for new signals
+        // Scan for new signals (also maintains Asian session boxes)
         const signals = await scanForSignals();
         console.log(`🔍 Signals found: ${signals.length}`);
 
