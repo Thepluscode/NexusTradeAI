@@ -410,6 +410,22 @@ async function initDb() {
             )
         `);
         console.log('✅ Password reset tokens table ready');
+        // [2026-04-27] Persistent scan diagnostics — survives Railway redeploys
+        // so post-mortems on "why did the bot fire zero signals on day X" are
+        // possible. Indexed on (bot, cycle_time DESC) for fast recent-history reads.
+        await dbPool.query(`
+            CREATE TABLE IF NOT EXISTS scan_diagnostics (
+                id              SERIAL PRIMARY KEY,
+                bot             VARCHAR(20) NOT NULL,
+                cycle_time      TIMESTAMPTZ NOT NULL,
+                signals_found   INTEGER DEFAULT 0,
+                total_blocked   INTEGER DEFAULT 0,
+                gate_blocks     JSONB DEFAULT '{}'::jsonb,
+                created_at      TIMESTAMPTZ DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_scan_diag_bot_time ON scan_diagnostics(bot, cycle_time DESC);
+        `);
+        console.log('✅ Scan diagnostics table ready');
 
         // Signal schema — idempotent; safe to run on every startup
         if (typeof initSignalSchema === 'function') {
@@ -454,12 +470,16 @@ let lastScanTime = null;
 let lastScanCompletedAt = 0; // for health monitor
 const recentErrors = []; // { timestamp, error } for health monitoring
 
-// Scan diagnostics — tracks which gates block trades each cycle
+// Scan diagnostics — tracks which gates block trades each cycle.
+// [2026-04-27] Persisted to scan_diagnostics DB table so redeploys don't
+// wipe scan history. Critical for post-mortem analysis when a strategy
+// goes silent for days — without persistence, every redeploy resets the
+// gate-block counts and we lose visibility into Thu/Fri behaviour.
 const scanDiagnostics = {
     lastCycleTime: null,
     signalsFound: 0,
     gateBlocks: {}, // gate name → count of blocks this cycle
-    history: [],     // last 10 cycles for trend analysis
+    history: [],     // last 10 cycles for trend analysis (loaded from DB on startup)
     _reset() {
         this.signalsFound = 0;
         this.gateBlocks = {};
@@ -469,13 +489,46 @@ const scanDiagnostics = {
         this.gateBlocks[gate] = (this.gateBlocks[gate] || 0) + 1;
     },
     _save() {
-        this.history.push({
+        const totalBlocked = Object.values(this.gateBlocks).reduce((a, b) => a + b, 0);
+        const entry = {
             time: this.lastCycleTime,
             signals: this.signalsFound,
             blocks: { ...this.gateBlocks },
-            totalBlocked: Object.values(this.gateBlocks).reduce((a, b) => a + b, 0),
-        });
+            totalBlocked,
+        };
+        this.history.push(entry);
         if (this.history.length > 10) this.history.shift();
+        // Best-effort DB write (fire-and-forget so scan loop is never blocked)
+        if (dbPool && this.lastCycleTime) {
+            dbPool.query(
+                `INSERT INTO scan_diagnostics (bot, cycle_time, signals_found, total_blocked, gate_blocks)
+                 VALUES ('stock', $1, $2, $3, $4::jsonb)`,
+                [this.lastCycleTime, this.signalsFound, totalBlocked, JSON.stringify(this.gateBlocks)]
+            ).catch(e => console.warn(`[scanDiagnostics] DB write failed: ${e.message}`));
+        }
+    },
+    async _loadFromDB() {
+        if (!dbPool) return;
+        try {
+            const r = await dbPool.query(
+                `SELECT cycle_time, signals_found, total_blocked, gate_blocks
+                 FROM scan_diagnostics
+                 WHERE bot='stock'
+                 ORDER BY cycle_time DESC LIMIT 10`
+            );
+            // Rows come back DESC; reverse to chronological order before populating history
+            this.history = r.rows.reverse().map(row => ({
+                time: row.cycle_time instanceof Date ? row.cycle_time.toISOString() : String(row.cycle_time),
+                signals: row.signals_found || 0,
+                totalBlocked: row.total_blocked || 0,
+                blocks: row.gate_blocks || {},
+            }));
+            if (this.history.length > 0) {
+                console.log(`[scanDiagnostics] Loaded ${this.history.length} prior cycles from DB`);
+            }
+        } catch (e) {
+            console.warn(`[scanDiagnostics] DB load failed: ${e.message}`);
+        }
     },
 };
 const MAX_ERROR_HISTORY = 100;
@@ -7907,6 +7960,10 @@ app.listen(PORT, async () => {
 
     // [v6.2] Hydrate agent metadata from DB (survives Railway ephemeral FS wipes)
     await hydrateAgentMetadataFromDB().catch(e => console.warn('Agent hydration error:', e.message));
+
+    // [2026-04-27] Restore last 10 scan-diagnostic cycles so /api/stock/diagnose
+    // shows real history immediately after a redeploy instead of an empty list.
+    await scanDiagnostics._loadFromDB().catch(e => console.warn('scanDiagnostics load error:', e.message));
 
     // One-shot: cover any orphan short positions left by prior over-sell bugs.
     // Long-only bot; shorts can only exist as residue. Paper API only.
