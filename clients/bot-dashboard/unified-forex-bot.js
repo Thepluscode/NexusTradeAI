@@ -278,10 +278,11 @@ async function dbForexOpen(pair, direction, tier, entry, stopLoss, takeProfit, u
         const tags = buildForexTradeTags(signal, tier, direction, session);
         const r = await dbPool.query(
             `INSERT INTO trades (bot,symbol,direction,tier,strategy,regime,status,entry_price,quantity,
-             position_size_usd,stop_loss,take_profit,entry_time,session,signal_score,entry_context,rsi,momentum_pct,decision_run_id)
-             VALUES ('forex',$1,$2,$3,$4,$5,'open',$6,$7,$8,$9,$10,NOW(),$11,$12,$13::jsonb,$14,$15,$16) RETURNING id`,
+             position_size_usd,stop_loss,take_profit,entry_time,session,signal_score,entry_context,rsi,volume_ratio,momentum_pct,decision_run_id)
+             VALUES ('forex',$1,$2,$3,$4,$5,'open',$6,$7,$8,$9,$10,NOW(),$11,$12,$13::jsonb,$14,$15,$16,$17) RETURNING id`,
             [pair, direction, tier, tags.strategy, tags.regime, entry, absUnits, positionSizeUsd, stopLoss, takeProfit,
-             session || null, tags.score, JSON.stringify(tags.context), signal.rsi || null, signal.trendStrength || null,
+             session || null, tags.score, JSON.stringify(tags.context), signal.rsi || null,
+             signal.volumeRatio || null, signal.trendStrength || null,
              signal.decisionRunId || null]
         );
         return r.rows[0]?.id;
@@ -1477,6 +1478,20 @@ function calculateSMA(candles, period) {
     const closes = candles.slice(-period).map(c => parseFloat(c.mid.c));
     if (sharedIndicators) return sharedIndicators.calculateSMA(closes, closes.length) || 0;
     return closes.reduce((a, b) => a + b, 0) / period;
+}
+
+// [2026-04-27] Forex tick-volume ratio (OANDA returns tick count per candle).
+// Mirrors crypto bot's volumeRatio: recent N bars vs longer baseline.
+// Returns null if data is missing — caller treats null as "no info, don't filter".
+function calculateForexVolumeRatio(candles, recentN = 10, baselineN = 100) {
+    if (!Array.isArray(candles) || candles.length < recentN) return null;
+    const tail = candles.slice(-baselineN);
+    const recent = candles.slice(-recentN);
+    const recentAvg = recent.reduce((s, c) => s + (parseFloat(c.volume ?? c.v ?? 0) || 0), 0) / recent.length;
+    const baselineAvg = tail.reduce((s, c) => s + (parseFloat(c.volume ?? c.v ?? 0) || 0), 0) / tail.length;
+    if (!baselineAvg || baselineAvg <= 0) return null;
+    const ratio = recentAvg / baselineAvg;
+    return Number.isFinite(ratio) ? parseFloat(ratio.toFixed(3)) : null;
 }
 
 function calculateATR(candles, period = 14) {
@@ -3888,6 +3903,19 @@ async function tradingLoop() {
             signal.expectedValue = fxQualifier.ev;
             signal.agentSizeMultiplier = (signal.agentSizeMultiplier || 1.0) * fxQualifier.allocationFactor;
 
+            // [2026-04-27] Compute forex tick-volume ratio so the bridge feedback
+            // loop can stratify forex outcomes by volume cohort (same way crypto
+            // momentum vol>3.0 cliff was discovered). Best-effort — failure leaves
+            // volumeRatio null and downstream stratification just skips.
+            if (signal.volumeRatio == null) {
+                try {
+                    const vrCandles = await getCandles(signal.pair, 'M15', 100).catch(() => null);
+                    if (vrCandles && vrCandles.length >= 10) {
+                        signal.volumeRatio = calculateForexVolumeRatio(vrCandles);
+                    }
+                } catch (_vrErr) { /* non-fatal */ }
+            }
+
             // [v23.2] ML Regime directional size multiplier — only reduces, never amplifies
             try {
                 const cachedMlReg = _forexMlRegimeCache.get(signal.pair);
@@ -4768,10 +4796,11 @@ class UserForexEngine {
             const tags = buildForexTradeTags(signal, tier, direction, session);
             const r = await dbPool.query(
                 `INSERT INTO trades (user_id,bot,symbol,direction,tier,strategy,regime,status,entry_price,quantity,
-                 position_size_usd,stop_loss,take_profit,entry_time,session,signal_score,entry_context,rsi,momentum_pct,decision_run_id)
-                 VALUES ($1,'forex',$2,$3,$4,$5,$6,'open',$7,$8,$9,$10,$11,NOW(),$12,$13,$14::jsonb,$15,$16,$17) RETURNING id`,
+                 position_size_usd,stop_loss,take_profit,entry_time,session,signal_score,entry_context,rsi,volume_ratio,momentum_pct,decision_run_id)
+                 VALUES ($1,'forex',$2,$3,$4,$5,$6,'open',$7,$8,$9,$10,$11,NOW(),$12,$13,$14::jsonb,$15,$16,$17,$18) RETURNING id`,
                 [this.userId, pair, direction, tier, tags.strategy, tags.regime, entry, absUnits, positionSizeUsd, stopLoss, takeProfit,
-                 session || null, tags.score, JSON.stringify(tags.context), signal.rsi || null, signal.trendStrength || null,
+                 session || null, tags.score, JSON.stringify(tags.context), signal.rsi || null,
+                 signal.volumeRatio || null, signal.trendStrength || null,
                  signal.decisionRunId || null]
             );
             return r.rows[0]?.id;
