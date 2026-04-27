@@ -7383,6 +7383,78 @@ app.post('/api/admin/trades/repair-pnl', requireJwtOrApiSecret, async (req, res)
     }
 });
 
+// [2026-04-27] Diagnostic — explain why ORB / momentum signals aren't firing.
+// Read-only, no auth (matches /health pattern). Mirrors the forex diagnose
+// endpoint that surfaced 2 multi-week bugs in 30 minutes. Reports global
+// gates (SPY, regime, circuit breaker) plus the existing scanDiagnostics
+// gate-block counts so we can see which filter killed the most candidates
+// in the last scan cycle.
+app.get('/api/stock/diagnose', (req, res) => {
+    try {
+        const lastHistory = scanDiagnostics.history[scanDiagnostics.history.length - 1] || null;
+        const totalBlocked = Object.values(scanDiagnostics.gateBlocks || {}).reduce((a, b) => a + b, 0);
+        const sortedBlockers = Object.entries(scanDiagnostics.gateBlocks || {})
+            .sort((a, b) => b[1] - a[1])
+            .map(([gate, count]) => ({ gate, count }));
+        // Aggregate which gates dominated across the last 10 cycles
+        const aggregate = {};
+        for (const h of scanDiagnostics.history) {
+            for (const [gate, count] of Object.entries(h.blocks || {})) {
+                aggregate[gate] = (aggregate[gate] || 0) + count;
+            }
+        }
+        const aggregateSorted = Object.entries(aggregate)
+            .sort((a, b) => b[1] - a[1])
+            .map(([gate, count]) => ({ gate, count }));
+
+        res.json({
+            success: true,
+            timestamp: new Date().toISOString(),
+            botState: {
+                running: botRunning,
+                paused: botPaused,
+                hasCredentials: hasGlobalAlpacaCredentials(),
+            },
+            globalGates: {
+                spyBullish,
+                marketRegime: globalThis._marketRegime || null,
+                circuitBreaker: perfData?.circuitBreakerStatus || 'OK',
+                circuitBreakerReason: perfData?.circuitBreakerReason || null,
+                orbTradesToday,
+                totalTradesToday,
+                maxTradesPerDay: MAX_TRADES_PER_DAY,
+                openPositions: positions.size,
+            },
+            lastScan: {
+                time: scanDiagnostics.lastCycleTime,
+                signalsFound: scanDiagnostics.signalsFound,
+                totalBlocked,
+                blockers: sortedBlockers,
+            },
+            // Look across the last 10 cycles to spot persistent gates vs transient
+            cumulativeLast10Cycles: {
+                cyclesRecorded: scanDiagnostics.history.length,
+                blockers: aggregateSorted,
+            },
+            // Tell the operator what to make of common patterns
+            interpretation: {
+                no_movers: 'No symbols passing initial mover screen — market is quiet or scanner is broken',
+                spy_bearish: 'SPY trend gate blocking all longs — wait for SPY recovery or relax',
+                regime_trending_down: '4-state regime detector says market is in a downtrend',
+                regime_high_volatility: 'Sitting out volatile regimes by design',
+                strategy_inactive: 'Strategy disabled by performance tracker (probably hit a loss streak)',
+                orb_limit: 'Already at 2 ORB trades today — daily cap',
+                score_threshold: 'Signal scores below MIN_SIGNAL_SCORE — could be too strict',
+                kill_switch: 'Bridge agent hard-blocked — check /agent/stats',
+                guardrail_paused: 'Adaptive guardrails paused trading lane — recent loss cluster',
+            },
+        });
+    } catch (e) {
+        console.error('[stock/diagnose] error:', e.message);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
 // Admin: assign legacy NULL-user trades to a specific user. Closed-only by
 // default — leaves live open positions alone so per-user engines aren't
 // disturbed mid-trade. One-time fix for trades created before user_id
