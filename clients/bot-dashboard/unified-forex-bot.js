@@ -4366,6 +4366,62 @@ app.post('/api/guardrails/reset', (req, res) => {
     res.json({ success: true, message: 'Guardrails reset' });
 });
 
+// [2026-04-27] One-shot backfill: compute volume_ratio retroactively for
+// historical forex trades using OANDA M15 candles around each entry_time.
+// Required because volume_ratio capture didn't exist until PR #13 — all
+// 27 historical closed trades have NULL and are invisible to cohort analysis.
+app.post('/api/admin/trades/backfill-volume-ratio', requireJwtOrApiSecret, async (req, res) => {
+    if (req.user?.role && req.user.role !== 'admin') {
+        return res.status(403).json({ success: false, error: 'Admin only' });
+    }
+    if (!dbPool) return res.status(503).json({ success: false, error: 'No DB' });
+    try {
+        const limit = Math.min(parseInt(req.body?.limit || req.query.limit || '500', 10), 5000);
+        const dryRun = req.body?.dryRun === true;
+        const rows = await dbPool.query(
+            `SELECT id, symbol, entry_time FROM trades
+             WHERE bot='forex' AND volume_ratio IS NULL AND entry_time IS NOT NULL
+             ORDER BY entry_time DESC LIMIT $1`,
+            [limit]
+        );
+        const stats = { found: rows.rows.length, updated: 0, no_candles: 0, no_ratio: 0, errors: 0, dryRun };
+        const samples = []; // first 10 results for response visibility
+        for (const r of rows.rows) {
+            try {
+                // Pull 100 M15 candles ending around the entry — covers the same
+                // "recent 10 vs baseline 100" window the live computation uses.
+                // Use OANDA's `to=` parameter to anchor the window at entry_time.
+                const isoTo = new Date(r.entry_time).toISOString();
+                const candles = await oandaRequest('get',
+                    `/v3/instruments/${r.symbol}/candles?granularity=M15&count=100&price=M&to=${encodeURIComponent(isoTo)}`)
+                    .then(d => d?.candles || [])
+                    .catch(() => []);
+                if (!candles.length) { stats.no_candles++; continue; }
+                const ratio = calculateForexVolumeRatio(candles);
+                if (ratio == null) { stats.no_ratio++; continue; }
+                if (samples.length < 10) {
+                    samples.push({ id: r.id, symbol: r.symbol, entry_time: r.entry_time, volume_ratio: ratio });
+                }
+                if (!dryRun) {
+                    await dbPool.query(
+                        `UPDATE trades SET volume_ratio=$1 WHERE id=$2 AND bot='forex' AND volume_ratio IS NULL`,
+                        [ratio, r.id]
+                    );
+                }
+                stats.updated++;
+            } catch (e) {
+                stats.errors++;
+                console.warn(`[backfill-volume-ratio] id=${r.id} ${r.symbol}: ${e.message}`);
+            }
+        }
+        console.log(`[backfill-volume-ratio] ${dryRun ? 'DRY RUN' : 'APPLIED'} — found=${stats.found} updated=${stats.updated} no_candles=${stats.no_candles} no_ratio=${stats.no_ratio} errors=${stats.errors}`);
+        res.json({ success: true, ...stats, samples });
+    } catch (e) {
+        console.error('[backfill-volume-ratio] error:', e.message);
+        res.status(500).json({ success: false, error: 'Internal server error', detail: e.message });
+    }
+});
+
 // ── Config status (for Settings page) ───────────────────────────────────────
 app.get('/api/config', (req, res) => {
     res.json({
