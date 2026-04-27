@@ -2720,10 +2720,15 @@ async function scanForSignals(heldPositions = positions) {
         const isRanging = h4Data.adx !== null && h4Data.adx < 30; // v23.5: relaxed from 25
 
         if (isMeanRevPair && isRanging) {
-            // Get H4 candles for BB calculation on H4 timeframe
+            // Get H4 candles for BB + RSI + ATR calculation.
+            // [Bugfix 2026-04-27] Was count=25; calculateRSI(period=14) needs
+            // period*2=28 candles or it returns 50 (fallback). With 25 candles,
+            // h4RSI was permanently 50 — the RSI<38/RSI>62 filter could NEVER
+            // fire, so Mean Reversion produced zero signals for weeks.
+            // Bumped to 50 so RSI/BB/ATR all have headroom.
             try {
-                const h4Candles = await getCandles(pair, 'H4', 25);
-                if (h4Candles.length >= 20) {
+                const h4Candles = await getCandles(pair, 'H4', 50);
+                if (h4Candles.length >= 28) {
                     const h4BB = calculateBollingerBands(h4Candles, 20, 2);
                     const h4Closes = h4Candles.map(c => parseFloat(c.mid.c));
                     const h4RSI = calculateRSI(h4Candles, 14);
@@ -4409,8 +4414,9 @@ app.get('/api/forex/diagnose', async (req, res) => {
                     if (h4.adx == null) mrBlocks.push('H4 ADX unavailable');
                     else if (h4.adx >= 30) mrBlocks.push(`H4 ADX ${h4.adx.toFixed(1)} >= 30 (not ranging)`);
                     try {
-                        const h4Candles = await getCandles(pair, 'H4', 25);
-                        if (h4Candles.length >= 20) {
+                        // Same fix as scan loop: need >=28 candles for RSI(14)
+                        const h4Candles = await getCandles(pair, 'H4', 50);
+                        if (h4Candles.length >= 28) {
                             const h4BB = calculateBollingerBands(h4Candles, 20, 2);
                             const h4RSI = calculateRSI(h4Candles, 14);
                             const cp = parseFloat(h4Candles[h4Candles.length - 1].mid.c);
