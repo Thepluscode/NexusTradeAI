@@ -4459,6 +4459,62 @@ app.get('/api/crypto/status', (req, res) => {
     // Return flat structure directly - matches CryptoBotPage BotStatus interface
     res.json(engine.getStatus());
 });
+
+// [2026-04-27] Diagnostic — explain current gating state. Mirrors
+// /api/forex/diagnose. Read-only, no auth. Computes BTC filter fresh
+// to avoid stale cached state.
+app.get('/api/crypto/diagnose', async (req, res) => {
+    try {
+        const stat = engine.getStatus();
+        // Fresh BTC filter probe (engine method has best-effort fallbacks)
+        let btcBullish = null;
+        let btcError = null;
+        try { btcBullish = await engine.isBTCBullish(); }
+        catch (e) { btcError = e.message; }
+        const blockers = [];
+        if (!stat.isRunning) blockers.push('bot not running');
+        if (stat.isPaused) blockers.push('bot paused');
+        if ((stat.positions || []).length >= (stat.config?.maxPositions || 3)) {
+            blockers.push(`at maxPositions cap (${stat.positions.length}/${stat.config?.maxPositions})`);
+        }
+        if (stat.dailyTrades >= (engine.config?.maxTradesPerDay || 10)) {
+            blockers.push(`daily trade limit hit (${stat.dailyTrades}/${engine.config?.maxTradesPerDay || 10})`);
+        }
+        if (btcBullish === false) blockers.push('BTC filter: bearish — altcoin longs blocked');
+        res.json({
+            success: true,
+            timestamp: new Date().toISOString(),
+            botState: {
+                running: stat.isRunning,
+                paused: stat.isPaused,
+                mode: stat.mode,
+            },
+            globalGates: {
+                btcBullish,
+                btcError,
+                positions: (stat.positions || []).length,
+                maxPositions: stat.config?.maxPositions ?? null,
+                dailyTrades: stat.dailyTrades ?? 0,
+                maxTradesPerDay: engine.config?.maxTradesPerDay ?? null,
+                scanCount: stat.scanCount ?? 0,
+                netPnL: stat.netPnL ?? 0,
+            },
+            guardrails: stat.guardrails || null,
+            activeSymbols: stat.config?.symbols ?? [],
+            invalidSymbols: stat.config?.invalidSymbols ?? [],
+            blockers,
+            interpretation: {
+                bot_paused: 'Set isPaused=false via /api/crypto/start',
+                maxPositions: 'Wait for an exit or close one manually',
+                daily_limit: 'Resets at UTC midnight',
+                btc_bearish: 'BTC trend filter blocking altcoin longs (XBTUSD itself still allowed). Wait for BTC recovery or accept that crypto sits out bear phases.',
+            },
+        });
+    } catch (e) {
+        console.error('[crypto/diagnose] error:', e.message);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
 app.post('/api/crypto/start', async (req, res) => {
     try {
         await engine.start();
