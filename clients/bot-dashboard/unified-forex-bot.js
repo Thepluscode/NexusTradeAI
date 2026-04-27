@@ -4366,6 +4366,81 @@ app.post('/api/guardrails/reset', (req, res) => {
     res.json({ success: true, message: 'Guardrails reset' });
 });
 
+// [2026-04-27] Diagnostic — for each v20.0 forex pair, report what's currently
+// blocking signal generation. Read-only; no side effects. Useful when forex
+// hasn't fired in days and you need to know whether filters are too strict or
+// just waiting for the right setup.
+app.get('/api/forex/diagnose', async (req, res) => {
+    try {
+        const sess = (typeof getCurrentSession === 'function') ? getCurrentSession() : null;
+        const result = {
+            timestamp: new Date().toISOString(),
+            sessionUtc: new Date().getUTCHours(),
+            session: sess?.name || 'unknown',
+            sessionQuality: sess?.quality || 'unknown',
+            pairs: {}
+        };
+        for (const pair of FOREX_PAIRS) {
+            const blockers = [];
+            const info = { pair };
+            try {
+                const h4 = await getH4TrendAndADX(pair).catch(() => ({}));
+                info.h4 = { sma200: h4.sma200, adx: h4.adx, trend: h4.trend, currentPrice: h4.currentPrice };
+                const box = sessionBoxes.get(pair);
+                info.box = box ? { isComplete: !!box.isComplete, longTaken: !!box.longTaken, shortTaken: !!box.shortTaken, high: box.high, low: box.low, date: box.date } : null;
+                const isBreakoutPair = LONDON_BREAKOUT_PAIRS.includes(pair);
+                const isMeanRevPair = MEAN_REVERSION_PAIRS.includes(pair);
+                info.eligibleFor = { londonBreakout: isBreakoutPair, meanReversion: isMeanRevPair };
+
+                // London Breakout blockers
+                if (isBreakoutPair) {
+                    const lbBlocks = [];
+                    if (!box) lbBlocks.push('no Asian box yet');
+                    else if (!box.isComplete) lbBlocks.push('Asian box not complete (waiting for London open)');
+                    else {
+                        if (h4.trend === 'down' && h4.currentPrice > h4.sma200) lbBlocks.push('H4 trend mismatch');
+                        if (box.longTaken && box.shortTaken) lbBlocks.push('both directions already taken today');
+                    }
+                    info.londonBreakoutBlockers = lbBlocks;
+                }
+                // Mean Reversion blockers — fetch H4 candles for full check
+                if (isMeanRevPair) {
+                    const mrBlocks = [];
+                    if (h4.adx == null) mrBlocks.push('H4 ADX unavailable');
+                    else if (h4.adx >= 30) mrBlocks.push(`H4 ADX ${h4.adx.toFixed(1)} >= 30 (not ranging)`);
+                    try {
+                        const h4Candles = await getCandles(pair, 'H4', 25);
+                        if (h4Candles.length >= 20) {
+                            const h4BB = calculateBollingerBands(h4Candles, 20, 2);
+                            const h4RSI = calculateRSI(h4Candles, 14);
+                            const cp = parseFloat(h4Candles[h4Candles.length - 1].mid.c);
+                            info.mr = { price: cp, lowerBB: h4BB?.lower, upperBB: h4BB?.upper, h4RSI };
+                            if (h4BB && h4RSI != null) {
+                                const longCondition = cp <= h4BB.lower && h4RSI < 38;
+                                const shortCondition = cp >= h4BB.upper && h4RSI > 62;
+                                if (!longCondition && !shortCondition) {
+                                    if (cp > h4BB.lower && cp < h4BB.upper) mrBlocks.push(`price inside BB (${h4BB.lower.toFixed(5)}-${h4BB.upper.toFixed(5)})`);
+                                    if (h4RSI >= 38 && h4RSI <= 62) mrBlocks.push(`H4 RSI ${h4RSI.toFixed(1)} not at extreme (need <38 or >62)`);
+                                }
+                            }
+                        } else {
+                            mrBlocks.push('not enough H4 candles');
+                        }
+                    } catch (e) { mrBlocks.push(`H4 fetch error: ${e.message}`); }
+                    info.meanReversionBlockers = mrBlocks;
+                }
+            } catch (e) {
+                blockers.push(`error: ${e.message}`);
+            }
+            result.pairs[pair] = info;
+        }
+        res.json({ success: true, ...result });
+    } catch (e) {
+        console.error('[forex/diagnose] error:', e.message);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
 // [2026-04-27] One-shot backfill: compute volume_ratio retroactively for
 // historical forex trades using OANDA M15 candles around each entry_time.
 // Required because volume_ratio capture didn't exist until PR #13 — all
