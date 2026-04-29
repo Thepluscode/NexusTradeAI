@@ -1635,6 +1635,25 @@ class CryptoTradingEngine {
         // Auto-optimizer state — updated every 4 hours in tradingLoop
         this._lastAutoOptimMs = 0;
         this._optimizedParams = null; // null = use defaults (PARAM_BOUNDS defaults)
+
+        // Decision trace ring-buffer — captures every signal that reached the trading loop
+        // and which gate (if any) blocked it. Exposed via /api/crypto/decision-trace.
+        // Cleared on restart; ephemeral. ~200 entries × ~250 bytes = 50KB.
+        this._decisionTrace = [];
+        this._decisionTraceMax = 200;
+    }
+
+    _recordDecision(symbol, stage, status, details = {}) {
+        if (this._decisionTrace.length >= this._decisionTraceMax) {
+            this._decisionTrace.shift();
+        }
+        this._decisionTrace.push({
+            ts: new Date().toISOString(),
+            symbol,
+            stage,
+            status,
+            details,
+        });
     }
 
     // ========================================================================
@@ -2913,6 +2932,7 @@ class CryptoTradingEngine {
         const check = this.canTrade(signal.symbol);
         if (!check.allowed) {
             console.log(`⛔ Trade blocked for ${signal.symbol}: ${check.reason}`);
+            this._recordDecision(signal.symbol, 'can_trade', 'block', { reason: check.reason });
             return null;
         }
 
@@ -2926,6 +2946,7 @@ class CryptoTradingEngine {
             const sizingMultiplier = Math.max(0.0, Math.min(2.0, runningWinRate / 0.5));
             if (sizingMultiplier <= 0) {
                 console.log(`⚠️  [SKIP] ${signal.symbol}: Kelly sizing ${sizingMultiplier.toFixed(2)}x — win rate too low (${(runningWinRate * 100).toFixed(1)}%), skipping trade`);
+                this._recordDecision(signal.symbol, 'kelly_sizing', 'block', { runningWinRate, sizingMultiplier });
                 return null;
             }
             const signalSizingFactor = signal.sizingFactor ?? 1.0;
@@ -3014,8 +3035,10 @@ class CryptoTradingEngine {
 
             if (!order) {
                 console.log(`❌ Failed to place order for ${signal.symbol}`);
+                this._recordDecision(signal.symbol, 'broker_order', 'block', { reason: 'placeOrder returned falsy', mode: isRealTradingEnabled() ? 'live' : 'paper' });
                 return null;
             }
+            this._recordDecision(signal.symbol, 'executed', 'execute', { orderId: order.orderId, quantity, price: signal.price, strategy: signal.strategy });
 
             // Create position — include currentPrice/unrealizedPnL so status
             // endpoint returns valid values before the first managePositions() cycle
@@ -3730,9 +3753,16 @@ class CryptoTradingEngine {
                     // Execute trades
                     for (const signal of opportunities) {
                         if (this.positions.size >= this.config.maxTotalPositions) break;
+                        this._recordDecision(signal.symbol, 'received', 'considered', {
+                            strategy: signal.strategy,
+                            score: signal.score,
+                            volumeRatio: signal.volumeRatio,
+                            rsi: signal.rsi,
+                        });
                         // [v15.0] Early position check — skip AI eval if we already hold this symbol
                         if (this.positions.has(signal.symbol)) {
                             console.log(`⏭️  ${signal.symbol}: Already have open position — skipping AI eval`);
+                            this._recordDecision(signal.symbol, 'position_check', 'block', { reason: 'already holding position' });
                             continue;
                         }
                         // [v23.0] ADVISORY MODE: agent evaluation is informational, NOT a hard gate.
@@ -3748,6 +3778,7 @@ class CryptoTradingEngine {
                         // KILL-SWITCH is the ONLY blocking path — it's a safety override, not a prediction
                         if (aiResult.source === 'kill_switch') {
                             console.log(`[Agent] ${signal.symbol} KILL-SWITCH BLOCK — ${aiResult.reason}`);
+                            this._recordDecision(signal.symbol, 'kill_switch', 'block', { reason: aiResult.reason });
                             (this._userTelegram || telegramAlerts).sendKillSwitchAlert('Crypto Bot', aiResult.reason).catch(err => console.warn('[ALERT] Telegram kill-switch send failed:', err.message));
                             continue;
                         }
@@ -3794,10 +3825,12 @@ class CryptoTradingEngine {
                         // [v4.6] Adaptive guardrails — pre-trade quality gate
                         if (this.isLanePaused()) {
                             console.log(`[Guardrail] ${signal.symbol} BLOCKED — lane paused until ${new Date(this.guardrails.lanePausedUntil).toLocaleTimeString()}`);
+                            this._recordDecision(signal.symbol, 'lane_paused', 'block', { until: this.guardrails.lanePausedUntil });
                             continue;
                         }
                         if ((signal.score || 0) < MIN_SIGNAL_SCORE) {
                             console.log(`[Guardrail] ${signal.symbol} BLOCKED — score ${(signal.score || 0).toFixed(2)} < ${MIN_SIGNAL_SCORE}`);
+                            this._recordDecision(signal.symbol, 'min_score', 'block', { score: signal.score, threshold: MIN_SIGNAL_SCORE });
                             continue;
                         }
                         // [v24.14] Regime directional gate — block longs when regime says "shorts only"
@@ -3806,6 +3839,7 @@ class CryptoTradingEngine {
                             const dir = signal.direction || 'long';
                             if (dir === 'long') {
                                 console.log(`🛑 [REGIME GATE] ${signal.symbol}: TRENDING_DOWN regime — blocking LONG (long-only bot sits out bearish markets)`);
+                                this._recordDecision(signal.symbol, 'regime_direction', 'block', { regime: cryptoRegime?.regime, direction: dir });
                                 continue;
                             }
                         }
@@ -3818,12 +3852,14 @@ class CryptoTradingEngine {
                         const rewardRisk = tpPct / stopPct;
                         if (rewardRisk < effectiveMinRR) {
                             console.log(`[Guardrail] ${signal.symbol} BLOCKED — R:R ${rewardRisk.toFixed(2)} < ${effectiveMinRR.toFixed(2)} (auto-optim)`);
+                            this._recordDecision(signal.symbol, 'risk_reward', 'block', { rewardRisk: parseFloat(rewardRisk.toFixed(2)), threshold: parseFloat(effectiveMinRR.toFixed(2)) });
                             continue;
                         }
                         // [Phase 3] Regime-adjusted score threshold — high vol raises the bar, low vol lowers it
                         const regimeScoreThreshold = MIN_SIGNAL_SCORE * cryptoRegime.adjustments.scoreThresholdMultiplier;
                         if ((signal.score || 0) < regimeScoreThreshold && regimeScoreThreshold !== MIN_SIGNAL_SCORE) {
                             console.log(`[Regime] ${signal.symbol} BLOCKED — score ${(signal.score || 0).toFixed(2)} < ${regimeScoreThreshold.toFixed(2)} (regime: ${cryptoRegime.adjustments.label})`);
+                            this._recordDecision(signal.symbol, 'regime_score', 'block', { score: signal.score, threshold: parseFloat(regimeScoreThreshold.toFixed(3)), regime: cryptoRegime.adjustments.label });
                             continue;
                         }
                         // [HighVolFilter] Backfill (n=69 momentum trades) showed vol_ratio>3.0
@@ -3835,6 +3871,7 @@ class CryptoTradingEngine {
                         const HIGH_VOL_THRESHOLD = parseFloat(process.env.CRYPTO_HIGH_VOL_THRESHOLD || '3.0');
                         if (HIGH_VOL_FILTER_ON && signal.strategy === 'momentum' && (signal.volumeRatio || 0) > HIGH_VOL_THRESHOLD) {
                             console.log(`[Guardrail] ${signal.symbol} BLOCKED — high_vol_filter (vol=${(signal.volumeRatio || 0).toFixed(2)} > ${HIGH_VOL_THRESHOLD}, strategy=momentum). Backfill: 46 such trades lost $174 net.`);
+                            this._recordDecision(signal.symbol, 'high_vol_filter', 'block', { volumeRatio: signal.volumeRatio, threshold: HIGH_VOL_THRESHOLD });
                             continue;
                         }
                         // [Phase 1] Order flow confirmation — block only when flow actively opposes trade direction
@@ -3844,6 +3881,7 @@ class CryptoTradingEngine {
                             const ofi = signal.orderFlowImbalance;
                             if ((dir === 'long' && ofi < -0.05) || (dir === 'short' && ofi > 0.05)) {
                                 console.log(`[FILTER] ${signal.symbol}: Order flow opposes ${dir} (imbalance=${ofi.toFixed(2)}), skipping`);
+                                this._recordDecision(signal.symbol, 'order_flow', 'block', { direction: dir, ofi: parseFloat(ofi.toFixed(3)) });
                                 continue;
                             }
                         }
@@ -3896,6 +3934,7 @@ class CryptoTradingEngine {
                         const committee = computeCryptoCommitteeScore(signal);
                         if (committee.confidence < effectiveCommitteeThreshold) {
                             console.log(`[Committee] ${signal.symbol}: Confidence ${committee.confidence} < ${effectiveCommitteeThreshold.toFixed(3)} threshold (auto-optim) — ${JSON.stringify(committee.components)}`);
+                            this._recordDecision(signal.symbol, 'committee', 'block', { confidence: committee.confidence, threshold: parseFloat(effectiveCommitteeThreshold.toFixed(3)), components: committee.components });
                             continue;
                         }
 
@@ -3919,6 +3958,7 @@ class CryptoTradingEngine {
                         // Use calibrated confidence for EV filter
                         // [Improvement 3] Transaction cost filter — reject if EV is negative after fees/slippage
                         if (!isCryptoPositiveEV(calibratedConf)) {
+                            this._recordDecision(signal.symbol, 'ev_filter', 'block', { calibratedConfidence: calibratedConf });
                             continue;
                         }
 
@@ -3942,9 +3982,11 @@ class CryptoTradingEngine {
                         );
                         if (!cxQualifier.qualified) {
                             console.log(`[Qualifier] ${signal.symbol} BLOCKED — ${cxQualifier.reason}`);
+                            this._recordDecision(signal.symbol, 'entry_qualifier', 'block', { reason: cxQualifier.reason, ev: cxQualifier.ev });
                             continue;
                         }
                         console.log(`[Qualifier] ${signal.symbol} PASSED — EV=${cxQualifier.ev.toFixed(3)}%, allocationFactor=${cxQualifier.allocationFactor.toFixed(2)}`);
+                        this._recordDecision(signal.symbol, 'all_gates_passed', 'pass', { score: signal.score, committeeConfidence: rawConf, calibratedConfidence: calibratedConf, ev: cxQualifier.ev, strategy: signal.strategy });
 
                         signal.committeeConfidence = rawConf;
                         signal.calibratedConfidence = calibratedConf;
@@ -4515,6 +4557,56 @@ app.get('/api/crypto/diagnose', async (req, res) => {
         res.status(500).json({ success: false, error: e.message });
     }
 });
+
+// [2026-04-29] Decision trace — every signal that reached the trading loop and
+// which gate (if any) blocked it. Read-only, no auth. Ephemeral (cleared on
+// restart). Capped at 200 entries; oldest evicted first. Use to answer
+// "why no trades?" — counts blocks per gate stage.
+app.get('/api/crypto/decision-trace', (req, res) => {
+    try {
+        const trace = engine._decisionTrace || [];
+        const limit = Math.min(parseInt(req.query.limit, 10) || 100, 200);
+        const recent = trace.slice(-limit);
+        // Aggregate by stage
+        const counts = {};
+        for (const entry of trace) {
+            const key = `${entry.stage}:${entry.status}`;
+            counts[key] = (counts[key] || 0) + 1;
+        }
+        res.json({
+            success: true,
+            timestamp: new Date().toISOString(),
+            traceSize: trace.length,
+            traceCap: engine._decisionTraceMax || 200,
+            stageCounts: counts,
+            recent,
+            interpretation: {
+                received: 'Signal arrived at trading loop from scanForOpportunities',
+                position_check: 'Already holding a position in this symbol',
+                kill_switch: 'Bridge agent hard-blocked (safety override)',
+                lane_paused: 'Adaptive guardrail paused trading after consecutive losses',
+                min_score: 'Signal score below MIN_SIGNAL_SCORE env threshold',
+                regime_direction: 'Regime detector says TRENDING_DOWN (long-only bot sits out)',
+                risk_reward: 'R:R ratio below auto-optimized minimum',
+                regime_score: 'Score below regime-adjusted threshold (high-vol regimes raise the bar)',
+                high_vol_filter: 'CRYPTO_HIGH_VOL_FILTER on AND volumeRatio > threshold (default 3.0)',
+                order_flow: 'Order flow imbalance opposes trade direction',
+                committee: 'Committee aggregator confidence below threshold (most common gate)',
+                ev_filter: 'Calibrated confidence implies negative expected value after fees',
+                entry_qualifier: 'Shared entry qualifier (EV/win-rate gate) blocked',
+                all_gates_passed: 'Signal cleared all gates — moving to executeTrade',
+                can_trade: 'Anti-churning canTrade rejection (cooldown, daily cap, etc)',
+                kelly_sizing: 'Kelly position size <= 0 (win rate too low)',
+                broker_order: 'Kraken placeOrder returned falsy — broker rejected or paper-mode bug',
+                executed: 'Order placed and position created',
+            },
+        });
+    } catch (e) {
+        console.error('[crypto/decision-trace] error:', e.message);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
 app.post('/api/crypto/start', async (req, res) => {
     try {
         await engine.start();
