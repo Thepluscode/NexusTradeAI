@@ -2562,11 +2562,18 @@ class CryptoTradingEngine {
             // Try each tier
             for (const [tierName, tier] of Object.entries(this.config.tiers)) {
                 // [v25.0] DIFF 1: Restrict tiers by market regime
+                // [2026-04-29] Original config blocked ALL tiers in TRENDING_DOWN and
+                // HIGH_VOLATILITY. Combined with the per-symbol regime detector
+                // frequently classifying altcoins as one of these states, the bot
+                // silently produced zero opportunities. Tier1 is the smallest /
+                // most conservative position size and is safe to allow in adverse
+                // regimes — a small loss is better than no data. Tier2/Tier3
+                // (larger sizes) remain blocked in adverse regimes to limit damage.
                 const tierAllowedByRegime = {
                     'TRENDING_UP': ['tier3', 'tier2', 'tier1'],
-                    'TRENDING_DOWN': [],
+                    'TRENDING_DOWN': ['tier1'],
                     'MEAN_REVERTING': ['tier1'],
-                    'HIGH_VOLATILITY': []
+                    'HIGH_VOLATILITY': ['tier1']
                 };
                 const allowedTiers = tierAllowedByRegime[cryptoRegimeClass] || ['tier3', 'tier2', 'tier1'];
                 if (!allowedTiers.includes(tierName)) {
