@@ -4509,6 +4509,98 @@ app.get('/api/crypto/status', (req, res) => {
     res.json(engine.getStatus());
 });
 
+// [2026-04-30] Funding Rate Monitor — Phase 1 of funding-rate arbitrage strategy.
+// Pulls live perpetual contract funding rates from Kraken Futures public API
+// (no auth needed). Surfaces opportunities where funding rate magnitude exceeds
+// a threshold. This is read-only / data-collection — does NOT execute any
+// trades. Use to validate edge exists before building the spot+perp execution.
+//
+// Kraken funding-rate semantics:
+//   fundingRate field = USD per contract per period (mark price units).
+//   To get relative %: fundingRate / markPrice
+//   fundingRateCoefficient is typically 24 → 24 funding periods per day (hourly).
+//   Annualized % = (fundingRate / markPrice) * 24 * 365 * 100
+//   Sign convention: positive = longs pay shorts (short the perp + long spot to capture).
+//                    negative = shorts pay longs (long the perp + short spot to capture; but
+//                    shorting spot retail is hard, so positive rates are the actionable ones).
+async function fetchKrakenFundingRates() {
+    const response = await axios.get('https://futures.kraken.com/derivatives/api/v3/tickers', {
+        timeout: 8000,
+    });
+    const tickers = response.data?.tickers || [];
+    const out = [];
+    for (const t of tickers) {
+        const sym = t.symbol || '';
+        if (!sym.startsWith('PF_')) continue; // PF_ = perpetual; PI_ = older deprecated
+        if (t.suspended) continue;
+        const fr = typeof t.fundingRate === 'number' ? t.fundingRate : null;
+        const frPred = typeof t.fundingRatePrediction === 'number' ? t.fundingRatePrediction : null;
+        const mark = typeof t.markPrice === 'number' ? t.markPrice : null;
+        if (fr === null || mark === null || mark <= 0) continue;
+        const relativeRate = fr / mark; // unitless rate per funding period
+        const annualizedPct = relativeRate * 24 * 365 * 100; // assumes hourly funding
+        out.push({
+            symbol: sym,
+            spotPair: sym.replace(/^PF_/, ''),
+            fundingRate: fr,
+            fundingRatePrediction: frPred,
+            markPrice: mark,
+            relativeRate,
+            annualizedPct: parseFloat(annualizedPct.toFixed(2)),
+            openInterest: t.openInterest ?? null,
+            vol24h: t.vol24h ?? null,
+        });
+    }
+    return out;
+}
+
+app.get('/api/crypto/funding-rates', async (req, res) => {
+    try {
+        const rates = await fetchKrakenFundingRates();
+        rates.sort((a, b) => Math.abs(b.annualizedPct) - Math.abs(a.annualizedPct));
+        res.json({
+            success: true,
+            timestamp: new Date().toISOString(),
+            count: rates.length,
+            rates: rates.slice(0, parseInt(req.query.limit, 10) || 50),
+            interpretation: {
+                positive: 'Longs pay shorts. Arb: short perp + long spot to capture.',
+                negative: 'Shorts pay longs. Arb requires shorting spot (hard for retail).',
+                threshold_actionable: '>= ~5% annualized makes the spread worth the round-trip cost.',
+            },
+        });
+    } catch (e) {
+        console.error('[funding-rates] error:', e.message);
+        res.status(502).json({ success: false, error: 'Kraken Futures API failed', detail: e.message });
+    }
+});
+
+app.get('/api/crypto/funding-opportunities', async (req, res) => {
+    try {
+        const minAPY = parseFloat(req.query.minAPY) || 5; // % annualized
+        const maxOpps = parseInt(req.query.limit, 10) || 20;
+        const rates = await fetchKrakenFundingRates();
+        // Only positive rates are actionable for spot+perp longs (short perp, hold spot).
+        // For now, filter to positive only AND magnitude above threshold AND volume present.
+        const candidates = rates
+            .filter(r => r.annualizedPct >= minAPY)
+            .filter(r => (r.vol24h || 0) > 0) // need liquidity
+            .sort((a, b) => b.annualizedPct - a.annualizedPct)
+            .slice(0, maxOpps);
+        res.json({
+            success: true,
+            timestamp: new Date().toISOString(),
+            criteria: { minAPY, requiresPositiveFunding: true, requiresVolume: true },
+            opportunityCount: candidates.length,
+            opportunities: candidates,
+            note: 'Phase 1 monitor only. Execution requires Kraken Futures API auth + spot+perp paired position management (not yet implemented).',
+        });
+    } catch (e) {
+        console.error('[funding-opportunities] error:', e.message);
+        res.status(502).json({ success: false, error: 'Kraken Futures API failed', detail: e.message });
+    }
+});
+
 // [2026-04-27] Diagnostic — explain current gating state. Mirrors
 // /api/forex/diagnose. Read-only, no auth. Computes BTC filter fresh
 // to avoid stale cached state.
