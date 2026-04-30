@@ -1377,6 +1377,83 @@ function detectCryptoRegime(klines) {
 // KRAKEN API CLIENT  (replaces Binance — US-friendly, no geo-block)
 // ============================================================================
 
+// [2026-04-30] KrakenFuturesClient — Phase 2a of funding-rate arbitrage.
+// Separate from spot KrakenClient. Different host (futures.kraken.com),
+// different auth (HMAC-SHA512 with SHA256-prehash and `Authent` header),
+// different account scope. Requires KRAKEN_FUTURES_API_KEY and
+// KRAKEN_FUTURES_API_SECRET env vars; if absent, methods return null
+// without crashing so the rest of the bot keeps working.
+class KrakenFuturesClient {
+    constructor(config = {}) {
+        this.baseURL = 'https://futures.kraken.com';
+        this.apiKey = config.apiKey || process.env.KRAKEN_FUTURES_API_KEY || null;
+        this.apiSecret = config.apiSecret || process.env.KRAKEN_FUTURES_API_SECRET || null;
+    }
+
+    isConfigured() {
+        return !!(this.apiKey && this.apiSecret);
+    }
+
+    // Kraken Futures authentication signing per their docs:
+    //   step1 = sha256(postData + nonce + endpointPath)  // path is the part AFTER /derivatives
+    //   step2 = base64Decode(apiSecret)
+    //   Authent = base64( hmac-sha512(step2, step1) )
+    _sign(endpointPath, nonce, postData) {
+        // endpointPath is e.g. "/api/v3/accounts" — the part following "/derivatives"
+        const path = endpointPath.replace(/^\/derivatives/, '');
+        const message = (postData || '') + nonce + path;
+        const sha256Digest = crypto.createHash('sha256').update(message).digest();
+        const secretBuffer = Buffer.from(this.apiSecret, 'base64');
+        return crypto.createHmac('sha512', secretBuffer).update(sha256Digest).digest('base64');
+    }
+
+    async _privateGet(endpoint) {
+        if (!this.isConfigured()) {
+            return { error: 'Kraken Futures not configured (set KRAKEN_FUTURES_API_KEY and _SECRET on Railway)' };
+        }
+        const nonce = Date.now().toString();
+        const url = `${this.baseURL}/derivatives${endpoint}`;
+        const signature = this._sign(`/derivatives${endpoint}`, nonce, '');
+        try {
+            const response = await axios.get(url, {
+                headers: {
+                    'APIKey': this.apiKey,
+                    'Authent': signature,
+                    'Nonce': nonce,
+                },
+                timeout: 10000,
+            });
+            const data = response.data;
+            if (data?.result === 'error') {
+                return { error: data.error || 'Unknown Kraken Futures error' };
+            }
+            return data;
+        } catch (e) {
+            return { error: `Kraken Futures request failed: ${e?.response?.data?.error || e.message}` };
+        }
+    }
+
+    async getAccountSummary() {
+        return this._privateGet('/api/v3/accounts');
+    }
+
+    async getOpenPositions() {
+        return this._privateGet('/api/v3/openpositions');
+    }
+
+    async getInstruments() {
+        // Public endpoint, no auth — used to map symbol → contract details
+        try {
+            const resp = await axios.get(`${this.baseURL}/derivatives/api/v3/instruments`, { timeout: 8000 });
+            return resp.data;
+        } catch (e) {
+            return { error: e.message };
+        }
+    }
+}
+
+const krakenFuturesClient = new KrakenFuturesClient();
+
 class KrakenClient {
     constructor(config) {
         this.baseURL = 'https://api.kraken.com';
@@ -4587,6 +4664,52 @@ app.get('/api/crypto/funding-rates', async (req, res) => {
     } catch (e) {
         console.error('[funding-rates] error:', e.message);
         res.status(502).json({ success: false, error: 'Kraken Futures API failed', detail: e.message });
+    }
+});
+
+// [2026-04-30] Kraken Futures account verification — Phase 2a smoke test.
+// Confirms KRAKEN_FUTURES_API_KEY/_SECRET env vars are set correctly and
+// the auth signing produces a valid header. Returns sanitized account
+// data only — never echoes the API key/secret. Auth-protected.
+app.get('/api/crypto/futures/account', requireApiSecret, async (req, res) => {
+    try {
+        if (!krakenFuturesClient.isConfigured()) {
+            return res.status(503).json({
+                success: false,
+                configured: false,
+                error: 'KRAKEN_FUTURES_API_KEY and KRAKEN_FUTURES_API_SECRET not set on Railway',
+                howToFix: 'Sign up at futures.kraken.com → API Keys → create key with Read+Trade permissions → set both env vars on Railway crypto-bot service',
+            });
+        }
+        const summary = await krakenFuturesClient.getAccountSummary();
+        if (summary?.error) {
+            return res.status(502).json({ success: false, configured: true, error: summary.error });
+        }
+        // Sanitize: return only result/balance shape, no keys
+        const accounts = summary?.accounts || {};
+        const accountSummary = {};
+        for (const [name, acct] of Object.entries(accounts)) {
+            if (!acct || typeof acct !== 'object') continue;
+            accountSummary[name] = {
+                type: acct.type ?? null,
+                currency: acct.currency ?? null,
+                balanceValue: acct.balanceValue ?? acct.balances ?? null,
+                availableMargin: acct.availableMargin ?? null,
+                marginEquity: acct.marginEquity ?? null,
+            };
+        }
+        const positions = await krakenFuturesClient.getOpenPositions();
+        res.json({
+            success: true,
+            configured: true,
+            timestamp: new Date().toISOString(),
+            accounts: accountSummary,
+            openPositionCount: (positions?.openPositions || []).length,
+            openPositions: positions?.openPositions || [],
+        });
+    } catch (e) {
+        console.error('[futures/account] error:', e.message);
+        res.status(500).json({ success: false, error: 'Internal error' });
     }
 });
 
