@@ -1530,6 +1530,16 @@ const RISK_PER_TRADE = parseFloat(process.env.RISK_PER_TRADE || '0.0025'); // [v
 const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.45');
 const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.20'); // [v19.1] was 0.72, regime multipliers reduce scores to 0.25-0.35 range
 const MIN_REWARD_RISK = parseFloat(process.env.MIN_REWARD_RISK || '1.7');
+// [2026-04-30] Anti-FOMO confidence cap. Empirical analysis (scripts/analyze-committee-threshold.js)
+// over 58 trades showed conf >= 0.50 lost 100% at -5%/trade while conf 0.40-0.45 won 57.7% at +0.45%.
+// Three committee components (orderFlow, displacement, fvgCount) anti-predict outcomes — they fire
+// AFTER moves are exhausted. High confidence = late/FOMO entry. Cap blocks the loss zone.
+// Default OFF (flag must be set on Railway env vars to activate).
+const CRYPTO_CONFIDENCE_CAP_ENABLED = process.env.CRYPTO_CONFIDENCE_CAP === 'true';
+const CRYPTO_CONFIDENCE_CAP_RAW = parseFloat(process.env.CRYPTO_CONFIDENCE_CAP_VALUE);
+const CRYPTO_CONFIDENCE_CAP = (Number.isFinite(CRYPTO_CONFIDENCE_CAP_RAW) && CRYPTO_CONFIDENCE_CAP_RAW > 0 && CRYPTO_CONFIDENCE_CAP_RAW < 1)
+    ? CRYPTO_CONFIDENCE_CAP_RAW
+    : 0.45;
 const MAX_SIGNALS_PER_CYCLE = parseInt(process.env.MAX_SIGNALS_PER_CYCLE || '1');
 const MAX_CONSECUTIVE_LOSSES = parseInt(process.env.MAX_CONSECUTIVE_LOSSES || '5');
 const LOSS_PAUSE_MS = parseInt(process.env.LOSS_PAUSE_MS || '7200000');
@@ -2888,7 +2898,12 @@ class CryptoTradingEngine {
         // 1. Committee confidence must meet threshold (auto-optimized, default 0.50)
         const conf = committee ? committee.confidence : 0;
         if (conf < committeeThreshold) {
-            reasons.push(`confidence ${conf.toFixed(2)} < ${committeeThreshold.toFixed(3)}`);
+            reasons.push(`confidence ${conf.toFixed(2)} < ${committeeThreshold.toFixed(3)} (delta -${(committeeThreshold - conf).toFixed(3)})`);
+        }
+        // [2026-04-30] Anti-FOMO upper cap — block trades with conf > cap.
+        // Reason: empirical 0% WR above 0.45 over 27 trades, -$257 net.
+        if (CRYPTO_CONFIDENCE_CAP_ENABLED && conf > CRYPTO_CONFIDENCE_CAP) {
+            reasons.push(`confidence ${conf.toFixed(2)} > cap ${CRYPTO_CONFIDENCE_CAP.toFixed(2)} (delta +${(conf - CRYPTO_CONFIDENCE_CAP).toFixed(3)}, anti-FOMO)`);
         }
 
         // 2. BTC correlation check — if BTC is bearish, don't go LONG on altcoins
