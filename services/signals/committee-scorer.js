@@ -268,8 +268,15 @@ function computeCommitteeScore(rawSignal, botTypeOrConfig, options = {}) {
 
     // v22.0 dynamic weight: only count components with actual data
     if (entry.present) {
-      weightedSum += entry.score * weight;
-      totalWeight += weight;
+      // [v26.0 2026-04-30] Negative weights mean "this component anti-predicts".
+      // Math: contribution = (1 - score) * |weight| when weight < 0.
+      // A high score (1.0) on a negative-weighted component contributes 0;
+      // a low score (0) contributes the full weight magnitude.
+      // totalWeight uses |weight| so confidence stays in [0, 1].
+      const absWeight = Math.abs(weight);
+      const effectiveScore = weight < 0 ? (1 - entry.score) : entry.score;
+      weightedSum += effectiveScore * absWeight;
+      totalWeight += absWeight;
       presentCount++;
     }
   }

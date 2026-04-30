@@ -237,6 +237,13 @@ function saveCryptoWeights(weights, meta) {
     }
 }
 
+// [2026-04-30] When CRYPTO_INVERT_WEIGHTS=true, optimizeCryptoWeights uses signed
+// edges so net-negative-edge components contribute via inversion (negative weight)
+// instead of being clamped to zero. The committee-scorer in services/signals
+// applies negative weights as (1 - score) * |weight|, turning anti-predictive
+// signals into evidence AGAINST the trade.
+const CRYPTO_INVERT_WEIGHTS = process.env.CRYPTO_INVERT_WEIGHTS === 'true';
+
 function optimizeCryptoWeights() {
     const evals = globalThis._cryptoTradeEvaluations || [];
     if (evals.length < 30) {
@@ -245,7 +252,7 @@ function optimizeCryptoWeights() {
     }
 
     const signalKeys = ['momentum', 'orderFlow', 'displacement', 'volumeProfile', 'fvg', 'volumeRatio'];
-    const edges = {};
+    const signedEdges = {};
 
     for (const key of signalKeys) {
         const withSignal = evals.filter(e => {
@@ -261,36 +268,74 @@ function optimizeCryptoWeights() {
 
         const avgWith = withSignal.length > 0 ? withSignal.reduce((s, e) => s + (e.pnlPct || 0), 0) / withSignal.length : 0;
         const avgWithout = withoutSignal.length > 0 ? withoutSignal.reduce((s, e) => s + (e.pnlPct || 0), 0) / withoutSignal.length : 0;
-        edges[key] = Math.max(0, avgWith - avgWithout);
+        signedEdges[key] = avgWith - avgWithout; // can be negative
     }
 
     const MIN_WEIGHT = 0.05;
     const MAX_WEIGHT = 0.40;
-    const totalEdge = Object.values(edges).reduce((s, e) => s + e, 0);
 
-    if (totalEdge <= 0) {
-        console.log('[AutoLearn] No positive edges for crypto, keeping default weights');
+    // Legacy path: positive-edges-only (current production behavior)
+    if (!CRYPTO_INVERT_WEIGHTS) {
+        const positiveEdges = {};
+        for (const key of signalKeys) {
+            positiveEdges[key] = Math.max(0, signedEdges[key]);
+        }
+        const totalEdge = Object.values(positiveEdges).reduce((s, e) => s + e, 0);
+        if (totalEdge <= 0) {
+            console.log('[AutoLearn] No positive edges for crypto, keeping default weights');
+            return null;
+        }
+        const rawWeights = {};
+        for (const key of signalKeys) {
+            rawWeights[key] = Math.max(MIN_WEIGHT, Math.min(MAX_WEIGHT, positiveEdges[key] / totalEdge));
+        }
+        const sum = Object.values(rawWeights).reduce((s, w) => s + w, 0);
+        const optimizedWeights = {};
+        for (const key of signalKeys) {
+            optimizedWeights[key] = parseFloat((rawWeights[key] / sum).toFixed(3));
+        }
+        const finalSum = Object.values(optimizedWeights).reduce((s, w) => s + w, 0);
+        if (Math.abs(finalSum - 1.0) > 0.001) {
+            optimizedWeights.momentum += parseFloat((1.0 - finalSum).toFixed(3));
+        }
+        console.log(`[AutoLearn] Optimized crypto weights from ${evals.length} trades:`, JSON.stringify(optimizedWeights));
+        saveCryptoWeights(optimizedWeights, { edges: positiveEdges, tradeCount: evals.length });
+        return optimizedWeights;
+    }
+
+    // [2026-04-30] Signed-weights path: net-negative-edge components get NEGATIVE
+    // weights, telling the scorer to invert their contribution. Components with
+    // |edge| below epsilon get default-weight magnitude with sign(0)=+1 (no flip).
+    const totalAbsEdge = Object.values(signedEdges).reduce((s, e) => s + Math.abs(e), 0);
+    if (totalAbsEdge <= 0) {
+        console.log('[AutoLearn] No edge signal at all (all components flat), keeping default weights');
         return null;
     }
 
     const rawWeights = {};
     for (const key of signalKeys) {
-        rawWeights[key] = Math.max(MIN_WEIGHT, Math.min(MAX_WEIGHT, edges[key] / totalEdge));
+        const magnitude = Math.max(MIN_WEIGHT, Math.min(MAX_WEIGHT, Math.abs(signedEdges[key]) / totalAbsEdge));
+        const sign = signedEdges[key] < 0 ? -1 : 1;
+        rawWeights[key] = sign * magnitude;
     }
 
-    const sum = Object.values(rawWeights).reduce((s, w) => s + w, 0);
+    // Normalize so sum of |weights| = 1.0 (preserves signs)
+    const sumAbs = Object.values(rawWeights).reduce((s, w) => s + Math.abs(w), 0);
     const optimizedWeights = {};
     for (const key of signalKeys) {
-        optimizedWeights[key] = parseFloat((rawWeights[key] / sum).toFixed(3));
+        optimizedWeights[key] = parseFloat((rawWeights[key] / sumAbs).toFixed(3));
     }
 
-    const finalSum = Object.values(optimizedWeights).reduce((s, w) => s + w, 0);
-    if (Math.abs(finalSum - 1.0) > 0.001) {
-        optimizedWeights.momentum += parseFloat((1.0 - finalSum).toFixed(3));
+    // Float-precision adjustment on momentum's magnitude (preserve sign)
+    const finalAbsSum = Object.values(optimizedWeights).reduce((s, w) => s + Math.abs(w), 0);
+    if (Math.abs(finalAbsSum - 1.0) > 0.001) {
+        const momSign = optimizedWeights.momentum < 0 ? -1 : 1;
+        optimizedWeights.momentum = parseFloat(((Math.abs(optimizedWeights.momentum) + (1.0 - finalAbsSum)) * momSign).toFixed(3));
     }
 
-    console.log(`[AutoLearn] Optimized crypto weights from ${evals.length} trades:`, JSON.stringify(optimizedWeights));
-    saveCryptoWeights(optimizedWeights, { edges, tradeCount: evals.length });
+    console.log(`[AutoLearn][SIGNED] Optimized crypto weights from ${evals.length} trades:`, JSON.stringify(optimizedWeights));
+    console.log(`[AutoLearn][SIGNED] Inverted components:`, signalKeys.filter(k => signedEdges[k] < 0).join(', ') || 'none');
+    saveCryptoWeights(optimizedWeights, { signedEdges, tradeCount: evals.length, inverted: true });
     return optimizedWeights;
 }
 
@@ -1377,15 +1422,21 @@ function detectCryptoRegime(klines) {
 // KRAKEN API CLIENT  (replaces Binance — US-friendly, no geo-block)
 // ============================================================================
 
-// [2026-04-30] KrakenFuturesClient — Phase 2a of funding-rate arbitrage.
-// Separate from spot KrakenClient. Different host (futures.kraken.com),
-// different auth (HMAC-SHA512 with SHA256-prehash and `Authent` header),
-// different account scope. Requires KRAKEN_FUTURES_API_KEY and
-// KRAKEN_FUTURES_API_SECRET env vars; if absent, methods return null
-// without crashing so the rest of the bot keeps working.
+// [2026-04-30] KrakenFuturesClient — Phase 2a/2b of funding-rate arbitrage.
+// Separate from spot KrakenClient. Different host, different auth scheme.
+// Requires KRAKEN_FUTURES_API_KEY and KRAKEN_FUTURES_API_SECRET env vars.
+//
+// SAFETY: defaults to DEMO mode (demo-futures.kraken.com) so accidental
+// runs cannot touch real money. Live mode requires explicit
+// KRAKEN_FUTURES_LIVE=true env var. trading-safety rule 3 (paper trading
+// only) is enforced here at the URL level.
 class KrakenFuturesClient {
     constructor(config = {}) {
-        this.baseURL = 'https://futures.kraken.com';
+        const useLive = process.env.KRAKEN_FUTURES_LIVE === 'true';
+        this.baseURL = useLive
+            ? 'https://futures.kraken.com'
+            : 'https://demo-futures.kraken.com';
+        this.isLive = useLive;
         this.apiKey = config.apiKey || process.env.KRAKEN_FUTURES_API_KEY || null;
         this.apiSecret = config.apiSecret || process.env.KRAKEN_FUTURES_API_SECRET || null;
     }
@@ -1399,7 +1450,6 @@ class KrakenFuturesClient {
     //   step2 = base64Decode(apiSecret)
     //   Authent = base64( hmac-sha512(step2, step1) )
     _sign(endpointPath, nonce, postData) {
-        // endpointPath is e.g. "/api/v3/accounts" — the part following "/derivatives"
         const path = endpointPath.replace(/^\/derivatives/, '');
         const message = (postData || '') + nonce + path;
         const sha256Digest = crypto.createHash('sha256').update(message).digest();
@@ -1407,22 +1457,33 @@ class KrakenFuturesClient {
         return crypto.createHmac('sha512', secretBuffer).update(sha256Digest).digest('base64');
     }
 
-    async _privateGet(endpoint) {
+    async _privateRequest(method, endpoint, params = {}) {
         if (!this.isConfigured()) {
             return { error: 'Kraken Futures not configured (set KRAKEN_FUTURES_API_KEY and _SECRET on Railway)' };
         }
         const nonce = Date.now().toString();
-        const url = `${this.baseURL}/derivatives${endpoint}`;
-        const signature = this._sign(`/derivatives${endpoint}`, nonce, '');
+        const postData = method === 'POST' ? new URLSearchParams(params).toString() : '';
+        const queryString = method === 'GET' && Object.keys(params).length
+            ? '?' + new URLSearchParams(params).toString()
+            : '';
+        const fullPath = `/derivatives${endpoint}${queryString}`;
+        const signature = this._sign(`/derivatives${endpoint}`, nonce, postData);
         try {
-            const response = await axios.get(url, {
+            const config = {
+                method,
+                url: `${this.baseURL}${fullPath}`,
                 headers: {
                     'APIKey': this.apiKey,
                     'Authent': signature,
                     'Nonce': nonce,
                 },
                 timeout: 10000,
-            });
+            };
+            if (method === 'POST') {
+                config.data = postData;
+                config.headers['Content-Type'] = 'application/x-www-form-urlencoded';
+            }
+            const response = await axios(config);
             const data = response.data;
             if (data?.result === 'error') {
                 return { error: data.error || 'Unknown Kraken Futures error' };
@@ -1433,22 +1494,74 @@ class KrakenFuturesClient {
         }
     }
 
-    async getAccountSummary() {
-        return this._privateGet('/api/v3/accounts');
-    }
+    _privateGet(endpoint, params = {}) { return this._privateRequest('GET', endpoint, params); }
+    _privatePost(endpoint, params = {}) { return this._privateRequest('POST', endpoint, params); }
 
-    async getOpenPositions() {
-        return this._privateGet('/api/v3/openpositions');
-    }
+    async getAccountSummary() { return this._privateGet('/api/v3/accounts'); }
+    async getOpenPositions() { return this._privateGet('/api/v3/openpositions'); }
 
     async getInstruments() {
-        // Public endpoint, no auth — used to map symbol → contract details
         try {
             const resp = await axios.get(`${this.baseURL}/derivatives/api/v3/instruments`, { timeout: 8000 });
             return resp.data;
         } catch (e) {
             return { error: e.message };
         }
+    }
+
+    /**
+     * Place an order. dryRun=true returns the request that WOULD be sent
+     * (signed) without actually sending. Use for integration verification.
+     */
+    async sendOrder(params, dryRun = false) {
+        const required = ['symbol', 'side', 'size'];
+        for (const k of required) {
+            if (params[k] === undefined || params[k] === null) {
+                return { error: `sendOrder missing required field: ${k}` };
+            }
+        }
+        if (!['buy', 'sell'].includes(params.side)) {
+            return { error: `sendOrder: side must be 'buy' or 'sell', got ${params.side}` };
+        }
+        if (typeof params.size !== 'number' || !Number.isFinite(params.size) || params.size <= 0) {
+            return { error: `sendOrder: size must be a positive number, got ${params.size}` };
+        }
+        const orderType = params.orderType || 'mkt';
+        const body = {
+            orderType,
+            symbol: params.symbol,
+            side: params.side,
+            size: String(params.size),
+        };
+        if (params.limitPrice !== undefined) body.limitPrice = String(params.limitPrice);
+        if (params.cliOrdId) body.cliOrdId = String(params.cliOrdId);
+        if (params.reduceOnly) body.reduceOnly = 'true';
+
+        if (dryRun) {
+            const nonce = Date.now().toString();
+            const postData = new URLSearchParams(body).toString();
+            const signature = this.isConfigured()
+                ? this._sign('/derivatives/api/v3/sendorder', nonce, postData)
+                : '<not configured>';
+            return {
+                dryRun: true,
+                isLive: this.isLive,
+                wouldSendTo: `${this.baseURL}/derivatives/api/v3/sendorder`,
+                method: 'POST',
+                payload: body,
+                postData,
+                nonce,
+                signaturePrefix: signature.slice(0, 16) + '...',
+            };
+        }
+        return this._privatePost('/api/v3/sendorder', body);
+    }
+
+    async cancelOrder(orderId, cliOrdId = null) {
+        const body = {};
+        if (orderId) body.order_id = orderId;
+        if (cliOrdId) body.cliOrdId = cliOrdId;
+        return this._privatePost('/api/v3/cancelorder', body);
     }
 }
 
@@ -4677,15 +4790,16 @@ app.get('/api/crypto/futures/account', requireApiSecret, async (req, res) => {
             return res.status(503).json({
                 success: false,
                 configured: false,
+                isLive: krakenFuturesClient.isLive,
+                baseURL: krakenFuturesClient.baseURL,
                 error: 'KRAKEN_FUTURES_API_KEY and KRAKEN_FUTURES_API_SECRET not set on Railway',
-                howToFix: 'Sign up at futures.kraken.com → API Keys → create key with Read+Trade permissions → set both env vars on Railway crypto-bot service',
+                howToFix: 'Sign up at demo-futures.kraken.com (paper) → API Keys → create key with Read+Trade permissions → set both env vars on Railway crypto-bot service. Default mode is DEMO. Set KRAKEN_FUTURES_LIVE=true only when ready for real money (not yet).',
             });
         }
         const summary = await krakenFuturesClient.getAccountSummary();
         if (summary?.error) {
-            return res.status(502).json({ success: false, configured: true, error: summary.error });
+            return res.status(502).json({ success: false, configured: true, isLive: krakenFuturesClient.isLive, error: summary.error });
         }
-        // Sanitize: return only result/balance shape, no keys
         const accounts = summary?.accounts || {};
         const accountSummary = {};
         for (const [name, acct] of Object.entries(accounts)) {
@@ -4702,6 +4816,8 @@ app.get('/api/crypto/futures/account', requireApiSecret, async (req, res) => {
         res.json({
             success: true,
             configured: true,
+            isLive: krakenFuturesClient.isLive,
+            baseURL: krakenFuturesClient.baseURL,
             timestamp: new Date().toISOString(),
             accounts: accountSummary,
             openPositionCount: (positions?.openPositions || []).length,
@@ -4709,6 +4825,28 @@ app.get('/api/crypto/futures/account', requireApiSecret, async (req, res) => {
         });
     } catch (e) {
         console.error('[futures/account] error:', e.message);
+        res.status(500).json({ success: false, error: 'Internal error' });
+    }
+});
+
+// [2026-04-30] Phase 2b — dry-run order construction. Returns the signed
+// request that WOULD be sent without actually sending. Use to verify
+// payload + signing before any live order. Auth-protected.
+//
+// POST body: { symbol: 'PF_XBTUSD', side: 'buy'|'sell', size: <number>, orderType?: 'mkt' }
+app.post('/api/crypto/futures/dry-run-order', requireApiSecret, async (req, res) => {
+    try {
+        const { symbol, side, size, orderType, limitPrice, cliOrdId, reduceOnly } = req.body || {};
+        const result = await krakenFuturesClient.sendOrder(
+            { symbol, side, size: typeof size === 'string' ? parseFloat(size) : size, orderType, limitPrice, cliOrdId, reduceOnly },
+            true, // dryRun
+        );
+        if (result.error) {
+            return res.status(400).json({ success: false, error: result.error });
+        }
+        res.json({ success: true, ...result });
+    } catch (e) {
+        console.error('[futures/dry-run-order] error:', e.message);
         res.status(500).json({ success: false, error: 'Internal error' });
     }
 });
