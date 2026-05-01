@@ -145,7 +145,13 @@ async function promoteStrategy(strategyName, reason, dbPool) {
             `INSERT INTO strategy_alerts (strategy_name, alert_type, severity, message, details)
              VALUES ($1, 'lifecycle_promotion', 'info', $2, $3)`,
             [strategyName, `Promoted: ${currentState} → ${nextState}`, JSON.stringify({ reason, previousState: currentState })]
-        ).catch(() => {}); // non-fatal if alerts table doesn't exist yet
+        ).catch(e => {
+            // Non-fatal: alerts table may not exist yet on fresh deploys.
+            // Code-quality rule #1: never silent. Log so we can spot a real failure.
+            if (!/relation .* does not exist/i.test(e.message || '')) {
+                console.warn(`[strategy-registry] Failed to log promotion alert for ${strategyName}: ${e.message}`);
+            }
+        });
 
         _forceCacheExpiry(); // force re-read on next getEnabledStrategies call
         return { success: true, newState: nextState, previousState: currentState };
@@ -193,7 +199,11 @@ async function demoteStrategy(strategyName, reason, dbPool) {
             `INSERT INTO strategy_alerts (strategy_name, alert_type, severity, message, details)
              VALUES ($1, 'lifecycle_demotion', 'warning', $2, $3)`,
             [strategyName, `Demoted: ${currentState} → ${prevState}`, JSON.stringify({ reason, previousState: currentState })]
-        ).catch(() => {});
+        ).catch(e => {
+            if (!/relation .* does not exist/i.test(e.message || '')) {
+                console.warn(`[strategy-registry] Failed to log demotion alert for ${strategyName}: ${e.message}`);
+            }
+        });
 
         _forceCacheExpiry();
         return { success: true, newState: prevState, previousState: currentState };
