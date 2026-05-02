@@ -214,4 +214,69 @@ describe('registry.getEnabledStrategies', () => {
         const enabled = await registry.getEnabledStrategies('stock', 'trending', pool);
         expect(enabled).toEqual([]);
     });
+
+    test('filters live strategies that fail evidence when evidence gate is enforced', async () => {
+        const pool = makeEvidencePool({
+            enabledRows: [{ strategy_name: 's1', asset_class: 'stock', state: 'live' }],
+            backtest: { strategy_name: 's1', trade_count: 35, win_rate: 0.48, profit_factor: 1.4, passed_gate_a: true, passed_walk_forward: true },
+            walkForward: { run_id: 'wf-1', fold_count: 3, total_oos_trades: 35, median_oos_sharpe: 0.7, worst_fold_sharpe: 0.1, passed_gate_b: true },
+            livePaper: { trade_count: 4, win_rate: 0.5, profit_factor: 1.2, total_pnl: 5 },
+        });
+
+        const enabled = await registry.getEnabledStrategies('stock', 'trending', pool, { enforceEvidence: true, bot: 'stock' });
+        expect(enabled).toEqual([]);
+    });
+
+    test('keeps live strategies that pass all evidence gates', async () => {
+        const pool = makeEvidencePool({
+            enabledRows: [{ strategy_name: 's1', asset_class: 'stock', state: 'live' }],
+            backtest: { strategy_name: 's1', trade_count: 35, win_rate: 0.48, profit_factor: 1.4, passed_gate_a: true, passed_walk_forward: true },
+            walkForward: { run_id: 'wf-1', fold_count: 3, total_oos_trades: 35, median_oos_sharpe: 0.7, worst_fold_sharpe: 0.1, passed_gate_b: true },
+            livePaper: { trade_count: 32, win_rate: 0.44, profit_factor: 1.2, total_pnl: 12 },
+        });
+
+        const enabled = await registry.getEnabledStrategies('stock', 'trending', pool, { enforceEvidence: true, bot: 'stock' });
+        expect(enabled).toHaveLength(1);
+        expect(enabled[0].name).toBe('s1');
+        expect(enabled[0].evidence.allowed).toBe(true);
+    });
 });
+
+describe('registry.getStrategyEvidenceSummaries', () => {
+    beforeEach(() => {
+        registry._reset();
+        registry._resetEnabledCache();
+        registry.register({
+            name: 's1',
+            assetClass: 'stock',
+            regimes: ['trending'],
+            evaluate: () => ({ killedBy: 'noop' }),
+        });
+    });
+
+    test('returns disabled evidence reason for operator surfaces', async () => {
+        const pool = makeEvidencePool({
+            enabledRows: [{ strategy_name: 's1', asset_class: 'stock', state: 'live' }],
+            backtest: { strategy_name: 's1', trade_count: 35, win_rate: 0.48, profit_factor: 1.4, passed_gate_a: true, passed_walk_forward: true },
+            walkForward: { run_id: 'wf-1', fold_count: 3, total_oos_trades: 35, median_oos_sharpe: 0.7, worst_fold_sharpe: 0.1, passed_gate_b: true },
+            livePaper: { trade_count: 4, win_rate: 0.5, profit_factor: 1.2, total_pnl: 5 },
+        });
+
+        const summaries = await registry.getStrategyEvidenceSummaries('stock', pool, { bot: 'stock' });
+        expect(summaries).toHaveLength(1);
+        expect(summaries[0].enabled).toBe(false);
+        expect(summaries[0].reason).toBe('live_paper_insufficient_trades (4 < 30)');
+    });
+});
+
+function makeEvidencePool({ enabledRows, backtest, walkForward, livePaper }) {
+    return {
+        query: async (sql) => {
+            if (sql.includes('FROM strategy_enabled')) return { rows: enabledRows };
+            if (sql.includes('FROM backtest_results')) return { rows: backtest ? [backtest] : [] };
+            if (sql.includes('FROM walk_forward_results')) return { rows: walkForward ? [walkForward] : [] };
+            if (sql.includes('FROM trades')) return { rows: livePaper ? [livePaper] : [] };
+            return { rows: [] };
+        },
+    };
+}

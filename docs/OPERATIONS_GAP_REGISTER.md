@@ -66,7 +66,7 @@ Monthly audit checklist:
 
 ### Strategy Edge Is Not Proven Enough
 
-Status: still open; do not treat route, deployment, or observability work as proof of trading edge.
+Status: evidence evaluator implemented in `services/signals/strategy-evidence.js`; strict execution filtering is controlled by `STRATEGY_EVIDENCE_GATE=true`.
 
 Current state:
 
@@ -84,6 +84,7 @@ Validation:
 
 - Strategy registry shows enabled/disabled status and reason.
 - Backtest and live-paper results are linked by strategy id and market regime.
+- Dashboard Strategy Performance and Operator Status show evidence disabled reasons from `/api/ops/status`.
 
 ### Bot Monoliths Limit Safe Change
 

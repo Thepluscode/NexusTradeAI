@@ -5397,8 +5397,24 @@ app.get('/health', (req, res) => {
     res.json(health);
 });
 
-app.get('/api/ops/status', (req, res) => {
+async function getStockStrategyStatusSummaries() {
+    const defaults = registryStrategies.map(strategy => ({ name: strategy.name, enabled: true }));
+    if (!strategyRegistry || typeof strategyRegistry.getStrategyEvidenceSummaries !== 'function' || !dbPool) {
+        return defaults;
+    }
+
+    try {
+        const summaries = await strategyRegistry.getStrategyEvidenceSummaries('stock', dbPool, { bot: 'stock' });
+        return summaries.length > 0 ? summaries : defaults;
+    } catch (err) {
+        console.warn(`[ops/status] strategy evidence unavailable: ${err.message}`);
+        return defaults;
+    }
+}
+
+app.get('/api/ops/status', async (req, res) => {
     const latestDiagnostics = scanDiagnostics.history[scanDiagnostics.history.length - 1] || null;
+    const strategies = await getStockStrategyStatusSummaries();
     res.json({
         success: true,
         data: buildOpsStatus({
@@ -5407,7 +5423,7 @@ app.get('/api/ops/status', (req, res) => {
             scanThresholdMs: 180000,
             isRunning: botRunning,
             isPaused: botPaused,
-            strategies: registryStrategies.map(strategy => ({ name: strategy.name, enabled: true })),
+            strategies,
             tradeRejections: latestDiagnostics?.blocks || {},
             db: { healthy: Boolean(dbPool), error: dbPool ? null : 'DATABASE_URL not configured or DB init failed' },
             bridge: { healthy: true },

@@ -37,6 +37,14 @@ Operational rules live in `AGENTS.md`. `AGENT.md` is a short compatibility file 
 
 Strategy quality is tracked as an operations gap. New strategies should not be enabled without backtest, walk-forward, and live paper-trading evidence.
 
+Strategy evidence gates:
+
+- Backtest: minimum trade count, win rate, and profit factor.
+- Walk-forward: out-of-sample trade count and Sharpe robustness.
+- Live paper: recent closed paper trades, win rate, profit factor, and net P&L.
+
+Set `STRATEGY_EVIDENCE_GATE=true` only after evidence rows exist for the target strategies. Without that flag, the dashboard still shows evidence failures, but execution remains controlled by the existing bot strategy gates.
+
 ## Verification
 
 Targeted local checks:

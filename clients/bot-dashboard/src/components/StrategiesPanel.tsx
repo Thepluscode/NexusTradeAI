@@ -22,12 +22,32 @@ import { SERVICE_URLS } from '@/services/api';
 
 // ── Data fetching ──────────────────────────────────────────────────────────
 
+interface StrategyOpsSummary {
+    name: string;
+    enabled: boolean;
+    reason?: string | null;
+}
+
+interface OpsStrategies {
+    enabled?: string[];
+    disabled?: StrategyOpsSummary[];
+}
+
+interface OpsStatusResponse {
+    data?: {
+        strategies?: OpsStrategies;
+    };
+}
+
 async function fetchAllBotStats() {
     const results = await Promise.allSettled([
         axios.get(`${SERVICE_URLS.stockBot}/api/trading/status`, { timeout: 3000 }),
         axios.get(`${SERVICE_URLS.stockBot}/api/config`, { timeout: 3000 }),
         axios.get(`${SERVICE_URLS.forexBot}/api/forex/status`, { timeout: 3000 }),
         axios.get(`${SERVICE_URLS.cryptoBot}/api/crypto/status`, { timeout: 3000 }),
+        axios.get<OpsStatusResponse>(`${SERVICE_URLS.stockBot}/api/ops/status`, { timeout: 3000 }),
+        axios.get<OpsStatusResponse>(`${SERVICE_URLS.forexBot}/api/ops/status`, { timeout: 3000 }),
+        axios.get<OpsStatusResponse>(`${SERVICE_URLS.cryptoBot}/api/ops/status`, { timeout: 3000 }),
     ]);
 
     return {
@@ -37,6 +57,11 @@ async function fetchAllBotStats() {
         config: results[1].status === 'fulfilled' ? results[1].value.data?.data : null,
         forex: results[2].status === 'fulfilled' ? results[2].value.data : null,
         crypto: results[3].status === 'fulfilled' ? results[3].value.data : null,
+        ops: {
+            stock: results[4].status === 'fulfilled' ? results[4].value.data?.data?.strategies : null,
+            forex: results[5].status === 'fulfilled' ? results[5].value.data?.data?.strategies : null,
+            crypto: results[6].status === 'fulfilled' ? results[6].value.data?.data?.strategies : null,
+        },
     };
 }
 
@@ -73,6 +98,38 @@ function TierBar({ label, stopLoss, profitTarget, color }: { label: string; stop
                     '& .MuiLinearProgress-bar': { bgcolor: color, borderRadius: 3 },
                 }}
             />
+        </Box>
+    );
+}
+
+function EvidenceSummary({ strategies, accentColor }: { strategies?: OpsStrategies | null; accentColor: string }) {
+    const enabled = strategies?.enabled ?? [];
+    const disabled = strategies?.disabled ?? [];
+    if (enabled.length === 0 && disabled.length === 0) return null;
+
+    return (
+        <Box sx={{ mt: 1.5 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.75 }}>
+                Evidence gates:
+            </Typography>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                {enabled.slice(0, 3).map(name => (
+                    <Chip
+                        key={`enabled-${name}`}
+                        label={`${name}: enabled`}
+                        size="small"
+                        sx={{ height: 21, fontSize: '0.58rem', color: accentColor, bgcolor: `${accentColor}14` }}
+                    />
+                ))}
+                {disabled.slice(0, 3).map(item => (
+                    <Chip
+                        key={`disabled-${item.name}`}
+                        label={`${item.name}: ${item.reason || 'evidence failed'}`}
+                        size="small"
+                        sx={{ height: 21, fontSize: '0.58rem', color: '#f59e0b', bgcolor: 'rgba(245,158,11,0.10)' }}
+                    />
+                ))}
+            </Box>
         </Box>
     );
 }
@@ -186,6 +243,7 @@ export const StrategiesPanel: React.FC = () => {
     const config = data?.config;
     const forex = data?.forex;
     const crypto = data?.crypto;
+    const ops = data?.ops;
 
     const stockStats = stock?.stats || stock?.performance || {};
     // Forex bot returns stats: {}, not performance: {}
@@ -252,6 +310,7 @@ export const StrategiesPanel: React.FC = () => {
                                 />
                             </Box>
                         )}
+                        <EvidenceSummary strategies={ops?.stock} accentColor="#10b981" />
                     </BotCard>
                 </Grid>
 
@@ -287,6 +346,7 @@ export const StrategiesPanel: React.FC = () => {
                                 </Typography>
                             </Box>
                         )}
+                        <EvidenceSummary strategies={ops?.forex} accentColor="#3b82f6" />
                     </BotCard>
                 </Grid>
 
@@ -318,6 +378,7 @@ export const StrategiesPanel: React.FC = () => {
                                 </Typography>
                             </Box>
                         )}
+                        <EvidenceSummary strategies={ops?.crypto} accentColor="#f59e0b" />
                     </BotCard>
                 </Grid>
             </Grid>
