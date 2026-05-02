@@ -10,6 +10,8 @@ const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
 const { createUserCredentialStore } = require('./userCredentialStore');
 const { requireApiSecret, requireJwt, requireJwtOrApiSecret, getEncryptionKey, encryptCredential, decryptCredential, signTokens, registerAuthRoutes } = require('./shared/auth');
+const { buildOpsStatus } = require('./shared/ops-status');
+const { evaluateLiveModeRequest, buildAuditEvent } = require('./shared/live-safety');
 // Signal modules — try local signal-analytics (ships with deploy), fall back to no-op
 let createSignalEndpoints;
 try { createSignalEndpoints = require('./signal-analytics').createSignalEndpoints; } catch (_) { createSignalEndpoints = () => {}; }
@@ -1565,6 +1567,10 @@ class KrakenFuturesClient {
     }
 }
 
+// System-level singleton (env var fallback for admin/system calls).
+// Per-user clients are constructed via getFuturesClientForUser(userId)
+// using credentials from the encrypted user credentialStore — same
+// pattern as spot Kraken (CRYPTO_API_KEY/_SECRET).
 const krakenFuturesClient = new KrakenFuturesClient();
 
 class KrakenClient {
@@ -4610,6 +4616,27 @@ function normalizeCredentialValue(value) {
 
 const credentialStore = createUserCredentialStore(path.join(__dirname, 'data/user-credentials.json'));
 
+// [2026-04-30] Per-user Kraken Futures client factory. Loads encrypted
+// credentials for the requesting user (same broker scope as spot
+// Kraken — 'crypto'). Keys: KRAKEN_FUTURES_API_KEY,
+// KRAKEN_FUTURES_API_SECRET. Per-user creds win; falls back to env vars
+// for system / admin operations. This is the same pattern as
+// getOrCreateCryptoEngine() for spot.
+async function getFuturesClientForUser(userId) {
+    if (userId === undefined || userId === null) {
+        return new KrakenFuturesClient();
+    }
+    try {
+        const creds = await loadUserCredentials(userId, 'crypto');
+        const apiKey = creds.KRAKEN_FUTURES_API_KEY || process.env.KRAKEN_FUTURES_API_KEY || null;
+        const apiSecret = creds.KRAKEN_FUTURES_API_SECRET || process.env.KRAKEN_FUTURES_API_SECRET || null;
+        return new KrakenFuturesClient({ apiKey, apiSecret });
+    } catch (e) {
+        console.warn(`[futures] failed to load creds for user ${userId}: ${e.message}`);
+        return new KrakenFuturesClient(); // env-var fallback
+    }
+}
+
 async function loadUserCredentials(userId, broker) {
     if (userId === undefined || userId === null) return {};
 
@@ -4673,6 +4700,44 @@ app.get('/health', (req, res) => {
         memory: checkMemoryHealth(),
     });
     res.json(health);
+});
+
+function getCryptoTradeRejections() {
+    return (engine._decisionTrace || [])
+        .filter(event => event.status === 'block')
+        .reduce((counts, event) => {
+            counts[event.stage] = (counts[event.stage] || 0) + 1;
+            return counts;
+        }, {});
+}
+
+app.get('/api/ops/status', (req, res) => {
+    const bridgeStats = globalThis._cryptoBridgeLatency?.snapshot
+        ? globalThis._cryptoBridgeLatency.snapshot()
+        : { count: 0, avgLatencyMs: 0, errorRate: 0 };
+    res.json({
+        success: true,
+        data: buildOpsStatus({
+            bot: 'crypto',
+            lastScanAt: lastScanCompletedAt,
+            scanThresholdMs: (engine.config ? engine.config.scanInterval : 60000) * 3,
+            isRunning: engine.isRunning,
+            isPaused: engine.isPaused,
+            strategies: [
+                { name: 'momentum', enabled: true },
+                { name: 'trend_pullback', enabled: false, reason: 'disabled after weak paper performance' },
+                { name: 'funding_rate_monitor', enabled: true },
+            ],
+            tradeRejections: getCryptoTradeRejections(),
+            db: { healthy: Boolean(dbPool), error: dbPool ? null : 'DATABASE_URL not configured or DB init failed' },
+            bridge: { healthy: bridgeStats.errorRate < 0.5, latencyMs: bridgeStats.avgLatencyMs, errorRate: bridgeStats.errorRate },
+            extra: {
+                recentErrors: recentErrors.length,
+                demoMode: engine.demoMode,
+                credentialsValid: engine.credentialsValid,
+            },
+        }),
+    });
 });
 
 // Get trading status
@@ -4780,25 +4845,31 @@ app.get('/api/crypto/funding-rates', async (req, res) => {
     }
 });
 
-// [2026-04-30] Kraken Futures account verification — Phase 2a smoke test.
-// Confirms KRAKEN_FUTURES_API_KEY/_SECRET env vars are set correctly and
-// the auth signing produces a valid header. Returns sanitized account
-// data only — never echoes the API key/secret. Auth-protected.
-app.get('/api/crypto/futures/account', requireApiSecret, async (req, res) => {
+// [2026-04-30] Kraken Futures account verification — Phase 2a/2c.
+// Auth: requireJwtOrApiSecret. Per-user clients via the encrypted
+// credentialStore (same pattern as spot Kraken — keys live in
+// 'crypto' broker scope: KRAKEN_FUTURES_API_KEY, KRAKEN_FUTURES_API_SECRET).
+// Admin/system callers (API secret) use env-var fallback.
+// Sanitized response — never echoes the API key/secret.
+app.get('/api/crypto/futures/account', requireJwtOrApiSecret, async (req, res) => {
     try {
-        if (!krakenFuturesClient.isConfigured()) {
+        const userId = req.user?.id ?? null;
+        const client = await getFuturesClientForUser(userId);
+        if (!client.isConfigured()) {
             return res.status(503).json({
                 success: false,
                 configured: false,
-                isLive: krakenFuturesClient.isLive,
-                baseURL: krakenFuturesClient.baseURL,
-                error: 'KRAKEN_FUTURES_API_KEY and KRAKEN_FUTURES_API_SECRET not set on Railway',
-                howToFix: 'Sign up at demo-futures.kraken.com (paper) → API Keys → create key with Read+Trade permissions → set both env vars on Railway crypto-bot service. Default mode is DEMO. Set KRAKEN_FUTURES_LIVE=true only when ready for real money (not yet).',
+                isLive: client.isLive,
+                baseURL: client.baseURL,
+                error: 'Kraken Futures credentials not set for this user',
+                howToFix: userId
+                    ? 'Settings → Crypto: add KRAKEN_FUTURES_API_KEY and KRAKEN_FUTURES_API_SECRET. Sign up at demo-futures.kraken.com first (paper trading). Default mode is DEMO; do NOT enable live trading yet.'
+                    : 'Set KRAKEN_FUTURES_API_KEY and KRAKEN_FUTURES_API_SECRET on Railway, OR call this endpoint with a user JWT after that user adds credentials in Settings → Crypto.',
             });
         }
-        const summary = await krakenFuturesClient.getAccountSummary();
+        const summary = await client.getAccountSummary();
         if (summary?.error) {
-            return res.status(502).json({ success: false, configured: true, isLive: krakenFuturesClient.isLive, error: summary.error });
+            return res.status(502).json({ success: false, configured: true, isLive: client.isLive, error: summary.error });
         }
         const accounts = summary?.accounts || {};
         const accountSummary = {};
@@ -4812,12 +4883,13 @@ app.get('/api/crypto/futures/account', requireApiSecret, async (req, res) => {
                 marginEquity: acct.marginEquity ?? null,
             };
         }
-        const positions = await krakenFuturesClient.getOpenPositions();
+        const positions = await client.getOpenPositions();
         res.json({
             success: true,
             configured: true,
-            isLive: krakenFuturesClient.isLive,
-            baseURL: krakenFuturesClient.baseURL,
+            isLive: client.isLive,
+            baseURL: client.baseURL,
+            credentialSource: userId ? 'user_credential_store' : 'system_env_vars',
             timestamp: new Date().toISOString(),
             accounts: accountSummary,
             openPositionCount: (positions?.openPositions || []).length,
@@ -4829,22 +4901,25 @@ app.get('/api/crypto/futures/account', requireApiSecret, async (req, res) => {
     }
 });
 
-// [2026-04-30] Phase 2b — dry-run order construction. Returns the signed
-// request that WOULD be sent without actually sending. Use to verify
-// payload + signing before any live order. Auth-protected.
+// [2026-04-30] Phase 2b/2c — dry-run order construction. Returns the
+// signed request that WOULD be sent without actually sending it. Use to
+// verify payload + signing path before any live order. Per-user creds
+// via the same store as account/, with system env-var fallback.
 //
 // POST body: { symbol: 'PF_XBTUSD', side: 'buy'|'sell', size: <number>, orderType?: 'mkt' }
-app.post('/api/crypto/futures/dry-run-order', requireApiSecret, async (req, res) => {
+app.post('/api/crypto/futures/dry-run-order', requireJwtOrApiSecret, async (req, res) => {
     try {
+        const userId = req.user?.id ?? null;
+        const client = await getFuturesClientForUser(userId);
         const { symbol, side, size, orderType, limitPrice, cliOrdId, reduceOnly } = req.body || {};
-        const result = await krakenFuturesClient.sendOrder(
+        const result = await client.sendOrder(
             { symbol, side, size: typeof size === 'string' ? parseFloat(size) : size, orderType, limitPrice, cliOrdId, reduceOnly },
             true, // dryRun
         );
         if (result.error) {
             return res.status(400).json({ success: false, error: result.error });
         }
-        res.json({ success: true, ...result });
+        res.json({ success: true, credentialSource: userId ? 'user_credential_store' : 'system_env_vars', ...result });
     } catch (e) {
         console.error('[futures/dry-run-order] error:', e.message);
         res.status(500).json({ success: false, error: 'Internal error' });
@@ -5099,6 +5174,19 @@ app.post('/api/config/mode', requireApiSecret, async (req, res) => {
         const { mode } = req.body;
         if (!['paper', 'live'].includes(mode)) {
             return res.status(400).json({ success: false, error: 'mode must be "paper" or "live"' });
+        }
+        const liveSafety = evaluateLiveModeRequest({ requestedMode: mode, body: req.body });
+        if (!liveSafety.allowed) {
+            const auditEvent = buildAuditEvent({
+                bot: 'crypto',
+                action: 'mode_change',
+                decision: 'blocked',
+                actor: req.user?.email || 'api-secret',
+                subject: 'live-mode',
+                metadata: { reasons: liveSafety.reasons, requestedMode: mode },
+            });
+            console.error('[crypto/config/mode] rejected mode change', auditEvent);
+            return res.status(403).json({ success: false, error: 'Live trading safety controls failed', reasons: liveSafety.reasons });
         }
         const value = mode === 'live' ? 'true' : 'false';
         process.env.REAL_TRADING_ENABLED = value;

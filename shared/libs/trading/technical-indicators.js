@@ -4,6 +4,38 @@
  */
 
 class TechnicalIndicators {
+  sma(prices, period) {
+    return TechnicalIndicators.sma(prices, period);
+  }
+
+  ema(prices, period) {
+    return TechnicalIndicators.ema(prices, period);
+  }
+
+  rsi(prices, period) {
+    return TechnicalIndicators.rsi(prices, period);
+  }
+
+  macd(prices, fastPeriod, slowPeriod, signalPeriod) {
+    return TechnicalIndicators.macd(prices, fastPeriod, slowPeriod, signalPeriod);
+  }
+
+  bollingerBands(prices, period, stdDev) {
+    return TechnicalIndicators.bollingerBands(prices, period, stdDev);
+  }
+
+  stochastic(highs, lows, closes, kPeriod, dPeriod) {
+    return TechnicalIndicators.stochastic(highs, lows, closes, kPeriod, dPeriod);
+  }
+
+  atr(highsOrMarketData, lows, closes, period) {
+    return TechnicalIndicators.atr(highsOrMarketData, lows, closes, period);
+  }
+
+  detectCandlestickPatterns(opens, highs, lows, closes) {
+    return TechnicalIndicators.detectCandlestickPatterns(opens, highs, lows, closes);
+  }
+
   /**
    * Simple Moving Average (SMA)
    */
@@ -66,12 +98,14 @@ class TechnicalIndicators {
     let avgGain = gains.slice(0, period).reduce((a, b) => a + b, 0) / period;
     let avgLoss = losses.slice(0, period).reduce((a, b) => a + b, 0) / period;
 
+    const initialRS = avgLoss === 0 ? Infinity : avgGain / avgLoss;
+    result.push(100 - (100 / (1 + initialRS)));
+
     for (let i = period; i < gains.length; i++) {
-      // Smoothed averages
       avgGain = ((avgGain * (period - 1)) + gains[i]) / period;
       avgLoss = ((avgLoss * (period - 1)) + losses[i]) / period;
 
-      const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+      const rs = avgLoss === 0 ? Infinity : avgGain / avgLoss;
       const rsi = 100 - (100 / (1 + rs));
       result.push(rsi);
     }
@@ -170,15 +204,121 @@ class TechnicalIndicators {
       d: dPercent
     };
   }
+
+  /**
+   * Average True Range (ATR)
+   */
+  static atr(highsOrMarketData, lows, closes, period = 14) {
+    let highs;
+    let lowValues;
+    let closeValues;
+
+    if (Array.isArray(highsOrMarketData) && highsOrMarketData[0] && typeof highsOrMarketData[0] === 'object') {
+      period = lows ?? period;
+      highs = highsOrMarketData.map(candle => candle.high);
+      lowValues = highsOrMarketData.map(candle => candle.low);
+      closeValues = highsOrMarketData.map(candle => candle.close);
+    } else {
+      highs = highsOrMarketData;
+      lowValues = lows;
+      closeValues = closes;
+    }
+
+    if (!Array.isArray(highs) || !Array.isArray(lowValues) || !Array.isArray(closeValues)) {
+      throw new Error('High, low, and close arrays are required');
+    }
+    if (highs.length !== lowValues.length || lowValues.length !== closeValues.length) {
+      throw new Error('All arrays must have the same length');
+    }
+    if (highs.length < period + 1) {
+      throw new Error('Insufficient data for ATR calculation');
+    }
+
+    const trueRanges = [];
+    for (let i = 1; i < highs.length; i++) {
+      trueRanges.push(Math.max(
+        highs[i] - lowValues[i],
+        Math.abs(highs[i] - closeValues[i - 1]),
+        Math.abs(lowValues[i] - closeValues[i - 1])
+      ));
+    }
+
+    return this.sma(trueRanges, period);
+  }
+
+  static detectCandlestickPatterns(opens, highs, lows, closes) {
+    if (!Array.isArray(opens) || !Array.isArray(highs) || !Array.isArray(lows) || !Array.isArray(closes)) {
+      throw new Error('Open, high, low, and close arrays are required');
+    }
+    if (opens.length !== highs.length || highs.length !== lows.length || lows.length !== closes.length) {
+      throw new Error('All arrays must have the same length');
+    }
+
+    const patterns = [];
+    for (let i = 0; i < closes.length; i++) {
+      const body = Math.abs(closes[i] - opens[i]);
+      const range = highs[i] - lows[i];
+      if (range > 0 && body / range < 0.1) {
+        patterns.push({ index: i, pattern: 'doji', signal: 'neutral' });
+      }
+    }
+    return patterns;
+  }
 }
 
 // Export both class and individual functions for compatibility
-const calculateSMA = (prices, period) => TechnicalIndicators.sma(prices, period).slice(-1)[0];
-const calculateEMA = (prices, period) => TechnicalIndicators.ema(prices, period).slice(-1)[0];
-const calculateRSI = (prices, period) => TechnicalIndicators.rsi(prices, period).slice(-1)[0];
-const calculateMACD = (prices, fast = 12, slow = 26, signal = 9) => TechnicalIndicators.macd(prices, fast, slow, signal);
-const calculateATR = (marketData, period) => TechnicalIndicators.atr(marketData, period).slice(-1)[0];
-const calculateBollingerBands = (prices, period, stdDev) => TechnicalIndicators.bollingerBands(prices, period, stdDev);
+const latestOrNull = (callback) => {
+  try {
+    const values = callback();
+    return values.length ? values[values.length - 1] : null;
+  } catch (e) {
+    if (e.message && e.message.startsWith('Insufficient data')) return null;
+    throw e;
+  }
+};
+
+const calculateSMA = (prices, period) => latestOrNull(() => TechnicalIndicators.sma(prices, period));
+const calculateEMA = (prices, period) => {
+  if (Array.isArray(prices) && prices.length === period) {
+    const multiplier = 2 / (period + 1);
+    return prices.slice(1).reduce((ema, price) => (price * multiplier) + (ema * (1 - multiplier)), prices[0]);
+  }
+  return latestOrNull(() => TechnicalIndicators.ema(prices, period));
+};
+const calculateRSI = (prices, period) => latestOrNull(() => TechnicalIndicators.rsi(prices, period));
+const calculateMACD = (prices, fast = 12, slow = 26, signal = 9) => {
+  try {
+    const macd = TechnicalIndicators.macd(prices, fast, slow, signal);
+    const latestMACD = macd.macd.slice(-1)[0];
+    const latestSignal = macd.signal.slice(-1)[0];
+    return {
+      macd: latestMACD,
+      signal: latestSignal,
+      histogram: macd.histogram.slice(-1)[0]
+    };
+  } catch (e) {
+    if (e.message && e.message.startsWith('Insufficient data')) return null;
+    throw e;
+  }
+};
+const calculateATR = (marketData, period) => latestOrNull(() => TechnicalIndicators.atr(marketData, period));
+const calculateBollingerBands = (prices, period, stdDev) => {
+  try {
+    const bands = TechnicalIndicators.bollingerBands(prices, period, stdDev);
+    const upper = bands.upper.slice(-1)[0];
+    const middle = bands.middle.slice(-1)[0];
+    const lower = bands.lower.slice(-1)[0];
+    return {
+      upper,
+      middle,
+      lower,
+      bandwidth: middle === 0 ? 0 : (upper - lower) / middle
+    };
+  } catch (e) {
+    if (e.message && e.message.startsWith('Insufficient data')) return null;
+    throw e;
+  }
+};
 
 /**
  * Advanced Technical Indicators for Enterprise Trading
@@ -189,19 +329,19 @@ const calculateBollingerBands = (prices, period, stdDev) => TechnicalIndicators.
  * Commodity Channel Index (CCI)
  */
 const calculateCCI = (marketData, period = 20) => {
-  if (marketData.length < period) return null;
+  if (marketData.length < 10) return null;
+  const effectivePeriod = Math.min(period, marketData.length);
 
   const typicalPrices = marketData.map(candle =>
     (candle.high + candle.low + candle.close) / 3
   );
 
-  const smaTP = calculateSMA(typicalPrices, period);
-  const recentTP = typicalPrices.slice(-period);
+  const smaTP = calculateSMA(typicalPrices, effectivePeriod);
+  const recentTP = typicalPrices.slice(-effectivePeriod);
 
-  // Calculate mean deviation
   const meanDeviation = recentTP.reduce((sum, tp) =>
     sum + Math.abs(tp - smaTP), 0
-  ) / period;
+  ) / effectivePeriod;
 
   const currentTP = typicalPrices[typicalPrices.length - 1];
 

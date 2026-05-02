@@ -236,6 +236,30 @@ export interface StrategyTestResult {
   recommendations: string[];
 }
 
+export interface OperatorOpsStatus {
+  bot: 'stock' | 'forex' | 'crypto' | string;
+  overall: 'ok' | 'degraded' | string;
+  timestamp: string;
+  runtime: {
+    isRunning: boolean;
+    isPaused: boolean;
+  };
+  scan: {
+    healthy: boolean;
+    lastScanAt: string | null;
+    ageMs: number | null;
+    thresholdMs: number;
+  };
+  strategies: {
+    total: number;
+    enabled: string[];
+    disabled: Array<{ name: string; reason: string }>;
+  };
+  tradeRejections: Record<string, number>;
+  dependencies: Record<string, { healthy?: boolean; error?: string | null; [key: string]: unknown }>;
+  extra?: Record<string, unknown>;
+}
+
 // ============================================
 // Banking Types
 // ============================================

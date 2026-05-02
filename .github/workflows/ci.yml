@@ -94,40 +94,35 @@ jobs:
     needs: dashboard-build
 
     steps:
-      - name: Stock Bot — /health
+      - name: Service health — all public endpoints
         run: |
-          CODE=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 15 \
-            https://nexus-stock-bot-production.up.railway.app/health)
-          echo "Stock Bot /health → $CODE"
-          [ "$CODE" = "200" ]
+          FAILURES=0
+          check_service() {
+            NAME="$1"
+            URL="$2"
+            TIMEOUT="${3:-15}"
+            if ! CODE=$(curl -sS -o "/tmp/${NAME}.body" -w "%{http_code}" --max-time "$TIMEOUT" "$URL"); then
+              CODE="000"
+            fi
+            echo "$NAME → $CODE"
+            if [ "$CODE" != "200" ]; then
+              echo "Response body:"
+              head -c 500 "/tmp/${NAME}.body" 2>/dev/null || true
+              echo
+              FAILURES=$((FAILURES + 1))
+            fi
+          }
 
-      - name: Forex Bot — /health
-        run: |
-          CODE=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 15 \
-            https://nexus-forex-bot-production.up.railway.app/health)
-          echo "Forex Bot /health → $CODE"
-          [ "$CODE" = "200" ]
+          check_service stock "https://nexus-stock-bot-production.up.railway.app/health" 15
+          check_service forex "https://nexus-forex-bot-production.up.railway.app/health" 15
+          check_service crypto "https://nexus-crypto-bot-production.up.railway.app/health" 15
+          check_service bridge "https://nexus-strategy-bridge-production.up.railway.app/health" 20
+          check_service dashboard "https://nexus-dashboard-production-e6e6.up.railway.app/" 15
 
-      - name: Crypto Bot — /health
-        run: |
-          CODE=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 15 \
-            https://nexus-crypto-bot-production.up.railway.app/health)
-          echo "Crypto Bot /health → $CODE"
-          [ "$CODE" = "200" ]
-
-      - name: Strategy Bridge — /health
-        run: |
-          CODE=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 20 \
-            https://nexus-strategy-bridge-production.up.railway.app/health)
-          echo "Strategy Bridge /health → $CODE"
-          [ "$CODE" = "200" ]
-
-      - name: Dashboard — / (200 OK)
-        run: |
-          CODE=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 15 \
-            https://nexus-dashboard-production-e6e6.up.railway.app/)
-          echo "Dashboard / → $CODE"
-          [ "$CODE" = "200" ]
+          if [ "$FAILURES" -gt 0 ]; then
+            echo "ERROR: $FAILURES service health check(s) failed"
+            exit 1
+          fi
 
       # Verify each status endpoint returns the fields the UI depends on.
       # Retries 3× with 15s gaps to handle mid-deploy transient failures.
@@ -184,4 +179,3 @@ jobs:
             (echo "Attempt $i failed: $RESULT" && [ $i -lt 3 ] && sleep 15)
           done
           echo "$RESULT" | grep -q OK || (echo "Crypto Bot API contract failed" && exit 1)
-

@@ -15,7 +15,7 @@ describe('Technical Indicators Unit Tests', () => {
       
       expect(result).toHaveLength(samplePrices.length - 4);
       expect(result[0]).toBeCloseTo(11.4, 1); // (10+11+12+11+13)/5
-      expect(result[result.length - 1]).toBeCloseTo(17.4, 1); // Last 5 values
+      expect(result[result.length - 1]).toBeCloseTo(18.2, 1); // (17+18+17+19+20)/5
     });
 
     test('should calculate EMA correctly', () => {

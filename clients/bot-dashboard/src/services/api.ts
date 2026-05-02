@@ -18,6 +18,7 @@ import type {
   TradeAnalyticsSymbol,
   TradeAnalyticsTier,
   EquityCurvePoint,
+  OperatorOpsStatus,
 } from '@/types';
 
 // ── Service URLs ─────────────────────────────────────────────────────────────
@@ -285,6 +286,25 @@ class APIClient {
     } catch {
       return null;
     }
+  }
+
+  async getOperatorStatus(bot: 'stock' | 'forex' | 'crypto'): Promise<OperatorOpsStatus | null> {
+    const instance = bot === 'stock' ? this.tradingEngine : bot === 'forex' ? this.forexService : this.cryptoService;
+    try {
+      const response = await instance.get('/api/ops/status', { timeout: 5000 });
+      return response.data?.data ?? response.data;
+    } catch {
+      return null;
+    }
+  }
+
+  async getAllOperatorStatuses(): Promise<Record<'stock' | 'forex' | 'crypto', OperatorOpsStatus | null>> {
+    const [stock, forex, crypto] = await Promise.all([
+      this.getOperatorStatus('stock'),
+      this.getOperatorStatus('forex'),
+      this.getOperatorStatus('crypto'),
+    ]);
+    return { stock, forex, crypto };
   }
 
   // Automation — proxied through the real trading start/stop endpoints

@@ -9,6 +9,8 @@ const jwt = require('jsonwebtoken');
 const { Pool } = require('pg');
 const rateLimit = require('express-rate-limit');
 const { requireApiSecret, requireJwt, requireJwtOrApiSecret, getEncryptionKey, encryptCredential, decryptCredential, signTokens, registerAuthRoutes } = require('./shared/auth');
+const { buildOpsStatus } = require('./shared/ops-status');
+const { buildAuditEvent } = require('./shared/live-safety');
 const { createUserCredentialStore } = require('./userCredentialStore');
 // Signal modules — try local signal-analytics (ships with deploy), fall back to no-op
 let createSignalEndpoints;
@@ -5395,6 +5397,28 @@ app.get('/health', (req, res) => {
     res.json(health);
 });
 
+app.get('/api/ops/status', (req, res) => {
+    const latestDiagnostics = scanDiagnostics.history[scanDiagnostics.history.length - 1] || null;
+    res.json({
+        success: true,
+        data: buildOpsStatus({
+            bot: 'stock',
+            lastScanAt: lastScanCompletedAt,
+            scanThresholdMs: 180000,
+            isRunning: botRunning,
+            isPaused: botPaused,
+            strategies: registryStrategies.map(strategy => ({ name: strategy.name, enabled: true })),
+            tradeRejections: latestDiagnostics?.blocks || {},
+            db: { healthy: Boolean(dbPool), error: dbPool ? null : 'DATABASE_URL not configured or DB init failed' },
+            bridge: { healthy: true },
+            extra: {
+                recentErrors: recentErrors.length,
+                lastDiagnostics: latestDiagnostics,
+            },
+        }),
+    });
+});
+
 // Trading bot start/stop/pause endpoints (for dashboard compatibility)
 app.post('/api/trading/start', (req, res) => {
     try {
@@ -5646,7 +5670,14 @@ app.post('/api/config/mode', requireApiSecret, async (req, res) => {
         // Paper-only invariant (CARL [trading-safety].3). Hard block live mode regardless
         // of caller authorization — this endpoint must never route orders to a live broker.
         if (mode === 'live') {
-            console.error('[config/mode] rejected mode=live — paper-only invariant');
+            console.error('[config/mode] rejected mode=live — paper-only invariant', buildAuditEvent({
+                bot: 'stock',
+                action: 'mode_change',
+                decision: 'blocked',
+                actor: req.user?.email || 'api-secret',
+                subject: 'live-mode',
+                metadata: { reason: 'paper-only invariant' },
+            }));
             return res.status(403).json({ success: false, error: 'Live trading is disabled — paper only.' });
         }
         const value = 'false';

@@ -31,11 +31,15 @@ import {
     Person,
     Settings,
     Hub,
+    AccessTime,
+    Storage,
+    Rule,
+    WarningAmber,
 } from '@mui/icons-material';
 import axios from 'axios';
 import { SERVICE_URLS, apiClient } from '@/services/api';
 import { useQuery } from '@tanstack/react-query';
-import type { TradeDaySummary } from '@/types';
+import type { OperatorOpsStatus, TradeDaySummary } from '@/types';
 import { useNavigate } from 'react-router-dom';
 
 interface BotHealth {
@@ -286,6 +290,125 @@ function PnLChart({ days = 30 }: { days?: number }) {
     );
 }
 
+function formatScanAge(ageMs: number | null) {
+    if (ageMs == null) return 'No scan';
+    const totalSeconds = Math.round(ageMs / 1000);
+    if (totalSeconds < 60) return `${totalSeconds}s`;
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    if (minutes < 60) return `${minutes}m ${seconds}s`;
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ${minutes % 60}m`;
+}
+
+function sumRejections(rejections: Record<string, number>) {
+    return Object.values(rejections).reduce((total, count) => total + (Number(count) || 0), 0);
+}
+
+function OpsBotPanel({ label, status }: { label: string; status: OperatorOpsStatus | null }) {
+    const ok = status?.overall === 'ok';
+    const degraded = status?.overall === 'degraded';
+    const color = ok ? '#10b981' : degraded ? '#f59e0b' : '#ef4444';
+    const disabled = status?.strategies.disabled ?? [];
+    const dependencyIssues = status
+        ? Object.entries(status.dependencies).filter(([, dep]) => dep?.healthy === false)
+        : [];
+    const rejections = status ? sumRejections(status.tradeRejections) : 0;
+    const topRejections = status
+        ? Object.entries(status.tradeRejections)
+            .sort((a, b) => Number(b[1]) - Number(a[1]))
+            .slice(0, 2)
+        : [];
+
+    return (
+        <Box
+            sx={{
+                p: 2,
+                height: '100%',
+                borderRadius: '12px',
+                border: '1px solid',
+                borderColor: alpha(color, status ? 0.22 : 0.3),
+                bgcolor: alpha(color, 0.04),
+            }}
+        >
+            <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
+                <FiberManualRecord sx={{ fontSize: 9, color }} />
+                <Typography variant="subtitle2" sx={{ fontWeight: 800, flex: 1 }}>
+                    {label}
+                </Typography>
+                <Chip
+                    size="small"
+                    label={status ? status.overall.toUpperCase() : 'OFFLINE'}
+                    sx={{
+                        height: 20,
+                        fontSize: '0.6rem',
+                        fontWeight: 800,
+                        color,
+                        bgcolor: alpha(color, 0.12),
+                        border: `1px solid ${alpha(color, 0.24)}`,
+                    }}
+                />
+            </Stack>
+
+            <Grid container spacing={1.25}>
+                <Grid item xs={6}>
+                    <BotStatItem
+                        label="Scan Age"
+                        value={formatScanAge(status?.scan.ageMs ?? null)}
+                        color={status?.scan.healthy ? '#10b981' : '#f59e0b'}
+                        icon={<AccessTime />}
+                    />
+                </Grid>
+                <Grid item xs={6}>
+                    <BotStatItem
+                        label="Rejections"
+                        value={String(rejections)}
+                        color={rejections > 0 ? '#f59e0b' : '#8b949e'}
+                        icon={<WarningAmber />}
+                    />
+                </Grid>
+                <Grid item xs={6}>
+                    <BotStatItem
+                        label="Disabled"
+                        value={String(disabled.length)}
+                        color={disabled.length > 0 ? '#f59e0b' : '#10b981'}
+                        icon={<Rule />}
+                    />
+                </Grid>
+                <Grid item xs={6}>
+                    <BotStatItem
+                        label="DB/Bridge"
+                        value={dependencyIssues.length === 0 && status ? 'Healthy' : `${dependencyIssues.length || 1} issue`}
+                        color={dependencyIssues.length === 0 && status ? '#10b981' : '#ef4444'}
+                        icon={<Storage />}
+                    />
+                </Grid>
+            </Grid>
+
+            {(disabled.length > 0 || topRejections.length > 0) && (
+                <Box sx={{ mt: 1.5, display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                    {disabled.slice(0, 2).map(item => (
+                        <Chip
+                            key={`${item.name}-${item.reason}`}
+                            size="small"
+                            label={`${item.name}: ${item.reason}`}
+                            sx={{ height: 22, fontSize: '0.58rem', color: '#f59e0b', bgcolor: alpha('#f59e0b', 0.08) }}
+                        />
+                    ))}
+                    {topRejections.map(([reason, count]) => (
+                        <Chip
+                            key={reason}
+                            size="small"
+                            label={`${reason}: ${count}`}
+                            sx={{ height: 22, fontSize: '0.58rem', color: '#8b949e', bgcolor: 'rgba(255,255,255,0.04)' }}
+                        />
+                    ))}
+                </Box>
+            )}
+        </Box>
+    );
+}
+
 export default function OverviewPage() {
     const navigate = useNavigate();
     const [lastUpdated, setLastUpdated] = React.useState<Date | null>(null);
@@ -327,6 +450,13 @@ export default function OverviewPage() {
             } catch { return null; }
         },
         refetchInterval: 60000, staleTime: 30000,
+    });
+
+    const { data: opsStatus } = useQuery({
+        queryKey: ['operatorOpsStatus'],
+        queryFn: () => apiClient.getAllOperatorStatuses(),
+        refetchInterval: 15000,
+        staleTime: 10000,
     });
 
     // API onboarding data (must be before any early returns to satisfy rules-of-hooks)
@@ -876,6 +1006,53 @@ export default function OverviewPage() {
                     ) : (
                         <Typography variant="body2" color="text.secondary">Strategy bridge offline</Typography>
                     )}
+                </Paper>
+            </Box>
+
+            {/* ── Operator Status ─────────────────────────────────── */}
+            <Box sx={{ mt: 4, animation: 'slideUp 0.5s ease 0.24s both' }}>
+                <Stack direction="row" alignItems="center" spacing={1.5} sx={{ mb: 2 }}>
+                    <Storage sx={{ color: '#14b8a6', fontSize: 22 }} />
+                    <Typography variant="h6" sx={{ fontWeight: 700 }}>
+                        Operator Status
+                    </Typography>
+                    <Chip
+                        size="small"
+                        label={(() => {
+                            const statuses = opsStatus ? Object.values(opsStatus).filter(Boolean) : [];
+                            const degraded = statuses.filter(item => item?.overall !== 'ok').length;
+                            return degraded === 0 && statuses.length === 3 ? 'CLEAR' : `${degraded || 3 - statuses.length} ATTENTION`;
+                        })()}
+                        sx={{
+                            fontSize: '0.62rem',
+                            fontWeight: 800,
+                            height: 20,
+                            bgcolor: alpha(
+                                opsStatus && Object.values(opsStatus).filter(Boolean).length === 3 &&
+                                    Object.values(opsStatus).every(item => item?.overall === 'ok')
+                                    ? '#10b981'
+                                    : '#f59e0b',
+                                0.1
+                            ),
+                            color: opsStatus && Object.values(opsStatus).filter(Boolean).length === 3 &&
+                                Object.values(opsStatus).every(item => item?.overall === 'ok')
+                                ? '#10b981'
+                                : '#f59e0b',
+                        }}
+                    />
+                </Stack>
+                <Paper elevation={0} sx={{ p: 2.5, borderRadius: '16px', border: '1px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.02)' }}>
+                    <Grid container spacing={2}>
+                        <Grid item xs={12} md={4}>
+                            <OpsBotPanel label="Stock" status={opsStatus?.stock ?? null} />
+                        </Grid>
+                        <Grid item xs={12} md={4}>
+                            <OpsBotPanel label="Forex" status={opsStatus?.forex ?? null} />
+                        </Grid>
+                        <Grid item xs={12} md={4}>
+                            <OpsBotPanel label="Crypto" status={opsStatus?.crypto ?? null} />
+                        </Grid>
+                    </Grid>
                 </Paper>
             </Box>
 
