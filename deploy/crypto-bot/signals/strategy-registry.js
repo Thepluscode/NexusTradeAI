@@ -1,6 +1,11 @@
 // services/signals/strategy-registry.js
 'use strict';
 
+const {
+    evaluateStrategyEvidence,
+    summarizeStrategyEvidence,
+} = require('./strategy-evidence');
+
 const strategies = new Map();
 
 function register(strategy) {
@@ -66,14 +71,14 @@ let enabledCache = null;
 let enabledCacheFetchedAt = 0;
 const ENABLED_CACHE_TTL_MS = 60_000;
 
-async function getEnabledStrategies(assetClass, regime, dbPool) {
+async function getEnabledStrategies(assetClass, regime, dbPool, options = {}) {
     const age = Date.now() - enabledCacheFetchedAt;
     const shouldRefresh = enabledCache === null || age > ENABLED_CACHE_TTL_MS;
 
     if (shouldRefresh) {
         try {
             const result = await dbPool.query(
-                `SELECT strategy_name, state FROM strategy_enabled
+                `SELECT strategy_name, asset_class, state, reason FROM strategy_enabled
                  WHERE asset_class = $1 AND state IN ('shadow','live')`,
                 [assetClass]
             );
@@ -85,7 +90,7 @@ async function getEnabledStrategies(assetClass, regime, dbPool) {
         }
     }
 
-    return enabledCache
+    const rows = enabledCache
         .map(row => {
             const strategy = strategies.get(row.strategy_name);
             if (!strategy) return null;
@@ -94,6 +99,142 @@ async function getEnabledStrategies(assetClass, regime, dbPool) {
         .filter(s => s !== null)
         .filter(s => s.assetClass === assetClass)
         .filter(s => s.regimes.includes(regime) || s.regimes.includes('any'));
+
+    if (!shouldEnforceEvidence(options)) return rows;
+
+    const gated = await Promise.all(rows.map(async strategy => {
+        const evidence = await getStrategyEvidence(strategy.name, strategy.assetClass, strategy.state, dbPool, options);
+        if (!evidence.allowed) return null;
+        return { ...strategy, evidence };
+    }));
+
+    return gated.filter(Boolean);
+}
+
+function shouldEnforceEvidence(options = {}) {
+    if (options.enforceEvidence === true) return true;
+    if (options.enforceEvidence === false) return false;
+    return process.env.STRATEGY_EVIDENCE_GATE === 'true';
+}
+
+function botForAssetClass(assetClass, options = {}) {
+    if (options.bot) return options.bot;
+    if (assetClass === 'stock') return 'stock';
+    if (assetClass === 'forex') return 'forex';
+    if (assetClass === 'crypto') return 'crypto';
+    return assetClass;
+}
+
+async function getStrategyEvidence(strategyName, assetClass, requestedState, dbPool, options = {}) {
+    const [backtest, walkForward, livePaper] = await Promise.all([
+        fetchLatestBacktest(dbPool, strategyName, assetClass),
+        fetchLatestWalkForward(dbPool, strategyName, assetClass),
+        fetchLivePaper(dbPool, strategyName, botForAssetClass(assetClass, options)),
+    ]);
+
+    return evaluateStrategyEvidence({
+        requestedState,
+        backtest,
+        walkForward,
+        livePaper,
+        thresholds: options.thresholds || {},
+    });
+}
+
+async function getStrategyEvidenceSummaries(assetClass, dbPool, options = {}) {
+    if (!dbPool) return [];
+
+    const result = await dbPool.query(
+        `SELECT strategy_name, asset_class, state, reason
+         FROM strategy_enabled
+         WHERE asset_class = $1
+         ORDER BY strategy_name`,
+        [assetClass]
+    );
+
+    const summaries = await Promise.all(result.rows.map(async row => {
+        const evaluation = await getStrategyEvidence(row.strategy_name, row.asset_class || assetClass, row.state, dbPool, options);
+        return summarizeStrategyEvidence({
+            name: row.strategy_name,
+            state: row.state,
+            assetClass: row.asset_class || assetClass,
+            evaluation,
+        });
+    }));
+
+    return summaries;
+}
+
+async function fetchLatestBacktest(dbPool, strategyName, assetClass) {
+    const result = await dbPool.query(
+        `SELECT strategy_name, asset_class, trade_count, win_rate, profit_factor,
+                passed_gate_a, passed_walk_forward, tested_at
+         FROM backtest_results
+         WHERE strategy_name = $1 AND asset_class = $2
+         ORDER BY tested_at DESC
+         LIMIT 1`,
+        [strategyName, assetClass]
+    );
+    return result.rows[0] || null;
+}
+
+async function fetchLatestWalkForward(dbPool, strategyName, assetClass) {
+    const result = await dbPool.query(
+        `WITH latest_run AS (
+            SELECT run_id
+            FROM walk_forward_results
+            WHERE strategy_name = $1 AND asset_class = $2
+            ORDER BY tested_at DESC
+            LIMIT 1
+         )
+         SELECT run_id,
+                COUNT(*)::int AS fold_count,
+                COALESCE(SUM(test_trade_count), 0)::int AS total_oos_trades,
+                COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY test_sharpe), 0)::float AS median_oos_sharpe,
+                COALESCE(MIN(test_sharpe), 0)::float AS worst_fold_sharpe,
+                (
+                    COUNT(*) >= 2
+                    AND COALESCE(SUM(test_trade_count), 0) >= 30
+                    AND COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY test_sharpe), 0) >= 0.5
+                    AND COALESCE(MIN(test_sharpe), 0) >= -0.5
+                ) AS passed_gate_b,
+                MAX(tested_at) AS tested_at
+         FROM walk_forward_results
+         WHERE strategy_name = $1
+           AND asset_class = $2
+           AND run_id = (SELECT run_id FROM latest_run)
+         GROUP BY run_id`,
+        [strategyName, assetClass]
+    );
+    return result.rows[0] || null;
+}
+
+async function fetchLivePaper(dbPool, strategyName, bot) {
+    const result = await dbPool.query(
+        `WITH closed AS (
+            SELECT COALESCE(pnl_usd, 0)::float AS pnl
+            FROM trades
+            WHERE strategy = $1
+              AND bot = $2
+              AND status = 'closed'
+              AND exit_time >= NOW() - INTERVAL '90 days'
+            ORDER BY exit_time DESC
+            LIMIT 100
+         )
+         SELECT COUNT(*)::int AS trade_count,
+                COALESCE(AVG(CASE WHEN pnl > 0 THEN 1.0 ELSE 0.0 END), 0)::float AS win_rate,
+                CASE
+                    WHEN ABS(SUM(CASE WHEN pnl <= 0 THEN pnl ELSE 0 END)) > 0
+                    THEN (SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END) / ABS(SUM(CASE WHEN pnl <= 0 THEN pnl ELSE 0 END)))::float
+                    WHEN SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END) > 0 THEN 10.0
+                    ELSE 0.0
+                END AS profit_factor,
+                COALESCE(SUM(pnl), 0)::float AS total_pnl,
+                NOW() AS evaluated_at
+         FROM closed`,
+        [strategyName, bot]
+    );
+    return result.rows[0] || null;
 }
 
 // ── Strategy lifecycle management (v24.6 Phase 6) ───────────────────────────
@@ -280,6 +421,8 @@ module.exports = {
     register,
     runStrategies,
     getEnabledStrategies,
+    getStrategyEvidence,
+    getStrategyEvidenceSummaries,
     promoteStrategy,
     demoteStrategy,
     evaluateStrategyHealth,
