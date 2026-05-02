@@ -8,6 +8,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
 const { requireApiSecret, requireJwt, requireJwtOrApiSecret, getEncryptionKey, encryptCredential, decryptCredential, signTokens, registerAuthRoutes } = require('./shared/auth');
+const { buildOpsStatus } = require('./shared/ops-status');
 const { createUserCredentialStore } = require('./userCredentialStore');
 // Signal modules — try local signal-analytics (ships with deploy), fall back to no-op
 let createSignalEndpoints;
@@ -4041,6 +4042,31 @@ app.get('/health', (req, res) => {
         memory: checkMemoryHealth(),
     });
     res.json(health);
+});
+
+app.get('/api/ops/status', (req, res) => {
+    res.json({
+        success: true,
+        data: buildOpsStatus({
+            bot: 'forex',
+            lastScanAt: lastScanCompletedAt,
+            scanThresholdMs: 900000,
+            isRunning: botRunning,
+            isPaused: botPaused,
+            strategies: [
+                { name: 'london_breakout', enabled: !botPaused, reason: botPaused ? 'BOT_PAUSED=true' : null },
+                { name: 'bb_rsi_mean_reversion', enabled: !botPaused, reason: botPaused ? 'BOT_PAUSED=true' : null },
+                { name: 'legacy_forex_strategies', enabled: false, reason: 'disabled after poor live paper performance' },
+            ],
+            tradeRejections: {},
+            db: { healthy: Boolean(dbPool), error: dbPool ? null : 'DATABASE_URL not configured or DB init failed' },
+            bridge: { healthy: true },
+            extra: {
+                recentErrors: recentErrors.length,
+                botPausedEnv: process.env.BOT_PAUSED === 'true',
+            },
+        }),
+    });
 });
 
 // [Phase 4] Forex trade evaluation summary endpoint
