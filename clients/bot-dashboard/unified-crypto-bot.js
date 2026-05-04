@@ -1736,6 +1736,25 @@ const CRYPTO_CONFIDENCE_CAP_RAW = parseFloat(process.env.CRYPTO_CONFIDENCE_CAP_V
 const CRYPTO_CONFIDENCE_CAP = (Number.isFinite(CRYPTO_CONFIDENCE_CAP_RAW) && CRYPTO_CONFIDENCE_CAP_RAW > 0 && CRYPTO_CONFIDENCE_CAP_RAW < 1)
     ? CRYPTO_CONFIDENCE_CAP_RAW
     : 0.45;
+// [2026-05-04] Anti-FOMO staleness filter — wires services/signals/staleness-detector.js
+// into the entry quality gate. Only fires when the bot can supply recent klines on
+// the signal (signal.recentBars / signal.klines / signal.bars). Without bars the
+// gate is a no-op, so misconfiguration cannot stop trading.
+const CRYPTO_STALENESS_FILTER_ENABLED = process.env.CRYPTO_STALENESS_FILTER === 'true';
+const CRYPTO_STALENESS_LOOKBACK = parseInt(process.env.CRYPTO_STALENESS_LOOKBACK || '5', 10);
+const CRYPTO_STALENESS_MAX_MOVE_PCT = parseFloat(process.env.CRYPTO_STALENESS_MAX_MOVE_PCT || '2.0');
+let _stalenessDetector = null;
+function getStalenessDetector() {
+    if (_stalenessDetector === null) {
+        try {
+            _stalenessDetector = require('../../services/signals/staleness-detector');
+        } catch (e) {
+            console.warn(`[StalenessFilter] Module unavailable: ${e.message}`);
+            _stalenessDetector = false; // memoize the failure so we don't keep retrying
+        }
+    }
+    return _stalenessDetector || null;
+}
 const MAX_SIGNALS_PER_CYCLE = parseInt(process.env.MAX_SIGNALS_PER_CYCLE || '1');
 const MAX_CONSECUTIVE_LOSSES = parseInt(process.env.MAX_CONSECUTIVE_LOSSES || '5');
 const LOSS_PAUSE_MS = parseInt(process.env.LOSS_PAUSE_MS || '7200000');
@@ -3133,6 +3152,22 @@ class CryptoTradingEngine {
         // 5. ATR regime must not be "extreme volatility" (too risky)
         if (signal.marketRegime === 'extreme' || signal.marketRegime === 'high') {
             reasons.push(`regime=${signal.marketRegime} (too volatile)`);
+        }
+
+        // 6. [2026-05-04] Staleness filter — block FOMO entries via price+volume in recent bars.
+        // Skipped when flag off, when bars unavailable on the signal, or when module load failed.
+        if (CRYPTO_STALENESS_FILTER_ENABLED) {
+            const bars = signal.recentBars || signal.klines || signal.bars || null;
+            const stalenessDetector = getStalenessDetector();
+            if (bars && stalenessDetector && typeof stalenessDetector.isEntryStale === 'function') {
+                const stalenessResult = stalenessDetector.isEntryStale(bars, direction, {
+                    lookbackBars: CRYPTO_STALENESS_LOOKBACK,
+                    maxMovePct: CRYPTO_STALENESS_MAX_MOVE_PCT
+                });
+                if (stalenessResult.stale) {
+                    reasons.push(`staleness ${stalenessResult.gate}: ${stalenessResult.reason}`);
+                }
+            }
         }
 
         const pass = reasons.length === 0;
