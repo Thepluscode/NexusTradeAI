@@ -24,6 +24,19 @@
  * with `stale: true` (typically: reject the entry).
  */
 
+// Accept either {open,high,low,close,volume} (full names, exit-manager style)
+// or {o,h,l,c,v} (one-letter, harness/strategy style). Returns null on missing.
+function barClose(bar) {
+  if (!bar) return null;
+  const c = bar.close != null ? bar.close : bar.c;
+  return Number.isFinite(c) ? c : null;
+}
+function barVolume(bar) {
+  if (!bar) return 0;
+  const v = bar.volume != null ? bar.volume : bar.v;
+  return Number.isFinite(v) ? v : 0;
+}
+
 function detectPriceStaleness(klines, direction, opts = {}) {
   const { lookbackBars = 5, maxMovePct = 2.0 } = opts;
 
@@ -33,17 +46,17 @@ function detectPriceStaleness(klines, direction, opts = {}) {
 
   const dir = direction === 'short' ? 'short' : 'long';
   const window = klines.slice(-lookbackBars - 1);
-  const startBar = window[0];
-  const endBar = window[window.length - 1];
+  const startClose = barClose(window[0]);
+  const endClose = barClose(window[window.length - 1]);
 
-  if (!startBar || !endBar || !Number.isFinite(startBar.close) || !Number.isFinite(endBar.close)) {
+  if (startClose == null || endClose == null) {
     return { stale: false, movePct: 0, lookback: window.length, reason: 'invalid bar data' };
   }
-  if (startBar.close <= 0) {
+  if (startClose <= 0) {
     return { stale: false, movePct: 0, lookback: window.length, reason: 'invalid start price' };
   }
 
-  const movePct = ((endBar.close - startBar.close) / startBar.close) * 100;
+  const movePct = ((endClose - startClose) / startClose) * 100;
   // For longs, a positive move is "stale" (we'd be buying after the rally).
   // For shorts, a negative move is "stale" (we'd be shorting after the drop).
   const directionalMove = dir === 'long' ? movePct : -movePct;
@@ -87,14 +100,14 @@ function detectVolumeStaleness(klines, opts = {}) {
     return { stale: false, elevatedBars: 0, lookback: lookbackBars, reason: 'insufficient baseline' };
   }
 
-  const baselineVol = baseline.reduce((s, b) => s + (Number(b.volume) || 0), 0) / baseline.length;
+  const baselineVol = baseline.reduce((s, b) => s + barVolume(b), 0) / baseline.length;
   if (!Number.isFinite(baselineVol) || baselineVol <= 0) {
     return { stale: false, elevatedBars: 0, lookback: lookbackBars, reason: 'zero baseline volume' };
   }
 
   let elevatedBars = 0;
   for (const bar of window) {
-    const vol = Number(bar.volume) || 0;
+    const vol = barVolume(bar);
     if (vol / baselineVol >= elevatedThreshold) elevatedBars++;
   }
 
