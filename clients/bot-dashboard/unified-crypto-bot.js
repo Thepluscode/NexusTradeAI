@@ -2952,6 +2952,12 @@ class CryptoTradingEngine {
             }
 
             if (bestSignal) {
+                // [2026-05-04] Attach trailing klines so the staleness gate has bars to evaluate.
+                // No-op when CRYPTO_STALENESS_FILTER is off; harmless extra ~40 objects per signal otherwise.
+                // The staleness-detector accepts both bar shapes (full names + one-letter), so no normalization needed.
+                if (data && Array.isArray(data.klines) && data.klines.length >= 30) {
+                    bestSignal.recentBars = data.klines.slice(-40);
+                }
                 if (bestSignal.strategy === 'trendPullback') {
                     console.log(`↩️ ${symbol} (pullback): Trend ${(trendStrength * 100).toFixed(2)}%, Pullback ${(pullbackFromEMA9 * 100).toFixed(2)}%, RSI ${rsi.toFixed(1)}`);
                 }
