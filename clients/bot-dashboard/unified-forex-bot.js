@@ -1429,7 +1429,21 @@ async function closePosition(instrument) {
     } else {
         body.longUnits = 'ALL';
     }
-    return await oandaRequest('put', `/v3/accounts/${oandaConfig.accountId}/positions/${instrument}/close`, body);
+    // [Bugfix 2026-05-07] oandaRequest returns null on error (line 1382 catch).
+    // Without this validation, callers thought the close succeeded when OANDA
+    // had rejected the request — caused trade #218 to remain open while the
+    // bot reported "closed" and silently dropped it from the positions Map.
+    // Now: throw on null response or missing fill transaction so callers can
+    // surface the failure (and skip the Map-delete that follows).
+    const response = await oandaRequest('put', `/v3/accounts/${oandaConfig.accountId}/positions/${instrument}/close`, body);
+    if (!response) {
+        throw new Error(`OANDA close failed for ${instrument}: oandaRequest returned null (see preceding "OANDA Error" log)`);
+    }
+    const fillTx = response.longOrderFillTransaction || response.shortOrderFillTransaction;
+    if (!fillTx) {
+        throw new Error(`OANDA close incomplete for ${instrument}: no fill transaction in response. Body: ${JSON.stringify(response).slice(0, 400)}`);
+    }
+    return response;
 }
 
 // [v18.0] Partial close — reduce position by a fraction (e.g. 0.33 = close 33%)
@@ -3179,8 +3193,11 @@ async function closePositionWithReason(pair, reason) {
     const snapshot = pos?.signalSnapshot ? { ...pos.signalSnapshot } : null;
     const posCopy = pos ? { ...pos } : null;
 
-    // Delete from Map EARLY — prevents stuck positions if downstream ops throw
-    positions.delete(pair);
+    // [Bugfix 2026-05-07] Map delete moved AFTER successful OANDA close (below).
+    // The old "delete EARLY" comment was backwards reasoning: deleting first
+    // means a failed OANDA close leaves the bot blind to a still-open broker
+    // position. Symptom: trade #218 reported closed by bot while OANDA still
+    // held -106k GBP_USD short; next reboot's hydrate re-added it; loop.
 
     // Enhanced alert based on reason type
     if (reason.toLowerCase().includes('stop') || reason.toLowerCase().includes('loss')) {
@@ -3239,7 +3256,19 @@ async function closePositionWithReason(pair, reason) {
         ).catch(e => console.warn(`⚠️  Telegram time-exit alert failed: ${e.message}`));
     }
 
-    const result = await closePosition(pair);
+    let result;
+    try {
+        result = await closePosition(pair);
+    } catch (err) {
+        // OANDA rejected the close (auth, market closed, instrument restricted, etc.).
+        // Leave Map intact so retry / next reconciliation can try again, and
+        // propagate the error so callers (e.g. /api/forex/close-all) report
+        // skipped instead of falsely saying "closed".
+        console.error(`❌ closePosition rejected for ${pair}: ${err.message}`);
+        throw err;
+    }
+    // OANDA confirmed the close — only NOW remove from in-memory positions Map.
+    positions.delete(pair);
 
     if (result) {
         // Extract actual fill data from OANDA response and update our copy
@@ -5791,16 +5820,30 @@ app.listen(PORT, async () => {
                             const u = parseFloat(t.initialUnits || t.currentUnits || 0);
                             return u >= 0 ? 'long' : 'short';
                         };
-                        // Find OANDA trades whose openTime is within ±5min of db entry_time
-                        // AND whose direction matches. Pick the one with closest openTime.
+                        // [Bugfix 2026-05-07] Match relaxed: drop ±5min openTime window.
+                        // Old window failed for trades that were closed manually / from
+                        // the OANDA UI / via direct API hours after entry — the close
+                        // transaction's openTime still equals the entry_time (within
+                        // seconds), so ±5min should have been fine, but in practice
+                        // the closed-trades index sometimes lags and the trade isn't
+                        // in the response yet, leading to no match → pnl=0 fallback
+                        // (this is what hit #218: closed at 13:27Z, reconciliation
+                        // ran at 13:29Z, OANDA closed-trades lookup didn't include it).
+                        // New: still match by direction, but pick the chronologically
+                        // closest opened trade for that pair (smallest |openTime - entry_time|),
+                        // even if outside 5 min. Prefer that to losing the real PnL
+                        // by zeroing out. Adds a 30-min outer guard — if the closest
+                        // trade's openTime is more than 30 min from entry_time, it's
+                        // probably an unrelated trade, fall back to pnl=0.
                         const candidates = (closed?.trades || [])
                             .map(t => {
                                 const openedAt = t.openTime ? new Date(t.openTime).getTime() : 0;
                                 return { t, openedAt, delta: Math.abs(openedAt - entryTs) };
                             })
-                            .filter(c => c.delta <= 5 * 60 * 1000 && oandaDir(c.t) === dbDirection)
+                            .filter(c => oandaDir(c.t) === dbDirection)
                             .sort((a, b) => a.delta - b.delta);
-                        const match = candidates[0]?.t;
+                        const OUTER_GUARD_MS = 30 * 60 * 1000;
+                        const match = candidates[0]?.delta <= OUTER_GUARD_MS ? candidates[0].t : null;
                         if (match) {
                             exitPrice = parseFloat(match.closePrice ?? match.averageClosePrice ?? exitPrice);
                             realPnl = parseFloat(match.realizedPL ?? 0);
@@ -5814,7 +5857,8 @@ app.listen(PORT, async () => {
                                 ? (realPnl < 0 ? 'Stop Loss (orphan-backfill)' : 'Take Profit (orphan-backfill)')
                                 : 'Closed Flat (orphan-backfill)';
                         } else {
-                            console.warn(`⚠️ Orphan ${row.symbol} id=${row.id}: no matching OANDA trade within 5min of ${row.entry_time} — recording as orphaned_restart pnl=0`);
+                            const closestDeltaMin = candidates[0] ? (candidates[0].delta / 60000).toFixed(1) : 'n/a';
+                            console.warn(`⚠️ Orphan ${row.symbol} id=${row.id}: no matching OANDA trade within ${OUTER_GUARD_MS/60000}min of ${row.entry_time} (closest direction-match: ${closestDeltaMin}min) — recording as orphaned_restart pnl=0`);
                         }
                     } catch (e) {
                         console.warn(`⚠️ OANDA backfill failed for orphan ${row.symbol} (id=${row.id}): ${e.message}`);
