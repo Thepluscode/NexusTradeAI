@@ -1,0 +1,176 @@
+name: Morning Briefing
+
+# Runs Mon-Fri at ~8:33 AM ET year-round (DST-aware via dual cron lines).
+# - EDT (Mar-Oct): 12:33 UTC = 8:33 EDT
+# - EST (Nov-Feb): 13:33 UTC = 8:33 EST
+# Brief misalignment (~1h) during the 1-2 week DST transition windows; we accept that.
+# The job dedupes itself: only runs if the *current* UTC hour matches the season's expected hour.
+# Read-only: hits health + trade endpoints, never writes/trades.
+# Security note: no untrusted github.event.* inputs are interpolated.
+
+on:
+  schedule:
+    - cron: '33 12 * * 1-5'   # EDT window
+    - cron: '33 13 * * 1-5'   # EST window
+  workflow_dispatch: {}
+
+jobs:
+  briefing:
+    name: Morning Briefing
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: DST guard (only run when local ET hour = 8)
+        id: dst_guard
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          # Both cron lines (12:33 UTC + 13:33 UTC) fire daily, but only one is
+          # the real 8:33 AM ET depending on DST. Set proceed=true only on the
+          # right one. Manual workflow_dispatch always proceeds.
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "manual run — proceeding"
+            exit 0
+          fi
+          ET_HOUR=$(TZ=America/New_York date +%H)
+          if [ "$ET_HOUR" = "08" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "ET hour is 08 — proceeding with briefing"
+          else
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "ET hour is $ET_HOUR — off-season cron firing; skipping all subsequent steps"
+          fi
+
+      - name: Stock Bot health
+        if: steps.dst_guard.outputs.proceed == 'true'
+        id: stock_health
+        run: |
+          R=$(curl -sf --max-time 15 https://nexus-stock-bot-production.up.railway.app/health || echo '{"status":"down"}')
+          echo "status=$(echo "$R" | jq -r '.status // "down"')" >> "$GITHUB_OUTPUT"
+
+      - name: Crypto Bot health
+        if: steps.dst_guard.outputs.proceed == 'true'
+        id: crypto_health
+        run: |
+          R=$(curl -sf --max-time 15 https://nexus-crypto-bot-production.up.railway.app/health || echo '{"status":"down"}')
+          echo "status=$(echo "$R" | jq -r '.status // "down"')" >> "$GITHUB_OUTPUT"
+
+      - name: Forex Bot health
+        if: steps.dst_guard.outputs.proceed == 'true'
+        id: forex_health
+        run: |
+          R=$(curl -sf --max-time 15 https://nexus-forex-bot-production.up.railway.app/health || echo '{"status":"down"}')
+          echo "status=$(echo "$R" | jq -r '.status // "down"')" >> "$GITHUB_OUTPUT"
+
+      - name: Strategy Bridge health
+        if: steps.dst_guard.outputs.proceed == 'true'
+        id: bridge_health
+        run: |
+          R=$(curl -sf --max-time 15 https://nexus-strategy-bridge-production.up.railway.app/health || echo '{"status":"down"}')
+          echo "status=$(echo "$R" | jq -r '.status // "down"')" >> "$GITHUB_OUTPUT"
+
+      - name: Last 24h trades + P&L
+        if: steps.dst_guard.outputs.proceed == 'true'
+        id: trades
+        run: |
+          fetch_summary() {
+            local url="$1"
+            local raw
+            raw=$(curl -sf --max-time 15 "$url" || echo '[]')
+            local n
+            n=$(echo "$raw" | jq '[.[] | select(.closed_at != null) | select((.closed_at | fromdateiso8601) > (now - 86400))] | length' 2>/dev/null || echo 0)
+            local pnl
+            pnl=$(echo "$raw" | jq '[.[] | select(.closed_at != null) | select((.closed_at | fromdateiso8601) > (now - 86400)) | .pnl_pct // 0] | add // 0 | . * 10000 | round / 100' 2>/dev/null || echo 0)
+            echo "$n $pnl"
+          }
+          read -r S_N S_PNL < <(fetch_summary 'https://nexus-stock-bot-production.up.railway.app/api/trades?limit=30&bot=stock')
+          read -r C_N C_PNL < <(fetch_summary 'https://nexus-crypto-bot-production.up.railway.app/api/trades?limit=30')
+          read -r F_N F_PNL < <(fetch_summary 'https://nexus-forex-bot-production.up.railway.app/api/trades?limit=30')
+          {
+            echo "stock_24h=$S_N"
+            echo "stock_pnl=$S_PNL"
+            echo "crypto_24h=$C_N"
+            echo "crypto_pnl=$C_PNL"
+            echo "forex_24h=$F_N"
+            echo "forex_pnl=$F_PNL"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open positions count
+        if: steps.dst_guard.outputs.proceed == 'true'
+        id: positions
+        run: |
+          count_open() {
+            curl -sf --max-time 15 "$1" 2>/dev/null \
+              | jq 'if type == "array" then length else (.positions // []) | length end' 2>/dev/null \
+              || echo "?"
+          }
+          {
+            echo "stock_open=$(count_open 'https://nexus-stock-bot-production.up.railway.app/api/positions')"
+            echo "crypto_open=$(count_open 'https://nexus-crypto-bot-production.up.railway.app/api/positions')"
+            echo "forex_open=$(count_open 'https://nexus-forex-bot-production.up.railway.app/api/positions')"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Compose & send Telegram briefing
+        if: steps.dst_guard.outputs.proceed == 'true'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          S_STATUS: ${{ steps.stock_health.outputs.status }}
+          C_STATUS: ${{ steps.crypto_health.outputs.status }}
+          F_STATUS: ${{ steps.forex_health.outputs.status }}
+          B_STATUS: ${{ steps.bridge_health.outputs.status }}
+          S_TRADES: ${{ steps.trades.outputs.stock_24h }}
+          S_PNL: ${{ steps.trades.outputs.stock_pnl }}
+          C_TRADES: ${{ steps.trades.outputs.crypto_24h }}
+          C_PNL: ${{ steps.trades.outputs.crypto_pnl }}
+          F_TRADES: ${{ steps.trades.outputs.forex_24h }}
+          F_PNL: ${{ steps.trades.outputs.forex_pnl }}
+          S_OPEN: ${{ steps.positions.outputs.stock_open }}
+          C_OPEN: ${{ steps.positions.outputs.crypto_open }}
+          F_OPEN: ${{ steps.positions.outputs.forex_open }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "::warning::Telegram credentials not configured — skipping send"
+            exit 0
+          fi
+          icon() { [ "$1" = "ok" ] && echo "✅" || echo "🔴"; }
+          DATE=$(date -u +"%a %b %d")
+          NL='%0A'
+          MSG="☀️ Morning Briefing — ${DATE}${NL}${NL}"
+          MSG+="$(icon "$S_STATUS") Stock  · ${S_OPEN} open · 24h: ${S_TRADES} trades, ${S_PNL}%25${NL}"
+          MSG+="$(icon "$C_STATUS") Crypto · ${C_OPEN} open · 24h: ${C_TRADES} trades, ${C_PNL}%25${NL}"
+          MSG+="$(icon "$F_STATUS") Forex  · ${F_OPEN} open · 24h: ${F_TRADES} trades, ${F_PNL}%25${NL}"
+          MSG+="$(icon "$B_STATUS") Bridge${NL}"
+          curl -sf --max-time 10 \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=${TELEGRAM_CHAT_ID}&text=${MSG}" \
+            >/dev/null || echo "::warning::Telegram send failed"
+
+      - name: Step summary
+        if: always() && steps.dst_guard.outputs.proceed == 'true'
+        env:
+          S_STATUS: ${{ steps.stock_health.outputs.status }}
+          C_STATUS: ${{ steps.crypto_health.outputs.status }}
+          F_STATUS: ${{ steps.forex_health.outputs.status }}
+          B_STATUS: ${{ steps.bridge_health.outputs.status }}
+          S_TRADES: ${{ steps.trades.outputs.stock_24h }}
+          S_PNL: ${{ steps.trades.outputs.stock_pnl }}
+          C_TRADES: ${{ steps.trades.outputs.crypto_24h }}
+          C_PNL: ${{ steps.trades.outputs.crypto_pnl }}
+          F_TRADES: ${{ steps.trades.outputs.forex_24h }}
+          F_PNL: ${{ steps.trades.outputs.forex_pnl }}
+          S_OPEN: ${{ steps.positions.outputs.stock_open }}
+          C_OPEN: ${{ steps.positions.outputs.crypto_open }}
+          F_OPEN: ${{ steps.positions.outputs.forex_open }}
+        run: |
+          {
+            echo "## Morning Briefing"
+            echo
+            echo "| Service | Status | Open | 24h trades | 24h P&L (sum %) |"
+            echo "|---|---|---|---|---|"
+            echo "| Stock | ${S_STATUS} | ${S_OPEN} | ${S_TRADES} | ${S_PNL} |"
+            echo "| Crypto | ${C_STATUS} | ${C_OPEN} | ${C_TRADES} | ${C_PNL} |"
+            echo "| Forex | ${F_STATUS} | ${F_OPEN} | ${F_TRADES} | ${F_PNL} |"
+            echo "| Bridge | ${B_STATUS} | — | — | — |"
+          } >> "$GITHUB_STEP_SUMMARY"
