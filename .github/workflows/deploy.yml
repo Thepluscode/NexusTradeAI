@@ -216,21 +216,23 @@ jobs:
           ls -la deploy/dashboard/dist/index.html
 
       # Trigger Railway redeploys on every push to main.
-      - name: Trigger Railway redeploys
+      - name: Trigger Railway redeploys (best-effort; Railway auto-deploy is the primary path)
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          # [2026-05-07] Switched from raw curl-to-GraphQL to Railway's official CLI.
-          # The previous approach used Authorization: Bearer which only works for
-          # one specific token type/scope; account/project/team tokens need different
-          # headers and Railway has rotated their auth scheme. The CLI handles all
-          # that — we just set RAILWAY_TOKEN env and call redeploy.
+          # [2026-05-07] Made non-blocking. Railway's native GitHub integration
+          # auto-deploys on every push to main, so this explicit trigger is only
+          # a fast-path. If the token isn't set / valid (workspace mismatch,
+          # rotated, etc.) we log a warning but DO NOT fail the workflow —
+          # Railway will redeploy via GitHub integration regardless, just a
+          # minute or two later. To re-enable strict mode: replace the warning
+          # at the bottom with `exit 1`.
           if [ -z "$RAILWAY_TOKEN" ]; then
-            echo "ERROR: RAILWAY_TOKEN not set — cannot trigger Railway redeploys"
-            exit 1
+            echo "::warning::RAILWAY_TOKEN not set — relying on Railway's GitHub auto-deploy for redeploy"
+            exit 0
           fi
           npm install -g @railway/cli@latest >/dev/null 2>&1
-          railway --version
+          railway --version || true
           FAILURES=0
           for SVC in nexus-stock-bot nexus-forex-bot nexus-crypto-bot nexus-strategy-bridge nexus-dashboard; do
             echo -n "Redeploying service $SVC... "
@@ -242,10 +244,10 @@ jobs:
             fi
           done
           if [ "$FAILURES" -gt 0 ]; then
-            echo "ERROR: $FAILURES Railway redeploy trigger(s) failed"
-            exit 1
+            echo "::warning::$FAILURES of 5 Railway redeploy trigger(s) rejected — relying on Railway's GitHub auto-deploy as fallback"
+          else
+            echo "All Railway redeploy triggers accepted"
           fi
-          echo "All Railway redeploy triggers accepted"
 
   # ── 2. Smoke tests after Railway auto-deploys ─────────────────────────────────
   smoke-test:
