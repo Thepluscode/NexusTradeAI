@@ -1,0 +1,101 @@
+{
+  "configs": {
+    "baseline_480_240_no_fade": {
+      "hard_min": 480,
+      "soft_min": 240,
+      "fade": false
+    },
+    "hard_360_soft_180_no_fade": {
+      "hard_min": 360,
+      "soft_min": 180,
+      "fade": false
+    },
+    "hard_240_soft_120_no_fade": {
+      "hard_min": 240,
+      "soft_min": 120,
+      "fade": false
+    },
+    "hard_240_soft_120_fade_60_03pct": {
+      "hard_min": 240,
+      "soft_min": 120,
+      "fade": true,
+      "fade_after_min": 60,
+      "fade_pct": 0.003
+    },
+    "hard_180_soft_90_fade_45_03pct": {
+      "hard_min": 180,
+      "soft_min": 90,
+      "fade": true,
+      "fade_after_min": 45,
+      "fade_pct": 0.003
+    }
+  },
+  "summary": {
+    "baseline_480_240_no_fade": {
+      "trades": 89,
+      "wins": 25,
+      "losses": 39,
+      "flats": 25,
+      "win_rate": 0.2809,
+      "total_pnl_pct": -0.1087,
+      "avg_win_pct": 0.0124,
+      "avg_loss_pct": -0.0107,
+      "profit_factor": 0.74,
+      "avg_minutes_held": 420.6,
+      "changed": 89
+    },
+    "hard_360_soft_180_no_fade": {
+      "trades": 89,
+      "wins": 20,
+      "losses": 38,
+      "flats": 31,
+      "win_rate": 0.2247,
+      "total_pnl_pct": -0.0851,
+      "avg_win_pct": 0.0129,
+      "avg_loss_pct": -0.009,
+      "profit_factor": 0.752,
+      "avg_minutes_held": 315.2,
+      "changed": 89
+    },
+    "hard_240_soft_120_no_fade": {
+      "trades": 89,
+      "wins": 32,
+      "losses": 41,
+      "flats": 16,
+      "win_rate": 0.3596,
+      "total_pnl_pct": -0.098,
+      "avg_win_pct": 0.0071,
+      "avg_loss_pct": -0.0079,
+      "profit_factor": 0.697,
+      "avg_minutes_held": 228.6,
+      "changed": 89
+    },
+    "hard_240_soft_120_fade_60_03pct": {
+      "trades": 89,
+      "wins": 36,
+      "losses": 51,
+      "flats": 2,
+      "win_rate": 0.4045,
+      "total_pnl_pct": 0.0276,
+      "avg_win_pct": 0.0058,
+      "avg_loss_pct": -0.0036,
+      "profit_factor": 1.151,
+      "avg_minutes_held": 123.9,
+      "changed": 89
+    },
+    "hard_180_soft_90_fade_45_03pct": {
+      "trades": 89,
+      "wins": 37,
+      "losses": 50,
+      "flats": 2,
+      "win_rate": 0.4157,
+      "total_pnl_pct": 0.0604,
+      "avg_win_pct": 0.0054,
+      "avg_loss_pct": -0.0028,
+      "profit_factor": 1.439,
+      "avg_minutes_held": 81.3,
+      "changed": 89
+    }
+  },
+  "n_input_trades": 89
+}
