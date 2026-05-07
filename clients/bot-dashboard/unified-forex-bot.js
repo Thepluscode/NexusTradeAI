@@ -490,6 +490,20 @@ const recentErrors = []; // { timestamp, error } for health monitoring
 // Box is built from 00:00-06:00 UTC, traded during 07:00-17:00 UTC
 const sessionBoxes = new Map(); // pair → { high, low, range, midline, isComplete, date, longTaken, shortTaken }
 let lastBoxBuildDate = null; // UTC date string (YYYY-MM-DD) — reset boxes daily
+
+// [G] Cumulative scan diagnostics for /api/forex/diagnose. In-memory only —
+// resets on Railway restart. Tracks WHY signals are not firing per pair/strategy
+// over time, which the per-call snapshot can't show.
+const forexBootedAt = new Date().toISOString();
+const forexRejectionCounters = new Map(); // 'pair|strategy|reason' → count
+const forexLastSignalAt = new Map();      // 'pair|strategy' → ISO timestamp
+function bumpForexRejection(pair, strategy, reason) {
+    const k = `${pair}|${strategy}|${reason}`;
+    forexRejectionCounters.set(k, (forexRejectionCounters.get(k) || 0) + 1);
+}
+function recordForexSignal(pair, strategy) {
+    forexLastSignalAt.set(`${pair}|${strategy}`, new Date().toISOString());
+}
 const MAX_ERROR_HISTORY = 100;
 let lastEquity = null; // null means not initialized yet
 let cachedLiveDailyPnL = 0; // updated by status endpoint for circuit breaker
@@ -2621,6 +2635,7 @@ async function scanForSignals(heldPositions = positions) {
         // [v25.0] DIFF 6: Regime gate — only fire breakout in trending regimes
         if (!allowedStrategies.boxBreakout) {
             // Skip breakout section entirely when regime is MEAN_REVERTING
+            bumpForexRejection(pair, 'boxBreakout', 'regime_gate_blocked');
         } else {
         // Evidence: 50-58% WR on GBP/USD (QuantifiedStrategies.com)
         // RESTRICTED to GBP_USD, USD_CHF only �� loses money on EUR/USD
@@ -2693,9 +2708,11 @@ async function scanForSignals(heldPositions = positions) {
                             isFlipReversal: isFlipLong || false,
                             existingDirection: isFlipLong ? 'short' : null
                         });
+                        recordForexSignal(pair, 'boxBreakout');
                     }
                 } else {
                     console.log(`📦 [BOX LONG] ${pair}: in buy zone but confirmation ${confirmation} < 0.55 — SKIP`);
+                    bumpForexRejection(pair, 'boxBreakout', 'confirmation_below_0.55');
                 }
             }
 
@@ -2751,9 +2768,11 @@ async function scanForSignals(heldPositions = positions) {
                             isFlipReversal: isFlipShort || false,
                             existingDirection: isFlipShort ? 'long' : null
                         });
+                        recordForexSignal(pair, 'boxBreakout');
                     }
                 } else {
                     console.log(`📦 [BOX SHORT] ${pair}: in sell zone but confirmation ${confirmation} < 0.55 — SKIP`);
+                    bumpForexRejection(pair, 'boxBreakout', 'confirmation_below_0.55');
                 }
             }
         }
@@ -2763,6 +2782,7 @@ async function scanForSignals(heldPositions = positions) {
         // [v25.0] DIFF 6: Regime gate — only fire mean reversion in ranging regimes
         if (!allowedStrategies.meanReversion) {
             // Skip MR section when regime is TRENDING
+            bumpForexRejection(pair, 'meanReversion', 'regime_gate_blocked');
         } else {
         // v20.0 required H4 RSI < 30 + ADX < 25 — too strict, never fired.
         // v23.5 relaxes to M15 RSI < 38 / > 62 with H4 ADX < 30 (ranging confirmation).
@@ -2819,6 +2839,7 @@ async function scanForSignals(heldPositions = positions) {
                                     h4RSI,
                                     h4BB: { upper: h4BB.upper, middle: h4BB.middle, lower: h4BB.lower }
                                 });
+                                recordForexSignal(pair, 'meanReversion');
                             }
                         }
 
@@ -2853,6 +2874,7 @@ async function scanForSignals(heldPositions = positions) {
                                     h4RSI,
                                     h4BB: { upper: h4BB.upper, middle: h4BB.middle, lower: h4BB.lower }
                                 });
+                                recordForexSignal(pair, 'meanReversion');
                             }
                         }
                     }
@@ -2862,6 +2884,7 @@ async function scanForSignals(heldPositions = positions) {
             }
         } else if (isMeanRevPair && h4Data.adx !== null) {
             console.log(`[MR] ${pair}: ADX ${h4Data.adx.toFixed(1)} >= 25 — trending, skip mean reversion`);
+            bumpForexRejection(pair, 'meanReversion', 'adx_trending');
         }
         } // end DIFF 6 mean reversion regime gate
     }
@@ -4416,6 +4439,12 @@ app.get('/api/forex/diagnose', async (req, res) => {
             sessionUtc: new Date().getUTCHours(),
             session: sess?.name || 'unknown',
             sessionQuality: sess?.quality || 'unknown',
+            // [G] Cumulative scan diagnostics — see bumpForexRejection / recordForexSignal.
+            // In-memory only; resets on Railway restart. Useful for spotting WHY
+            // signals don't fire over a window of scans.
+            bootedAt: forexBootedAt,
+            cumulativeRejections: Object.fromEntries(forexRejectionCounters),
+            lastSignalAt: Object.fromEntries(forexLastSignalAt),
             pairs: {}
         };
         for (const pair of FOREX_PAIRS) {
@@ -4429,6 +4458,18 @@ app.get('/api/forex/diagnose', async (req, res) => {
                 const isBreakoutPair = LONDON_BREAKOUT_PAIRS.includes(pair);
                 const isMeanRevPair = MEAN_REVERSION_PAIRS.includes(pair);
                 info.eligibleFor = { londonBreakout: isBreakoutPair, meanReversion: isMeanRevPair };
+                // [G] Per-pair cumulative slice — easier consumption than the flat top-level map.
+                info.cumulativeRejections = { boxBreakout: {}, meanReversion: {} };
+                for (const [k, v] of forexRejectionCounters) {
+                    const [p, s, r] = k.split('|');
+                    if (p === pair && info.cumulativeRejections[s]) {
+                        info.cumulativeRejections[s][r] = v;
+                    }
+                }
+                info.lastSignalAt = {
+                    boxBreakout: forexLastSignalAt.get(`${pair}|boxBreakout`) || null,
+                    meanReversion: forexLastSignalAt.get(`${pair}|meanReversion`) || null,
+                };
 
                 // London Breakout blockers
                 if (isBreakoutPair) {

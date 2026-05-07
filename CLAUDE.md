@@ -19,7 +19,7 @@ Automated trading platform running 3 independent bots on Railway. Each bot is a 
 | Service | Port | Broker | Pairs | Status |
 |---------|------|--------|-------|--------|
 | **Stock Bot** | 8080 | Alpaca (paper) | ~135 US equities | Active — ORB strategy |
-| **Forex Bot** | 8080 | OANDA (practice) | 4 pairs (restricted) | Paused (`BOT_PAUSED=true`) |
+| **Forex Bot** | 8080 | OANDA (practice) | 4 pairs (restricted) | Active — v20 strategies wired, no real signals since Mar 9 (correctly gated by session/range conditions) |
 | **Crypto Bot** | 8080 | Kraken (paper) | 25 crypto pairs | Active — momentum strategy |
 | **Strategy Bridge** | 8080 | — | — | Active — AI evaluation |
 
@@ -43,12 +43,14 @@ All services use port 8080 on Railway (Railway routes externally). Local dev use
 - Scans ~135 stocks every 60s during market hours (9:30 AM–4:00 PM EST)
 - Anti-churning: 15 trades/day, 3/symbol, 10-min cooldown
 
-### Forex Bot — v20.0 Evidence-Based (PAUSED)
-- **File:** `deploy/forex-bot/bot.js`
-- **London Breakout:** GBP/USD, USD/CHF only — H4 200-SMA trend filter
-- **BB+RSI Mean Reversion:** EUR/USD, EUR/GBP only — ADX < 25 ranging filter
-- Previous strategies had 0% win rate across 70+ trades — all disabled
-- Paused via `BOT_PAUSED=true` env var on Railway
+### Forex Bot — v20.0 Evidence-Based (ACTIVE, awaiting market conditions)
+- **File:** `clients/bot-dashboard/unified-forex-bot.js` (deploy wrapper at `deploy/forex-bot/bot.js`)
+- **boxBreakout (London Breakout):** GBP/USD, USD/CHF only — Asian box → London session breakout, H4 200-SMA trend filter. Inline at `unified-forex-bot.js:~2640-2780`. Signals tagged `strategy: 'boxBreakout'`.
+- **meanReversion (BB+RSI):** EUR/USD, EUR/GBP only — H4 ADX < 30 ranging filter, BB extreme + RSI extreme entry. Inline at `unified-forex-bot.js:~2780-2890`. Signals tagged `strategy: 'meanReversion'`.
+- `BOT_PAUSED` env var on Railway is **false**. `signals/strategies/forex-london-breakout.js` is dead code — registry never invoked.
+- Last real-signal entry: **2026-03-09** (`pullbackContinuation`, legacy v17 path). Recent open positions tagged `trendContinuation` are orphan recoveries (`entry_context.session = "restored"`), not new signals.
+- **Introspection:** `GET /api/forex/diagnose` returns per-pair eligibility, current H4 state, current blockers, and **cumulative rejection counters since boot** (key: `pair|strategy|reason`). Use this before guessing at filter values — see `feedback_introspection_first.md`.
+- Disabled (legacy): trendFollowing / momentum / pullback (all `0% WR over 70+ trades`).
 
 ### Crypto Bot — Momentum + BTC Gate
 - **File:** `deploy/crypto-bot/bot.js`
