@@ -2644,6 +2644,12 @@ async function scanForSignals(heldPositions = positions) {
         const isBreakoutPair = LONDON_BREAKOUT_PAIRS.includes(pair);
         const h4LongOk = h4Data.trend === 'up' || h4Data.trend === 'neutral';
         const h4ShortOk = h4Data.trend === 'down' || h4Data.trend === 'neutral';
+        // [G] Silent box-state rejections (box missing / not complete / both directions taken).
+        if (isBreakoutPair && (!box || !box.isComplete)) {
+            bumpForexRejection(pair, 'boxBreakout', !box ? 'no_asian_box' : 'box_incomplete');
+        } else if (isBreakoutPair && box && box.longTaken && box.shortTaken) {
+            bumpForexRejection(pair, 'boxBreakout', 'both_directions_taken_today');
+        }
         if (isBreakoutPair && box && box.isComplete) {
             const zonePct = 0.20; // Entry zone: within 20% of box edge
             const zoneSize = box.range * zonePct;
@@ -2807,6 +2813,16 @@ async function scanForSignals(heldPositions = positions) {
                     const h4ATR = calculateATR(h4Candles, 14);
 
                     if (h4BB && h4RSI !== null && h4ATR > 0) {
+                        // [G] Track silent MR rejections (these are the most common cases).
+                        const longConditionMet = currentPrice <= h4BB.lower && h4RSI < 38;
+                        const shortConditionMet = currentPrice >= h4BB.upper && h4RSI > 62;
+                        if (!longConditionMet && !shortConditionMet) {
+                            const insideBB = currentPrice > h4BB.lower && currentPrice < h4BB.upper;
+                            const rsiNeutral = h4RSI >= 38 && h4RSI <= 62;
+                            if (insideBB) bumpForexRejection(pair, 'meanReversion', 'price_inside_bb');
+                            if (rsiNeutral) bumpForexRejection(pair, 'meanReversion', 'rsi_neutral');
+                            if (!insideBB && !rsiNeutral) bumpForexRejection(pair, 'meanReversion', 'bb_rsi_mismatch');
+                        }
                         // ── MEAN REV LONG: price at/below lower BB + RSI oversold ──
                         // [v23.5] Relaxed from RSI < 30 to RSI < 38 — H4 RSI < 30 only fires
                         // ~once/month on EUR/USD, starving the bot of data.
