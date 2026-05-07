@@ -220,28 +220,24 @@ jobs:
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
+          # [2026-05-07] Switched from raw curl-to-GraphQL to Railway's official CLI.
+          # The previous approach used Authorization: Bearer which only works for
+          # one specific token type/scope; account/project/team tokens need different
+          # headers and Railway has rotated their auth scheme. The CLI handles all
+          # that — we just set RAILWAY_TOKEN env and call redeploy.
           if [ -z "$RAILWAY_TOKEN" ]; then
             echo "ERROR: RAILWAY_TOKEN not set — cannot trigger Railway redeploys"
             exit 1
           fi
-          ENV_ID="71aa0246-7eb1-4309-8976-61a8838b6ab9"
+          npm install -g @railway/cli@latest >/dev/null 2>&1
+          railway --version
           FAILURES=0
-          for SID in 2b939f3a 7c7c3976 baae31c1 50829ae3 a632e893; do
-            echo -n "Redeploying service $SID... "
-            RESP=$(curl -sf -X POST https://backboard.railway.com/graphql/v2 \
-              -H "Authorization: Bearer $RAILWAY_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d "{\"query\":\"mutation { serviceInstanceRedeploy(serviceId: \\\"$SID\\\", environmentId: \\\"$ENV_ID\\\") }\"}" || true)
-            echo "$RESP"
-            if [ -z "$RESP" ]; then
-              echo "ERROR: empty Railway response for service $SID"
-              FAILURES=$((FAILURES + 1))
-              continue
-            fi
-            if echo "$RESP" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(1 if d.get('errors') else 0)"; then
-              echo "Railway accepted redeploy for service $SID"
+          for SVC in nexus-stock-bot nexus-forex-bot nexus-crypto-bot nexus-strategy-bridge nexus-dashboard; do
+            echo -n "Redeploying service $SVC... "
+            if railway redeploy --service "$SVC" --yes; then
+              echo "Railway accepted redeploy for $SVC"
             else
-              echo "ERROR: Railway rejected redeploy for service $SID"
+              echo "ERROR: Railway rejected redeploy for $SVC"
               FAILURES=$((FAILURES + 1))
             fi
           done
