@@ -2488,6 +2488,11 @@ async function scanForSignals(heldPositions = positions) {
     const allowedSessions = ['London', 'London/NY Overlap', 'New York'];
     if (!allowedSessions.includes(session.name)) {
         console.log(`⏸️ ${session.name} — restricted to London/NY sessions only, skipping new entries`);
+        // [G] Bump session-blocked rejection for every tradable pair so the counter
+        // surfaces this dominant rejection cause during off-hours.
+        for (const pair of FOREX_PAIRS) {
+            bumpForexRejection(pair, 'session', `blocked_by_session_${session.name.replace(/[^A-Za-z0-9]/g, '_')}`);
+        }
         return signals;
     }
 
@@ -4475,7 +4480,7 @@ app.get('/api/forex/diagnose', async (req, res) => {
                 const isMeanRevPair = MEAN_REVERSION_PAIRS.includes(pair);
                 info.eligibleFor = { londonBreakout: isBreakoutPair, meanReversion: isMeanRevPair };
                 // [G] Per-pair cumulative slice — easier consumption than the flat top-level map.
-                info.cumulativeRejections = { boxBreakout: {}, meanReversion: {} };
+                info.cumulativeRejections = { boxBreakout: {}, meanReversion: {}, session: {} };
                 for (const [k, v] of forexRejectionCounters) {
                     const [p, s, r] = k.split('|');
                     if (p === pair && info.cumulativeRejections[s]) {
