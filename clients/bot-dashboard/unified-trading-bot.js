@@ -4780,14 +4780,15 @@ async function closePosition(symbol, qty, reason = 'Manual') {
         let currentPrice = null;
         const position = positions.get(symbol);
 
-        // FIX 1 & 2: Capture snapshot and positionCopy BEFORE any async/fallible operations,
-        // then delete from Map EARLY so the position is never stuck if downstream steps throw.
+        // Capture copies BEFORE any async/fallible operations.
         const positionCopy = position ? { ...position } : null;
         const snapshot = position ? (position.signalSnapshot ? { ...position.signalSnapshot } : null) : null;
 
-        // CRITICAL: Delete from Map immediately — prevents stuck positions even if
-        // DB operations, evaluation, or savePositions fail below.
-        positions.delete(symbol);
+        // [Bugfix 2026-05-07] Map delete moved to AFTER Alpaca order succeeds (below).
+        // Old code deleted EARLY claiming "prevents stuck positions" but the actual
+        // effect was: Alpaca order rejection → Map cleared → bot thinks no position
+        // → next scan can re-enter same symbol, ending up with 2x exposure on Alpaca.
+        // Same bug class as the forex closePositionWithReason fix in commit b0aa06d.
 
         try {
             const posUrl = `${alpacaConfig.baseURL}/v2/positions/${symbol}`;
@@ -4817,6 +4818,9 @@ async function closePosition(symbol, qty, reason = 'Manual') {
                 'APCA-API-SECRET-KEY': alpacaConfig.secretKey
             }
         });
+
+        // [Bugfix 2026-05-07] Alpaca confirmed close — only NOW remove from Map.
+        positions.delete(symbol);
 
         console.log(`✅ Position closed: ${symbol} (${reason})`);
 
@@ -4906,10 +4910,15 @@ async function closePosition(symbol, qty, reason = 'Manual') {
         savePerfData();
 
     } catch (error) {
-        console.error(`❌ Error closing ${symbol}:`, error.message);
-        // Ensure position is removed from Map even if Alpaca order submission fails,
-        // so the bot is not permanently blocked from re-entering this symbol.
-        positions.delete(symbol);
+        // [Bugfix 2026-05-07] Do NOT delete from Map on close failure — old code
+        // did, with reasoning "so the bot is not permanently blocked from re-entering
+        // this symbol", but the real effect was Alpaca-still-holds-position +
+        // bot-thinks-empty → next scan could double-enter. Leave Map intact so the
+        // next time-stop / stop-loss / manual close tries again. Re-throw so callers
+        // (`/api/trading/realize-profits`, EOD close, manual close-all) can mark the
+        // symbol as skipped instead of falsely succeeding.
+        console.error(`❌ Error closing ${symbol}: ${error.message} — leaving in Map for retry`);
+        throw error;
     } finally {
         closingSymbols.delete(symbol);
     }

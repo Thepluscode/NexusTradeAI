@@ -3437,6 +3437,7 @@ class CryptoTradingEngine {
 
     async managePositions() {
         for (const [symbol, position] of this.positions.entries()) {
+          try {
             const currentPrice = await this.kraken.getPrice(symbol);
             if (!currentPrice) continue;
 
@@ -3676,6 +3677,14 @@ class CryptoTradingEngine {
             position.unrealizedPnLPct = pnlPercent / 100;
 
             console.log(`   ${symbol}: $${currentPrice.toFixed(2)} (${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%) | Stop: $${position.stopLoss.toFixed(2)}`);
+          } catch (perSymbolError) {
+            // [Bugfix 2026-05-07] Per-symbol isolation: a thrown close (e.g. Kraken
+            // rejection) used to silently swallow at closePosition; now it propagates.
+            // Catching here so one symbol's failure doesn't skip every other position
+            // in this cycle. Position stays in Map (per closePosition's retry intent)
+            // so next managePositions tick will try again.
+            console.error(`[managePositions] ${symbol} cycle aborted: ${perSymbolError.message}`);
+          }
         }
     }
 
@@ -3708,9 +3717,14 @@ class CryptoTradingEngine {
             let order;
             if (isRealTradingEnabled()) {
                 order = await this.kraken.placeOrder(symbol, 'SELL', position.quantity);
+                // [Bugfix 2026-05-07] Old code logged + returned silently on null — caller
+                // then thought close succeeded but Kraken still held the position. Throw
+                // instead so callers (time-stop, stop-loss, manual close-all) can surface
+                // the failure and retry, rather than silently dropping the position from
+                // their next-iteration view. Same fix class as the forex `closePosition`
+                // change in commit b0aa06d.
                 if (!order) {
-                    console.log(`❌ Failed to close position for ${symbol}`);
-                    return;
+                    throw new Error(`Kraken close failed for ${symbol}: placeOrder returned null/falsy`);
                 }
             } else {
                 order = { orderId: `paper-sell-${symbol}-${Date.now()}` };
@@ -3819,7 +3833,11 @@ class CryptoTradingEngine {
             // Persist performance data so it survives restarts
             this.saveState();
         } catch (error) {
-            console.error(`❌ Error closing position:`, error);
+            // [Bugfix 2026-05-07] Re-throw instead of silent log. Map.delete is
+            // already on the success path above (line ~3822), so on throw the
+            // position stays tracked and the caller knows to retry / report.
+            console.error(`❌ Error closing crypto position ${symbol}: ${error.message} — position retained in Map for retry`);
+            throw error;
         }
     }
 
