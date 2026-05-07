@@ -53,11 +53,16 @@ All services use port 8080 on Railway (Railway routes externally). Local dev use
 - Disabled (legacy): trendFollowing / momentum / pullback (all `0% WR over 70+ trades`).
 
 ### Crypto Bot — Momentum + BTC Gate
-- **File:** `deploy/crypto-bot/bot.js`
-- **Win rate:** 34% (+$20.49 net)
-- **Trend Pullback:** DISABLED (9.1% WR, -$17.94 over 11 trades)
-- BTC SMA50 gate: blocks all altcoin longs when BTC is below its 50-period SMA
-- Trades 24/7, 25 pairs on Kraken
+- **File:** `clients/bot-dashboard/unified-crypto-bot.js` (deploy wrapper at `deploy/crypto-bot/bot.js`)
+- **Win rate:** 47.7% (+$8.35 net) per dashboard 2026-05-07.
+- **Trend Pullback:** DISABLED (9.1% WR, -$17.94 over 11 trades).
+- BTC SMA50 gate: blocks all altcoin longs when BTC is below its 50-period SMA.
+- Trades 24/7, 25 pairs on Kraken.
+- **Exit-tuning env knobs (default OFF / unchanged behaviour):**
+  - `CRYPTO_HARD_TIMESTOP_MIN` (default `480`) — hard close at this many minutes. Drop to `240` to halve the worst loss-runs that the dashboard shows dominate "Time Stop" exits at 481 min.
+  - `CRYPTO_SOFT_TIMESTOP_MIN` (default `240`) — when to trail stop to breakeven.
+  - `CRYPTO_MOMENTUM_FADE_EXIT` (default `false`). When `true`: any position with `|price - entry| / entry < CRYPTO_MOMENTUM_FADE_PCT` (default `0.003` = 0.3%) after `CRYPTO_MOMENTUM_FADE_AFTER_MIN` minutes (default `60`) is closed as `Momentum Fade Exit`. Targets the "entered but didn't follow through" pattern.
+  - **Backtest before flipping any of these on**; they change live exit behaviour.
 
 ---
 

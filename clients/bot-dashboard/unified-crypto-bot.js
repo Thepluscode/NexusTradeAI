@@ -1743,6 +1743,22 @@ const CRYPTO_CONFIDENCE_CAP = (Number.isFinite(CRYPTO_CONFIDENCE_CAP_RAW) && CRY
 const CRYPTO_STALENESS_FILTER_ENABLED = process.env.CRYPTO_STALENESS_FILTER === 'true';
 const CRYPTO_STALENESS_LOOKBACK = parseInt(process.env.CRYPTO_STALENESS_LOOKBACK || '5', 10);
 const CRYPTO_STALENESS_MAX_MOVE_PCT = parseFloat(process.env.CRYPTO_STALENESS_MAX_MOVE_PCT || '2.0');
+
+// [2026-05-07] Time-stop tuning + momentum-fade exit, both default OFF.
+// Motivation: dashboard shows the 8-hour hard time-stop dominates exits — most
+// momentum trades drift sideways and close near-flat-slightly-negative at 481min.
+// These flags let the operator tighten exits after backtesting without code change.
+//   CRYPTO_HARD_TIMESTOP_MIN: replaces the 480-min hard close (e.g., 240 = 4h).
+//   CRYPTO_SOFT_TIMESTOP_MIN: replaces the 240-min soft trail-to-BE (e.g., 120 = 2h).
+//   CRYPTO_MOMENTUM_FADE_EXIT: when 'true', closes any position that hasn't moved
+//     more than CRYPTO_MOMENTUM_FADE_PCT in absolute value after
+//     CRYPTO_MOMENTUM_FADE_AFTER_MIN minutes. Catches the "entered but didn't follow
+//     through" pattern without waiting 8 hours for time-stop.
+const CRYPTO_HARD_TIMESTOP_MIN = parseInt(process.env.CRYPTO_HARD_TIMESTOP_MIN || '480', 10);
+const CRYPTO_SOFT_TIMESTOP_MIN = parseInt(process.env.CRYPTO_SOFT_TIMESTOP_MIN || '240', 10);
+const CRYPTO_MOMENTUM_FADE_EXIT_ENABLED = process.env.CRYPTO_MOMENTUM_FADE_EXIT === 'true';
+const CRYPTO_MOMENTUM_FADE_AFTER_MIN = parseInt(process.env.CRYPTO_MOMENTUM_FADE_AFTER_MIN || '60', 10);
+const CRYPTO_MOMENTUM_FADE_PCT = parseFloat(process.env.CRYPTO_MOMENTUM_FADE_PCT || '0.003');
 let _stalenessDetector = null;
 function getStalenessDetector() {
     if (_stalenessDetector === null) {
@@ -3505,8 +3521,22 @@ class CryptoTradingEngine {
                 ? Math.floor((Date.now() - new Date(entryAt).getTime()) / 60000)
                 : position.entryBars; // fallback if timestamp missing
 
-            // Phase 1: Soft time stop at 240 min (4 hours) — trail to breakeven
-            if (minutesHeld >= 240 && !position.timeStopTrailed) {
+            // [2026-05-07] Optional momentum-fade exit — close if no real move after N min.
+            // Default OFF; flip CRYPTO_MOMENTUM_FADE_EXIT=true on Railway to enable.
+            if (CRYPTO_MOMENTUM_FADE_EXIT_ENABLED &&
+                minutesHeld >= CRYPTO_MOMENTUM_FADE_AFTER_MIN &&
+                !position.timeStopTrailed &&
+                position.entry > 0) {
+                const moveFraction = Math.abs(currentPrice - position.entry) / position.entry;
+                if (moveFraction < CRYPTO_MOMENTUM_FADE_PCT) {
+                    console.log(`💤 [MOMENTUM-FADE] ${symbol}: held ${minutesHeld}min, |move| ${(moveFraction*100).toFixed(2)}% < ${(CRYPTO_MOMENTUM_FADE_PCT*100).toFixed(2)}% threshold — closing`);
+                    await this.closePosition(symbol, currentPrice, `Momentum Fade Exit (${minutesHeld}min, |move| ${(moveFraction*100).toFixed(2)}%)`);
+                    continue;
+                }
+            }
+
+            // Phase 1: Soft time stop — trail to breakeven (default 240 min, override via CRYPTO_SOFT_TIMESTOP_MIN)
+            if (minutesHeld >= CRYPTO_SOFT_TIMESTOP_MIN && !position.timeStopTrailed) {
                 position.timeStopTrailed = true;
                 if (pnlUSD > 0) {
                     const beStop = position.entry;
@@ -3521,8 +3551,8 @@ class CryptoTradingEngine {
                 }
             }
 
-            // Phase 2: Hard time stop at 480 min (8 hours) — doubled from 4h
-            if (minutesHeld >= 480) {
+            // Phase 2: Hard time stop — force close (default 480 min, override via CRYPTO_HARD_TIMESTOP_MIN)
+            if (minutesHeld >= CRYPTO_HARD_TIMESTOP_MIN) {
                 console.log(`⏰ [TIME-STOP] ${symbol}: 8h HARD CLOSE — held ${minutesHeld} min, P&L $${pnlUSD.toFixed(2)}`);
                 this.profitProtectReentrySymbols.set(symbol, { timestamp: Date.now(), direction: position.direction || 'long', entry: position.entry || currentPrice });
                 await this.closePosition(symbol, currentPrice, `Time Stop (${minutesHeld} min, P&L $${pnlUSD.toFixed(2)})`);
