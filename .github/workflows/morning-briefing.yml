@@ -138,17 +138,28 @@ jobs:
             echo "::warning::Telegram credentials not configured — skipping send"
             exit 0
           fi
-          icon() { [ "$1" = "ok" ] && echo "✅" || echo "🔴"; }
+          icon() { [ "$1" = "ok" ] && printf '✅' || printf '🔴'; }
           DATE=$(date -u +"%a %b %d")
-          NL='%0A'
-          MSG="☀️ Morning Briefing — ${DATE}${NL}${NL}"
-          MSG+="$(icon "$S_STATUS") Stock  · ${S_OPEN} open · 24h: ${S_TRADES} trades, ${S_PNL}%25${NL}"
-          MSG+="$(icon "$C_STATUS") Crypto · ${C_OPEN} open · 24h: ${C_TRADES} trades, ${C_PNL}%25${NL}"
-          MSG+="$(icon "$F_STATUS") Forex  · ${F_OPEN} open · 24h: ${F_TRADES} trades, ${F_PNL}%25${NL}"
-          MSG+="$(icon "$B_STATUS") Bridge${NL}"
-          curl -sf --max-time 10 \
-            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=${TELEGRAM_CHAT_ID}&text=${MSG}" \
-            >/dev/null || echo "::warning::Telegram send failed"
+          # Build message with literal newlines; --data-urlencode handles all escaping.
+          MSG=$(printf '☀️ Morning Briefing — %s\n\n%s Stock  · %s open · 24h: %s trades, %s%%\n%s Crypto · %s open · 24h: %s trades, %s%%\n%s Forex  · %s open · 24h: %s trades, %s%%\n%s Bridge\n' \
+            "$DATE" \
+            "$(icon "$S_STATUS")" "$S_OPEN" "$S_TRADES" "$S_PNL" \
+            "$(icon "$C_STATUS")" "$C_OPEN" "$C_TRADES" "$C_PNL" \
+            "$(icon "$F_STATUS")" "$F_OPEN" "$F_TRADES" "$F_PNL" \
+            "$(icon "$B_STATUS")")
+          # Capture full response so failures show the API error code.
+          RESPONSE=$(curl -s -w '\nHTTP:%{http_code}' --max-time 10 \
+            --get \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${MSG}" \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" 2>&1)
+          STATUS=$(echo "$RESPONSE" | grep -oE 'HTTP:[0-9]+' | tail -1 | cut -d: -f2)
+          if [ "$STATUS" != "200" ]; then
+            BODY=$(echo "$RESPONSE" | sed -E 's/^HTTP:[0-9]+$//' | tr -d '\n')
+            echo "::warning::Telegram send failed — HTTP $STATUS: $BODY"
+          else
+            echo "Telegram send OK"
+          fi
 
       - name: Step summary
         if: always() && steps.dst_guard.outputs.proceed == 'true'
