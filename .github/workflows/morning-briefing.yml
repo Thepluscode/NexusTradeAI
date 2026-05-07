@@ -71,48 +71,35 @@ jobs:
           R=$(curl -sf --max-time 15 https://nexus-strategy-bridge-production.up.railway.app/health || echo '{"status":"down"}')
           echo "status=$(echo "$R" | jq -r '.status // "down"')" >> "$GITHUB_OUTPUT"
 
-      - name: Last 24h trades + P&L
+      - name: Trades summary + open positions (single endpoint)
         if: steps.dst_guard.outputs.proceed == 'true'
         id: trades
         run: |
-          fetch_summary() {
+          # /api/trades returns {success, count, trades:[...]}. pnl_pct is a string
+          # decimal (e.g., "0.0030"); status is "closed" or "open"; closed trades have
+          # exit_time set. /api/positions doesn't exist on these bots — derive open
+          # count from the same /api/trades response (status == "open").
+          fetch_bot() {
             local url="$1"
-            local raw
-            raw=$(curl -sf --max-time 15 "$url" || echo '[]')
-            local n
-            n=$(echo "$raw" | jq '[.[] | select(.closed_at != null) | select((.closed_at | fromdateiso8601) > (now - 86400))] | length' 2>/dev/null || echo 0)
-            local pnl
-            pnl=$(echo "$raw" | jq '[.[] | select(.closed_at != null) | select((.closed_at | fromdateiso8601) > (now - 86400)) | .pnl_pct // 0] | add // 0 | . * 10000 | round / 100' 2>/dev/null || echo 0)
-            echo "$n $pnl"
+            local raw n_24h pnl_24h n_open
+            raw=$(curl -sf --max-time 15 "$url" 2>/dev/null || echo '{"trades":[]}')
+            n_24h=$(echo "$raw" | jq '[.trades[]? | select(.status=="closed") | select(.exit_time != null) | select((.exit_time | fromdateiso8601) > (now - 86400))] | length' 2>/dev/null || echo 0)
+            pnl_24h=$(echo "$raw" | jq '[.trades[]? | select(.status=="closed") | select(.exit_time != null) | select((.exit_time | fromdateiso8601) > (now - 86400)) | (.pnl_pct // "0") | tonumber] | add // 0 | . * 10000 | round / 100' 2>/dev/null || echo 0)
+            n_open=$(echo "$raw" | jq '[.trades[]? | select(.status=="open")] | length' 2>/dev/null)
+            [ -z "$n_open" ] && n_open="?"
+            # default to 0 if jq returned empty
+            [ -z "$n_24h" ] && n_24h=0
+            [ -z "$pnl_24h" ] && pnl_24h=0
+            echo "$n_24h $pnl_24h $n_open"
           }
-          read -r S_N S_PNL < <(fetch_summary 'https://nexus-stock-bot-production.up.railway.app/api/trades?limit=30&bot=stock')
-          read -r C_N C_PNL < <(fetch_summary 'https://nexus-crypto-bot-production.up.railway.app/api/trades?limit=30')
-          read -r F_N F_PNL < <(fetch_summary 'https://nexus-forex-bot-production.up.railway.app/api/trades?limit=30')
+          # /api/trades?limit=N — bump to 100 so we don't miss intraday tail in busy periods
+          read -r S_N S_PNL S_OPEN < <(fetch_bot 'https://nexus-stock-bot-production.up.railway.app/api/trades?limit=100')
+          read -r C_N C_PNL C_OPEN < <(fetch_bot 'https://nexus-crypto-bot-production.up.railway.app/api/trades?limit=100')
+          read -r F_N F_PNL F_OPEN < <(fetch_bot 'https://nexus-forex-bot-production.up.railway.app/api/trades?limit=100')
           {
-            echo "stock_24h=$S_N"
-            echo "stock_pnl=$S_PNL"
-            echo "crypto_24h=$C_N"
-            echo "crypto_pnl=$C_PNL"
-            echo "forex_24h=$F_N"
-            echo "forex_pnl=$F_PNL"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Open positions count
-        if: steps.dst_guard.outputs.proceed == 'true'
-        id: positions
-        run: |
-          count_open() {
-            # `||` only fires on non-zero exit, but jq exits 0 on empty input
-            # (producing empty stdout), so fall back via explicit empty check.
-            local out
-            out=$(curl -sf --max-time 15 "$1" 2>/dev/null \
-              | jq -r 'if type == "array" then length else (.positions // []) | length end' 2>/dev/null)
-            if [ -z "$out" ]; then echo "?"; else echo "$out"; fi
-          }
-          {
-            echo "stock_open=$(count_open 'https://nexus-stock-bot-production.up.railway.app/api/positions')"
-            echo "crypto_open=$(count_open 'https://nexus-crypto-bot-production.up.railway.app/api/positions')"
-            echo "forex_open=$(count_open 'https://nexus-forex-bot-production.up.railway.app/api/positions')"
+            echo "stock_24h=$S_N";   echo "stock_pnl=$S_PNL";   echo "stock_open=$S_OPEN"
+            echo "crypto_24h=$C_N";  echo "crypto_pnl=$C_PNL";  echo "crypto_open=$C_OPEN"
+            echo "forex_24h=$F_N";   echo "forex_pnl=$F_PNL";   echo "forex_open=$F_OPEN"
           } >> "$GITHUB_OUTPUT"
 
       - name: Compose & send Telegram briefing
@@ -130,9 +117,9 @@ jobs:
           C_PNL: ${{ steps.trades.outputs.crypto_pnl }}
           F_TRADES: ${{ steps.trades.outputs.forex_24h }}
           F_PNL: ${{ steps.trades.outputs.forex_pnl }}
-          S_OPEN: ${{ steps.positions.outputs.stock_open }}
-          C_OPEN: ${{ steps.positions.outputs.crypto_open }}
-          F_OPEN: ${{ steps.positions.outputs.forex_open }}
+          S_OPEN: ${{ steps.trades.outputs.stock_open }}
+          C_OPEN: ${{ steps.trades.outputs.crypto_open }}
+          F_OPEN: ${{ steps.trades.outputs.forex_open }}
         run: |
           if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
             echo "::warning::Telegram credentials not configured — skipping send"
@@ -174,9 +161,9 @@ jobs:
           C_PNL: ${{ steps.trades.outputs.crypto_pnl }}
           F_TRADES: ${{ steps.trades.outputs.forex_24h }}
           F_PNL: ${{ steps.trades.outputs.forex_pnl }}
-          S_OPEN: ${{ steps.positions.outputs.stock_open }}
-          C_OPEN: ${{ steps.positions.outputs.crypto_open }}
-          F_OPEN: ${{ steps.positions.outputs.forex_open }}
+          S_OPEN: ${{ steps.trades.outputs.stock_open }}
+          C_OPEN: ${{ steps.trades.outputs.crypto_open }}
+          F_OPEN: ${{ steps.trades.outputs.forex_open }}
         run: |
           {
             echo "## Morning Briefing"
