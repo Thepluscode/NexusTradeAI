@@ -5680,7 +5680,7 @@ app.listen(PORT, async () => {
                 console.log(`🔄 Restored position: ${instrument} LONG ${longUnits} units @ ${avgPrice} (peakPL: $${Math.max(0, hydratedPL).toFixed(2)}, wasPositive: ${hydratedPL > 15})`);
                 // Ensure restored position has a DB trade row
                 if (dbPool) {
-                    const existing = await dbPool.query(`SELECT id, decision_run_id FROM trades WHERE bot='forex' AND symbol=$1 AND status='open' AND user_id IS NULL`, [instrument]);
+                    const existing = await dbPool.query(`SELECT id, decision_run_id, entry_time FROM trades WHERE bot='forex' AND symbol=$1 AND status='open' AND user_id IS NULL`, [instrument]);
                     if (existing.rows.length === 0) {
                         dbForexOpen(instrument, 'long', 'tier1', avgPrice, stopLong, tpLong, longUnits, 'restored', {})
                             .then(id => { const pos = positions.get(instrument); if (pos) pos.dbTradeId = id; console.log(`📝 [DB] Restored ${instrument} LONG persisted (id: ${id})`); })
@@ -5690,6 +5690,14 @@ app.listen(PORT, async () => {
                         if (pos) {
                             pos.dbTradeId = existing.rows[0].id;
                             if (existing.rows[0].decision_run_id != null) pos.decisionRunId = existing.rows[0].decision_run_id;
+                            // [Bugfix 2026-05-07] Time-stops were resetting on every Railway redeploy
+                            // because hydrate set entryTime=now(). Use the DB row's true entry_time
+                            // so minutesHeld reflects actual hold duration. Affects orphan trades
+                            // (e.g., #218 GBP_USD held 11.5h without firing the 6h hard stop).
+                            if (existing.rows[0].entry_time) {
+                                pos.entryTime = new Date(existing.rows[0].entry_time);
+                                console.log(`📝 [DB] ${instrument} LONG restored entryTime from DB: ${pos.entryTime.toISOString()}`);
+                            }
                         }
                         console.log(`📝 [DB] Restored ${instrument} LONG already in DB (id: ${existing.rows[0].id})`);
                     }
@@ -5713,7 +5721,7 @@ app.listen(PORT, async () => {
                 console.log(`🔄 Restored position: ${instrument} SHORT ${Math.abs(shortUnits)} units @ ${avgPrice} (peakPL: $${Math.max(0, hydratedPL).toFixed(2)}, wasPositive: ${hydratedPL > 15})`);
                 // Ensure restored position has a DB trade row
                 if (dbPool) {
-                    const existing = await dbPool.query(`SELECT id, decision_run_id FROM trades WHERE bot='forex' AND symbol=$1 AND status='open' AND user_id IS NULL`, [instrument]);
+                    const existing = await dbPool.query(`SELECT id, decision_run_id, entry_time FROM trades WHERE bot='forex' AND symbol=$1 AND status='open' AND user_id IS NULL`, [instrument]);
                     if (existing.rows.length === 0) {
                         dbForexOpen(instrument, 'short', 'tier1', avgPrice, stopShort, tpShort, shortUnits, 'restored', {})
                             .then(id => { const pos = positions.get(instrument); if (pos) pos.dbTradeId = id; console.log(`📝 [DB] Restored ${instrument} SHORT persisted (id: ${id})`); })
@@ -5723,6 +5731,12 @@ app.listen(PORT, async () => {
                         if (pos) {
                             pos.dbTradeId = existing.rows[0].id;
                             if (existing.rows[0].decision_run_id != null) pos.decisionRunId = existing.rows[0].decision_run_id;
+                            // [Bugfix 2026-05-07] See LONG branch — restore real entry_time from DB
+                            // so time-stops compute against actual hold duration, not hydrate time.
+                            if (existing.rows[0].entry_time) {
+                                pos.entryTime = new Date(existing.rows[0].entry_time);
+                                console.log(`📝 [DB] ${instrument} SHORT restored entryTime from DB: ${pos.entryTime.toISOString()}`);
+                            }
                         }
                         console.log(`📝 [DB] Restored ${instrument} SHORT already in DB (id: ${existing.rows[0].id})`);
                     }
