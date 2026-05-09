@@ -597,6 +597,11 @@ const register = promClient.register; // Use default register
 const { Pool: PgPool } = require('pg');
 let dbPool = null;
 
+// [2026-05-09] Module-scope cache for the System-1 4-state market regime classifier.
+// Set per-symbol in the scan loop right after sharedRegimeDetector.detectRegime() runs.
+// Read in buildCryptoTradeTags() to stamp on trades.market_regime.
+const _cryptoLastMarketRegimeBySymbol = new Map();
+
 async function initTradeDb() {
     if (!process.env.DATABASE_URL) {
         console.log('⚠️  DATABASE_URL not set — auth + trade persistence disabled');
@@ -657,6 +662,7 @@ async function initTradeDb() {
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS signal_score DECIMAL(10,3);
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS entry_context JSONB DEFAULT '{}'::jsonb;
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS decision_run_id INTEGER;
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS market_regime VARCHAR(30); -- [2026-05-09] System-1 4-state classifier value
             CREATE INDEX IF NOT EXISTS idx_trades_bot ON trades(bot);
             CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
             CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time);
@@ -737,9 +743,16 @@ function buildCryptoTradeTags(signal = {}, tier) {
         else if (normalizedTier === 'tier3') regime = 'trend-expansion';
     }
 
+    // [2026-05-09] System-1 4-state classifier value (TRENDING_UP/MEAN_REVERTING/etc.)
+    // Lookup falls back to module cache populated in scan loop. NULL if detector unavailable.
+    const marketRegimeClass = signal.marketRegimeClass
+        || (signal.symbol ? _cryptoLastMarketRegimeBySymbol.get(signal.symbol) : null)
+        || null;
+
     return {
         strategy: normalizedStrategy,
         regime,
+        marketRegimeClass,
         score,
         context: {
             tier: normalizedTier,
@@ -768,12 +781,12 @@ function buildCryptoTradeTags(signal = {}, tier) {
 async function dbCryptoOpen(symbol, tier, entry, stopLoss, takeProfit, quantity, positionSize, signal = {}) {
     if (!dbPool) return null;
     try {
-        const tags = buildCryptoTradeTags(signal, tier);
+        const tags = buildCryptoTradeTags({ ...signal, symbol }, tier);
         const r = await dbPool.query(
-            `INSERT INTO trades (bot,symbol,direction,tier,strategy,regime,status,entry_price,quantity,
+            `INSERT INTO trades (bot,symbol,direction,tier,strategy,regime,market_regime,status,entry_price,quantity,
              position_size_usd,stop_loss,take_profit,entry_time,signal_score,entry_context,rsi,volume_ratio,momentum_pct,decision_run_id)
-             VALUES ('crypto',$1,'long',$2,$3,$4,'open',$5,$6,$7,$8,$9,NOW(),$10,$11::jsonb,$12,$13,$14,$15) RETURNING id`,
-            [symbol, tier, tags.strategy, tags.regime, entry, quantity, positionSize, stopLoss, takeProfit,
+             VALUES ('crypto',$1,'long',$2,$3,$4,$5,'open',$6,$7,$8,$9,$10,NOW(),$11,$12::jsonb,$13,$14,$15,$16) RETURNING id`,
+            [symbol, tier, tags.strategy, tags.regime, tags.marketRegimeClass, entry, quantity, positionSize, stopLoss, takeProfit,
              tags.score, JSON.stringify(tags.context), signal.rsi || null, signal.volumeRatio || null, signal.momentum || null,
              signal.decisionRunId || null]
         );
@@ -2801,6 +2814,7 @@ class CryptoTradingEngine {
                     }));
                     const regimeAnalysis = sharedRegimeDetector.detectRegime(normalizedBars);
                     cryptoRegimeClass = regimeAnalysis.regime;
+                    _cryptoLastMarketRegimeBySymbol.set(symbol, cryptoRegimeClass); // [2026-05-09] cache for trade stamping
                     console.log(`[Crypto Regime] ${symbol}: ${cryptoRegimeClass} (conf: ${regimeAnalysis.confidence.toFixed(2)})`);
                 } catch (e) {
                     console.warn(`[Crypto Regime] Failed for ${symbol}: ${e.message}`);
@@ -5572,12 +5586,12 @@ async function getOrCreateCryptoEngine(userId) {
         userEngine._dbOpen = async function(symbol, tier, entry, stopLoss, takeProfit, quantity, positionSize, signal = {}) {
             if (!dbPool) return null;
             try {
-                const tags = buildCryptoTradeTags(signal, tier);
+                const tags = buildCryptoTradeTags({ ...signal, symbol }, tier);
                 const r = await dbPool.query(
-                    `INSERT INTO trades (user_id,bot,symbol,direction,tier,strategy,regime,status,entry_price,quantity,
+                    `INSERT INTO trades (user_id,bot,symbol,direction,tier,strategy,regime,market_regime,status,entry_price,quantity,
                      position_size_usd,stop_loss,take_profit,entry_time,signal_score,entry_context,rsi,volume_ratio,momentum_pct)
-                     VALUES ($1,'crypto',$2,'long',$3,$4,$5,'open',$6,$7,$8,$9,$10,NOW(),$11,$12::jsonb,$13,$14,$15) RETURNING id`,
-                    [userId, symbol, tier, tags.strategy, tags.regime, entry, quantity, positionSize, stopLoss, takeProfit,
+                     VALUES ($1,'crypto',$2,'long',$3,$4,$5,$6,'open',$7,$8,$9,$10,$11,NOW(),$12,$13::jsonb,$14,$15,$16) RETURNING id`,
+                    [userId, symbol, tier, tags.strategy, tags.regime, tags.marketRegimeClass, entry, quantity, positionSize, stopLoss, takeProfit,
                      tags.score, JSON.stringify(tags.context), signal.rsi || null, signal.volumeRatio || null, signal.momentum || null]
                 );
                 return r.rows[0]?.id;
