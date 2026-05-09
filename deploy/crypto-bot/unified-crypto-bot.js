@@ -1744,6 +1744,13 @@ const CRYPTO_STALENESS_FILTER_ENABLED = process.env.CRYPTO_STALENESS_FILTER === 
 const CRYPTO_STALENESS_LOOKBACK = parseInt(process.env.CRYPTO_STALENESS_LOOKBACK || '5', 10);
 const CRYPTO_STALENESS_MAX_MOVE_PCT = parseFloat(process.env.CRYPTO_STALENESS_MAX_MOVE_PCT || '2.0');
 
+// [2026-05-09] SMA50 downtrend filter tolerance band.
+// Without this, a single tick below SMA50 idles the entire bot. Setting
+// CRYPTO_SMA50_TOLERANCE_PCT=0.002 (default) lets prices within 0.2% of SMA50
+// through, so micro-dips near the trend line don't kill all signals.
+// 2026-05-09 observed: XBT/ETH/SOL all 0.10–0.21% below SMA50 → 0 signals for hours.
+const CRYPTO_SMA50_TOLERANCE_PCT = parseFloat(process.env.CRYPTO_SMA50_TOLERANCE_PCT || '0.002');
+
 // [2026-05-07] Time-stop tuning + momentum-fade exit, both default OFF.
 // Motivation: dashboard shows the 8-hour hard time-stop dominates exits — most
 // momentum trades drift sideways and close near-flat-slightly-negative at 481min.
@@ -2436,8 +2443,12 @@ class CryptoTradingEngine {
             if (!sma20 || !ema9) continue;
 
             // [v6.2] Downtrend skip — if SMA50 available and price below it, skip long entries
-            if (sma50 && data.currentPrice < sma50) {
-                console.log(`🔻 ${symbol}: price $${data.currentPrice.toFixed(2)} below SMA50 $${sma50.toFixed(2)} — skipping (downtrend)`);
+            // [2026-05-09] Tolerance band: micro-dips within CRYPTO_SMA50_TOLERANCE_PCT (default 0.2%)
+            // are allowed through, so a single-tick break of SMA50 doesn't idle the whole bot.
+            const sma50Floor = sma50 ? sma50 * (1 - CRYPTO_SMA50_TOLERANCE_PCT) : null;
+            if (sma50 && data.currentPrice < sma50Floor) {
+                const pctBelow = ((sma50 - data.currentPrice) / sma50 * 100).toFixed(2);
+                console.log(`🔻 ${symbol}: price $${data.currentPrice.toFixed(2)} ${pctBelow}% below SMA50 $${sma50.toFixed(2)} (tolerance ${(CRYPTO_SMA50_TOLERANCE_PCT*100).toFixed(2)}%) — skipping (downtrend)`);
                 continue;
             }
 
