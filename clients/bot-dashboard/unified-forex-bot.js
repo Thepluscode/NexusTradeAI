@@ -119,6 +119,12 @@ const monteCarloSizer = new MonteCarloSizer();
 const { Pool: PgPool } = require('pg');
 let dbPool = null;
 
+// [2026-05-09] Module-scope cache for the System-1 4-state market regime classifier.
+// Set in scanForSignals() right after sharedRegimeDetector.detectRegime() runs.
+// Read in buildForexTradeTags() to stamp on trades.market_regime. Forex-wide (one
+// classification per scan, applies to all 4 pairs).
+let _forexLastMarketRegime = null;
+
 async function initTradeDb() {
     if (!process.env.DATABASE_URL) {
         console.log('⚠️  DATABASE_URL not set — auth + trade persistence disabled');
@@ -179,6 +185,7 @@ async function initTradeDb() {
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS signal_score DECIMAL(10,3);
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS entry_context JSONB DEFAULT '{}'::jsonb;
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS decision_run_id INTEGER;
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS market_regime VARCHAR(30); -- [2026-05-09] System-1 4-state classifier value (TRENDING_UP/MEAN_REVERTING/etc.)
             CREATE INDEX IF NOT EXISTS idx_trades_bot ON trades(bot);
             CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
             CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time);
@@ -243,9 +250,14 @@ function buildForexTradeTags(signal = {}, tier, direction, session) {
         else if (session === 'New York') regime = 'new-york-trend';
     }
 
+    // [2026-05-09] System-1 4-state market regime classifier value (TRENDING_UP/MEAN_REVERTING/etc.)
+    // Falls back to module cache set in scanForSignals(). NULL on first scan or if detector unavailable.
+    const marketRegimeClass = signal.marketRegimeClass || _forexLastMarketRegime || null;
+
     return {
         strategy: normalizedStrategy,
         regime,
+        marketRegimeClass,
         score,
         context: {
             tier: normalizedTier,
@@ -265,6 +277,7 @@ function buildForexTradeTags(signal = {}, tier, direction, session) {
             hasDisplacement: signal.hasDisplacement ?? false,
             fvgCount: signal.fvgCount ?? 0,
             marketRegime: signal.marketRegime ?? null,
+            marketRegimeClass, // [2026-05-09] also kept in entry_context for ML training continuity
             featureSnapshot: signal.featureSnapshot ?? null,
             mlRegime: signal.mlRegime ?? null,
         }
@@ -278,10 +291,10 @@ async function dbForexOpen(pair, direction, tier, entry, stopLoss, takeProfit, u
         const positionSizeUsd = entry > 0 ? parseFloat((absUnits * entry).toFixed(2)) : null;
         const tags = buildForexTradeTags(signal, tier, direction, session);
         const r = await dbPool.query(
-            `INSERT INTO trades (bot,symbol,direction,tier,strategy,regime,status,entry_price,quantity,
+            `INSERT INTO trades (bot,symbol,direction,tier,strategy,regime,market_regime,status,entry_price,quantity,
              position_size_usd,stop_loss,take_profit,entry_time,session,signal_score,entry_context,rsi,volume_ratio,momentum_pct,decision_run_id)
-             VALUES ('forex',$1,$2,$3,$4,$5,'open',$6,$7,$8,$9,$10,NOW(),$11,$12,$13::jsonb,$14,$15,$16,$17) RETURNING id`,
-            [pair, direction, tier, tags.strategy, tags.regime, entry, absUnits, positionSizeUsd, stopLoss, takeProfit,
+             VALUES ('forex',$1,$2,$3,$4,$5,$6,'open',$7,$8,$9,$10,$11,NOW(),$12,$13,$14::jsonb,$15,$16,$17,$18) RETURNING id`,
+            [pair, direction, tier, tags.strategy, tags.regime, tags.marketRegimeClass, entry, absUnits, positionSizeUsd, stopLoss, takeProfit,
              session || null, tags.score, JSON.stringify(tags.context), signal.rsi || null,
              signal.volumeRatio || null, signal.trendStrength || null,
              signal.decisionRunId || null]
@@ -2563,6 +2576,7 @@ async function scanForSignals(heldPositions = positions) {
                 }));
                 const regimeAnalysis = sharedRegimeDetector.detectRegime(normalizedBars);
                 forexRegimeClass = regimeAnalysis.regime;
+                _forexLastMarketRegime = forexRegimeClass; // [2026-05-09] cache for trade stamping
                 console.log(`[4-State Regime] Forex: ${forexRegimeClass} (conf: ${regimeAnalysis.confidence.toFixed(2)})`);
             }
         } catch (e) {
@@ -4870,12 +4884,16 @@ app.get('/api/edge-attribution', async (req, res) => {
         const params = useWindow ? [windowDays, minN] : [minN];
         const minNParamIdx = useWindow ? '$2' : '$1';
 
+        // [2026-05-09] Group by both `regime` (System-3 strategy/session label, populated for all
+        // historical trades) AND `market_regime` (System-1 4-state classifier, NULL for trades
+        // before 2026-05-09 deploy). Old data buckets to '(pre-2026-05-09)' so it stays separable.
         const sql = `
             WITH closed AS (
                 SELECT
                     bot,
                     COALESCE(NULLIF(strategy, ''), '(unknown)') AS strategy,
                     COALESCE(NULLIF(regime, ''), '(unknown)') AS regime,
+                    COALESCE(NULLIF(market_regime, ''), '(pre-2026-05-09)') AS market_regime,
                     ${cleanPnlUsd} AS pnl_usd_clean,
                     ${cleanPnlPct} AS pnl_pct_clean,
                     exit_time
@@ -4884,7 +4902,7 @@ app.get('/api/edge-attribution', async (req, res) => {
                   ${windowFilter}
             )
             SELECT
-                bot, strategy, regime,
+                bot, strategy, regime, market_regime,
                 COUNT(*)::INT AS n,
                 ROUND(100.0 * COUNT(*) FILTER (WHERE pnl_usd_clean > 0) / NULLIF(COUNT(*), 0), 1)::FLOAT AS win_rate_pct,
                 ROUND(COALESCE(SUM(pnl_usd_clean), 0)::numeric, 2)::FLOAT AS total_pnl_usd,
@@ -4894,7 +4912,7 @@ app.get('/api/edge-attribution', async (req, res) => {
                 ROUND((AVG(pnl_pct_clean) + 1.96 * STDDEV(pnl_pct_clean) / SQRT(GREATEST(COUNT(*), 1)))::numeric, 6)::FLOAT AS pnl_pct_ci_high,
                 MAX(exit_time) AS most_recent_trade
             FROM closed
-            GROUP BY bot, strategy, regime
+            GROUP BY bot, strategy, regime, market_regime
             HAVING COUNT(*) >= ${minNParamIdx}
             ORDER BY total_pnl_usd DESC NULLS LAST
         `;
@@ -5147,10 +5165,10 @@ class UserForexEngine {
             const positionSizeUsd = entry > 0 ? parseFloat((absUnits * entry).toFixed(2)) : null;
             const tags = buildForexTradeTags(signal, tier, direction, session);
             const r = await dbPool.query(
-                `INSERT INTO trades (user_id,bot,symbol,direction,tier,strategy,regime,status,entry_price,quantity,
+                `INSERT INTO trades (user_id,bot,symbol,direction,tier,strategy,regime,market_regime,status,entry_price,quantity,
                  position_size_usd,stop_loss,take_profit,entry_time,session,signal_score,entry_context,rsi,volume_ratio,momentum_pct,decision_run_id)
-                 VALUES ($1,'forex',$2,$3,$4,$5,$6,'open',$7,$8,$9,$10,$11,NOW(),$12,$13,$14::jsonb,$15,$16,$17,$18) RETURNING id`,
-                [this.userId, pair, direction, tier, tags.strategy, tags.regime, entry, absUnits, positionSizeUsd, stopLoss, takeProfit,
+                 VALUES ($1,'forex',$2,$3,$4,$5,$6,$7,'open',$8,$9,$10,$11,$12,NOW(),$13,$14,$15::jsonb,$16,$17,$18,$19) RETURNING id`,
+                [this.userId, pair, direction, tier, tags.strategy, tags.regime, tags.marketRegimeClass, entry, absUnits, positionSizeUsd, stopLoss, takeProfit,
                  session || null, tags.score, JSON.stringify(tags.context), signal.rsi || null,
                  signal.volumeRatio || null, signal.trendStrength || null,
                  signal.decisionRunId || null]

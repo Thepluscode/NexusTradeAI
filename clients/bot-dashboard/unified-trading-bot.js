@@ -371,6 +371,7 @@ async function initDb() {
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS agent_confidence REAL;
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS agent_reason TEXT;
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS decision_run_id INTEGER;
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS market_regime VARCHAR(30); -- [2026-05-09] System-1 4-state classifier value
             CREATE INDEX IF NOT EXISTS idx_trades_bot ON trades(bot);
             CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
             CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time);
@@ -1030,11 +1031,11 @@ async function dbTradeOpen(symbol, entryPrice, shares, config, signal, tier, str
     try {
         const tags = buildStockTradeTags(signal, strategy, tier);
         const r = await dbPool.query(
-            `INSERT INTO trades (bot,symbol,direction,tier,strategy,regime,status,entry_price,quantity,
+            `INSERT INTO trades (bot,symbol,direction,tier,strategy,regime,market_regime,status,entry_price,quantity,
              position_size_usd,stop_loss,take_profit,entry_time,signal_score,entry_context,rsi,volume_ratio,momentum_pct,
              agent_approved,agent_confidence,agent_reason,decision_run_id)
-             VALUES ('stock',$1,'long',$2,$3,$4,'open',$5,$6,$7,$8,$9,NOW(),$10,$11::jsonb,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
-            [symbol, tier, tags.strategy, tags.regime, entryPrice, shares, shares * entryPrice,
+             VALUES ('stock',$1,'long',$2,$3,$4,$5,'open',$6,$7,$8,$9,$10,NOW(),$11,$12::jsonb,$13,$14,$15,$16,$17,$18,$19) RETURNING id`,
+            [symbol, tier, tags.strategy, tags.regime, tags.marketRegimeClass, entryPrice, shares, shares * entryPrice,
              config.stopLoss ? entryPrice * (1 - config.stopLoss) : null,
              config.profitTarget ? entryPrice * (1 + config.profitTarget) : null,
              tags.score, JSON.stringify(tags.context),
@@ -1167,9 +1168,14 @@ function buildStockTradeTags(signal = {}, strategy, tier) {
         }
     }
 
+    // [2026-05-09] System-1 4-state market regime classifier value (TRENDING_UP/MEAN_REVERTING/etc.)
+    // Threaded from findOpeningRangeBreakoutSignal where sharedRegimeDetector runs.
+    const marketRegimeClass = signal.marketRegimeClass || null;
+
     return {
         strategy: normalizedStrategy,
         regime,
+        marketRegimeClass,
         score,
         context: {
             tier: tier || signal.tier || null,
@@ -1835,6 +1841,7 @@ function buildOpeningRangeBreakoutCandidate({ symbol, bars, current, rsi, vwap, 
         strategy: 'openingRangeBreakout',
         regime: regimeProfile.regime,
         regimeScore: regimeProfile.quality,
+        marketRegimeClass: regimeClass, // [2026-05-09] System-1 4-state classifier (TRENDING_UP/MEAN_REVERTING/...)
         config: OPENING_RANGE_BREAKOUT_CONFIG,
         entryVolume: recentBreakoutVolume,
         breakoutTrigger: breakoutTrigger.toFixed(2),
@@ -6339,11 +6346,11 @@ class UserTradingEngine {
         try {
             const tags = buildStockTradeTags(signal, strategy, tier);
             const r = await dbPool.query(
-                `INSERT INTO trades (user_id,bot,symbol,direction,tier,strategy,regime,status,entry_price,quantity,
+                `INSERT INTO trades (user_id,bot,symbol,direction,tier,strategy,regime,market_regime,status,entry_price,quantity,
                  position_size_usd,stop_loss,take_profit,entry_time,signal_score,entry_context,rsi,volume_ratio,momentum_pct,
                  agent_approved,agent_confidence,agent_reason,decision_run_id)
-                 VALUES ($1,'stock',$2,'long',$3,$4,$5,'open',$6,$7,$8,$9,$10,NOW(),$11,$12::jsonb,$13,$14,$15,$16,$17,$18,$19) RETURNING id`,
-                [this.userId, symbol, tier, tags.strategy, tags.regime, entryPrice, shares, shares * entryPrice,
+                 VALUES ($1,'stock',$2,'long',$3,$4,$5,$6,'open',$7,$8,$9,$10,$11,NOW(),$12,$13::jsonb,$14,$15,$16,$17,$18,$19,$20) RETURNING id`,
+                [this.userId, symbol, tier, tags.strategy, tags.regime, tags.marketRegimeClass, entryPrice, shares, shares * entryPrice,
                  config.stopLoss ? entryPrice * (1 - config.stopLoss) : null,
                  config.profitTarget ? entryPrice * (1 + config.profitTarget) : null,
                  tags.score, JSON.stringify(tags.context),
