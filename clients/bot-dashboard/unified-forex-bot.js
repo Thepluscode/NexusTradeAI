@@ -4828,6 +4828,97 @@ app.get('/api/trades/summary', async (req, res) => {
     } catch (e) { res.status(500).json({ success: false, error: 'Internal server error', daily: [], totals: [] }); }
 });
 
+// [2026-05-09] Edge attribution — per (bot, strategy, regime) P&L over a time window.
+// Source of truth is `trades` (not the rollup) so we get all 3 bots, time-window slicing,
+// and statistical bands in one query without per-bot write paths to maintain.
+//
+// Query params:
+//   window  — days lookback (default 30, max 365). 0 = all time.
+//   minN    — minimum trades per bucket to include (default 5).
+//
+// Response shape:
+//   { success, window_days, min_n, generated_at, data: [{ bot, strategy, regime,
+//     n, win_rate_pct, total_pnl_usd, avg_pnl_pct, stddev_pnl_pct,
+//     pnl_pct_ci_low, pnl_pct_ci_high, most_recent_trade, status }] }
+//
+// status: 'positive_edge' (95% CI lower > 0), 'negative_edge' (CI upper < 0),
+//         'low_n' (n < 20), 'inconclusive' (CI straddles 0).
+app.get('/api/edge-attribution', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not configured', data: [] });
+    try {
+        // Default: 30 days. Pass window=0 explicitly for all-time. Reject NaN/out-of-range.
+        const windowRaw = req.query.window;
+        let windowDays;
+        if (windowRaw === undefined) {
+            windowDays = 30;
+        } else {
+            const parsed = parseInt(windowRaw, 10);
+            if (!Number.isFinite(parsed)) {
+                return res.status(400).json({ success: false, error: 'window must be an integer (days), or 0 for all time' });
+            }
+            if (parsed < 0 || parsed > 365) {
+                return res.status(400).json({ success: false, error: 'window must be between 0 and 365 days' });
+            }
+            windowDays = parsed;
+        }
+        const useWindow = windowDays > 0;
+        const minN = Math.max(1, Math.min(parseInt(req.query.minN) || 5, 1000));
+
+        const cleanPnlUsd = `CASE WHEN pnl_usd IS NULL OR pnl_usd::text = 'NaN' THEN NULL ELSE pnl_usd::FLOAT END`;
+        const cleanPnlPct = `CASE WHEN pnl_pct IS NULL OR pnl_pct::text = 'NaN' THEN NULL ELSE pnl_pct::FLOAT END`;
+        const windowFilter = useWindow ? `AND COALESCE(exit_time, created_at) >= NOW() - INTERVAL '1 day' * $1` : '';
+        const params = useWindow ? [windowDays, minN] : [minN];
+        const minNParamIdx = useWindow ? '$2' : '$1';
+
+        const sql = `
+            WITH closed AS (
+                SELECT
+                    bot,
+                    COALESCE(NULLIF(strategy, ''), '(unknown)') AS strategy,
+                    COALESCE(NULLIF(regime, ''), '(unknown)') AS regime,
+                    ${cleanPnlUsd} AS pnl_usd_clean,
+                    ${cleanPnlPct} AS pnl_pct_clean,
+                    exit_time
+                FROM trades
+                WHERE status = 'closed'
+                  ${windowFilter}
+            )
+            SELECT
+                bot, strategy, regime,
+                COUNT(*)::INT AS n,
+                ROUND(100.0 * COUNT(*) FILTER (WHERE pnl_usd_clean > 0) / NULLIF(COUNT(*), 0), 1)::FLOAT AS win_rate_pct,
+                ROUND(COALESCE(SUM(pnl_usd_clean), 0)::numeric, 2)::FLOAT AS total_pnl_usd,
+                ROUND(AVG(pnl_pct_clean)::numeric, 6)::FLOAT AS avg_pnl_pct,
+                ROUND(STDDEV(pnl_pct_clean)::numeric, 6)::FLOAT AS stddev_pnl_pct,
+                ROUND((AVG(pnl_pct_clean) - 1.96 * STDDEV(pnl_pct_clean) / SQRT(GREATEST(COUNT(*), 1)))::numeric, 6)::FLOAT AS pnl_pct_ci_low,
+                ROUND((AVG(pnl_pct_clean) + 1.96 * STDDEV(pnl_pct_clean) / SQRT(GREATEST(COUNT(*), 1)))::numeric, 6)::FLOAT AS pnl_pct_ci_high,
+                MAX(exit_time) AS most_recent_trade
+            FROM closed
+            GROUP BY bot, strategy, regime
+            HAVING COUNT(*) >= ${minNParamIdx}
+            ORDER BY total_pnl_usd DESC NULLS LAST
+        `;
+        const r = await dbPool.query(sql, params);
+        const rows = r.rows.map(row => {
+            let status = 'inconclusive';
+            if (row.n < 20) status = 'low_n';
+            else if (row.pnl_pct_ci_low != null && row.pnl_pct_ci_low > 0) status = 'positive_edge';
+            else if (row.pnl_pct_ci_high != null && row.pnl_pct_ci_high < 0) status = 'negative_edge';
+            return { ...row, status };
+        });
+        res.json({
+            success: true,
+            window_days: useWindow ? windowDays : null,
+            min_n: minN,
+            generated_at: new Date().toISOString(),
+            data: rows
+        });
+    } catch (e) {
+        console.error('[edge-attribution]', e.message);
+        res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+});
+
 app.get('/metrics', async (req, res) => {
     try {
         const promClient = require('prom-client');
