@@ -193,6 +193,25 @@ async function initTradeDb() {
             CREATE INDEX IF NOT EXISTS idx_trades_user_bot ON trades(user_id, bot);
             CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy);
             CREATE INDEX IF NOT EXISTS idx_trades_regime ON trades(regime);
+            -- [2026-05-09] strategy_kill_switches: shadow-mode auto-disable list driven by edge-attribution.
+            -- Bots will NOT enforce these flags yet — first we observe the table populating sensibly,
+            -- then a follow-up commit will wire the gate at signal time.
+            CREATE TABLE IF NOT EXISTS strategy_kill_switches (
+                id SERIAL PRIMARY KEY,
+                bot VARCHAR(20) NOT NULL,
+                strategy VARCHAR(50) NOT NULL,
+                market_regime VARCHAR(30) NOT NULL DEFAULT '(any)',
+                n_trades INTEGER NOT NULL,
+                total_pnl_usd FLOAT,
+                avg_pnl_pct FLOAT,
+                pnl_pct_ci_upper FLOAT,
+                disabled_at TIMESTAMPTZ DEFAULT NOW(),
+                expires_at TIMESTAMPTZ,
+                reason TEXT,
+                window_days INTEGER NOT NULL DEFAULT 30,
+                UNIQUE(bot, strategy, market_regime)
+            );
+            CREATE INDEX IF NOT EXISTS idx_kill_switches_lookup ON strategy_kill_switches(bot, strategy, market_regime);
         `);
         console.log('✅ Forex bot: Trades table ready');
         await dbPool.query(`
@@ -4934,6 +4953,105 @@ app.get('/api/edge-attribution', async (req, res) => {
     } catch (e) {
         console.error('[edge-attribution]', e.message);
         res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+});
+
+// [2026-05-09] Auto-disable scanner — populates strategy_kill_switches based on edge-attribution data.
+// SHADOW MODE: bots do not enforce these flags yet. This endpoint is called daily by a GitHub Action;
+// the kill-switch rows it writes are observation-only until a follow-up commit wires the gate at
+// signal-build time. Criteria for flagging: n_trades >= minN AND 95% CI upper bound < 0 (i.e.,
+// strategy is statistically losing money in the chosen window/regime combo).
+app.post('/api/admin/refresh-kill-switches', requireJwtOrApiSecret, async (req, res) => {
+    if (!dbPool) return res.status(503).json({ success: false, error: 'DB not configured' });
+    try {
+        const windowDays = Math.max(7, Math.min(parseInt(req.query.window) || 30, 365));
+        const minN = Math.max(10, Math.min(parseInt(req.query.minN) || 30, 1000));
+        const ttlDays = Math.max(1, Math.min(parseInt(req.query.ttlDays) || 7, 90));
+
+        const cleanPnlUsd = `CASE WHEN pnl_usd IS NULL OR pnl_usd::text = 'NaN' THEN NULL ELSE pnl_usd::FLOAT END`;
+        const cleanPnlPct = `CASE WHEN pnl_pct IS NULL OR pnl_pct::text = 'NaN' THEN NULL ELSE pnl_pct::FLOAT END`;
+        const candidatesSql = `
+            WITH closed AS (
+                SELECT
+                    bot,
+                    COALESCE(NULLIF(strategy, ''), '(unknown)') AS strategy,
+                    COALESCE(NULLIF(market_regime, ''), '(any)') AS market_regime,
+                    ${cleanPnlUsd} AS pnl_usd_clean,
+                    ${cleanPnlPct} AS pnl_pct_clean
+                FROM trades
+                WHERE status = 'closed'
+                  AND COALESCE(exit_time, created_at) >= NOW() - INTERVAL '1 day' * $1
+            )
+            SELECT
+                bot, strategy, market_regime,
+                COUNT(*)::INT AS n,
+                ROUND(COALESCE(SUM(pnl_usd_clean), 0)::numeric, 2)::FLOAT AS total_pnl_usd,
+                ROUND(AVG(pnl_pct_clean)::numeric, 6)::FLOAT AS avg_pnl_pct,
+                ROUND((AVG(pnl_pct_clean) + 1.96 * STDDEV(pnl_pct_clean) / SQRT(GREATEST(COUNT(*), 1)))::numeric, 6)::FLOAT AS ci_upper
+            FROM closed
+            GROUP BY bot, strategy, market_regime
+            HAVING COUNT(*) >= $2
+        `;
+        const { rows } = await dbPool.query(candidatesSql, [windowDays, minN]);
+
+        const flagged = [];
+        const skipped = [];
+        for (const row of rows) {
+            const isLosing = row.ci_upper != null && row.ci_upper < 0;
+            if (!isLosing) { skipped.push({ ...row, why: 'ci_upper>=0' }); continue; }
+            const reason = `auto-disable: n=${row.n}, pnl=$${row.total_pnl_usd}, 95%CI upper=${row.ci_upper.toFixed(4)} (window=${windowDays}d)`;
+            await dbPool.query(`
+                INSERT INTO strategy_kill_switches (bot, strategy, market_regime, n_trades, total_pnl_usd, avg_pnl_pct, pnl_pct_ci_upper, disabled_at, expires_at, reason, window_days)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW() + INTERVAL '1 day' * $8, $9, $10)
+                ON CONFLICT (bot, strategy, market_regime) DO UPDATE SET
+                    n_trades = EXCLUDED.n_trades,
+                    total_pnl_usd = EXCLUDED.total_pnl_usd,
+                    avg_pnl_pct = EXCLUDED.avg_pnl_pct,
+                    pnl_pct_ci_upper = EXCLUDED.pnl_pct_ci_upper,
+                    disabled_at = NOW(),
+                    expires_at = EXCLUDED.expires_at,
+                    reason = EXCLUDED.reason,
+                    window_days = EXCLUDED.window_days
+            `, [row.bot, row.strategy, row.market_regime, row.n, row.total_pnl_usd, row.avg_pnl_pct, row.ci_upper, ttlDays, reason, windowDays]);
+            flagged.push({ ...row, reason });
+        }
+
+        // Clean up expired rows so the table doesn't grow unbounded
+        const expired = await dbPool.query(`DELETE FROM strategy_kill_switches WHERE expires_at < NOW() RETURNING bot, strategy, market_regime`);
+
+        res.json({
+            success: true,
+            mode: 'shadow', // bots do NOT enforce yet
+            window_days: windowDays,
+            min_n: minN,
+            ttl_days: ttlDays,
+            evaluated: rows.length,
+            flagged_count: flagged.length,
+            skipped_count: skipped.length,
+            expired_count: expired.rows.length,
+            flagged,
+            generated_at: new Date().toISOString()
+        });
+    } catch (e) {
+        console.error('[refresh-kill-switches]', e.message);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// [2026-05-09] Read-only inspector for current kill switches. No auth — observability.
+app.get('/api/kill-switches', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not configured', data: [] });
+    try {
+        const r = await dbPool.query(`
+            SELECT bot, strategy, market_regime, n_trades, total_pnl_usd, avg_pnl_pct, pnl_pct_ci_upper,
+                   disabled_at, expires_at, reason, window_days
+            FROM strategy_kill_switches
+            WHERE expires_at IS NULL OR expires_at > NOW()
+            ORDER BY disabled_at DESC
+        `);
+        res.json({ success: true, mode: 'shadow', data: r.rows, count: r.rows.length });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
     }
 });
 
