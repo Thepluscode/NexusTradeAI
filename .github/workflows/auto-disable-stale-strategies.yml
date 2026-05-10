@@ -1,0 +1,61 @@
+name: Auto-disable stale strategies
+
+# Runs daily at 06:00 UTC. Hits POST /api/admin/refresh-kill-switches on the
+# forex-bot, which queries trades over the last 30 days and writes a row into
+# strategy_kill_switches for any (bot, strategy, market_regime) bucket where
+# n>=30 AND 95% CI upper bound < 0 (i.e., statistically losing money).
+#
+# SHADOW MODE: bots do NOT yet read kill_switches at signal time. This job
+# only POPULATES the table so we can observe what would be auto-disabled
+# before any real disabling. A follow-up commit wires the gate.
+#
+# Read endpoint: GET /api/kill-switches (no auth) for inspection.
+# To override defaults manually, curl the endpoint directly with auth.
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # 06:00 UTC daily
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    name: Refresh kill switches
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: POST /api/admin/refresh-kill-switches
+        env:
+          NEXUS_API_SECRET: ${{ secrets.NEXUS_API_SECRET }}
+        run: |
+          if [ -z "$NEXUS_API_SECRET" ]; then
+            echo "::error::NEXUS_API_SECRET secret not configured"
+            exit 1
+          fi
+          URL="https://nexus-forex-bot-production.up.railway.app/api/admin/refresh-kill-switches?window=30&minN=30"
+          RESPONSE=$(curl -s -w '\nHTTP:%{http_code}' --max-time 30 \
+            -X POST \
+            -H "X-Api-Secret: ${NEXUS_API_SECRET}" \
+            "$URL" 2>&1)
+          STATUS=$(echo "$RESPONSE" | grep -oE 'HTTP:[0-9]+' | tail -1 | cut -d: -f2)
+          BODY=$(echo "$RESPONSE" | sed -E 's/HTTP:[0-9]+$//')
+          echo "$BODY"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Refresh failed — HTTP $STATUS"
+            exit 1
+          fi
+          FLAGGED=$(echo "$BODY" | jq '.flagged_count // 0')
+          EVALUATED=$(echo "$BODY" | jq '.evaluated // 0')
+          EXPIRED=$(echo "$BODY" | jq '.expired_count // 0')
+          {
+            echo "## Auto-disable scan"
+            echo
+            echo "- Window: 30d, minN: 30"
+            echo "- Buckets evaluated: ${EVALUATED}"
+            echo "- Newly flagged (statistically losing): ${FLAGGED}"
+            echo "- Expired entries cleaned: ${EXPIRED}"
+            echo
+            echo "**Mode: SHADOW** — bots do not enforce these flags yet."
+            echo
+            echo 'Inspect: `curl https://nexus-forex-bot-production.up.railway.app/api/kill-switches`'
+          } >> "$GITHUB_STEP_SUMMARY"
