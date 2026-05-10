@@ -35,7 +35,7 @@ jobs:
           URL="https://nexus-forex-bot-production.up.railway.app/api/admin/refresh-kill-switches?window=30&minN=30"
           RESPONSE=$(curl -s -w '\nHTTP:%{http_code}' --max-time 30 \
             -X POST \
-            -H "X-Api-Secret: ${NEXUS_API_SECRET}" \
+            -H "Authorization: Bearer ${NEXUS_API_SECRET}" \
             "$URL" 2>&1)
           STATUS=$(echo "$RESPONSE" | grep -oE 'HTTP:[0-9]+' | tail -1 | cut -d: -f2)
           BODY=$(echo "$RESPONSE" | sed -E 's/HTTP:[0-9]+$//')
