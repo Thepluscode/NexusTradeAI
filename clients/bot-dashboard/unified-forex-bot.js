@@ -4909,9 +4909,9 @@ app.get('/api/intraday-equity', async (req, res) => {
         const r = await dbPool.query(`
             WITH hour_grid AS (
                 SELECT generate_series(
-                    date_trunc('hour', NOW() - ($1 || ' hours')::INTERVAL),
+                    date_trunc('hour', NOW() - INTERVAL '1 hour' * $1),
                     date_trunc('hour', NOW()),
-                    '1 hour'::INTERVAL
+                    INTERVAL '1 hour'
                 ) AS hour
             ),
             bot_grid AS (
@@ -4927,7 +4927,7 @@ app.get('/api/intraday-equity', async (req, res) => {
                 FROM trades
                 WHERE status = 'closed'
                   AND exit_time IS NOT NULL
-                  AND exit_time >= NOW() - ($1 || ' hours')::INTERVAL
+                  AND exit_time >= NOW() - INTERVAL '1 hour' * $1
                 GROUP BY bot, hour
             )
             SELECT
