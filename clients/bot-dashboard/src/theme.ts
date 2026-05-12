@@ -185,4 +185,74 @@ const darkTheme = createTheme({
   },
 });
 
+// ── Trading dashboard tokens (Calm Hero + Cockpit overview) ──────────────────
+// Scoped to the OverviewPage redesign. Existing theme above is untouched
+// so other pages keep their current visual language.
+export const tradingTokens = {
+  bg: {
+    default: '#0A0C10',
+    surface: '#11151B',
+    surface2: '#171C24',
+  },
+  border: '#1F2630',
+  borderStrong: '#2A323D',
+  text: {
+    primary: '#E7ECF3',
+    secondary: '#8A94A6',
+    muted: '#5A6473',
+  },
+  status: {
+    success: '#3FB950',
+    error: '#F85149',
+    warning: '#D29922',
+    info: '#58A6FF',
+  },
+  font: {
+    sans: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    mono: '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, "Cascadia Code", monospace',
+  },
+} as const;
+
+export const tradingTypography = {
+  hero: {
+    fontFamily: tradingTokens.font.sans,
+    fontSize: '3.5rem',
+    lineHeight: 1.143,
+    fontWeight: 600,
+    letterSpacing: '-0.02em',
+    fontVariantNumeric: 'tabular-nums' as const,
+  },
+  h4: {
+    fontFamily: tradingTokens.font.sans,
+    fontSize: '1.75rem',
+    lineHeight: 1.286,
+    fontWeight: 500,
+    letterSpacing: '-0.015em',
+    fontVariantNumeric: 'tabular-nums' as const,
+  },
+  h6: {
+    fontFamily: tradingTokens.font.sans,
+    fontSize: '1.125rem',
+    lineHeight: 1.333,
+    fontWeight: 600,
+    letterSpacing: '-0.01em',
+  },
+  body1: { fontFamily: tradingTokens.font.sans, fontSize: '0.875rem', lineHeight: 1.571 },
+  body2: { fontFamily: tradingTokens.font.sans, fontSize: '0.8125rem', lineHeight: 1.538 },
+  overline: {
+    fontFamily: tradingTokens.font.sans,
+    fontSize: '0.6875rem',
+    lineHeight: 1.455,
+    letterSpacing: '0.08em',
+    textTransform: 'uppercase' as const,
+    fontWeight: 600,
+  },
+  monoNum: {
+    fontFamily: tradingTokens.font.mono,
+    fontSize: '0.8125rem',
+    lineHeight: 1.538,
+    fontVariantNumeric: 'tabular-nums' as const,
+  },
+};
+
 export default darkTheme;

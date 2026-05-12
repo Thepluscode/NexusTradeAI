@@ -7,10 +7,8 @@ import {
 } from '@mui/material';
 import {
     Bolt, CheckCircle, Speed, Security, Psychology, TrendingUp,
-    Code, ArrowForward, ExpandMore, QueryStats, Public, Timer,
+    Code, ArrowForward, ExpandMore,
 } from '@mui/icons-material';
-
-const BRIDGE_URL = 'https://nexus-strategy-bridge-production.up.railway.app';
 
 function FeatureCard({ icon, title, desc }: { icon: React.ReactNode; title: string; desc: string }) {
     return (
@@ -34,9 +32,9 @@ export default function LandingPage() {
         <>
             <Helmet>
                 <title>NexusTradeAI — AI Trade Signal Evaluator API</title>
-                <meta name="description" content="Get AI-powered GO/NO-GO decisions on any trade signal. Multi-agent pipeline analyzes stocks, forex, and crypto with confidence scores, risk flags, and reasoning." />
+                <meta name="description" content="Get AI-powered enter or skip decisions on any trade signal. Multi-agent pipeline analyzes stocks, forex, and crypto with confidence scores, risk flags, and reasoning." />
                 <meta property="og:title" content="NexusTradeAI — AI Trade Signal Evaluator API" />
-                <meta property="og:description" content="AI-powered trade evaluation for stocks, forex, and crypto. One API call, instant GO/NO-GO decision." />
+                <meta property="og:description" content="AI-powered trade evaluation for stocks, forex, and crypto. One API call, instant enter or skip decision." />
                 <meta property="og:type" content="website" />
             </Helmet>
 
@@ -112,7 +110,7 @@ export default function LandingPage() {
                             background: 'linear-gradient(135deg, #e6edf3 0%, #8b949e 100%)',
                             WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
                         }}>
-                            AI-Powered GO/NO-GO<br />for Every Trade Signal
+                            AI-Powered enter or skip<br />for Every Trade Signal
                         </Typography>
                         <Typography variant="h6" sx={{
                             color: 'text.secondary', fontWeight: 400, maxWidth: 600, mx: 'auto', mb: 4,
@@ -153,39 +151,6 @@ export default function LandingPage() {
                     </Container>
                 </Box>
 
-                {/* ── Code Example ─────────────────────────────────────── */}
-                <Container maxWidth="md" sx={{ pb: { xs: 6, md: 10 } }}>
-                    <Paper sx={{
-                        bgcolor: 'rgba(0,0,0,0.4)', borderRadius: 3,
-                        border: '1px solid rgba(255,255,255,0.08)',
-                        overflow: 'hidden',
-                    }}>
-                        <Box sx={{
-                            px: 2.5, py: 1, display: 'flex', alignItems: 'center', gap: 1,
-                            bgcolor: 'rgba(255,255,255,0.03)',
-                            borderBottom: '1px solid rgba(255,255,255,0.06)',
-                        }}>
-                            <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: '#ef4444' }} />
-                            <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: '#f59e0b' }} />
-                            <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: '#10b981' }} />
-                            <Typography variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>Terminal</Typography>
-                        </Box>
-                        <Box component="pre" sx={{
-                            m: 0, p: 2.5, fontSize: '0.82rem', lineHeight: 1.7,
-                            fontFamily: '"JetBrains Mono", "Fira Code", monospace',
-                            color: '#e6edf3', overflowX: 'auto',
-                        }}>
-                            <Box component="span" sx={{ color: '#8b949e' }}>{'# One API call → AI GO/NO-GO decision\n'}</Box>
-                            <Box component="span" sx={{ color: '#79c0ff' }}>{'curl '}</Box>
-                            {`-X POST ${BRIDGE_URL}/api/v1/evaluate \\\n`}
-                            {'  -H "X-API-Key: ntai_live_your_key" \\\n'}
-                            {'  -d \'{"symbol":"NVDA","price":875,"direction":"long","rsi":62}\'\n\n'}
-                            <Box component="span" sx={{ color: '#8b949e' }}>{'# Response:\n'}</Box>
-                            <Box component="span" sx={{ color: '#7ee787' }}>{`{\n  "should_enter": true,\n  "confidence": 0.78,\n  "reason": "Strong upward momentum with healthy RSI...",\n  "risk_flags": ["earnings_proximity"],\n  "position_size_multiplier": 1.25\n}`}</Box>
-                        </Box>
-                    </Paper>
-                </Container>
-
                 {/* ── Features Grid ────────────────────────────────────── */}
                 <Box sx={{ bgcolor: 'rgba(255,255,255,0.01)', py: { xs: 6, md: 10 }, borderTop: '1px solid rgba(255,255,255,0.04)' }}>
                     <Container maxWidth="lg">
@@ -209,7 +174,7 @@ export default function LandingPage() {
                             <FeatureCard
                                 icon={<Speed sx={{ fontSize: 32 }} />}
                                 title="One API Call"
-                                desc="Send symbol, price, and whatever indicators you have. Get GO/NO-GO with confidence, reasoning, and risk flags in ~8 seconds."
+                                desc="Send symbol, price, and whatever indicators you have. Get enter or skip with confidence, reasoning, and risk flags in ~8 seconds."
                             />
                             <FeatureCard
                                 icon={<Security sx={{ fontSize: 32 }} />}
@@ -272,6 +237,7 @@ export default function LandingPage() {
                                 </Box>
                                 <Button
                                     fullWidth
+                                    disabled={plan.cta === 'Subscribe'}
                                     variant={plan.primary ? 'contained' : 'outlined'}
                                     onClick={() => navigate('/login')}
                                     sx={{
@@ -281,7 +247,7 @@ export default function LandingPage() {
                                         } : {}),
                                     }}
                                 >
-                                    {plan.cta}
+                                    {plan.cta === 'Subscribe' ? 'Coming soon' : plan.cta}
                                 </Button>
                             </Paper>
                         ))}
@@ -296,7 +262,7 @@ export default function LandingPage() {
                         </Typography>
                         {[
                             { step: '1', title: 'Get your API key', desc: 'Sign up, create a key from the dashboard. Takes 30 seconds.' },
-                            { step: '2', title: 'Send your signal', desc: 'POST to /api/v1/evaluate with symbol, price, and indicators. Get back GO/NO-GO with reasoning.' },
+                            { step: '2', title: 'Send your signal', desc: 'POST to /api/v1/evaluate with symbol, price, and indicators. Get back enter or skip with reasoning.' },
                             { step: '3', title: 'Report outcomes', desc: 'Tell us how the trade went. The AI learns your patterns and gets better over time.' },
                         ].map((item, i) => (
                             <Box key={item.step} sx={{
@@ -319,38 +285,6 @@ export default function LandingPage() {
                     </Container>
                 </Box>
 
-                {/* ── Trust Signals ───────────────────────────────────── */}
-                <Container maxWidth="lg" sx={{ py: { xs: 6, md: 10 } }}>
-                    <Box sx={{
-                        display: 'grid',
-                        gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' },
-                        gap: 3,
-                    }}>
-                        {[
-                            { icon: <QueryStats sx={{ fontSize: 28 }} />, value: '1,000+', label: 'API Evaluations Served' },
-                            { icon: <Public sx={{ fontSize: 28 }} />, value: '3 Markets', label: 'Stocks, Forex & Crypto' },
-                            { icon: <Timer sx={{ fontSize: 28 }} />, value: '99.9%', label: 'Uptime SLA' },
-                            { icon: <Speed sx={{ fontSize: 28 }} />, value: '<8s', label: 'Avg Response Time' },
-                        ].map(stat => (
-                            <Paper key={stat.label} sx={{
-                                p: 3, textAlign: 'center',
-                                border: '1px solid rgba(255,255,255,0.06)',
-                                bgcolor: 'rgba(255,255,255,0.02)',
-                            }}>
-                                <Box sx={{ color: '#3b82f6', mb: 1.5 }}>{stat.icon}</Box>
-                                <Typography variant="h4" fontWeight={900} sx={{
-                                    mb: 0.5,
-                                    background: 'linear-gradient(135deg, #e6edf3 0%, #8b949e 100%)',
-                                    WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-                                }}>
-                                    {stat.value}
-                                </Typography>
-                                <Typography variant="body2" color="text.secondary">{stat.label}</Typography>
-                            </Paper>
-                        ))}
-                    </Box>
-                </Container>
-
                 {/* ── FAQ ─────────────────────────────────────────────── */}
                 <Box sx={{ bgcolor: 'rgba(255,255,255,0.01)', py: { xs: 6, md: 10 }, borderTop: '1px solid rgba(255,255,255,0.04)' }}>
                     <Container maxWidth="md">
@@ -363,7 +297,7 @@ export default function LandingPage() {
                         {[
                             {
                                 q: 'What is NexusTradeAI?',
-                                a: 'NexusTradeAI is an AI-powered trade signal evaluator API. You send us a trade signal (symbol, price, direction, indicators) and our multi-agent AI pipeline returns a GO/NO-GO decision with a confidence score, reasoning, and risk flags.',
+                                a: 'NexusTradeAI is an AI-powered trade signal evaluator API. You send us a trade signal (symbol, price, direction, indicators) and our multi-agent AI pipeline returns an enter or skip decision with a confidence score, reasoning, and risk flags.',
                             },
                             {
                                 q: 'How accurate are the signals?',
@@ -371,7 +305,7 @@ export default function LandingPage() {
                             },
                             {
                                 q: 'Is it free to use?',
-                                a: 'Yes! The Free tier gives you 100 evaluations per month at no cost, forever. No credit card required. When you need more volume, Pro ($49/mo) offers 5,000 evaluations and Enterprise ($499/mo) is unlimited.',
+                                a: 'Yes. The Free tier gives you 100 evaluations per month at no cost, forever — no credit card required. Pro and Enterprise tiers are coming soon. Sign up now and you\'ll get first access when they go live.',
                             },
                             {
                                 q: 'What markets are supported?',
@@ -383,7 +317,7 @@ export default function LandingPage() {
                             },
                             {
                                 q: 'What are the rate limits?',
-                                a: 'Free tier: 100 evaluations per month. Pro tier: 5,000 evaluations per month with priority queue. Enterprise: unlimited evaluations with dedicated capacity. All tiers share the same AI pipeline quality.',
+                                a: 'The Free tier currently includes 100 evaluations per month, running on the same AI pipeline as paid tiers will. Pro (5,000/mo with priority queue) and Enterprise (unlimited with dedicated capacity) are coming soon.',
                             },
                         ].map((item, i) => (
                             <Accordion

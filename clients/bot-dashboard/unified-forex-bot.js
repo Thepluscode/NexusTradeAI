@@ -4861,6 +4861,42 @@ app.get('/api/trades/summary', async (req, res) => {
     } catch (e) { res.status(500).json({ success: false, error: 'Internal server error', daily: [], totals: [] }); }
 });
 
+// [2026-05-12] Recent trades — cross-bot feed for the overview dashboard.
+// Read-only query; does not affect trading logic. Returns most-recent closed
+// trades across stock, forex, and crypto bots, normalized to the shape the
+// frontend TradesFeedPanel consumes.
+app.get('/api/recent-trades', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not configured', data: [] });
+    try {
+        const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 20, 100));
+        const r = await dbPool.query(`
+            SELECT id, bot, symbol, direction, pnl_usd, pnl_pct, close_reason, exit_time
+            FROM trades
+            WHERE status = 'closed' AND exit_time IS NOT NULL
+            ORDER BY exit_time DESC
+            LIMIT $1
+        `, [limit]);
+        const data = r.rows.map(row => {
+            const dir = String(row.direction || '').toLowerCase();
+            const side = (dir === 'short' || dir === 'sell') ? 'SHORT' : 'LONG';
+            return {
+                id: String(row.id),
+                symbol: row.symbol,
+                bot: row.bot,
+                side,
+                pnl_usd: parseFloat(row.pnl_usd) || 0,
+                pnl_pct: parseFloat(row.pnl_pct) || 0,
+                exit_reason: row.close_reason || '',
+                closed_at: row.exit_time ? new Date(row.exit_time).toISOString() : new Date().toISOString(),
+            };
+        });
+        res.json({ success: true, count: data.length, data });
+    } catch (e) {
+        console.error('[recent-trades]', e.message);
+        res.status(500).json({ success: false, error: 'Internal server error', data: [] });
+    }
+});
+
 // [2026-05-09] Edge attribution — per (bot, strategy, regime) P&L over a time window.
 // Source of truth is `trades` (not the rollup) so we get all 3 bots, time-window slicing,
 // and statistical bands in one query without per-bot write paths to maintain.
