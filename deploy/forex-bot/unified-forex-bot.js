@@ -4933,9 +4933,10 @@ app.get('/api/intraday-equity', async (req, res) => {
             SELECT
                 bg.bot,
                 bg.hour,
-                COALESCE(h.pnl_hour, 0)::FLOAT AS pnl_hour,
-                SUM(COALESCE(h.pnl_hour, 0))::FLOAT
-                    OVER (PARTITION BY bg.bot ORDER BY bg.hour) AS cum_pnl
+                COALESCE(h.pnl_hour, 0) AS pnl_hour,
+                SUM(COALESCE(h.pnl_hour, 0)) OVER (
+                    PARTITION BY bg.bot ORDER BY bg.hour
+                ) AS cum_pnl
             FROM bot_grid bg
             LEFT JOIN hourly h ON h.bot = bg.bot AND h.hour = bg.hour
             ORDER BY bg.bot, bg.hour
