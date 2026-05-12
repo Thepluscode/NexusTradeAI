@@ -1,17 +1,9 @@
-import { Box, Stack, Typography } from '@mui/material';
+import { Box, Stack, Typography, Skeleton } from '@mui/material';
 import { AreaChart, Area, ResponsiveContainer } from 'recharts';
+import { useQuery } from '@tanstack/react-query';
 import { tradingTokens, tradingTypography } from '@/theme';
+import { fetchIntradayEquity } from './api';
 import type { BotKey } from './types';
-
-interface EquityCurvePanelProps {
-  curves?: Record<BotKey, number[]>;
-}
-
-const DEFAULT_CURVES: Record<BotKey, number[]> = {
-  stock: Array.from({ length: 60 }, (_, i) => 52000 + Math.sin(i / 6) * 180 + i * 4),
-  forex: Array.from({ length: 60 }, (_, i) => 48000 - Math.cos(i / 5) * 90 + i * 0.5),
-  crypto: Array.from({ length: 60 }, (_, i) => 46200 + Math.sin(i / 4) * 220 + i * 12),
-};
 
 const BOT_LABELS: Record<BotKey, string> = {
   stock: 'Stock',
@@ -21,21 +13,28 @@ const BOT_LABELS: Record<BotKey, string> = {
 
 function rowColor(series: number[]): string {
   if (series.length < 2) return tradingTokens.text.muted;
-  const start = series[0];
-  const end = series[series.length - 1];
-  return end >= start ? tradingTokens.status.success : tradingTokens.status.error;
+  const last = series[series.length - 1];
+  if (last > 0) return tradingTokens.status.success;
+  if (last < 0) return tradingTokens.status.error;
+  return tradingTokens.text.muted;
 }
 
-function pctChange(series: number[]): string {
-  if (series.length < 2) return '0.00%';
-  const start = series[0];
-  const end = series[series.length - 1];
-  const pct = ((end - start) / start) * 100;
-  const sign = pct >= 0 ? '+' : '−';
-  return `${sign}${Math.abs(pct).toFixed(2)}%`;
+function formatDelta(series: number[]): string {
+  if (series.length === 0) return '$0.00';
+  const last = series[series.length - 1];
+  const sign = last >= 0 ? '+' : '−';
+  return `${sign}$${Math.abs(last).toFixed(2)}`;
 }
 
-export default function EquityCurvePanel({ curves = DEFAULT_CURVES }: EquityCurvePanelProps) {
+export default function EquityCurvePanel() {
+  const { data, isLoading } = useQuery({
+    queryKey: ['intradayEquity', 24],
+    queryFn: () => fetchIntradayEquity(24),
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+
+  const curves: Record<BotKey, number[]> = data ?? { stock: [], forex: [], crypto: [] };
   const bots: BotKey[] = ['stock', 'forex', 'crypto'];
 
   return (
@@ -56,18 +55,20 @@ export default function EquityCurvePanel({ curves = DEFAULT_CURVES }: EquityCurv
         sx={{ px: 3, py: 1.5, borderBottom: `1px solid ${tradingTokens.border}` }}
       >
         <Typography sx={{ ...tradingTypography.h6, color: tradingTokens.text.primary }}>
-          Equity · 24h
+          Realized P&L · 24h
         </Typography>
         <Typography sx={{ ...tradingTypography.overline, color: tradingTokens.text.muted }}>
-          stacked sparklines
+          cumulative per bot
         </Typography>
       </Stack>
 
       <Box sx={{ flex: 1, px: 3, py: 1.5, display: 'flex', flexDirection: 'column', gap: 1 }}>
         {bots.map((key) => {
-          const series = curves[key];
+          const series = curves[key] ?? [];
           const color = rowColor(series);
-          const data = series.map((y, i) => ({ x: i, y }));
+          const hasData = series.length > 0;
+          const chartData = series.map((y, i) => ({ x: i, y }));
+
           return (
             <Stack key={key} direction="row" alignItems="center" spacing={2} sx={{ flex: 1 }}>
               <Typography
@@ -81,35 +82,52 @@ export default function EquityCurvePanel({ curves = DEFAULT_CURVES }: EquityCurv
                 {BOT_LABELS[key]}
               </Typography>
               <Box sx={{ flex: 1, height: '100%', minHeight: 0 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={data} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
-                    <defs>
-                      <linearGradient id={`grad-${key}`} x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor={color} stopOpacity={0.25} />
-                        <stop offset="100%" stopColor={color} stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <Area
-                      type="monotone"
-                      dataKey="y"
-                      stroke={color}
-                      strokeWidth={1.5}
-                      fill={`url(#grad-${key})`}
-                      isAnimationActive={false}
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
+                {isLoading ? (
+                  <Skeleton variant="rectangular" height={32} sx={{ borderRadius: '4px' }} />
+                ) : !hasData ? (
+                  <Box
+                    sx={{
+                      height: '100%',
+                      display: 'flex',
+                      alignItems: 'center',
+                      px: 1,
+                    }}
+                  >
+                    <Typography sx={{ ...tradingTypography.body2, color: tradingTokens.text.muted, fontSize: '0.75rem' }}>
+                      no closed trades in 24h
+                    </Typography>
+                  </Box>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={chartData} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
+                      <defs>
+                        <linearGradient id={`grad-${key}`} x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor={color} stopOpacity={0.25} />
+                          <stop offset="100%" stopColor={color} stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <Area
+                        type="monotone"
+                        dataKey="y"
+                        stroke={color}
+                        strokeWidth={1.5}
+                        fill={`url(#grad-${key})`}
+                        isAnimationActive={false}
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                )}
               </Box>
               <Typography
                 sx={{
                   ...tradingTypography.monoNum,
-                  color,
-                  width: 64,
+                  color: hasData ? color : tradingTokens.text.muted,
+                  width: 72,
                   textAlign: 'right',
                   flexShrink: 0,
                 }}
               >
-                {pctChange(series)}
+                {isLoading ? '…' : hasData ? formatDelta(series) : '—'}
               </Typography>
             </Stack>
           );

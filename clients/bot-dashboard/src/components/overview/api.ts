@@ -90,6 +90,31 @@ interface KillSwitchResponse {
   count: number;
 }
 
+interface IntradayEquityResponse {
+  success: boolean;
+  hours: number;
+  generated_at: string;
+  data: Partial<Record<BotKey, number[]>>;
+}
+
+export async function fetchIntradayEquity(hours = 24): Promise<Record<BotKey, number[]>> {
+  const empty: Record<BotKey, number[]> = { stock: [], forex: [], crypto: [] };
+  try {
+    const res = await axios.get<IntradayEquityResponse>(
+      `${SERVICE_URLS.forexBot}/api/intraday-equity`,
+      { params: { hours }, timeout: 6000 },
+    );
+    if (!res.data?.success || !res.data.data) return empty;
+    return {
+      stock: res.data.data.stock ?? [],
+      forex: res.data.data.forex ?? [],
+      crypto: res.data.data.crypto ?? [],
+    };
+  } catch {
+    return empty;
+  }
+}
+
 interface RecentTradesResponse {
   success: boolean;
   count: number;

@@ -4897,6 +4897,65 @@ app.get('/api/recent-trades', async (req, res) => {
     }
 });
 
+// [2026-05-12] Intraday equity curve — per-bot cumulative realized P&L over
+// an hourly time window. Read-only; does not affect trading. The frontend
+// renders this as a 24h equity-curve sparkline per bot. Note: this is
+// REALIZED P&L curve, not account equity (we don't snapshot equity yet).
+app.get('/api/intraday-equity', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not configured', data: {} });
+    try {
+        const hours = Math.max(1, Math.min(parseInt(req.query.hours) || 24, 168));
+        const cleanPnlUsd = `CASE WHEN pnl_usd IS NULL OR pnl_usd::text = 'NaN' THEN 0 ELSE pnl_usd END`;
+        const r = await dbPool.query(`
+            WITH hour_grid AS (
+                SELECT generate_series(
+                    date_trunc('hour', NOW() - ($1 || ' hours')::INTERVAL),
+                    date_trunc('hour', NOW()),
+                    '1 hour'::INTERVAL
+                ) AS hour
+            ),
+            bot_grid AS (
+                SELECT b.bot, h.hour
+                FROM (SELECT unnest(ARRAY['stock','forex','crypto']) AS bot) b
+                CROSS JOIN hour_grid h
+            ),
+            hourly AS (
+                SELECT
+                    bot,
+                    date_trunc('hour', exit_time) AS hour,
+                    SUM(${cleanPnlUsd})::FLOAT AS pnl_hour
+                FROM trades
+                WHERE status = 'closed'
+                  AND exit_time IS NOT NULL
+                  AND exit_time >= NOW() - ($1 || ' hours')::INTERVAL
+                GROUP BY bot, hour
+            )
+            SELECT
+                bg.bot,
+                bg.hour,
+                COALESCE(h.pnl_hour, 0)::FLOAT AS pnl_hour,
+                SUM(COALESCE(h.pnl_hour, 0))::FLOAT
+                    OVER (PARTITION BY bg.bot ORDER BY bg.hour) AS cum_pnl
+            FROM bot_grid bg
+            LEFT JOIN hourly h ON h.bot = bg.bot AND h.hour = bg.hour
+            ORDER BY bg.bot, bg.hour
+        `, [hours]);
+        const grouped = { stock: [], forex: [], crypto: [] };
+        for (const row of r.rows) {
+            if (grouped[row.bot]) grouped[row.bot].push(parseFloat(row.cum_pnl) || 0);
+        }
+        res.json({
+            success: true,
+            hours,
+            generated_at: new Date().toISOString(),
+            data: grouped,
+        });
+    } catch (e) {
+        console.error('[intraday-equity]', e.message);
+        res.status(500).json({ success: false, error: 'Internal server error', data: {} });
+    }
+});
+
 // [2026-05-09] Edge attribution — per (bot, strategy, regime) P&L over a time window.
 // Source of truth is `trades` (not the rollup) so we get all 3 bots, time-window slicing,
 // and statistical bands in one query without per-bot write paths to maintain.
