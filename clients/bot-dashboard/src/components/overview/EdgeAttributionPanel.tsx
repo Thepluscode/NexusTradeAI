@@ -1,9 +1,19 @@
 import { Box, Stack, Typography, Skeleton } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
+import { useMemo } from 'react';
 import { tradingTokens, tradingTypography } from '@/theme';
 import CIBar from './CIBar';
 import { fetchEdgeAttribution } from './api';
 import type { EdgeAttributionRow, EdgeStatus } from './types';
+
+interface EdgeAttributionPanelProps {
+  /**
+   * When `prominent` is true the panel takes the full available height,
+   * shows a "Top edge today" callout band above the table, and stretches
+   * to fill its parent. Used by the edge-first OverviewPage layout.
+   */
+  prominent?: boolean;
+}
 
 const STATUS_LABEL: Record<EdgeStatus, string> = {
   positive: 'POSITIVE',
@@ -28,7 +38,7 @@ function statusRank(s: EdgeStatus): number {
   return s === 'positive' ? 0 : s === 'negative' ? 1 : s === 'inconclusive' ? 2 : 3;
 }
 
-export default function EdgeAttributionPanel() {
+export default function EdgeAttributionPanel({ prominent = false }: EdgeAttributionPanelProps) {
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['edgeAttribution', 30, 10],
     queryFn: () => fetchEdgeAttribution(30, 10),
@@ -36,16 +46,29 @@ export default function EdgeAttributionPanel() {
     staleTime: 15_000,
   });
 
-  const rows: EdgeAttributionRow[] = (data ?? []).slice().sort((a, b) => {
-    const r = statusRank(a.status) - statusRank(b.status);
-    if (r !== 0) return r;
-    return Math.abs(b.total_pnl_usd) - Math.abs(a.total_pnl_usd);
-  });
+  const rows: EdgeAttributionRow[] = useMemo(
+    () =>
+      (data ?? []).slice().sort((a, b) => {
+        const r = statusRank(a.status) - statusRank(b.status);
+        if (r !== 0) return r;
+        return Math.abs(b.total_pnl_usd) - Math.abs(a.total_pnl_usd);
+      }),
+    [data],
+  );
+
+  // The "winning bucket" — best positive-edge row (largest lower-CI bound
+  // among positive rows). Surfaces only when a row is actually positive.
+  const topEdge = useMemo(() => {
+    const positives = rows.filter((r) => r.status === 'positive');
+    if (positives.length === 0) return null;
+    return positives.slice().sort((a, b) => b.pnl_pct_ci_low - a.pnl_pct_ci_low)[0];
+  }, [rows]);
 
   return (
     <Box
       sx={{
-        height: 480,
+        height: prominent ? '100%' : 480,
+        minHeight: prominent ? 560 : undefined,
         background: tradingTokens.bg.surface,
         border: `1px solid ${tradingTokens.border}`,
         borderRadius: '8px',
@@ -59,13 +82,89 @@ export default function EdgeAttributionPanel() {
         justifyContent="space-between"
         sx={{ px: 3, py: 2, borderBottom: `1px solid ${tradingTokens.border}` }}
       >
-        <Typography sx={{ ...tradingTypography.h6, color: tradingTokens.text.primary }}>
-          Edge Attribution
-        </Typography>
+        <Stack>
+          <Typography sx={{ ...tradingTypography.h6, color: tradingTokens.text.primary }}>
+            {prominent ? 'Where is the edge today?' : 'Edge Attribution'}
+          </Typography>
+          {prominent && (
+            <Typography
+              sx={{
+                ...tradingTypography.body2,
+                color: tradingTokens.text.secondary,
+                fontSize: '0.75rem',
+              }}
+            >
+              30-day per-bucket P&L with 95% confidence interval. Sorted positive → negative → inconclusive.
+            </Typography>
+          )}
+        </Stack>
         <Typography sx={{ ...tradingTypography.overline, color: tradingTokens.text.muted }}>
           window 30d · 95% CI · minN 10
         </Typography>
       </Stack>
+
+      {prominent && topEdge && (
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 2,
+            px: 3,
+            py: 1.5,
+            background: `${tradingTokens.status.success}0F`,
+            borderBottom: `1px solid ${tradingTokens.border}`,
+          }}
+        >
+          <Typography
+            sx={{
+              ...tradingTypography.overline,
+              color: tradingTokens.status.success,
+              fontWeight: 700,
+              letterSpacing: '0.1em',
+            }}
+          >
+            TOP EDGE
+          </Typography>
+          <Typography sx={{ ...tradingTypography.body1, color: tradingTokens.text.primary, fontWeight: 600 }}>
+            {topEdge.strategy}{' '}
+            <Box component="span" sx={{ color: tradingTokens.text.secondary, fontWeight: 400, textTransform: 'uppercase', fontSize: '0.75rem', ml: 0.5 }}>
+              · {topEdge.bot}
+            </Box>
+          </Typography>
+          <Box sx={{ flex: 1 }} />
+          <Typography
+            sx={{
+              ...tradingTypography.monoNum,
+              color: tradingTokens.status.success,
+              fontSize: '0.9375rem',
+              fontWeight: 600,
+            }}
+          >
+            {formatUSD(topEdge.total_pnl_usd)}
+          </Typography>
+          <Typography sx={{ ...tradingTypography.body2, color: tradingTokens.text.secondary, fontSize: '0.75rem' }}>
+            n={topEdge.n} · WR {topEdge.win_rate_pct.toFixed(1)}% · CI [
+            {(topEdge.pnl_pct_ci_low * 100).toFixed(2)}%,{' '}
+            {(topEdge.pnl_pct_ci_high * 100).toFixed(2)}%]
+          </Typography>
+        </Box>
+      )}
+
+      {prominent && !topEdge && !isLoading && !isError && rows.length > 0 && (
+        <Box
+          sx={{
+            px: 3,
+            py: 1.25,
+            background: tradingTokens.bg.surface2,
+            borderBottom: `1px solid ${tradingTokens.border}`,
+          }}
+        >
+          <Typography sx={{ ...tradingTypography.body2, color: tradingTokens.text.secondary, fontSize: '0.8125rem' }}>
+            No positive-edge bucket yet — every strategy's 95% CI still straddles or crosses zero.
+            Keep observing.
+          </Typography>
+        </Box>
+      )}
 
       <Box sx={{ flex: 1, overflow: 'auto' }}>
         <Box
@@ -129,7 +228,6 @@ export default function EdgeAttributionPanel() {
         {rows.map((row) => (
           <Box
             key={`${row.bot}-${row.strategy}`}
-            onClick={() => console.log('Edge row:', row)}
             sx={{
               display: 'grid',
               gridTemplateColumns: '1.4fr 0.8fr 0.5fr 0.7fr 0.9fr 1.6fr 1fr',
@@ -137,7 +235,6 @@ export default function EdgeAttributionPanel() {
               px: 3,
               py: 1.5,
               borderBottom: `1px solid ${tradingTokens.border}`,
-              cursor: 'pointer',
               transition: 'background 150ms ease',
               '&:hover': { background: tradingTokens.bg.surface2 },
               '&:last-of-type': { borderBottom: 'none' },

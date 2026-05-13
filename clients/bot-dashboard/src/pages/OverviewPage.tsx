@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import SEO from '@/components/SEO';
 import SubtitleStrip from '@/components/overview/SubtitleStrip';
 import HeroZone from '@/components/overview/HeroZone';
-import BotTile from '@/components/overview/BotTile';
+import BotChip from '@/components/overview/BotChip';
 import EdgeAttributionPanel from '@/components/overview/EdgeAttributionPanel';
 import EquityCurvePanel from '@/components/overview/EquityCurvePanel';
 import AlertsPanel from '@/components/overview/AlertsPanel';
@@ -43,7 +43,7 @@ export default function OverviewPage() {
     staleTime: 5_000,
   });
 
-  // Shares the cache key with EquityCurvePanel — only one network call.
+  // Shared cache key with EquityCurvePanel + BotChip — one network call.
   const { data: intradayEquity } = useQuery({
     queryKey: ['intradayEquity', 24],
     queryFn: () => fetchIntradayEquity(24),
@@ -70,7 +70,7 @@ export default function OverviewPage() {
   };
 
   const handlePillClick = () => {
-    const el = document.getElementById('alerts-panel');
+    const el = document.getElementById('alerts-region');
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
 
@@ -78,7 +78,7 @@ export default function OverviewPage() {
     <>
       <SEO
         title="Overview · NexusTradeAI"
-        description="Calm hero + cockpit overview of NexusTradeAI autonomous trading bots."
+        description="Edge-first overview of NexusTradeAI — see where the trading edge is today, then drill into bot health."
       />
       <Box sx={{ background: tradingTokens.bg.default, minHeight: '100vh', color: tradingTokens.text.primary }}>
         <SubtitleStrip />
@@ -94,7 +94,7 @@ export default function OverviewPage() {
         />
 
         {statusesError && (
-          <Box sx={{ px: 3, py: 2, maxWidth: 1920, mx: 'auto' }}>
+          <Box sx={{ px: 3, pt: 2, maxWidth: 1920, mx: 'auto' }}>
             <Box
               role="alert"
               sx={{
@@ -116,51 +116,61 @@ export default function OverviewPage() {
                   No data shown below this point. The bots may still be trading — check Railway logs.
                 </Typography>
               </Stack>
-              <Button
-                variant="outlined"
-                color="error"
-                size="small"
-                onClick={() => refetchStatuses()}
-              >
+              <Button variant="outlined" color="error" size="small" onClick={() => refetchStatuses()}>
                 Retry
               </Button>
             </Box>
           </Box>
         )}
 
-        <Box
-          sx={{
-            p: 3,
-            maxWidth: 1920,
-            mx: 'auto',
-            display: 'grid',
-            gap: 2,
-            gridTemplateColumns: '320px 1fr 320px',
-            '@media (max-width: 1440px)': {
-              gridTemplateColumns: '1fr 1fr',
-            },
-            '@media (max-width: 900px)': {
-              gridTemplateColumns: '1fr',
-            },
-          }}
-        >
-          <Stack spacing={2}>
+        <Box sx={{ p: 3, maxWidth: 1920, mx: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {/* Compact bot strip — health at a glance, no longer the page's focus */}
+          <Stack
+            direction="row"
+            spacing={2}
+            sx={{
+              flexWrap: 'wrap',
+              '@media (max-width: 720px)': {
+                flexDirection: 'column',
+              },
+            }}
+          >
             {statusesLoading && bots.length === 0
               ? [0, 1, 2].map((i) => (
-                  <Skeleton key={i} variant="rectangular" height={220} sx={{ borderRadius: '8px' }} />
+                  <Skeleton
+                    key={i}
+                    variant="rectangular"
+                    height={76}
+                    sx={{ flex: 1, minWidth: 220, borderRadius: '8px' }}
+                  />
                 ))
-              : bots.map((b) => <BotTile key={b.key} bot={b} onClick={handleBotClick} />)}
+              : bots.map((b) => <BotChip key={b.key} bot={b} onClick={handleBotClick} />)}
           </Stack>
 
-          <Stack spacing={2}>
-            <EdgeAttributionPanel />
+          {/* Edge attribution — the page's primary object */}
+          <Box>
+            <EdgeAttributionPanel prominent />
+          </Box>
+
+          {/* Supporting context: equity, trades, alerts */}
+          <Box
+            id="alerts-region"
+            sx={{
+              display: 'grid',
+              gap: 2,
+              gridTemplateColumns: '1fr 1fr 1fr',
+              '@media (max-width: 1200px)': {
+                gridTemplateColumns: '1fr 1fr',
+              },
+              '@media (max-width: 720px)': {
+                gridTemplateColumns: '1fr',
+              },
+            }}
+          >
             <EquityCurvePanel />
-          </Stack>
-
-          <Stack spacing={2} id="alerts-panel">
-            <AlertsPanel onCountChange={setAlertCount} />
             <TradesFeedPanel />
-          </Stack>
+            <AlertsPanel onCountChange={setAlertCount} />
+          </Box>
         </Box>
       </Box>
     </>
