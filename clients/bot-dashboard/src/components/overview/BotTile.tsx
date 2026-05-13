@@ -1,5 +1,5 @@
 import { Box, Stack, Typography } from '@mui/material';
-import { LineChart, Line } from 'recharts';
+import { LineChart, Line, ResponsiveContainer } from 'recharts';
 import { tradingTokens, tradingTypography } from '@/theme';
 import type { BotData } from './types';
 
@@ -23,12 +23,28 @@ export default function BotTile({ bot, onClick }: BotTileProps) {
     : bot.isRunning
       ? tradingTokens.status.success
       : tradingTokens.status.warning;
+  const ledLabel = !bot.online ? 'offline' : bot.isRunning ? 'running' : 'paused';
 
-  const sparklineData = bot.equityHistory.map((v, i) => ({ x: i, y: v }));
+  const hasIntraday = (bot.intradayEquity?.length ?? 0) > 1;
+  const sparklineData = hasIntraday
+    ? bot.intradayEquity!.map((v, i) => ({ x: i, y: v }))
+    : [];
+
+  const handleKey = (e: React.KeyboardEvent) => {
+    if (!onClick) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onClick(bot.key);
+    }
+  };
 
   return (
     <Box
       onClick={() => onClick?.(bot.key)}
+      onKeyDown={handleKey}
+      tabIndex={onClick ? 0 : -1}
+      role={onClick ? 'button' : undefined}
+      aria-label={onClick ? `Open ${bot.name} bot — ${ledLabel}, ${bot.mode}, today ${formatUSD(bot.dailyPnL)}` : undefined}
       sx={{
         height: 220,
         background: tradingTokens.bg.surface,
@@ -41,13 +57,19 @@ export default function BotTile({ bot, onClick }: BotTileProps) {
         cursor: onClick ? 'pointer' : 'default',
         opacity: bot.online ? 1 : 0.65,
         transition: 'border-color 200ms ease, transform 200ms ease',
+        outline: 'none',
         '&:hover': onClick
           ? { borderColor: tradingTokens.borderStrong, transform: 'translateY(-1px)' }
           : undefined,
+        '&:focus-visible': {
+          borderColor: tradingTokens.status.info ?? tradingTokens.borderStrong,
+          boxShadow: `0 0 0 2px ${tradingTokens.status.info ?? tradingTokens.borderStrong}33`,
+        },
       }}
     >
       <Stack direction="row" alignItems="center" spacing={1.25}>
         <Box
+          aria-label={ledLabel}
           sx={{
             width: 8,
             height: 8,
@@ -94,16 +116,40 @@ export default function BotTile({ bot, onClick }: BotTileProps) {
       </Stack>
 
       <Box sx={{ height: 40, width: '100%', mt: 1 }}>
-        <LineChart width={272} height={40} data={sparklineData}>
-          <Line
-            type="monotone"
-            dataKey="y"
-            stroke={bot.online ? pnlColor : offlineColor}
-            strokeWidth={1.5}
-            dot={false}
-            isAnimationActive={false}
-          />
-        </LineChart>
+        {hasIntraday ? (
+          <ResponsiveContainer width="100%" height={40}>
+            <LineChart data={sparklineData}>
+              <Line
+                type="monotone"
+                dataKey="y"
+                stroke={bot.online ? pnlColor : offlineColor}
+                strokeWidth={1.5}
+                dot={false}
+                isAnimationActive={false}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        ) : (
+          <Box
+            sx={{
+              height: 40,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'flex-start',
+            }}
+          >
+            <Typography
+              sx={{
+                ...tradingTypography.body2,
+                fontSize: '0.7rem',
+                color: tradingTokens.text.muted,
+                fontStyle: 'italic',
+              }}
+            >
+              no intraday data yet
+            </Typography>
+          </Box>
+        )}
       </Box>
     </Box>
   );

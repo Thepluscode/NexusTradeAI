@@ -7,7 +7,7 @@ export interface BotData {
   isRunning: boolean;
   mode: 'LIVE' | 'PAPER';
   dailyPnL: number;
-  equityHistory: number[];
+  intradayEquity?: number[];
 }
 
 export type EdgeStatus = 'positive' | 'inconclusive' | 'low_n' | 'negative';
