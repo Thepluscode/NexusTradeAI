@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 
 import SEO from '@/components/SEO';
 import { useQuery } from '@tanstack/react-query';
@@ -92,9 +93,29 @@ function exportTradesToCSV(rows: TradeRecord[]) {
     URL.revokeObjectURL(url);
 }
 
+const VALID_BOT_FILTERS: BotFilter[] = ['all', 'stock', 'forex', 'crypto'];
+
+function isBotFilter(v: string | null): v is BotFilter {
+    return v !== null && (VALID_BOT_FILTERS as string[]).includes(v);
+}
+
 export default function TradesPage() {
     const [tab, setTab] = useState(0);
-    const [botFilter, setBotFilter] = useState<BotFilter>('all');
+    const [searchParams, setSearchParams] = useSearchParams();
+    const initialBotFilter: BotFilter = isBotFilter(searchParams.get('bot'))
+        ? (searchParams.get('bot') as BotFilter)
+        : 'all';
+    const [botFilter, _setBotFilter] = useState<BotFilter>(initialBotFilter);
+    const setBotFilter = useCallback(
+        (next: BotFilter) => {
+            _setBotFilter(next);
+            const params = new URLSearchParams(searchParams);
+            if (next === 'all') params.delete('bot');
+            else params.set('bot', next);
+            setSearchParams(params, { replace: true });
+        },
+        [searchParams, setSearchParams],
+    );
     const [days, setDays] = useState(30);
     const [myTrades, setMyTrades] = useState(() => !!localStorage.getItem('nexus_access_token'));
     const isLoggedIn = !!localStorage.getItem('nexus_access_token');

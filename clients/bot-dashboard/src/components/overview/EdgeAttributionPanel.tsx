@@ -1,6 +1,7 @@
 import { Box, Stack, Typography, Skeleton, ButtonBase } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { tradingTokens, tradingTypography } from '@/theme';
 import CIBar from './CIBar';
 import { fetchEdgeAttribution, fetchKillSwitchRows } from './api';
@@ -53,6 +54,7 @@ function statusRank(s: EdgeStatus): number {
 export default function EdgeAttributionPanel({ prominent = false }: EdgeAttributionPanelProps) {
   const [windowDays, setWindowDays] = useState<WindowDays>(30);
   const minN = MIN_N_FOR[windowDays];
+  const navigate = useNavigate();
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['edgeAttribution', windowDays, minN],
@@ -313,9 +315,21 @@ export default function EdgeAttributionPanel({ prominent = false }: EdgeAttribut
           const bucketKey = `${row.bot}/${row.strategy}`;
           const killed = killedSet.has(bucketKey);
           const killReason = killReasonByBucket.get(bucketKey);
+          const handleClick = () => navigate(`/trades?bot=${row.bot}`);
+          const handleKey = (e: React.KeyboardEvent) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              handleClick();
+            }
+          };
           return (
             <Box
               key={`${row.bot}-${row.strategy}`}
+              role="button"
+              tabIndex={0}
+              aria-label={`View ${row.bot} ${row.strategy} trades — ${STATUS_LABEL[row.status]}, ${formatUSD(row.total_pnl_usd)}`}
+              onClick={handleClick}
+              onKeyDown={handleKey}
               sx={{
                 display: 'grid',
                 gridTemplateColumns: '1.4fr 0.8fr 0.5fr 0.7fr 0.9fr 1.6fr 1fr',
@@ -323,9 +337,15 @@ export default function EdgeAttributionPanel({ prominent = false }: EdgeAttribut
                 px: 3,
                 py: 1.5,
                 borderBottom: `1px solid ${tradingTokens.border}`,
+                cursor: 'pointer',
                 transition: 'background 150ms ease',
                 opacity: killed ? 0.75 : 1,
+                outline: 'none',
                 '&:hover': { background: tradingTokens.bg.surface2 },
+                '&:focus-visible': {
+                  background: tradingTokens.bg.surface2,
+                  boxShadow: `inset 0 0 0 2px ${tradingTokens.status.info}55`,
+                },
                 '&:last-of-type': { borderBottom: 'none' },
               }}
             >
