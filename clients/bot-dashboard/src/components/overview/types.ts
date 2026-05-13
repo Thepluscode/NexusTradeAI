@@ -21,6 +21,8 @@ export interface EdgeAttributionRow {
   pnl_pct_ci_low: number;
   pnl_pct_ci_high: number;
   status: EdgeStatus;
+  /** ISO timestamp of the most recent closed trade in this bucket. */
+  most_recent_trade?: string;
 }
 
 export type AlertSeverity = 'info' | 'warning' | 'error';

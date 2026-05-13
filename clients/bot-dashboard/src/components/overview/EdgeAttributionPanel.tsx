@@ -51,6 +51,18 @@ function statusRank(s: EdgeStatus): number {
   return s === 'positive' ? 0 : s === 'negative' ? 1 : s === 'inconclusive' ? 2 : 3;
 }
 
+function relativeTime(iso?: string): { label: string; stale: boolean } {
+  if (!iso) return { label: 'never', stale: true };
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return { label: '—', stale: true };
+  const secs = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  const stale = secs > 7 * 86400;
+  if (secs < 60) return { label: `${secs}s ago`, stale };
+  if (secs < 3600) return { label: `${Math.floor(secs / 60)}m ago`, stale };
+  if (secs < 86400) return { label: `${Math.floor(secs / 3600)}h ago`, stale };
+  return { label: `${Math.floor(secs / 86400)}d ago`, stale };
+}
+
 export default function EdgeAttributionPanel({ prominent = false }: EdgeAttributionPanelProps) {
   const [windowDays, setWindowDays] = useState<WindowDays>(30);
   const minN = MIN_N_FOR[windowDays];
@@ -349,9 +361,25 @@ export default function EdgeAttributionPanel({ prominent = false }: EdgeAttribut
                 '&:last-of-type': { borderBottom: 'none' },
               }}
             >
-              <Typography sx={{ ...tradingTypography.body1, color: tradingTokens.text.primary }}>
-                {row.strategy}
-              </Typography>
+              <Stack spacing={0.25} sx={{ minWidth: 0 }}>
+                <Typography sx={{ ...tradingTypography.body1, color: tradingTokens.text.primary }}>
+                  {row.strategy}
+                </Typography>
+                {(() => {
+                  const t = relativeTime(row.most_recent_trade);
+                  return (
+                    <Typography
+                      sx={{
+                        ...tradingTypography.overline,
+                        color: t.stale ? tradingTokens.status.warning : tradingTokens.text.muted,
+                        fontSize: '0.625rem',
+                      }}
+                    >
+                      last trade {t.label}
+                    </Typography>
+                  );
+                })()}
+              </Stack>
               <Typography sx={{ ...tradingTypography.body2, color: tradingTokens.text.secondary, textTransform: 'uppercase' }}>
                 {row.bot}
               </Typography>
