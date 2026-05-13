@@ -75,7 +75,7 @@ export async function fetchEdgeAttribution(window = 30, minN = 10): Promise<Edge
   return res.data.data;
 }
 
-interface KillSwitchRow {
+export interface KillSwitchRow {
   bot: string;
   strategy: string;
   reason: string;
@@ -88,6 +88,18 @@ interface KillSwitchResponse {
   mode: string;
   data: KillSwitchRow[];
   count: number;
+}
+
+export async function fetchKillSwitchRows(): Promise<KillSwitchRow[]> {
+  try {
+    const res = await axios.get<KillSwitchResponse>(`${SERVICE_URLS.forexBot}/api/kill-switches`, {
+      timeout: 4000,
+    });
+    if (!res.data?.success || !Array.isArray(res.data.data)) return [];
+    return res.data.data;
+  } catch {
+    return [];
+  }
 }
 
 interface IntradayEquityResponse {

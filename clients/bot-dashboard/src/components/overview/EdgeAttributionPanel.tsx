@@ -1,9 +1,9 @@
-import { Box, Stack, Typography, Skeleton } from '@mui/material';
+import { Box, Stack, Typography, Skeleton, ButtonBase } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { tradingTokens, tradingTypography } from '@/theme';
 import CIBar from './CIBar';
-import { fetchEdgeAttribution } from './api';
+import { fetchEdgeAttribution, fetchKillSwitchRows } from './api';
 import type { EdgeAttributionRow, EdgeStatus } from './types';
 
 interface EdgeAttributionPanelProps {
@@ -14,6 +14,18 @@ interface EdgeAttributionPanelProps {
    */
   prominent?: boolean;
 }
+
+type WindowDays = 7 | 30 | 90;
+
+const WINDOWS: { value: WindowDays; label: string }[] = [
+  { value: 7, label: '7d' },
+  { value: 30, label: '30d' },
+  { value: 90, label: '90d' },
+];
+
+// minN scales with window — comparing equal statistical confidence across
+// timeframes. A 90d bucket with n=10 is much weaker signal than a 7d one.
+const MIN_N_FOR: Record<WindowDays, number> = { 7: 5, 30: 10, 90: 20 };
 
 const STATUS_LABEL: Record<EdgeStatus, string> = {
   positive: 'POSITIVE',
@@ -39,12 +51,33 @@ function statusRank(s: EdgeStatus): number {
 }
 
 export default function EdgeAttributionPanel({ prominent = false }: EdgeAttributionPanelProps) {
+  const [windowDays, setWindowDays] = useState<WindowDays>(30);
+  const minN = MIN_N_FOR[windowDays];
+
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ['edgeAttribution', 30, 10],
-    queryFn: () => fetchEdgeAttribution(30, 10),
+    queryKey: ['edgeAttribution', windowDays, minN],
+    queryFn: () => fetchEdgeAttribution(windowDays, minN),
     refetchInterval: 30_000,
     staleTime: 15_000,
   });
+
+  const { data: killRows } = useQuery({
+    queryKey: ['killSwitchRows'],
+    queryFn: fetchKillSwitchRows,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+
+  // bucket key = `${bot}/${strategy}` — match the edge-attribution shape
+  const killedSet = useMemo(
+    () => new Set((killRows ?? []).map((r) => `${r.bot}/${r.strategy}`)),
+    [killRows],
+  );
+  const killReasonByBucket = useMemo(() => {
+    const m = new Map<string, string>();
+    (killRows ?? []).forEach((r) => m.set(`${r.bot}/${r.strategy}`, r.reason));
+    return m;
+  }, [killRows]);
 
   const rows: EdgeAttributionRow[] = useMemo(
     () =>
@@ -80,7 +113,7 @@ export default function EdgeAttributionPanel({ prominent = false }: EdgeAttribut
         direction="row"
         alignItems="center"
         justifyContent="space-between"
-        sx={{ px: 3, py: 2, borderBottom: `1px solid ${tradingTokens.border}` }}
+        sx={{ px: 3, py: 2, borderBottom: `1px solid ${tradingTokens.border}`, gap: 2, flexWrap: 'wrap' }}
       >
         <Stack>
           <Typography sx={{ ...tradingTypography.h6, color: tradingTokens.text.primary }}>
@@ -94,13 +127,64 @@ export default function EdgeAttributionPanel({ prominent = false }: EdgeAttribut
                 fontSize: '0.75rem',
               }}
             >
-              30-day per-bucket P&L with 95% confidence interval. Sorted positive → negative → inconclusive.
+              Per-bucket P&L with 95% confidence interval. Sorted positive → negative → inconclusive.
             </Typography>
           )}
         </Stack>
-        <Typography sx={{ ...tradingTypography.overline, color: tradingTokens.text.muted }}>
-          window 30d · 95% CI · minN 10
-        </Typography>
+        <Stack direction="row" alignItems="center" spacing={1.5}>
+          <Box
+            role="tablist"
+            aria-label="edge window"
+            sx={{
+              display: 'inline-flex',
+              p: '2px',
+              gap: '2px',
+              background: tradingTokens.bg.surface2,
+              border: `1px solid ${tradingTokens.border}`,
+              borderRadius: '8px',
+            }}
+          >
+            {WINDOWS.map(({ value, label }) => {
+              const active = value === windowDays;
+              return (
+                <ButtonBase
+                  key={value}
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setWindowDays(value)}
+                  sx={{
+                    px: 1.5,
+                    py: 0.5,
+                    borderRadius: '6px',
+                    background: active ? tradingTokens.bg.surface : 'transparent',
+                    color: active ? tradingTokens.text.primary : tradingTokens.text.secondary,
+                    border: active ? `1px solid ${tradingTokens.borderStrong}` : '1px solid transparent',
+                    fontFamily: tradingTokens.font.mono,
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    letterSpacing: '0.02em',
+                    transition: 'background 150ms ease, color 150ms ease, border-color 150ms ease',
+                    '&:hover': active ? undefined : { color: tradingTokens.text.primary },
+                    '&:focus-visible': {
+                      boxShadow: `0 0 0 2px ${tradingTokens.status.info}55`,
+                    },
+                  }}
+                >
+                  {label}
+                </ButtonBase>
+              );
+            })}
+          </Box>
+          <Typography
+            sx={{
+              ...tradingTypography.overline,
+              color: tradingTokens.text.muted,
+              fontSize: '0.625rem',
+            }}
+          >
+            95% CI · minN {minN}
+          </Typography>
+        </Stack>
       </Stack>
 
       {prominent && topEdge && (
@@ -225,56 +309,85 @@ export default function EdgeAttributionPanel({ prominent = false }: EdgeAttribut
           </Stack>
         )}
 
-        {rows.map((row) => (
-          <Box
-            key={`${row.bot}-${row.strategy}`}
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: '1.4fr 0.8fr 0.5fr 0.7fr 0.9fr 1.6fr 1fr',
-              alignItems: 'center',
-              px: 3,
-              py: 1.5,
-              borderBottom: `1px solid ${tradingTokens.border}`,
-              transition: 'background 150ms ease',
-              '&:hover': { background: tradingTokens.bg.surface2 },
-              '&:last-of-type': { borderBottom: 'none' },
-            }}
-          >
-            <Typography sx={{ ...tradingTypography.body1, color: tradingTokens.text.primary }}>
-              {row.strategy}
-            </Typography>
-            <Typography sx={{ ...tradingTypography.body2, color: tradingTokens.text.secondary, textTransform: 'uppercase' }}>
-              {row.bot}
-            </Typography>
-            <Typography sx={{ ...tradingTypography.monoNum, color: tradingTokens.text.primary }}>
-              {row.n}
-            </Typography>
-            <Typography sx={{ ...tradingTypography.monoNum, color: tradingTokens.text.primary }}>
-              {row.win_rate_pct.toFixed(1)}
-            </Typography>
-            <Typography
+        {rows.map((row) => {
+          const bucketKey = `${row.bot}/${row.strategy}`;
+          const killed = killedSet.has(bucketKey);
+          const killReason = killReasonByBucket.get(bucketKey);
+          return (
+            <Box
+              key={`${row.bot}-${row.strategy}`}
               sx={{
-                ...tradingTypography.monoNum,
-                color: row.total_pnl_usd >= 0 ? tradingTokens.status.success : tradingTokens.status.error,
-                fontWeight: 500,
+                display: 'grid',
+                gridTemplateColumns: '1.4fr 0.8fr 0.5fr 0.7fr 0.9fr 1.6fr 1fr',
+                alignItems: 'center',
+                px: 3,
+                py: 1.5,
+                borderBottom: `1px solid ${tradingTokens.border}`,
+                transition: 'background 150ms ease',
+                opacity: killed ? 0.75 : 1,
+                '&:hover': { background: tradingTokens.bg.surface2 },
+                '&:last-of-type': { borderBottom: 'none' },
               }}
             >
-              {formatUSD(row.total_pnl_usd)}
-            </Typography>
-            <Box>
-              <CIBar low={row.pnl_pct_ci_low} high={row.pnl_pct_ci_high} status={row.status} />
+              <Typography sx={{ ...tradingTypography.body1, color: tradingTokens.text.primary }}>
+                {row.strategy}
+              </Typography>
+              <Typography sx={{ ...tradingTypography.body2, color: tradingTokens.text.secondary, textTransform: 'uppercase' }}>
+                {row.bot}
+              </Typography>
+              <Typography sx={{ ...tradingTypography.monoNum, color: tradingTokens.text.primary }}>
+                {row.n}
+              </Typography>
+              <Typography sx={{ ...tradingTypography.monoNum, color: tradingTokens.text.primary }}>
+                {row.win_rate_pct.toFixed(1)}
+              </Typography>
+              <Typography
+                sx={{
+                  ...tradingTypography.monoNum,
+                  color: row.total_pnl_usd >= 0 ? tradingTokens.status.success : tradingTokens.status.error,
+                  fontWeight: 500,
+                }}
+              >
+                {formatUSD(row.total_pnl_usd)}
+              </Typography>
+              <Box>
+                <CIBar low={row.pnl_pct_ci_low} high={row.pnl_pct_ci_high} status={row.status} />
+              </Box>
+              <Stack direction="row" alignItems="center" spacing={0.75} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
+                <Typography
+                  sx={{
+                    ...tradingTypography.overline,
+                    color: STATUS_COLOR[row.status],
+                    fontSize: '0.625rem',
+                  }}
+                >
+                  {STATUS_LABEL[row.status]}
+                </Typography>
+                {killed && (
+                  <Typography
+                    component="span"
+                    title={killReason ? `Killed: ${killReason}` : 'Auto-disabled by kill-switch cron'}
+                    sx={{
+                      ...tradingTypography.overline,
+                      color: tradingTokens.status.error,
+                      border: `1px solid ${tradingTokens.status.error}`,
+                      borderRadius: '4px',
+                      px: 0.625,
+                      py: 0.125,
+                      fontSize: '0.5625rem',
+                      lineHeight: 1.4,
+                      fontWeight: 700,
+                      letterSpacing: '0.08em',
+                      cursor: 'help',
+                    }}
+                  >
+                    KILLED
+                  </Typography>
+                )}
+              </Stack>
             </Box>
-            <Typography
-              sx={{
-                ...tradingTypography.overline,
-                color: STATUS_COLOR[row.status],
-                fontSize: '0.625rem',
-              }}
-            >
-              {STATUS_LABEL[row.status]}
-            </Typography>
-          </Box>
-        ))}
+          );
+        })}
       </Box>
     </Box>
   );
