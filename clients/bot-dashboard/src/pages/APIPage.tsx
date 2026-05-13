@@ -70,16 +70,35 @@ export default function APIPage() {
     }, [qc]);
 
     // Fetch keys + usage
-    const { data: keysData } = useQuery({
+    const {
+        data: keysData,
+        isError: keysError,
+        error: keysErrorObj,
+        refetch: refetchKeys,
+    } = useQuery({
         queryKey: ['apiKeys'],
         queryFn: () => apiClient.getAPIKeys(),
         staleTime: 30000, refetchInterval: 60000,
     });
-    const { data: usage } = useQuery({
+    const {
+        data: usage,
+        isError: usageError,
+        error: usageErrorObj,
+        refetch: refetchUsage,
+    } = useQuery({
         queryKey: ['apiUsage'],
         queryFn: () => apiClient.getAPIUsage(),
         staleTime: 30000, refetchInterval: 60000,
     });
+    const feedHasError = keysError || usageError;
+    const feedErrorMessage =
+        (keysErrorObj instanceof Error && keysErrorObj.message) ||
+        (usageErrorObj instanceof Error && usageErrorObj.message) ||
+        undefined;
+    const retryFeeds = () => {
+        if (keysError) refetchKeys();
+        if (usageError) refetchUsage();
+    };
 
     const keys = (keysData?.keys || []) as unknown as APIKey[];
     const usageSummary = (usage || { calls_today: 0, calls_month: 0, monthly_limit: 100, active_keys: 0 }) as unknown as UsageSummary;
@@ -133,6 +152,31 @@ export default function APIPage() {
 
     return (
         <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 1200, mx: 'auto' }}>
+            {feedHasError && (
+                <Alert
+                    severity="error"
+                    sx={{ mb: 2 }}
+                    action={
+                        <Button color="inherit" size="small" onClick={retryFeeds}>
+                            Retry
+                        </Button>
+                    }
+                >
+                    Failed to load{' '}
+                    {keysError && usageError
+                        ? 'API keys and usage'
+                        : keysError
+                            ? 'API keys'
+                            : 'usage stats'}
+                    . The values shown below may be stale or zero — not a true reflection of your account.
+                    {feedErrorMessage && (
+                        <Box component="span" sx={{ display: 'block', mt: 0.5, opacity: 0.85, fontSize: '0.8rem' }}>
+                            {feedErrorMessage}
+                        </Box>
+                    )}
+                </Alert>
+            )}
+
             {/* Header */}
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
                 <Box>
