@@ -354,23 +354,56 @@ export default function AgentPage() {
   const queryClient = useQueryClient();
   const [backfillRunning, setBackfillRunning] = useState(false);
 
-  const { data: stats, isLoading } = useQuery<AgentStats>({
+  const {
+    data: stats,
+    isLoading,
+    isError: statsError,
+    error: statsErrorObj,
+    refetch: refetchStats,
+  } = useQuery<AgentStats>({
     queryKey: ['agentStats'],
     queryFn: () => apiClient.getAgentStats() as unknown as Promise<AgentStats>,
     refetchInterval: 15000, staleTime: 10000,
   });
 
-  const { data: decisionsData } = useQuery({
+  const {
+    data: decisionsData,
+    isError: decisionsError,
+    error: decisionsErrorObj,
+    refetch: refetchDecisions,
+  } = useQuery({
     queryKey: ['agentDecisions'],
     queryFn: () => apiClient.getAgentDecisions(30),
     refetchInterval: 30000, staleTime: 20000,
   });
 
-  const { data: portfolioData } = useQuery({
+  const {
+    data: portfolioData,
+    isError: portfolioError,
+    error: portfolioErrorObj,
+    refetch: refetchPortfolio,
+  } = useQuery({
     queryKey: ['portfolioRisk'],
     queryFn: () => apiClient.getPortfolioRisk(),
     refetchInterval: 30000, staleTime: 20000,
   });
+
+  const anyFeedError = statsError || decisionsError || portfolioError;
+  const firstErrorMessage =
+    (statsErrorObj instanceof Error && statsErrorObj.message) ||
+    (decisionsErrorObj instanceof Error && decisionsErrorObj.message) ||
+    (portfolioErrorObj instanceof Error && portfolioErrorObj.message) ||
+    undefined;
+  const erroredFeeds = [
+    statsError ? 'agent stats' : null,
+    decisionsError ? 'decisions' : null,
+    portfolioError ? 'portfolio risk' : null,
+  ].filter(Boolean) as string[];
+  const retryFeeds = () => {
+    if (statsError) refetchStats();
+    if (decisionsError) refetchDecisions();
+    if (portfolioError) refetchPortfolio();
+  };
 
   const killMutation = useMutation({
     mutationFn: () => apiClient.agentKill('Manual kill from dashboard'),
@@ -431,6 +464,27 @@ export default function AgentPage() {
 
   return (
     <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 1400, mx: 'auto' }}>
+      {anyFeedError && (
+        <Alert
+          severity="error"
+          sx={{ mb: 2 }}
+          action={
+            <Button color="inherit" size="small" onClick={retryFeeds}>
+              Retry
+            </Button>
+          }
+        >
+          Failed to load {erroredFeeds.join(' + ')}. Some sections below
+          may render with stale or empty data and not reflect the agent's
+          true state.
+          {firstErrorMessage && (
+            <Box component="span" sx={{ display: 'block', mt: 0.5, opacity: 0.85, fontSize: '0.8rem' }}>
+              {firstErrorMessage}
+            </Box>
+          )}
+        </Alert>
+      )}
+
       {/* Header */}
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
