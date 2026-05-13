@@ -242,7 +242,13 @@ export default function StockBotPage() {
         return (
             <Box sx={{ p: { xs: 1.5, sm: 2, md: 3 } }}>
                 <Alert severity="error" sx={{ mb: 2 }}>
-                    Stock Bot is offline. Unable to reach the stock bot service.
+                    Stock Bot service is unreachable. Check the Railway nexus-stock-bot
+                    service health or your network connection.
+                    {error instanceof Error && error.message && (
+                        <Box component="span" sx={{ display: 'block', mt: 0.5, opacity: 0.85, fontSize: '0.875rem' }}>
+                            {error.message}
+                        </Box>
+                    )}
                 </Alert>
                 <Button
                     variant="contained"
