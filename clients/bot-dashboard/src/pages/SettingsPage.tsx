@@ -159,7 +159,7 @@ async function setTradingMode(mode: 'paper' | 'live') {
         axios.post(`${SERVICE_URLS.cryptoBot}/api/config/mode`, { mode }, { headers: authHeaders, timeout: 5000 }),
     ]);
 
-    const fulfilled = results.filter(result => result.status === 'fulfilled') as PromiseFulfilledResult<import('axios').AxiosResponse<any>>[];
+    const fulfilled = results.filter(result => result.status === 'fulfilled') as PromiseFulfilledResult<import('axios').AxiosResponse<unknown>>[];
     if (fulfilled.length === 0) {
         throw new Error('Failed to switch trading mode');
     }

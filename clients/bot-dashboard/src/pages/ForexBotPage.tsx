@@ -1,5 +1,6 @@
 import SEO from '@/components/SEO';
 import AgentDecisionsCard from '@/components/AgentDecisionsCard';
+import type { SignalEffectivenessEntry } from '@/types/signal-effectiveness';
 import {
     Box,
     Paper,
@@ -445,7 +446,7 @@ export default function ForexBotPage() {
                     {evaluations?.signalEffectiveness && (
                         <Box sx={{ mt: 2 }}>
                             <Typography variant="subtitle2" gutterBottom>Signal Effectiveness</Typography>
-                            {Object.entries(evaluations.signalEffectiveness).map(([signal, data]: [string, any]) => (
+                            {Object.entries(evaluations.signalEffectiveness as Record<string, SignalEffectivenessEntry>).map(([signal, data]) => (
                                 <Box key={signal} sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
                                     <Typography variant="body2" sx={{ width: 120 }}>{signal}</Typography>
                                     <Chip
