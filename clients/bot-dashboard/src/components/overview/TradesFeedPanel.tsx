@@ -1,5 +1,6 @@
 import { Box, Stack, Typography, Skeleton, Button } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { tradingTokens, tradingTypography } from '@/theme';
 import { fetchRecentTrades } from './api';
 import type { TradeItem } from './types';
@@ -20,6 +21,7 @@ function formatUSD(n: number): string {
 }
 
 export default function TradesFeedPanel() {
+  const navigate = useNavigate();
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['recentTrades', 20],
     queryFn: () => fetchRecentTrades(20),
@@ -86,19 +88,37 @@ export default function TradesFeedPanel() {
         {trades.map((t) => {
           const positive = t.pnl_usd >= 0;
           const color = positive ? tradingTokens.status.success : tradingTokens.status.error;
+          const handleClick = () => navigate(`/trades?bot=${t.bot}`);
+          const handleKey = (e: React.KeyboardEvent) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              handleClick();
+            }
+          };
           return (
             <Stack
               key={t.id}
               direction="row"
               alignItems="center"
               spacing={1.25}
+              role="button"
+              tabIndex={0}
+              aria-label={`View ${t.bot} trades — ${t.symbol} ${t.side}, ${t.pnl_usd >= 0 ? '+' : '−'}$${Math.abs(t.pnl_usd).toFixed(2)}`}
+              onClick={handleClick}
+              onKeyDown={handleKey}
               sx={{
                 px: 2,
                 height: 36,
                 borderBottom: `1px solid ${tradingTokens.border}`,
                 '&:last-of-type': { borderBottom: 'none' },
+                cursor: 'pointer',
+                outline: 'none',
                 transition: 'background 150ms ease',
                 '&:hover': { background: tradingTokens.bg.surface2 },
+                '&:focus-visible': {
+                  background: tradingTokens.bg.surface2,
+                  boxShadow: `inset 0 0 0 2px ${tradingTokens.status.info}55`,
+                },
               }}
             >
               <Typography
