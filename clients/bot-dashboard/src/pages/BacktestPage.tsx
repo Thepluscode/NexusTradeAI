@@ -75,13 +75,17 @@ function ValidationChecklist({ checks }: { checks: Record<string, boolean> }) {
 }
 
 export default function BacktestPage() {
-    const { data: report, isLoading, isError } = useQuery({
+    const { data: report, isLoading, isError, error: reportError, refetch: refetchReport } = useQuery({
         queryKey: ['backtestReport'],
         queryFn: () => apiClient.getBacktestReport(),
         staleTime: 60 * 1000, retry: 1, refetchInterval: 30 * 1000,
     });
 
-    const { data: equityCurve = [] } = useQuery({
+    const {
+        data: equityCurve = [],
+        isError: equityError,
+        refetch: refetchEquity,
+    } = useQuery({
         queryKey: ['equityCurve'],
         queryFn: () => apiClient.getEquityCurve(90, 'stock'),
         staleTime: 5 * 60 * 1000, refetchInterval: 10 * 60 * 1000,
@@ -131,10 +135,26 @@ export default function BacktestPage() {
     }
 
     if (isError || !report) {
+        const message =
+            reportError instanceof Error && reportError.message ? reportError.message : undefined;
         return (
             <Box sx={{ p: 3 }}>
-                <Alert severity="warning">
-                    Could not connect to the stock bot. Check that it is running.
+                <Alert
+                    severity="error"
+                    sx={{ mb: 2 }}
+                    action={
+                        <Button color="inherit" size="small" onClick={() => refetchReport()}>
+                            Retry
+                        </Button>
+                    }
+                >
+                    Stock bot backtest report is unreachable. Check the Railway
+                    nexus-stock-bot service health or your network connection.
+                    {message && (
+                        <Box component="span" sx={{ display: 'block', mt: 0.5, opacity: 0.85, fontSize: '0.875rem' }}>
+                            {message}
+                        </Box>
+                    )}
                 </Alert>
             </Box>
         );
@@ -251,7 +271,21 @@ export default function BacktestPage() {
                 />
             </Box>
 
-            {/* Equity curve chart */}
+            {/* Equity curve — show error notice if the feed failed, otherwise render the chart */}
+            {equityError && (equityCurve as EquityCurvePoint[]).length === 0 && (
+                <Alert
+                    severity="error"
+                    sx={{ mb: 2 }}
+                    action={
+                        <Button color="inherit" size="small" onClick={() => refetchEquity()}>
+                            Retry
+                        </Button>
+                    }
+                >
+                    Equity curve unavailable. The 90-day P&L chart and its day-by-day
+                    summary stats below are missing because of an upstream error.
+                </Alert>
+            )}
             {(equityCurve as EquityCurvePoint[]).length > 1 && (() => {
                 const curve = equityCurve as EquityCurvePoint[];
                 const finalPnl = curve[curve.length - 1]?.cumulative_pnl ?? 0;
