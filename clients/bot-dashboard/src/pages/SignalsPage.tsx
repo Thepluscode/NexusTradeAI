@@ -32,6 +32,27 @@ import { apiClient } from '@/services/api';
 
 type Bot = 'stock' | 'forex' | 'crypto';
 
+// Small reusable error-state block for each card's useQuery failure.
+// Was previously absent — every card silently fell through to its "no data yet"
+// Alert when the actual API call errored, hiding real failure modes from users.
+function QueryError({ label, error, onRetry }: { label: string; error: unknown; onRetry: () => void }) {
+  const message = error instanceof Error && error.message ? error.message : undefined;
+  return (
+    <Alert
+      severity="error"
+      action={<Button color="inherit" size="small" onClick={onRetry}>Retry</Button>}
+      sx={{ '& .MuiAlert-message': { fontSize: '0.85rem' } }}
+    >
+      Failed to load {label}.
+      {message && (
+        <Box component="span" sx={{ display: 'block', mt: 0.5, opacity: 0.85, fontSize: '0.8rem' }}>
+          {message}
+        </Box>
+      )}
+    </Alert>
+  );
+}
+
 // ── Noise Report Card ─────────────────────────────────────────────────────────
 
 function classColor(cls: string): string {
@@ -45,7 +66,7 @@ function classColor(cls: string): string {
 }
 
 function NoiseReportCard({ bot }: { bot: Bot }) {
-  const { data: report, isLoading, refetch } = useQuery({
+  const { data: report, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['noise-report', bot],
     queryFn: () => apiClient.getNoiseReport(bot),
     refetchInterval: false,
@@ -57,6 +78,7 @@ function NoiseReportCard({ bot }: { bot: Bot }) {
   };
 
   if (isLoading) return <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress size={32} /></Box>;
+  if (isError) return <QueryError label="noise report" error={error} onRetry={() => refetch()} />;
   if (!report) return <Alert severity="info">No noise report data yet. Need at least 10 evaluated trades.</Alert>;
 
   const rankings = (report.componentRankings as Array<{ name: string; ic: number; pValue: number; classification: string; significant: boolean }>) || [];
@@ -151,13 +173,14 @@ const REGIME_COLORS: Record<string, string> = {
 };
 
 function RegimeHeatmap({ bot }: { bot: Bot }) {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['regime-heatmap', bot],
     queryFn: () => apiClient.getRegimeHeatmap(bot),
     refetchInterval: false,
   });
 
   if (isLoading) return <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress size={32} /></Box>;
+  if (isError) return <QueryError label="regime heatmap" error={error} onRetry={() => refetch()} />;
   if (!data) return <Alert severity="info">Not enough data for regime analysis (need 30+ trades).</Alert>;
 
   const matrix = (data.matrix || data) as Record<string, Record<string, { ic: number; pValue: number; classification: string; n: number }>>;
@@ -214,13 +237,14 @@ function RegimeHeatmap({ bot }: { bot: Bot }) {
 // ── Signal Timeline ───────────────────────────────────────────────────────────
 
 function SignalTimeline({ bot }: { bot: Bot }) {
-  const { data: timeline, isLoading } = useQuery({
+  const { data: timeline, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['signal-timeline', bot],
     queryFn: () => apiClient.getSignalTimeline(bot, 30),
     refetchInterval: 30000,
   });
 
   if (isLoading) return <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress size={32} /></Box>;
+  if (isError) return <QueryError label="signal timeline" error={error} onRetry={() => refetch()} />;
   if (!timeline || timeline.length === 0) return <Alert severity="info">No recent signal data.</Alert>;
 
   type TimelineEntry = { time: string; symbol: string; direction: string; pnl: number; pnlPct: number; committeeScore: number; regime: string; exitReason: string };
@@ -287,13 +311,14 @@ function SignalTimeline({ bot }: { bot: Bot }) {
 // ── Threshold Curve ───────────────────────────────────────────────────────────
 
 function ThresholdCurve({ bot }: { bot: Bot }) {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['threshold-curve', bot],
     queryFn: () => apiClient.getThresholdCurve(bot),
     refetchInterval: false,
   });
 
   if (isLoading) return <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress size={32} /></Box>;
+  if (isError) return <QueryError label="threshold curve" error={error} onRetry={() => refetch()} />;
   if (!data) return <Alert severity="info">No threshold sweep data. Run CLI: node services/backtesting-js/cli.js --bot {bot} --sweep-threshold</Alert>;
 
   type SweepRow = { threshold: number; totalTrades: number; winRate: number; profitFactor: number; sharpe: number; netPnl: number };
