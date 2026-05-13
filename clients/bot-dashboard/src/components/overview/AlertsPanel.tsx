@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Box, Stack, Typography } from '@mui/material';
+import { Box, Stack, Typography, Button } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 import { tradingTokens, tradingTypography } from '@/theme';
 import { fetchKillSwitchAlerts } from './api';
@@ -26,7 +26,7 @@ interface AlertsPanelProps {
 }
 
 export default function AlertsPanel({ onCountChange }: AlertsPanelProps) {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['killSwitches'],
     queryFn: fetchKillSwitchAlerts,
     refetchInterval: 60_000,
@@ -42,7 +42,8 @@ export default function AlertsPanel({ onCountChange }: AlertsPanelProps) {
   return (
     <Box
       sx={{
-        height: 240,
+        height: '100%',
+        minHeight: 240,
         background: tradingTokens.bg.surface,
         border: `1px solid ${tradingTokens.border}`,
         borderRadius: '8px',
@@ -64,7 +65,16 @@ export default function AlertsPanel({ onCountChange }: AlertsPanelProps) {
         </Typography>
       </Stack>
 
-      {alerts.length === 0 ? (
+      {isError ? (
+        <Stack alignItems="center" justifyContent="center" spacing={1.5} sx={{ flex: 1, py: 4, px: 2 }}>
+          <Typography sx={{ ...tradingTypography.body2, color: tradingTokens.status.error, textAlign: 'center' }}>
+            Alerts feed unavailable.
+          </Typography>
+          <Button variant="outlined" color="error" size="small" onClick={() => refetch()}>
+            Retry
+          </Button>
+        </Stack>
+      ) : alerts.length === 0 ? (
         <Stack alignItems="center" justifyContent="center" sx={{ flex: 1, gap: 1 }}>
           <Box
             sx={{

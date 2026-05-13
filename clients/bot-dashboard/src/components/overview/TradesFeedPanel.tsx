@@ -1,4 +1,4 @@
-import { Box, Stack, Typography, Skeleton } from '@mui/material';
+import { Box, Stack, Typography, Skeleton, Button } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 import { tradingTokens, tradingTypography } from '@/theme';
 import { fetchRecentTrades } from './api';
@@ -20,7 +20,7 @@ function formatUSD(n: number): string {
 }
 
 export default function TradesFeedPanel() {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['recentTrades', 20],
     queryFn: () => fetchRecentTrades(20),
     refetchInterval: 30_000,
@@ -32,7 +32,8 @@ export default function TradesFeedPanel() {
   return (
     <Box
       sx={{
-        height: 480,
+        height: '100%',
+        minHeight: 240,
         background: tradingTokens.bg.surface,
         border: `1px solid ${tradingTokens.border}`,
         borderRadius: '8px',
@@ -55,7 +56,18 @@ export default function TradesFeedPanel() {
       </Stack>
 
       <Box sx={{ flex: 1, overflow: 'auto' }}>
-        {isLoading && (
+        {isError && (
+          <Stack alignItems="center" justifyContent="center" spacing={1.5} sx={{ py: 4, px: 2 }}>
+            <Typography sx={{ ...tradingTypography.body2, color: tradingTokens.status.error, textAlign: 'center' }}>
+              Trades feed unavailable.
+            </Typography>
+            <Button variant="outlined" color="error" size="small" onClick={() => refetch()}>
+              Retry
+            </Button>
+          </Stack>
+        )}
+
+        {!isError && isLoading && (
           <Box sx={{ px: 2, py: 1 }}>
             {[0, 1, 2, 3, 4, 5].map((i) => (
               <Skeleton key={i} variant="rectangular" height={28} sx={{ mb: 0.75 }} />
@@ -63,7 +75,7 @@ export default function TradesFeedPanel() {
           </Box>
         )}
 
-        {!isLoading && trades.length === 0 && (
+        {!isError && !isLoading && trades.length === 0 && (
           <Stack alignItems="center" justifyContent="center" sx={{ flex: 1, py: 6 }}>
             <Typography sx={{ ...tradingTypography.body2, color: tradingTokens.text.secondary }}>
               No recent trades

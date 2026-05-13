@@ -152,13 +152,17 @@ export default function OverviewPage() {
             <EdgeAttributionPanel prominent />
           </Box>
 
-          {/* Supporting context: equity, trades, alerts */}
+          {/* Supporting context: equity, trades, alerts.
+              gridAutoRows: 1fr makes all three panels share the row height
+              so the bottom row is visually uniform regardless of panel
+              content (was uneven 220/240/480 before). */}
           <Box
             id="alerts-region"
             sx={{
               display: 'grid',
               gap: 2,
               gridTemplateColumns: '1fr 1fr 1fr',
+              gridAutoRows: '1fr',
               '@media (max-width: 1200px)': {
                 gridTemplateColumns: '1fr 1fr',
               },

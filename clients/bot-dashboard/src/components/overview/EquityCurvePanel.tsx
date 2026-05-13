@@ -1,9 +1,22 @@
-import { Box, Stack, Typography, Skeleton } from '@mui/material';
+import { Box, Stack, Typography, Skeleton, Button } from '@mui/material';
 import { AreaChart, Area, ResponsiveContainer } from 'recharts';
 import { useQuery } from '@tanstack/react-query';
 import { tradingTokens, tradingTypography } from '@/theme';
 import { fetchIntradayEquity } from './api';
 import type { BotKey } from './types';
+
+function PanelErrorState({ label, onRetry }: { label: string; onRetry: () => void }) {
+  return (
+    <Stack alignItems="center" justifyContent="center" spacing={1.5} sx={{ flex: 1, py: 4, px: 2 }}>
+      <Typography sx={{ ...tradingTypography.body2, color: tradingTokens.status.error, textAlign: 'center' }}>
+        {label}
+      </Typography>
+      <Button variant="outlined" color="error" size="small" onClick={onRetry}>
+        Retry
+      </Button>
+    </Stack>
+  );
+}
 
 const BOT_LABELS: Record<BotKey, string> = {
   stock: 'Stock',
@@ -27,7 +40,7 @@ function formatDelta(series: number[]): string {
 }
 
 export default function EquityCurvePanel() {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['intradayEquity', 24],
     queryFn: () => fetchIntradayEquity(24),
     refetchInterval: 60_000,
@@ -40,7 +53,8 @@ export default function EquityCurvePanel() {
   return (
     <Box
       sx={{
-        height: 220,
+        height: '100%',
+        minHeight: 240,
         background: tradingTokens.bg.surface,
         border: `1px solid ${tradingTokens.border}`,
         borderRadius: '8px',
@@ -62,6 +76,9 @@ export default function EquityCurvePanel() {
         </Typography>
       </Stack>
 
+      {isError ? (
+        <PanelErrorState label="Equity feed unavailable." onRetry={() => refetch()} />
+      ) : (
       <Box sx={{ flex: 1, px: 3, py: 1.5, display: 'flex', flexDirection: 'column', gap: 1 }}>
         {bots.map((key) => {
           const series = curves[key] ?? [];
@@ -133,6 +150,7 @@ export default function EquityCurvePanel() {
           );
         })}
       </Box>
+      )}
     </Box>
   );
 }
