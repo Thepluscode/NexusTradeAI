@@ -1752,28 +1752,36 @@ function buildOpeningRangeBreakoutCandidate({ symbol, bars, current, rsi, vwap, 
     const openingRangeBars = bars.slice(0, OPENING_RANGE_BREAKOUT_CONFIG.openingRangeMinutes);
     if (openingRangeBars.length < OPENING_RANGE_BREAKOUT_CONFIG.openingRangeMinutes) return null;
 
-    // [v25.0] DIFF 1: Regime-aware entry gates — prevent false breakouts in ranging markets
-    let regimeClass = 'medium'; // fallback for when detector unavailable
-    if (sharedRegimeDetector && bars.length >= 20) {
-        try {
-            const regimeAnalysis = sharedRegimeDetector.detectRegime(bars);
-            regimeClass = regimeAnalysis.regime; // TRENDING_UP, TRENDING_DOWN, MEAN_REVERTING, HIGH_VOLATILITY
-            console.log(`[Regime] ${symbol}: ${regimeClass} (conf: ${regimeAnalysis.confidence.toFixed(2)})`);
-        } catch (e) {
-            console.warn(`[Regime] Failed to detect regime for ${symbol}: ${e.message}`);
-        }
+    // [v25.0] DIFF 1: Regime-aware entry gates — prevent false breakouts in ranging markets.
+    // [2026-06-14 FIX] Was reading regime from the symbol's own 5-min bars, which on
+    // intraday timeframes structurally classifies almost every stock as MEAN_REVERTING
+    // (low per-bar ATR%, low ADX) — root cause of 30-day stock-bot silence. The MARKET
+    // regime (SPY-derived, computed once per scan in globalThis._marketRegime) is the
+    // correct signal: ORB filtering should ask "is the broader tape trending?", not
+    // "is this one stock's 5-min chart trending?".
+    const marketRegimeAge = globalThis._marketRegimeUpdated
+        ? Date.now() - globalThis._marketRegimeUpdated
+        : Infinity;
+    const marketRegimeStale = marketRegimeAge > 10 * 60 * 1000; // 10 min
+    const marketRegime = !marketRegimeStale ? globalThis._marketRegime?.regime : null;
+    let regimeClass = marketRegime || 'TRENDING_UP'; // permissive default when SPY regime unavailable/stale
+    if (marketRegime) {
+        const conf = globalThis._marketRegime?.confidence?.toFixed(2) ?? '?';
+        console.log(`[Regime] ${symbol}: market=${marketRegime} (SPY conf: ${conf})`);
+    } else {
+        console.log(`[Regime] ${symbol}: SPY market regime unavailable${marketRegimeStale ? ' (stale)' : ''} — fallback TRENDING_UP (permissive)`);
     }
-    
-    // Gate ORB entries by regime — only trade in TRENDING_UP
+
+    // Gate ORB entries by MARKET regime — only trade when broader tape supports breakouts
     const orbAllowedInRegime = {
         'TRENDING_UP': true,       // ORB works best in up trends
         'TRENDING_DOWN': false,    // NO breakout longs in downtrends
         'MEAN_REVERTING': false,   // NO ORB in ranging markets — false breakouts
         'HIGH_VOLATILITY': false   // NO ORB in crisis/news regimes
     };
-    
+
     if (!orbAllowedInRegime[regimeClass]) {
-        console.log(`[Regime Gate] ${symbol}: ORB blocked in ${regimeClass} regime`);
+        console.log(`[Regime Gate] ${symbol}: ORB blocked in ${regimeClass} market regime`);
         return { killedBy: `regime_${regimeClass.toLowerCase()}` };
     }
 
