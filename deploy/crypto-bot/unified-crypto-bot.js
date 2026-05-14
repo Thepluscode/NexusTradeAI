@@ -112,6 +112,25 @@ if (crossAssetModule) console.log('[INIT] Cross-asset signal module loaded');
 if (microstructureModule) console.log('[INIT] Microstructure (VPIN) module loaded');
 if (liquiditySweepModule) console.log('[INIT] Liquidity sweep module loaded');
 
+// [2026-05-14] Shared bar normalizer. KrakenClient.getKlines (this file :1702) returns
+// arrays of the shape [time, open, high, low, close, volume] — NOT objects with .open/.o
+// properties. Multiple sites in this file (BTC regime classifier, microstructure, sweep,
+// volume averages) used `parseFloat(b.open || b.o || 0)` style normalizers that silently
+// produced zeros for every bar — causing ATR=0%, ADX=0, all-zero microstructure, and
+// the broader "everything classifies as MEAN_REVERTING with conf 0.80" silence.
+let normalizeCryptoBars;
+try {
+    ({ normalizeCryptoBars } = require('./signals/normalizers'));
+} catch (e) {
+    try { ({ normalizeCryptoBars } = require('../../services/signals/normalizers')); } catch (_) {
+        normalizeCryptoBars = (klines) => (klines || []).map(k => ({
+            open: parseFloat(k[1]) || 0, high: parseFloat(k[2]) || 0,
+            low: parseFloat(k[3]) || 0, close: parseFloat(k[4]) || 0,
+            volume: parseFloat(k[5]) || 0,
+        }));
+    }
+}
+
 // Load .env from project root (Railway injects env vars directly, so dotenv is a no-op there)
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
@@ -2424,8 +2443,9 @@ class CryptoTradingEngine {
             // [v25.0] DIFF 6: Liquidation cascade detection — pause entries after volume spike + reversal
             if (data.klines && data.klines.length >= 10) {
                 const recentKlines = data.klines.slice(-10);
-                const avgVol = data.klines.slice(-100).reduce((s, b) => s + (b.volume || b.v || 0), 0) / Math.min(data.klines.length, 100);
-                const recentVol = recentKlines.reduce((s, b) => s + (b.volume || b.v || 0), 0) / 10;
+                // [2026-05-14] data.klines is raw Kraken arrays — use index [5] for volume, not b.volume
+                const avgVol = data.klines.slice(-100).reduce((s, b) => s + (parseFloat(b[5]) || 0), 0) / Math.min(data.klines.length, 100);
+                const recentVol = recentKlines.reduce((s, b) => s + (parseFloat(b[5]) || 0), 0) / 10;
                 const volSpike = recentVol > avgVol * 2.5;
                 const lastK = recentKlines[recentKlines.length - 1];
                 const prevK = recentKlines[recentKlines.length - 2];
@@ -3985,14 +4005,10 @@ class CryptoTradingEngine {
                 const btcKlines = await this.kraken.getKlines('XBTUSD', '5m', 100).catch(() => null);
                 let cryptoRegime;
                 if (sharedRegimeDetector && btcKlines && btcKlines.length > 30) {
-                    // Normalize Kraken klines to {open, high, low, close, volume}
-                    const normalizedBtc = btcKlines.map(b => ({
-                        open: parseFloat(b.open || b.o || 0),
-                        high: parseFloat(b.high || b.h || 0),
-                        low: parseFloat(b.low || b.l || 0),
-                        close: parseFloat(b.close || b.c || 0),
-                        volume: parseFloat(b.volume || b.v || 0),
-                    }));
+                    // [2026-05-14 FIX] Kraken klines are arrays [time,open,high,low,close,volume].
+                    // The previous `b.open || b.o` inline normalizer produced all zeros, which
+                    // caused ATR=0%/ADX=0 and the resulting "MEAN_REVERTING conf 0.80" for BTC.
+                    const normalizedBtc = normalizeCryptoBars(btcKlines);
                     const regimeResult = sharedRegimeDetector.detectRegime(normalizedBtc, {
                         lowVolThreshold: 0.8,    // crypto has higher baseline vol
                         highVolThreshold: 3.0,   // crypto crisis threshold
@@ -4241,11 +4257,9 @@ class CryptoTradingEngine {
                             // which carries them via bestSignal.recentBars (see :3000).
                             const bars = signal.recentBars || signal.klines || signal.bars;
                             if (microstructureModule && bars && bars.length >= 20) {
-                                const normalizedBars = bars.map(b => ({
-                                    open: parseFloat(b.open || b.o || 0), high: parseFloat(b.high || b.h || 0),
-                                    low: parseFloat(b.low || b.l || 0), close: parseFloat(b.close || b.c || 0),
-                                    volume: parseFloat(b.volume || b.v || 0),
-                                }));
+                                // [2026-05-14 FIX] bars come from signal.recentBars which is
+                                // data.klines.slice(-40) — raw Kraken arrays. Use shared normalizer.
+                                const normalizedBars = normalizeCryptoBars(bars);
                                 const micro = microstructureModule.computeMicrostructure(normalizedBars);
                                 if (micro.present && micro.toxicity?.raw?.direction === 'distribution') {
                                     signal.sizingFactor = (signal.sizingFactor || 1.0) * 0.7;
@@ -4256,11 +4270,8 @@ class CryptoTradingEngine {
                             }
                             // Liquidity sweep — reuses bars from above
                             if (liquiditySweepModule && bars && bars.length >= 25) {
-                                const normalizedBars = bars.map(b => ({
-                                    open: parseFloat(b.open || b.o || 0), high: parseFloat(b.high || b.h || 0),
-                                    low: parseFloat(b.low || b.l || 0), close: parseFloat(b.close || b.c || 0),
-                                    volume: parseFloat(b.volume || b.v || 0),
-                                }));
+                                // [2026-05-14 FIX] bars are raw Kraken arrays — see microstructure block above.
+                                const normalizedBars = normalizeCryptoBars(bars);
                                 const sweep = liquiditySweepModule.computeLiquiditySweep(normalizedBars, signal.atr || 1);
                                 if (sweep.raw.detected && sweep.raw.bullishSweeps.length > 0) {
                                     signal.sizingFactor = (signal.sizingFactor || 1.0) * 1.15;
