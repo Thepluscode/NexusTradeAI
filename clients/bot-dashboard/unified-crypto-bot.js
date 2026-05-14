@@ -4229,9 +4229,14 @@ class CryptoTradingEngine {
                                     console.log(`[CROSS-ASSET] ${signal.symbol} size ×${crossAsset.riskMultiplier.toFixed(2)} (fear zone: ${crossAsset.components?.vix?.zone || '?'})`);
                                 }
                             }
-                            // Microstructure: VPIN from klines already fetched
-                            if (microstructureModule && data.klines && data.klines.length >= 20) {
-                                const normalizedBars = data.klines.map(b => ({
+                            // Microstructure: VPIN from bars attached at scan time.
+                            // Bug fix 2026-06-14: previously referenced undefined `data` from
+                            // scanForOpportunities() scope — threw ReferenceError on every signal
+                            // since v24.12 (2026-04-20). Bars now read from the signal itself,
+                            // which carries them via bestSignal.recentBars (see :3000).
+                            const bars = signal.recentBars || signal.klines || signal.bars;
+                            if (microstructureModule && bars && bars.length >= 20) {
+                                const normalizedBars = bars.map(b => ({
                                     open: parseFloat(b.open || b.o || 0), high: parseFloat(b.high || b.h || 0),
                                     low: parseFloat(b.low || b.l || 0), close: parseFloat(b.close || b.c || 0),
                                     volume: parseFloat(b.volume || b.v || 0),
@@ -4244,14 +4249,14 @@ class CryptoTradingEngine {
                                     console.log(`[MICROSTRUCTURE] ${signal.symbol} ACCUMULATION confirmed (VPIN: ${micro.vpin?.raw?.vpin?.toFixed(3) || '?'})`);
                                 }
                             }
-                            // Liquidity sweep
-                            if (liquiditySweepModule && data.klines && data.klines.length >= 25) {
-                                const normalizedBars = data.klines.map(b => ({
+                            // Liquidity sweep — reuses bars from above
+                            if (liquiditySweepModule && bars && bars.length >= 25) {
+                                const normalizedBars = bars.map(b => ({
                                     open: parseFloat(b.open || b.o || 0), high: parseFloat(b.high || b.h || 0),
                                     low: parseFloat(b.low || b.l || 0), close: parseFloat(b.close || b.c || 0),
                                     volume: parseFloat(b.volume || b.v || 0),
                                 }));
-                                const sweep = liquiditySweepModule.computeLiquiditySweep(normalizedBars, data.atr || 1);
+                                const sweep = liquiditySweepModule.computeLiquiditySweep(normalizedBars, signal.atr || 1);
                                 if (sweep.raw.detected && sweep.raw.bullishSweeps.length > 0) {
                                     signal.sizingFactor = (signal.sizingFactor || 1.0) * 1.15;
                                     console.log(`[LIQUIDITY SWEEP] ${signal.symbol} BULLISH sweep — size ×1.15`);
