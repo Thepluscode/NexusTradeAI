@@ -2803,22 +2803,22 @@ class CryptoTradingEngine {
 
             // [v14.0] Apply strategy-regime weights to momentum signals
 
-            // [v25.0] DIFF 1: 4-state regime filter — prevent bad tier selections
-            let cryptoRegimeClass = 'medium';
-            if (sharedRegimeDetector && data.klines && data.klines.length >= 20) {
-                try {
-                    const normalizedBars = data.klines.slice(-50).map(b => ({
-                        open: parseFloat(b.open || b.o || 0), high: parseFloat(b.high || b.h || 0),
-                        low: parseFloat(b.low || b.l || 0), close: parseFloat(b.close || b.c || 0),
-                        volume: parseFloat(b.volume || b.v || 0),
-                    }));
-                    const regimeAnalysis = sharedRegimeDetector.detectRegime(normalizedBars);
-                    cryptoRegimeClass = regimeAnalysis.regime;
-                    _cryptoLastMarketRegimeBySymbol.set(symbol, cryptoRegimeClass); // [2026-05-09] cache for trade stamping
-                    console.log(`[Crypto Regime] ${symbol}: ${cryptoRegimeClass} (conf: ${regimeAnalysis.confidence.toFixed(2)})`);
-                } catch (e) {
-                    console.warn(`[Crypto Regime] Failed for ${symbol}: ${e.message}`);
-                }
+            // [v25.0] DIFF 1: 4-state regime filter — prevent bad tier selections.
+            // [2026-05-14 FIX] Was re-running sharedRegimeDetector on each symbol's own
+            // 5-min bars, with daily-tuned thresholds (lowVolThreshold=0.5%, ADX<20).
+            // On 5-min bars almost every alt registers MEAN_REVERTING — root cause of
+            // the crypto tier2/tier3 silent block. Use the BTC-level regime
+            // (cryptoRegime.regime4state, computed once per scan at :3996 with
+            // crypto-calibrated thresholds lowVolThreshold=0.8, highVolThreshold=3.0).
+            // Trade-stamping cache still populated so retrospective analytics keep
+            // working — just with the market regime, which is at least directionally
+            // meaningful (vs per-symbol misclassification).
+            const cryptoRegimeClass = cryptoRegime?.regime4state || 'TRENDING_UP'; // permissive default
+            _cryptoLastMarketRegimeBySymbol.set(symbol, cryptoRegimeClass);
+            if (cryptoRegime?.regime4state) {
+                console.log(`[Crypto Regime] ${symbol}: market=${cryptoRegimeClass} (BTC conf: ${cryptoRegime.confidence?.toFixed(2) ?? '?'})`);
+            } else {
+                console.log(`[Crypto Regime] ${symbol}: BTC regime unavailable — fallback TRENDING_UP (permissive)`);
             }
 
             // [v25.0] DIFF 7: Intra-day momentum gates — restrict tiers by time of day
@@ -3997,9 +3997,14 @@ class CryptoTradingEngine {
                         lowVolThreshold: 0.8,    // crypto has higher baseline vol
                         highVolThreshold: 3.0,   // crypto crisis threshold
                     });
-                    // Merge with legacy interface so downstream code works
+                    // Merge with legacy interface so downstream code works.
+                    // [2026-05-14] Preserve the 4-state regime as `regime4state` BEFORE
+                    // overwriting `regime` with the legacy 3-state ('high'/'low'/'medium').
+                    // Downstream (per-symbol gate at :2807) now reads regime4state instead of
+                    // re-running the daily-tuned classifier on each symbol's own 5-min bars.
                     cryptoRegime = {
                         ...regimeResult,
+                        regime4state: regimeResult.regime, // TRENDING_UP/TRENDING_DOWN/MEAN_REVERTING/HIGH_VOLATILITY
                         regime: regimeResult.raw.volatility === 'high' ? 'high' : regimeResult.raw.volatility === 'low' ? 'low' : 'medium',
                         atrPct: regimeResult.atrPercent / 100,
                         trendRatio: Math.abs(regimeResult.emaSlope) * 100,
