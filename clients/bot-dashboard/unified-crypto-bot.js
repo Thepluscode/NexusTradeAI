@@ -1758,6 +1758,14 @@ const RISK_PER_TRADE = parseFloat(process.env.RISK_PER_TRADE || '0.0025'); // [v
 const MIN_SIGNAL_CONFIDENCE = parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.45');
 const MIN_SIGNAL_SCORE = parseFloat(process.env.MIN_SIGNAL_SCORE || '0.20'); // [v19.1] was 0.72, regime multipliers reduce scores to 0.25-0.35 range
 const MIN_REWARD_RISK = parseFloat(process.env.MIN_REWARD_RISK || '1.7');
+
+// [2026-05-15] Silent-failure alert: warn when no signal has passed the Committee
+// for an extended period. Catches the failure mode that caused the 30-day trade
+// silence — gates ratcheted past the signal distribution, no trades, no alerts.
+// Env override: ZERO_SIGNAL_ALERT_MINUTES (default 60).
+const ZERO_SIGNAL_ALERT_MS = (parseFloat(process.env.ZERO_SIGNAL_ALERT_MINUTES) || 60) * 60_000;
+let _lastCommitteePassTime = Date.now();
+let _lastZeroSignalAlertTime = 0;
 // [2026-04-30] Anti-FOMO confidence cap. Empirical analysis (scripts/analyze-committee-threshold.js)
 // over 58 trades showed conf >= 0.50 lost 100% at -5%/trade while conf 0.40-0.45 won 57.7% at +0.45%.
 // Three committee components (orderFlow, displacement, fvgCount) anti-predict outcomes — they fire
@@ -4110,6 +4118,15 @@ class CryptoTradingEngine {
                 // Scan for new opportunities
                 if (this.positions.size < this.config.maxTotalPositions) {
                     console.log(`\n🔍 Scanning ${this.activeSymbols.length || this.config.symbols.length} crypto pairs...`);
+                    // Silent-failure alert (see ZERO_SIGNAL_ALERT_MS)
+                    {
+                        const _now = Date.now();
+                        const _quietMs = _now - _lastCommitteePassTime;
+                        if (_quietMs >= ZERO_SIGNAL_ALERT_MS && (_now - _lastZeroSignalAlertTime) >= ZERO_SIGNAL_ALERT_MS) {
+                            console.warn(`[ALERT] No Committee pass in ${Math.round(_quietMs / 60000)} minutes — gates may have ratcheted past the signal distribution. Check /api/edge-attribution and recent [Committee] / [Guardrail] logs.`);
+                            _lastZeroSignalAlertTime = _now;
+                        }
+                    }
                     const opportunities = await this.scanForOpportunities(cryptoRegime);
 
                     console.log(`\n🎯 Found ${opportunities.length} signal(s)`);
@@ -4307,6 +4324,7 @@ class CryptoTradingEngine {
                         const calibratedConf = calibrateConfidence(rawConf);
                         const calTag = plattParams.calibrated ? ` cal:${calibratedConf.toFixed(3)}` : '';
                         console.log(`[Committee] ${signal.symbol}: APPROVED conf:${rawConf}${calTag} — momentum:${committee.components.momentum} flow:${committee.components.orderFlow} displacement:${committee.components.displacement} VP:${committee.components.volumeProfile} FVG:${committee.components.fvg}`);
+                        _lastCommitteePassTime = Date.now(); // resets silent-failure alert timer
 
                         // [v14.1] Portfolio Allocator — compute capital allocation from calibrated confidence + state
                         const portfolioState = {

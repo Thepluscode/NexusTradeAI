@@ -1496,6 +1496,14 @@ const MAX_CONSECUTIVE_LOSSES = parseInt(process.env.MAX_CONSECUTIVE_LOSSES || '3
 const LOSS_PAUSE_MS = parseInt(process.env.LOSS_PAUSE_MS || '7200000');          // 2h pause after N consecutive losses
 const STOP_LOSS_COOLDOWN_MS = parseInt(process.env.STOP_LOSS_COOLDOWN_MS || '2700000'); // 45min after stop loss
 
+// [2026-05-15] Silent-failure alert: warn when no signal has passed the Committee
+// for an extended period. Catches the failure mode that caused the 30-day trade
+// silence — gates ratcheted past the signal distribution, no trades, no alerts.
+// Env override: ZERO_SIGNAL_ALERT_MINUTES (default 60).
+const ZERO_SIGNAL_ALERT_MS = (parseFloat(process.env.ZERO_SIGNAL_ALERT_MINUTES) || 60) * 60_000;
+let _lastCommitteePassTime = Date.now();
+let _lastZeroSignalAlertTime = 0;
+
 // Adaptive guardrail state
 const guardrails = {
     consecutiveLosses: 0,
@@ -3218,6 +3226,15 @@ async function scanMomentumBreakouts() {
 
         const symbols = popularStocks.getAllSymbols();
         console.log(`\n🔍 Momentum Scan: Checking ${symbols.length} stocks... [Regime: ${regime.adjustments.label}${regime.isTrending ? ' TRENDING' : ''}] [SPY: ${spyBullish ? 'BULLISH' : 'BEARISH'}]${regime.isTrending ? ' [MeanRev: BLOCKED]' : ''}`);
+        // Silent-failure alert (see ZERO_SIGNAL_ALERT_MS)
+        {
+            const _now = Date.now();
+            const _quietMs = _now - _lastCommitteePassTime;
+            if (_quietMs >= ZERO_SIGNAL_ALERT_MS && (_now - _lastZeroSignalAlertTime) >= ZERO_SIGNAL_ALERT_MS) {
+                console.warn(`[ALERT] No Committee pass in ${Math.round(_quietMs / 60000)} minutes — gates may have ratcheted past the signal distribution. Check /api/edge-attribution and recent [Committee] / [Guardrail] logs.`);
+                _lastZeroSignalAlertTime = _now;
+            }
+        }
         scanDiagnostics._reset();
 
         const movers = [];
@@ -3457,6 +3474,7 @@ async function scanMomentumBreakouts() {
                         continue;
                     }
                     console.log(`[Committee] ${mover.symbol}: APPROVED conf:${committee.confidence} (${positiveComponents}/6 positive) — momentum:${committee.components.momentum} flow:${committee.components.orderFlow} displacement:${committee.components.displacement} VP:${committee.components.volumeProfile} FVG:${committee.components.fvg}`);
+                    _lastCommitteePassTime = Date.now(); // resets silent-failure alert timer
 
                     // [v23.0] Apply Platt-scaled calibration if available (maps raw→win probability)
                     const calibratedConf = calibrateConfidence(committee.confidence, globalThis._stockPlattParams);
