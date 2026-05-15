@@ -3358,7 +3358,16 @@ async function scanMomentumBreakouts() {
                             continue;
                         }
                     }
-                    // [v24.12] Enrich mover with Phase 3 alpha signals before committee scoring
+                    // [v24.12] Enrich mover with Phase 3 alpha signals before committee scoring.
+                    // [2026-05-15 FIX] `bars` and `atr` were bare free identifiers here —
+                    // undefined in this scope, throwing ReferenceError on every signal that
+                    // reached this block (currently masked: the regime gate above blocks
+                    // 100% of movers, so this code is unreachable in production right now).
+                    // analyzeMomentum() now attaches mover.bars (last 40 1-min bars) and
+                    // mover.atr; aliasing them as local consts so the existing `&& bars &&
+                    // bars.length` guards short-circuit cleanly when missing.
+                    const bars = mover.bars || null;
+                    const atr = mover.atr ?? null;
                     try {
                         // Cross-asset: VIX fear gauge (use cached regime ATR% as proxy for vol level)
                         if (crossAssetModule) {
@@ -4513,7 +4522,15 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
 
         if (candidates.length === 0) return null;
         candidates.sort((a, b) => (b.score || 0) - (a.score || 0));
-        return candidates[0];
+        const chosen = candidates[0];
+        // [2026-05-15] Attach intraday bars + ATR for downstream alpha enrichment
+        // (microstructure VPIN, liquidity sweep). Previously these were bare free
+        // identifiers in the scan loop's alpha block → ReferenceError caught by
+        // try/catch → silent enrichment failure. Trim to last 40 bars to match the
+        // microstructure (>=20) and liquidity-sweep (>=25) minimum window.
+        chosen.bars = bars.slice(-40);
+        chosen.atr = atr;
+        return chosen;
 
     } catch (error) {
         return null;
