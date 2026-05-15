@@ -219,6 +219,8 @@ export default function CryptoBotPage() {
     const winRate = status?.stats?.totalTrades
         ? ((status.stats.winners / status.stats.totalTrades) * 100).toFixed(1)
         : '0';
+    // [2026-05-15] hasTrades gates the display so 0-trade bots don't show "0.0%".
+    const hasTrades = (status?.stats?.totalTrades ?? 0) > 0;
 
     const getBtcTrendColor = (trend: string | null) => {
         switch (trend) {
@@ -365,10 +367,10 @@ export default function CryptoBotPage() {
                                 <span style={{ color: '#ef4444' }}>{status?.stats?.shortTrades || 0}</span>
                             </Typography>
                             <Typography variant="caption" sx={{
-                                color: parseFloat(winRate) >= 50 ? '#10b981' : parseFloat(winRate) >= 45 ? '#f59e0b' : status?.stats?.totalTrades ? '#ef4444' : 'text.secondary',
-                                fontWeight: status?.stats?.totalTrades ? 600 : 400,
+                                color: !hasTrades ? 'text.secondary' : parseFloat(winRate) >= 50 ? '#10b981' : parseFloat(winRate) >= 45 ? '#f59e0b' : '#ef4444',
+                                fontWeight: hasTrades ? 600 : 400,
                             }}>
-                                Win Rate: {winRate}% {status?.stats?.totalTrades ? `(${status.stats.totalTrades} trades)` : ''}
+                                Win Rate: {hasTrades ? `${winRate}% (${status?.stats?.totalTrades} trades)` : '— (no closed trades yet)'}
                             </Typography>
                         </CardContent>
                     </Card>
@@ -464,15 +466,15 @@ export default function CryptoBotPage() {
                                 </Grid>
                                 <Grid item xs={3}>
                                     <Typography variant="body2" color="text.secondary">Win Rate</Typography>
-                                    <Typography variant="h5">{evaluations.winRate}%</Typography>
+                                    <Typography variant="h5">{(evaluations.totalTrades ?? 0) > 0 ? `${evaluations.winRate}%` : '—'}</Typography>
                                 </Grid>
                                 <Grid item xs={3}>
                                     <Typography variant="body2" color="text.secondary">Avg Win</Typography>
-                                    <Typography variant="h5" color="success.main">+{evaluations.avgWin}%</Typography>
+                                    <Typography variant="h5" color="success.main">{(evaluations.totalTrades ?? 0) > 0 ? `+${evaluations.avgWin}%` : '—'}</Typography>
                                 </Grid>
                                 <Grid item xs={3}>
                                     <Typography variant="body2" color="text.secondary">Avg Loss</Typography>
-                                    <Typography variant="h5" color="error.main">{evaluations.avgLoss}%</Typography>
+                                    <Typography variant="h5" color="error.main">{(evaluations.totalTrades ?? 0) > 0 ? `${evaluations.avgLoss}%` : '—'}</Typography>
                                 </Grid>
                             </>
                         )}
@@ -488,12 +490,20 @@ export default function CryptoBotPage() {
                             {Object.entries(evaluations.signalEffectiveness as Record<string, SignalEffectivenessEntry>).map(([signal, data]) => (
                                 <Box key={signal} sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
                                     <Typography variant="body2" sx={{ width: 120 }}>{signal}</Typography>
-                                    <Chip
-                                        label={`${data.edge > 0 ? '+' : ''}${data.edge}%`}
-                                        size="small"
-                                        color={data.edge > 0 ? 'success' : 'error'}
-                                        sx={{ mr: 1 }}
-                                    />
+                                    {(data?.withSignal?.count ?? 0) > 0 && (data?.withoutSignal?.count ?? 0) > 0 ? (
+                                        <Chip
+                                            label={`${data.edge > 0 ? '+' : ''}${data.edge}%`}
+                                            size="small"
+                                            color={data.edge > 0 ? 'success' : 'error'}
+                                            sx={{ mr: 1 }}
+                                        />
+                                    ) : (
+                                        <Chip
+                                            label="N/A"
+                                            size="small"
+                                            sx={{ mr: 1, opacity: 0.5 }}
+                                        />
+                                    )}
                                     <Typography variant="caption" color="text.secondary">
                                         ({data?.withSignal?.count ?? 0} trades with, {data?.withoutSignal?.count ?? 0} without)
                                     </Typography>

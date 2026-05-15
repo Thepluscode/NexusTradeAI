@@ -87,6 +87,16 @@ export default function AgentDecisionsCard({ assetClass, limit = 10 }: Props) {
                 </Box>
             </Box>
 
+            {/* [2026-05-15] Honesty: orch.* stats below come from a single, un-filtered
+                getAgentStats() endpoint — they're SYSTEM-WIDE, not per-bot. The decisions
+                table further down IS filtered by assetClass. Surface that to the reader
+                instead of letting identical numbers on every bot page imply otherwise. */}
+            {assetClass && (
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1, fontStyle: 'italic' }}>
+                    System-wide pipeline stats below · recent decisions filtered to {assetClass}
+                </Typography>
+            )}
+
             {/* Mini stats row */}
             <Box sx={{
                 display: 'grid',

@@ -265,6 +265,9 @@ export default function StockBotPage() {
     const winRate = status?.stats?.winRate != null
         ? Number(status.stats.winRate).toFixed(1)
         : '0';
+    // [2026-05-15] hasTrades gates the display so a 0-trade bot doesn't render
+    // "0%" win rate (which reads as 0% of 100 attempts, not "no data yet").
+    const hasTrades = (status?.stats?.totalTrades ?? 0) > 0;
 
     return (
         <>
@@ -410,9 +413,9 @@ export default function StockBotPage() {
                             </Typography>
                             <Typography variant="h5" sx={{
                                 fontWeight: 800, mt: 0.5, letterSpacing: '-0.02em',
-                                color: parseFloat(winRate) >= 50 ? '#10b981' : parseFloat(winRate) >= 45 ? '#f59e0b' : status?.stats?.totalTrades ? '#ef4444' : 'text.secondary',
+                                color: !hasTrades ? 'text.secondary' : parseFloat(winRate) >= 50 ? '#10b981' : parseFloat(winRate) >= 45 ? '#f59e0b' : '#ef4444',
                             }}>
-                                {winRate}%
+                                {hasTrades ? `${winRate}%` : '—'}
                             </Typography>
                             <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.68rem' }}>
                                 {status?.stats?.totalTrades || 0} trades · need ≥45%
@@ -548,15 +551,15 @@ export default function StockBotPage() {
                                 </Grid>
                                 <Grid item xs={3}>
                                     <Typography variant="body2" color="text.secondary">Win Rate</Typography>
-                                    <Typography variant="h5">{evaluations.winRate}%</Typography>
+                                    <Typography variant="h5">{(evaluations.totalTrades ?? 0) > 0 ? `${evaluations.winRate}%` : '—'}</Typography>
                                 </Grid>
                                 <Grid item xs={3}>
                                     <Typography variant="body2" color="text.secondary">Avg Win</Typography>
-                                    <Typography variant="h5" color="success.main">+{evaluations.avgWin}%</Typography>
+                                    <Typography variant="h5" color="success.main">{(evaluations.totalTrades ?? 0) > 0 ? `+${evaluations.avgWin}%` : '—'}</Typography>
                                 </Grid>
                                 <Grid item xs={3}>
                                     <Typography variant="body2" color="text.secondary">Avg Loss</Typography>
-                                    <Typography variant="h5" color="error.main">{evaluations.avgLoss}%</Typography>
+                                    <Typography variant="h5" color="error.main">{(evaluations.totalTrades ?? 0) > 0 ? `${evaluations.avgLoss}%` : '—'}</Typography>
                                 </Grid>
                             </>
                         )}
@@ -572,12 +575,20 @@ export default function StockBotPage() {
                             {Object.entries(evaluations.signalEffectiveness as Record<string, SignalEffectivenessEntry>).map(([signal, data]) => (
                                 <Box key={signal} sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
                                     <Typography variant="body2" sx={{ width: 120 }}>{signal}</Typography>
-                                    <Chip
-                                        label={`${data.edge > 0 ? '+' : ''}${data.edge}%`}
-                                        size="small"
-                                        color={data.edge > 0 ? 'success' : 'error'}
-                                        sx={{ mr: 1 }}
-                                    />
+                                    {(data?.withSignal?.count ?? 0) > 0 && (data?.withoutSignal?.count ?? 0) > 0 ? (
+                                        <Chip
+                                            label={`${data.edge > 0 ? '+' : ''}${data.edge}%`}
+                                            size="small"
+                                            color={data.edge > 0 ? 'success' : 'error'}
+                                            sx={{ mr: 1 }}
+                                        />
+                                    ) : (
+                                        <Chip
+                                            label="N/A"
+                                            size="small"
+                                            sx={{ mr: 1, opacity: 0.5 }}
+                                        />
+                                    )}
                                     <Typography variant="caption" color="text.secondary">
                                         ({data?.withSignal?.count ?? 0} trades with, {data?.withoutSignal?.count ?? 0} without)
                                     </Typography>
