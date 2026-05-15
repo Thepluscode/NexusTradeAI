@@ -269,6 +269,22 @@ export default function StockBotPage() {
     // "0%" win rate (which reads as 0% of 100 attempts, not "no data yet").
     const hasTrades = (status?.stats?.totalTrades ?? 0) > 0;
 
+    // [2026-05-15] Stock bot is long-only (see unified-trading-bot.js:2848-2856
+    // where managePositions filters qty <= 0 as orphans and refuses to manage them).
+    // Partition positions so the "Open Positions" card reflects bot-managed reality;
+    // orphans get rendered separately with a "cover manually in Alpaca" instruction.
+    const isOrphan = (pos: Position): boolean => {
+        const q = pos.qty ?? pos.quantity ?? 0;
+        return q < 0 || pos.side?.toLowerCase() === 'short';
+    };
+    const allPositions: Position[] = status?.positions ?? [];
+    const managedPositions = allPositions.filter(p => !isOrphan(p));
+    const orphanPositions = allPositions.filter(isOrphan);
+    const managedOpenPnL = managedPositions.reduce((sum, p) =>
+        sum + (p.unrealizedPnL ?? p.pnl ?? p.unrealizedPL ?? 0), 0);
+    const orphanOpenPnL = orphanPositions.reduce((sum, p) =>
+        sum + (p.unrealizedPnL ?? p.pnl ?? p.unrealizedPL ?? 0), 0);
+
     return (
         <>
         <SEO title="Stock Bot" description="AI-powered stock trading bot with multi-tier momentum strategy. Real-time positions, P&L tracking, and automated risk management." path="/stock" />
@@ -685,14 +701,14 @@ export default function StockBotPage() {
             {/* Positions */}
             <Paper sx={{ p: 2, mb: 3 }}>
                 <Typography variant="h6" sx={{ mb: 0.5 }}>
-                    Open Positions ({status?.positions?.length || 0}/{status?.config?.maxPositions || 5})
+                    Open Positions ({managedPositions.length}/{status?.config?.maxPositions || 5})
                 </Typography>
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                    ${(status?.openPnL ?? 0).toFixed(2)} unrealized from current entries. This will not always match daily return, which is based on account change since prior close.
+                    ${managedOpenPnL.toFixed(2)} unrealized from bot-managed entries. This will not always match daily return, which is based on account change since prior close{orphanPositions.length > 0 ? ' (and currently includes mark-to-market on the orphan position(s) below)' : ''}.
                 </Typography>
-                {status?.positions && status.positions.length > 0 ? (
+                {managedPositions.length > 0 ? (
                     <Grid container spacing={2}>
-                        {status.positions.map((pos) => (
+                        {managedPositions.map((pos) => (
                             <Grid item xs={12} sm={6} md={4} key={pos.symbol}>
                                 {(() => {
                                     const pnlDollar = pos.unrealizedPnL ?? pos.pnl ?? pos.unrealizedPL ?? 0;
@@ -808,6 +824,55 @@ export default function StockBotPage() {
                         <Typography variant="caption" color="text.disabled">
                             {isRunning ? 'Scanning for momentum signals…' : 'Start the bot to begin scanning'}
                         </Typography>
+                    </Box>
+                )}
+
+                {/* [2026-05-15] Orphan positions — present in Alpaca but NOT bot-managed.
+                    Stock bot logs "[ManagePositions] Skipping N orphan position(s)... Cover
+                    via Alpaca dashboard or buy-to-cover" each scan. Surface that to the
+                    operator instead of letting the dashboard imply the bot owns them. */}
+                {orphanPositions.length > 0 && (
+                    <Box sx={{ mt: 3, pt: 2, borderTop: '1px dashed', borderColor: 'rgba(245,158,11,0.3)' }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                            <Typography variant="subtitle1" sx={{ fontWeight: 700, color: '#f59e0b' }}>
+                                Orphan positions ({orphanPositions.length})
+                            </Typography>
+                            <Chip label="NOT BOT-MANAGED" size="small" sx={{ height: 18, fontSize: '0.6rem', bgcolor: 'rgba(245,158,11,0.15)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.3)', fontWeight: 700 }} />
+                        </Box>
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 2, fontSize: '0.82rem' }}>
+                            ${orphanOpenPnL.toFixed(2)} unrealized on these. The bot refuses to trade them (long-only policy). Cover manually via the Alpaca dashboard (buy-to-cover for shorts) — the bot logs this skip every scan until cleared.
+                        </Typography>
+                        <Grid container spacing={2}>
+                            {orphanPositions.map((pos) => {
+                                const pnlDollar = pos.unrealizedPnL ?? pos.pnl ?? pos.unrealizedPL ?? 0;
+                                const entryPrice = pos.entryPrice ?? parseFloat(pos.avg_entry_price || '0');
+                                const qty = pos.qty ?? pos.quantity ?? 0;
+                                const isGreen = pnlDollar >= 0;
+                                return (
+                                    <Grid item xs={12} sm={6} md={4} key={`orphan-${pos.symbol}`}>
+                                        <Card sx={{ border: '1px dashed', borderColor: 'rgba(245,158,11,0.4)', bgcolor: 'rgba(245,158,11,0.03)' }}>
+                                            <CardContent sx={{ pb: '12px !important' }}>
+                                                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.75 }}>
+                                                    <Typography variant="h6" sx={{ fontWeight: 800, fontSize: '1rem' }}>{pos.symbol}</Typography>
+                                                    <Chip label="ORPHAN" size="small" sx={{ height: 22, fontSize: '0.65rem', fontWeight: 700, bgcolor: alpha('#f59e0b', 0.15), color: '#fbbf24', border: '1px solid rgba(245,158,11,0.3)' }} />
+                                                </Box>
+                                                <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.72rem' }}>
+                                                    {qty} shares · entry ${entryPrice.toFixed(2)}
+                                                </Typography>
+                                                <Box sx={{ display: 'flex', alignItems: 'center', mt: 1, gap: 0.5 }}>
+                                                    {isGreen
+                                                        ? <TrendingUp sx={{ color: '#10b981', fontSize: 18 }} />
+                                                        : <TrendingDown sx={{ color: '#ef4444', fontSize: 18 }} />}
+                                                    <Typography variant="h6" sx={{ fontWeight: 800, fontSize: '1rem', color: isGreen ? '#10b981' : '#ef4444' }}>
+                                                        {isGreen ? '+' : ''}${pnlDollar.toFixed(2)}
+                                                    </Typography>
+                                                </Box>
+                                            </CardContent>
+                                        </Card>
+                                    </Grid>
+                                );
+                            })}
+                        </Grid>
                     </Box>
                 )}
             </Paper>
