@@ -2735,8 +2735,13 @@ class CryptoTradingEngine {
                 const priceInBox = (data.currentPrice - box.low) / box.range; // 0 = at low, 1 = at high
                 const dynamicRR = calculateCryptoDynamicRR(atrPct);
 
-                // LONG: price in bottom 20% of box
-                if (priceInBox <= 0.20 && !box.longTaken && rsi < 45) {
+                // LONG: price in bottom 20% of box.
+                // [2026-05-14 FIX] Was missing the lower bound — when price broke below
+                // box.low (priceInBox < 0), this still fired but with stopDistance =
+                // box.low * 0.985 ABOVE currentPrice → negative stopLossPercent → broken R:R.
+                // Box-mean-reversion logic only applies when price is INSIDE the box; a
+                // break below is a different (breakdown) setup, not a reversion long.
+                if (priceInBox >= 0 && priceInBox <= 0.20 && !box.longTaken && rsi < 45) {
                     const confirmation = calculateCryptoConfirmation({
                         rsi, direction: 'long', macdBullish, orderFlowImbalance, bollingerPercentB: bb ? bb.percentB : undefined
                     });
@@ -2774,8 +2779,14 @@ class CryptoTradingEngine {
                     }
                 }
 
-                // SHORT: price in top 20% of box
-                if (priceInBox >= 0.80 && !box.shortTaken && rsi > 55) {
+                // SHORT: price in top 20% of box.
+                // [2026-05-14 FIX] Was missing the upper bound — when price broke above
+                // box.high (priceInBox > 1), this still fired but with stopDistance =
+                // box.high * 1.015 BELOW currentPrice → negative stopLossPercent →
+                // R:R came out as e.g. -18.34 (observed live on XBTUSD at priceInBox 194.6%).
+                // Box-mean-reversion logic only applies when price is INSIDE the box; a
+                // break above is a different (breakout) setup, not a reversion short.
+                if (priceInBox >= 0.80 && priceInBox <= 1.0 && !box.shortTaken && rsi > 55) {
                     const confirmation = calculateCryptoConfirmation({
                         rsi, direction: 'short', macdBullish, orderFlowImbalance, bollingerPercentB: bb ? bb.percentB : undefined
                     });
