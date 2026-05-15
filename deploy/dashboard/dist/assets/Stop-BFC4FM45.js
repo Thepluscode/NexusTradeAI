@@ -1,1 +1,0 @@
-import{o,j as t}from"./index-CalLX6WO.js";const p=o(t.jsx("path",{d:"M6 6h12v12H6z"}),"Stop");export{p as S};
