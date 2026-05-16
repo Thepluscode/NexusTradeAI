@@ -15,7 +15,7 @@ import {
 } from '@mui/material';
 import { Bolt, Email, Lock, Person } from '@mui/icons-material';
 import axios from 'axios';
-import { SERVICE_URLS } from '@/services/api';
+import { SERVICE_URLS, scheduleProactiveRefresh } from '@/services/api';
 
 const AUTH_URL = SERVICE_URLS.stockBot;
 
@@ -40,6 +40,7 @@ export default function LoginPage() {
       const { data } = await axios.post(`${AUTH_URL}${endpoint}`, payload);
       localStorage.setItem('nexus_access_token', data.accessToken);
       localStorage.setItem('nexus_refresh_token', data.refreshToken);
+      scheduleProactiveRefresh();
       navigate('/dashboard');
     } catch (err: unknown) {
       const response = (err as { response?: { status?: number; data?: { error?: string } } })?.response;
@@ -53,6 +54,7 @@ export default function LoginPage() {
           });
           localStorage.setItem('nexus_access_token', data.accessToken);
           localStorage.setItem('nexus_refresh_token', data.refreshToken);
+          scheduleProactiveRefresh();
           navigate('/dashboard');
           return;
         } catch (devErr: unknown) {

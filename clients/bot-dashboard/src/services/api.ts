@@ -56,6 +56,17 @@ function safeParseUser(): { id?: number | string; email?: string } {
 function getAccessToken() { return localStorage.getItem('nexus_access_token'); }
 function getRefreshToken() { return localStorage.getItem('nexus_refresh_token'); }
 
+function readAccessTokenExpiryMs(): number | null {
+  const token = getAccessToken();
+  if (!token) return null;
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
 // Attach Bearer token to every outgoing request
 function addAuthInterceptor(instance: AxiosInstance) {
   instance.interceptors.request.use((config: InternalAxiosRequestConfig) => {
@@ -84,6 +95,7 @@ async function tryRefreshToken(): Promise<string | null> {
     const { data } = await axios.post(`${SERVICE_URLS.stockBot}/api/auth/refresh`, { refreshToken });
     localStorage.setItem('nexus_access_token', data.accessToken);
     localStorage.setItem('nexus_refresh_token', data.refreshToken);
+    scheduleProactiveRefresh();
     return data.accessToken;
   } catch (err: unknown) {
     // Only clear session on explicit auth rejection (401/403), not network errors
@@ -95,6 +107,38 @@ async function tryRefreshToken(): Promise<string | null> {
     }
     return null;
   }
+}
+
+// Proactive refresh: fire the refresh flow ~60s before exp so users never see
+// a console 401. The reactive response interceptor below is still the safety
+// net for: tabs that wake from sleep past exp, clock skew, and network blips.
+const REFRESH_LEAD_MS = 60_000;
+let _proactiveTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function scheduleProactiveRefresh() {
+  if (_proactiveTimer) {
+    clearTimeout(_proactiveTimer);
+    _proactiveTimer = null;
+  }
+  const expMs = readAccessTokenExpiryMs();
+  if (!expMs) return;
+  // Clamp to >=1s in the future so an already-expired token still fires
+  // promptly (and lets tryRefreshToken handle it) rather than skipping.
+  const delay = Math.max(1000, expMs - Date.now() - REFRESH_LEAD_MS);
+  _proactiveTimer = setTimeout(() => {
+    _proactiveTimer = null;
+    // tryRefreshToken re-arms via scheduleProactiveRefresh() on success.
+    void tryRefreshToken();
+  }, delay);
+}
+
+// Cross-tab coordination: when another tab writes a fresh token, re-arm
+// this tab's timer against the new expiry. Prevents stale timers from
+// firing redundant refresh calls after a sibling tab already refreshed.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', e => {
+    if (e.key === 'nexus_access_token') scheduleProactiveRefresh();
+  });
 }
 
 function addRefreshInterceptor(instance: AxiosInstance) {
@@ -900,3 +944,7 @@ class APIClient {
 }
 
 export const apiClient = new APIClient();
+
+// Kick off proactive token refresh for any token already in localStorage
+// from a prior session. LoginPage also calls this after a fresh login.
+scheduleProactiveRefresh();
