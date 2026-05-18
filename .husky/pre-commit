@@ -1,0 +1,48 @@
+#!/usr/bin/env sh
+# Pre-commit secret scanner — local defense-in-depth on top of GitHub Push
+# Protection. Catches leaks before the push, so the operator doesn't have to
+# rewrite history when a key gets pasted into a notes file.
+#
+# Background: CARL development-004 (OpenRouter key leak, 2026-05-18). GitHub
+# Push Protection saved the day but only at push time. This hook moves the
+# catch upstream to commit time.
+#
+# Bypass: `git commit --no-verify` (the operator's CLAUDE.md says not to —
+# this is here only as documentation of the escape hatch).
+
+. "$(dirname -- "$0")/_/husky.sh"
+
+# Require gitleaks. Fail loud with install instructions rather than letting
+# the commit through silently if the tool is missing.
+if ! command -v gitleaks > /dev/null 2>&1; then
+  printf '\n\033[31m[pre-commit] gitleaks not found.\033[0m\n'
+  printf '  Install with:  brew install gitleaks\n'
+  printf '  Then retry your commit.\n\n'
+  printf '  (If you genuinely need to bypass — only for emergencies — use\n'
+  printf '   `git commit --no-verify`, but file an incident first.)\n\n'
+  exit 1
+fi
+
+# Scan only what is staged for this commit. --redact ensures any matched
+# secret is replaced with REDACTED in the output so the secret does not get
+# logged in terminal scrollback / CI logs / pair-programming screenshares.
+gitleaks protect \
+  --staged \
+  --no-banner \
+  --redact \
+  --config=.gitleaks.toml \
+  --exit-code 1
+
+rc=$?
+if [ $rc -ne 0 ]; then
+  printf '\n\033[31m[pre-commit] gitleaks found likely secrets in staged changes.\033[0m\n'
+  printf '  Review the findings above. Most actions:\n'
+  printf '    1. Redact the value in the file, then `git add` and retry.\n'
+  printf '    2. If it is a placeholder/example, add the path or pattern to\n'
+  printf '       .gitleaks.toml under [allowlist].\n'
+  printf '    3. Only as a last resort, bypass with --no-verify and ROTATE\n'
+  printf '       the leaked credential immediately afterwards.\n\n'
+  exit $rc
+fi
+
+exit 0

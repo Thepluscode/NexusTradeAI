@@ -1,0 +1,70 @@
+# gitleaks config for NexusTradeAI
+#
+# Used by the local pre-commit hook (.husky/pre-commit) which runs
+# `gitleaks protect --staged --config .gitleaks.toml`.
+#
+# Strategy: extend the default gitleaks ruleset (gets all 150+ provider
+# patterns including sk-or-v1-* OpenRouter, sk-ant-* Anthropic, sk-proj-*
+# OpenAI, gh*_ GitHub, AKIA AWS, AIza Google, xox* Slack, etc.) and add a
+# minimal allowlist for known placeholders / documentation examples.
+#
+# Adding to this allowlist requires conscious judgement: every new entry
+# narrows the protection. Prefer redacting the example over allowlisting.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "NexusTradeAI placeholder & doc-example allowlist"
+
+# Files that intentionally contain example/placeholder credentials.
+paths = [
+  # Env templates — all values here are placeholders by definition.
+  '''^\.env\.example$''',
+  '''(^|/)\.env\.example$''',
+
+  # Public API docs that show example curl commands and key formats.
+  '''^docs/api/.*$''',
+
+  # Setup runbooks — instruct users how to obtain real keys, show formats.
+  '''^docs/runbooks/(CRYPTO_TRADING|TELEGRAM_ALERTS|SMS_ALERTS|METATRADER|INTEGRATION|PM2)_.*\.md$''',
+
+  # Archived setup guides (duplicate runbook copies from before restructure).
+  '''^docs/archive/(CRYPTO_TRADING|TELEGRAM_ALERTS|SMS_ALERTS|METATRADER|NO_TRADES|INTEGRATION)_.*\.md$''',
+
+  # Dashboard UI pages that render API usage examples to end-users.
+  '''^clients/bot-dashboard/src/pages/(API|Docs)Page\.tsx$''',
+
+  # Built dashboard bundles for the same UI pages (Vite hash suffixes).
+  '''^deploy/dashboard/dist/assets/(API|Docs)Page-[A-Za-z0-9_-]+\.js$''',
+
+  # Kubernetes manifests with documented default admin credentials.
+  '''^data-infrastructure/kubernetes/.*\.ya?ml$''',
+  '''^infrastructure/production/.*\.ya?ml$''',
+
+  # Marketing strategy file with example campaign content.
+  '''^marketing/freemium-launch/FreemiumLaunchStrategy\.js$''',
+
+  # ADR files explicitly discuss the SHAPE of secrets (not the values).
+  '''^docs/adr/.*\.md$''',
+
+  # Architecture and service docs reference env var names by design.
+  '''^docs/(ARCHITECTURE|SERVICES|RESTRUCTURE_PROPOSAL)\.md$''',
+
+  # The redaction-placeholder string in WHY_NO_TRADES_YET.md.
+  '''^docs/archive/notes/WHY_NO_TRADES_YET\.md$''',
+]
+
+# Strings that are clearly placeholders regardless of file.
+regexes = [
+  '''(?i)REDACTED''',
+  '''(?i)<your[- _].*>''',
+  '''(?i)YOUR[_-](API[_-])?KEY''',
+  '''(?i)YOUR[_-]SECRET''',
+  '''(?i)YOUR[_-]TOKEN''',
+  '''(?i)PASTE[_-]YOUR''',
+  '''(?i)example[_-]?(key|secret|token)''',
+  '''(?i)placeholder''',
+  '''(?i)YWRtaW4''',  # base64 of "admin" — common docs example
+  '''sk-or-v1-\[REDACTED''',
+]
