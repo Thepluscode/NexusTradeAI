@@ -2781,32 +2781,61 @@ function updateTrailingStop(position, currentPrice, unrealizedPL) {
     return stopUpdated;
 }
 
-// Track which Alpaca API keys have already had cover-orphan-shorts run in this
-// process, so repeat callers (per-user engines pointing at the same account)
-// don't all race to cover the same short and log noisy "insufficient qty" errors.
+// Track which Alpaca API keys have already had cover-orphan-shorts SUCCEED in
+// this process, so repeat callers (per-user engines pointing at the same
+// account) don't all race to cover the same short and log noisy "insufficient
+// qty" errors. Set only after a re-verification confirms zero orphan shorts
+// remain — previously this was set BEFORE the attempt, so any transient
+// failure (network blip, insufficient buying power, partial fill, market
+// closed) permanently disabled the retry path. See CARL development-006
+// orphan-cover follow-up and pending_2026_05_24_post_handsoff_backlog.md.
 const _coveredApiKeys = new Set();
 
-// One-shot startup cleanup: cover any orphan short positions (qty < 0) by
-// submitting buy-to-cover orders. Bot is long-only, so a short can only exist
-// as residue from a prior over-sell bug. Paper API only — refuses to run
-// against any non-paper Alpaca endpoint.
+// [2026-05-18] Mutex to prevent concurrent coverOrphanShorts calls for the
+// same Alpaca account from racing each other. Cleared in the finally block.
+const _orphanCoverInFlight = new Set();
+
+// [2026-05-18] Rate-limit retries to once per 5 minutes per Alpaca account.
+// Without this, calling coverOrphanShorts from managePositions every scan
+// cycle would spam the Alpaca API with cover attempts during a sustained
+// failure (e.g., insufficient buying power until market open).
+const _lastOrphanCoverMs = new Map();
+const ORPHAN_COVER_RETRY_MS = 5 * 60 * 1000;
+
+// Cover any orphan short positions (qty < 0) by submitting buy-to-cover
+// MARKET orders. Bot is long-only, so a short can only exist as residue
+// from a prior over-sell bug. Paper API only — refuses to run against any
+// non-paper Alpaca endpoint.
+//
+// [2026-05-18] Behaviour change: now safe to call repeatedly. The function
+// short-circuits when (a) success has already been verified, (b) another
+// invocation is in flight, or (c) the retry cooldown is still active.
+// On a clean run that finds no orphans (or successfully covers all of them
+// and re-verifies zero remain), it marks the apiKey done so future calls
+// no-op. Otherwise it leaves the apiKey unmarked so the next call retries.
 async function coverOrphanShorts(config, label = 'global') {
     if (!config?.apiKey || !config?.secretKey || !config?.baseURL) return;
     if (!config.baseURL.includes('paper-api.alpaca.markets')) {
         console.warn(`[OrphanCover ${label}] Refusing to run — baseURL is not paper-api.alpaca.markets`);
         return;
     }
-    if (_coveredApiKeys.has(config.apiKey)) {
-        return; // Already covered for this Alpaca account in this process
-    }
-    _coveredApiKeys.add(config.apiKey);
+    if (_coveredApiKeys.has(config.apiKey)) return;        // verified done
+    if (_orphanCoverInFlight.has(config.apiKey)) return;   // concurrent caller
+    const lastMs = _lastOrphanCoverMs.get(config.apiKey) || 0;
+    if (Date.now() - lastMs < ORPHAN_COVER_RETRY_MS) return;  // cooldown
+    _orphanCoverInFlight.add(config.apiKey);
+    _lastOrphanCoverMs.set(config.apiKey, Date.now());
+
     const MAX_COVER_QTY = 1000; // safety cap against bad data
     try {
         const res = await axios.get(`${config.baseURL}/v2/positions`, {
             headers: { 'APCA-API-KEY-ID': config.apiKey, 'APCA-API-SECRET-KEY': config.secretKey }
         });
         const orphans = (res.data || []).filter(p => parseFloat(p.qty) < 0);
-        if (orphans.length === 0) return;
+        if (orphans.length === 0) {
+            _coveredApiKeys.add(config.apiKey);  // No orphans ⇒ verified clean; skip future calls
+            return;
+        }
         console.log(`[OrphanCover ${label}] Found ${orphans.length} orphan short position(s); covering...`);
         for (const p of orphans) {
             const qty = Math.abs(parseFloat(p.qty));
@@ -2825,8 +2854,28 @@ async function coverOrphanShorts(config, label = 'global') {
                 console.warn(`[OrphanCover ${label}] ❌ Cover order failed for ${p.symbol}: ${e.response?.data?.message || e.message}`);
             }
         }
+
+        // [2026-05-18] Re-verify orphans are gone before marking apiKey done.
+        // Previously we marked done at the top of this function regardless of
+        // outcome — any failure left orphans stranded for the process lifetime.
+        try {
+            const verify = await axios.get(`${config.baseURL}/v2/positions`, {
+                headers: { 'APCA-API-KEY-ID': config.apiKey, 'APCA-API-SECRET-KEY': config.secretKey }
+            });
+            const remaining = (verify.data || []).filter(p => parseFloat(p.qty) < 0);
+            if (remaining.length === 0) {
+                _coveredApiKeys.add(config.apiKey);
+                console.log(`[OrphanCover ${label}] ✅ Verified zero orphan shorts remain`);
+            } else {
+                console.warn(`[OrphanCover ${label}] ⚠️  ${remaining.length} orphan(s) still present after cover attempt — will retry in ${ORPHAN_COVER_RETRY_MS / 60000} min: ${remaining.map(p => `${p.symbol}(${p.qty})`).join(', ')}`);
+            }
+        } catch (e) {
+            console.warn(`[OrphanCover ${label}] Verification fetch failed: ${e.message} — not marking apiKey done; will retry next cycle`);
+        }
     } catch (e) {
         console.warn(`[OrphanCover ${label}] Position fetch failed: ${e.message}`);
+    } finally {
+        _orphanCoverInFlight.delete(config.apiKey);
     }
 }
 
@@ -2834,6 +2883,16 @@ async function managePositions() {
     if (!hasGlobalAlpacaCredentials()) {
         return;
     }
+
+    // [2026-05-18] Retry orphan-short cover if a previous attempt failed or
+    // an orphan appeared mid-session. coverOrphanShorts is internally
+    // rate-limited (5 min cooldown), mutex-guarded against concurrent
+    // callers, and short-circuits once verified zero-orphan — safe to call
+    // every scan cycle. See pending_2026_05_24_post_handsoff_backlog.md.
+    coverOrphanShorts(alpacaConfig, 'managePositions').catch(e =>
+        console.warn('[OrphanCover managePositions] unexpected error:', e?.message || String(e))
+    );
+
     try {
         const positionsUrl = `${alpacaConfig.baseURL}/v2/positions`;
         const response = await axios.get(positionsUrl, {
