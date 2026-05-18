@@ -3364,6 +3364,33 @@ class CryptoTradingEngine {
             console.log(`   Stop: $${signal.stopLoss.toFixed(2)} (-${signal.stopLossPercent.toFixed(1)}%)`);
             console.log(`   Target: $${signal.takeProfit.toFixed(2)} (+${signal.profitTargetPercent.toFixed(1)}%)`);
 
+            // [2026-05-18] DAILY-CAP RACE DEFENSE — CARL development-006.
+            // Live evidence 2026-05-18 08:18 UTC: bot reported dailyTrades=17
+            // with maxTradesPerDay=10. The original increment was at the
+            // bottom of this method, AFTER `await kraken.placeOrder` had
+            // already taken ~100-500ms. Any signal that passed canTrade()
+            // while count was at N-1 could reach this point before count was
+            // bumped to N — making canTrade for the next signal still see N-1.
+            //
+            // The fix: reserve the slot SYNCHRONOUSLY here (no await between
+            // a re-check and the mutation), then roll back on order failure.
+            // Tripwire log fires loudly if count is already AT or PAST the
+            // hard upper-bound cap (config.maxTradesPerDay * 1.2 = BTC-boost
+            // ceiling) — that would indicate the leak is from a DIFFERENT
+            // increment path (hydration, orphan-cover, multi-engine), not
+            // this race. Investigate by grep for dailyTradeCount mutations.
+            const _capUpperBound = Math.floor(this.config.maxTradesPerDay * 1.2);
+            if (this.dailyTradeCount >= _capUpperBound) {
+                console.log(`⛔ [DAILY-CAP-TRIPWIRE] ${signal.symbol}: dailyTradeCount=${this.dailyTradeCount} >= upper-bound cap=${_capUpperBound} BUT execution path reached executeTrade — race-defense alone won't fix this; suspect hydration over-count or other increment path. CARL development-006.`);
+                this._recordDecision(signal.symbol, 'daily_cap_race', 'block', {
+                    dailyTradeCount: this.dailyTradeCount,
+                    cap: _capUpperBound,
+                });
+                return null;
+            }
+            this.dailyTradeCount++;  // Reserve atomically — rolled back on order failure below
+            const _reservedDailySlot = true;
+
             let order;
             if (isRealTradingEnabled()) {
                 order = await this.kraken.placeOrder(signal.symbol, 'BUY', quantity);
@@ -3373,6 +3400,7 @@ class CryptoTradingEngine {
             }
 
             if (!order) {
+                if (_reservedDailySlot) this.dailyTradeCount--;  // Release the reserved slot — order didn't fire
                 console.log(`❌ Failed to place order for ${signal.symbol}`);
                 this._recordDecision(signal.symbol, 'broker_order', 'block', { reason: 'placeOrder returned falsy', mode: isRealTradingEnabled() ? 'live' : 'paper' });
                 return null;
@@ -3436,7 +3464,8 @@ class CryptoTradingEngine {
                 .catch(e => console.warn(`⚠️  DB trade open failed: ${e.message}`));
 
             // Update tracking
-            this.dailyTradeCount++;
+            // [2026-05-18] dailyTradeCount++ moved earlier to reserve atomically
+            // before `await kraken.placeOrder` (CARL development-006).
             this.totalTrades++;
             this.lastTradeTime.set(signal.symbol, Date.now());
             this.tradesToday.push({
@@ -6192,6 +6221,15 @@ app.listen(PORT, async () => {
             }
             if (hydratedToday > 0) {
                 console.log(`📊 [Hydrate] Crypto anti-churning from DB: dailyTradeCount=${hydratedToday}, lastTradeTime=${engine.lastTradeTime.size} pairs`);
+            }
+            // [2026-05-18] DAILY-CAP TRIPWIRE — CARL development-006. If hydration leaves
+            // the counter at or above the cap (or worse, above 1.2x the cap), that's
+            // a smoking gun for an over-counting bug (e.g. hydration running twice
+            // on the same instance without reset). Log it loud so it shows up in
+            // Railway logs the morning after.
+            const _cap = engine.config?.maxTradesPerDay || 10;
+            if (engine.dailyTradeCount >= Math.floor(_cap * 1.2)) {
+                console.warn(`⚠️  [HYDRATE-TRIPWIRE] dailyTradeCount=${engine.dailyTradeCount} >= upper-bound cap=${Math.floor(_cap * 1.2)} AFTER hydration. Likely cause of CARL development-006 if not the executeTrade race. Verify trades table has only ${_cap}-ish rows for today, not 17+.`);
             }
         } catch (err) {
             console.error('[HYDRATE] Crypto anti-churning hydration failed:', err.message);
