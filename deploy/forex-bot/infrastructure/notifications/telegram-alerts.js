@@ -57,6 +57,8 @@ const stubService = {
     sendCryptoTakeProfit: noop,
 };
 
+let _startupWarned = false;
+
 /**
  * Factory used by all three bots.
  * Returns the same singleton stub on every call, matching the pattern:
@@ -64,6 +66,12 @@ const stubService = {
  * which is also called inside the bot's reconnect/reload logic.
  */
 function getTelegramAlertService() {
+    if (!_startupWarned) {
+        _startupWarned = true;
+        if (!process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_CHAT_ID) {
+            console.warn('[telegram] DISABLED on this service: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set — stock/forex entry alerts will not send');
+        }
+    }
     return stubService;
 }
 

@@ -4770,7 +4770,7 @@ async function executeTrade(signal, strategy) {
 
         // Send entry alert — fire-and-forget so a network failure never aborts the trade record
         telegramAlerts.sendStockEntry(signal.symbol, signal.price, parseFloat(stopPrice), parseFloat(targetPrice), shares, tier)
-            .catch(e => console.warn(`⚠️  Telegram entry alert failed: ${e.message}`));
+            .catch(e => console.warn(`[telegram] sendStockEntry(${signal.symbol}) failed:`, e && e.message));
 
         // [v21.0] Report execution to strategy bridge learning loop
         axios.post(`${BRIDGE_URL}/agent/execution`, {

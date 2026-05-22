@@ -3188,7 +3188,7 @@ async function executeTrade(signal) {
             signal.takeProfit,
             units,
             signal.tier
-        ).catch(e => console.warn(`⚠️  Telegram entry alert failed: ${e.message}`));
+        ).catch(e => console.warn(`[telegram] sendForexEntry(${signal.pair}) failed:`, e && e.message));
 
         // [v21.0] Report execution to strategy bridge learning loop
         axios.post(`${BRIDGE_URL}/agent/execution`, {
