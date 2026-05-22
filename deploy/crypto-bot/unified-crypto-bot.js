@@ -5634,10 +5634,11 @@ async function getOrCreateCryptoEngine(userId) {
                 const tags = buildCryptoTradeTags({ ...signal, symbol }, tier);
                 const r = await dbPool.query(
                     `INSERT INTO trades (user_id,bot,symbol,direction,tier,strategy,regime,market_regime,status,entry_price,quantity,
-                     position_size_usd,stop_loss,take_profit,entry_time,signal_score,entry_context,rsi,volume_ratio,momentum_pct)
-                     VALUES ($1,'crypto',$2,'long',$3,$4,$5,$6,'open',$7,$8,$9,$10,$11,NOW(),$12,$13::jsonb,$14,$15,$16) RETURNING id`,
+                     position_size_usd,stop_loss,take_profit,entry_time,signal_score,entry_context,rsi,volume_ratio,momentum_pct,decision_run_id)
+                     VALUES ($1,'crypto',$2,'long',$3,$4,$5,$6,'open',$7,$8,$9,$10,$11,NOW(),$12,$13::jsonb,$14,$15,$16,$17) RETURNING id`,
                     [userId, symbol, tier, tags.strategy, tags.regime, tags.marketRegimeClass, entry, quantity, positionSize, stopLoss, takeProfit,
-                     tags.score, JSON.stringify(tags.context), signal.rsi || null, signal.volumeRatio || null, signal.momentum || null]
+                     tags.score, JSON.stringify(tags.context), signal.rsi || null, signal.volumeRatio || null, signal.momentum || null,
+                     signal.decisionRunId || null]
                 );
                 return r.rows[0]?.id;
             } catch (e) { console.warn('DB crypto open failed:', e.message); return null; }
