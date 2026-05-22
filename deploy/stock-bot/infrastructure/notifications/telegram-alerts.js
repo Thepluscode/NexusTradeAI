@@ -1,70 +1,314 @@
-// Stub — local development only
-// Provides a no-op implementation of the Telegram alert service.
-//
-// All three bots obtain the service via:
-//   const { getTelegramAlertService } = require('./infrastructure/notifications/telegram-alerts');
-//   let telegramAlerts = getTelegramAlertService();
-//
-// The returned object is also used as `this._telegram` or `this._userTelegram` inside
-// bot strategy classes, so every method must return a Promise to be safely .catch()-able.
-//
-// Observed method calls across all bots:
-//   telegramAlerts.enabled                    — boolean property (not a function)
-//   telegramAlerts.send(message)
-//   telegramAlerts.sendTestAlert()
-//   telegramAlerts.sendHeartbeatAlert(botName, silentMinutes)
-//   telegramAlerts.sendAgentApproval(botName, symbol, direction, confidence, sizeMult, regime)
-//   telegramAlerts.sendAgentRejection(botName, symbol, direction, reason, confidence, riskFlags)
-//   telegramAlerts.sendKillSwitchAlert(botName, reason)
-//   telegramAlerts.sendStockEntry(symbol, price, stopPrice, targetPrice, shares, tier)
-//   telegramAlerts.sendStockStopLoss(symbol, entry, currentPrice, unrealizedPL, stopLoss)
-//   telegramAlerts.sendStockTakeProfit(symbol, entry, currentPrice, unrealizedPL, target)
-//   telegramAlerts.sendForexEntry(pair, direction, entry, stopLoss, takeProfit, units, tier)
-//   telegramAlerts.sendForexStopLoss(pair, entry, reason)
-//   telegramAlerts.sendForexTakeProfit(pair, entry, reason)
-//   telegramAlerts.sendCryptoEntry(symbol, ...)
-//   telegramAlerts.sendCryptoStopLoss(symbol, entry, currentPrice, pnlPercent, stopLoss)
-//   telegramAlerts.sendCryptoTakeProfit(symbol, entry, currentPrice, pnlPercent, takeProfit)
-
-const noop = () => Promise.resolve({ ok: false, stub: true });
-
-const stubService = {
-    /** Set to false so bots skip re-initialisation branches that check `if (telegramAlerts.enabled)`. */
-    enabled: false,
-
-    send: noop,
-    sendTestAlert: noop,
-    sendHeartbeatAlert: noop,
-
-    // Agent / AI decision alerts
-    sendAgentApproval: noop,
-    sendAgentRejection: noop,
-    sendKillSwitchAlert: noop,
-
-    // Stock alerts
-    sendStockEntry: noop,
-    sendStockStopLoss: noop,
-    sendStockTakeProfit: noop,
-
-    // Forex alerts
-    sendForexEntry: noop,
-    sendForexStopLoss: noop,
-    sendForexTakeProfit: noop,
-
-    // Crypto alerts
-    sendCryptoEntry: noop,
-    sendCryptoStopLoss: noop,
-    sendCryptoTakeProfit: noop,
-};
-
 /**
- * Factory used by all three bots.
- * Returns the same singleton stub on every call, matching the pattern:
- *   telegramAlerts = getTelegramAlertService();
- * which is also called inside the bot's reconnect/reload logic.
+ * TELEGRAM ALERT SERVICE
+ *
+ * Sends Telegram notifications for critical trading events:
+ * - Stop Loss hits
+ * - Take Profit hits
+ * - Large position changes
+ *
+ * COMPLETELY FREE - No cost, unlimited messages!
  */
-function getTelegramAlertService() {
-    return stubService;
+
+const TelegramBot = require('node-telegram-bot-api');
+
+class TelegramAlertService {
+    constructor() {
+        this.botToken = process.env.TELEGRAM_BOT_TOKEN;
+        this.chatId = process.env.TELEGRAM_CHAT_ID;
+        this.enabled = process.env.TELEGRAM_ALERTS_ENABLED === 'true';
+
+        if (this.enabled) {
+            if (!this.botToken || !this.chatId) {
+                console.warn('⚠️  Telegram alerts enabled but missing credentials. Check .env file.');
+                this.enabled = false;
+            } else {
+                try {
+                    this.bot = new TelegramBot(this.botToken, { polling: false });
+                    console.log('📱 Telegram Alert Service initialized');
+                    console.log(`   Alerts will be sent to Chat ID: ${this.maskChatId(this.chatId)}`);
+                } catch (error) {
+                    console.error('❌ Failed to initialize Telegram bot:', error.message);
+                    this.enabled = false;
+                }
+            }
+        } else {
+            console.log('📱 Telegram alerts disabled (set TELEGRAM_ALERTS_ENABLED=true to enable)');
+        }
+    }
+
+    maskChatId(chatId) {
+        if (!chatId) return '***';
+        const str = chatId.toString();
+        if (str.length < 4) return '***';
+        return str.slice(0, -4).replace(/\d/g, '*') + str.slice(-4);
+    }
+
+    async sendStockStopLoss(symbol, entryPrice, currentPrice, loss, stopLoss) {
+        if (!this.enabled) return false;
+
+        const message = `🚨 *STOCK STOP LOSS HIT* 🚨
+
+📛 *Symbol:* ${symbol}
+💰 *Entry:* $${entryPrice.toFixed(2)}
+📉 *Current:* $${currentPrice.toFixed(2)}
+🔻 *Stop Loss:* $${stopLoss.toFixed(2)}
+💸 *Loss:* ${loss.toFixed(2)}%
+
+⏰ *Time:* ${new Date().toLocaleString()}`;
+
+        return await this.send(message);
+    }
+
+    async sendStockTakeProfit(symbol, entryPrice, currentPrice, profit, target) {
+        if (!this.enabled) return false;
+
+        const message = `🎯 *STOCK PROFIT TARGET HIT* 🎯
+
+💎 *Symbol:* ${symbol}
+💰 *Entry:* $${entryPrice.toFixed(2)}
+📈 *Current:* $${currentPrice.toFixed(2)}
+🎯 *Target:* $${target.toFixed(2)}
+💵 *Profit:* +${profit.toFixed(2)}%
+
+⏰ *Time:* ${new Date().toLocaleString()}`;
+
+        return await this.send(message);
+    }
+
+    async sendForexStopLoss(pair, entry, reason) {
+        if (!this.enabled) return false;
+
+        const message = `🚨 *FOREX STOP LOSS HIT* 🚨
+
+📛 *Pair:* ${pair}
+💰 *Entry:* ${entry}
+🔻 *Stop Loss Triggered*
+📉 *Reason:* ${reason}
+
+⏰ *Time:* ${new Date().toLocaleString()}`;
+
+        return await this.send(message);
+    }
+
+    async sendForexTakeProfit(pair, entry, reason) {
+        if (!this.enabled) return false;
+
+        const message = `🎯 *FOREX PROFIT TARGET HIT* 🎯
+
+💎 *Pair:* ${pair}
+💰 *Entry:* ${entry}
+🎯 *Take Profit Hit*
+📈 *Reason:* ${reason}
+
+⏰ *Time:* ${new Date().toLocaleString()}`;
+
+        return await this.send(message);
+    }
+
+    async sendStockEntry(symbol, entryPrice, stopLoss, takeProfit, shares, tier) {
+        if (!this.enabled) return false;
+
+        const riskPercent = ((entryPrice - stopLoss) / entryPrice * 100).toFixed(2);
+        const rewardPercent = ((takeProfit - entryPrice) / entryPrice * 100).toFixed(2);
+        const positionValue = (shares * entryPrice).toFixed(2);
+
+        const message = `🚀 *NEW STOCK POSITION ENTERED* 🚀
+
+💎 *Symbol:* ${symbol}
+📊 *Tier:* ${tier.toUpperCase()}
+📈 *Shares:* ${shares} ($${positionValue})
+
+💰 *Entry Price:* $${entryPrice.toFixed(2)}
+🔻 *Stop Loss:* $${stopLoss.toFixed(2)} (-${riskPercent}%)
+🎯 *Take Profit:* $${takeProfit.toFixed(2)} (+${rewardPercent}%)
+
+📊 *Risk/Reward:* 1:${(parseFloat(rewardPercent) / parseFloat(riskPercent)).toFixed(2)}
+
+⏰ *Time:* ${new Date().toLocaleString()}`;
+
+        return await this.send(message);
+    }
+
+    async sendForexEntry(pair, direction, entry, stopLoss, takeProfit, units, tier) {
+        if (!this.enabled) return false;
+
+        const directionEmoji = direction === 'long' ? '📈' : '📉';
+        const directionText = direction.toUpperCase();
+
+        const riskPips = Math.abs(entry - stopLoss);
+        const rewardPips = Math.abs(takeProfit - entry);
+        const riskPercent = (riskPips / entry * 100).toFixed(2);
+        const rewardPercent = (rewardPips / entry * 100).toFixed(2);
+
+        const message = `🚀 *NEW FOREX POSITION ENTERED* 🚀
+
+💎 *Pair:* ${pair}
+${directionEmoji} *Direction:* ${directionText}
+📊 *Tier:* ${tier.toUpperCase()}
+📈 *Units:* ${units}
+
+💰 *Entry:* ${entry.toFixed(5)}
+🔻 *Stop Loss:* ${stopLoss.toFixed(5)} (-${riskPercent}%)
+🎯 *Take Profit:* ${takeProfit.toFixed(5)} (+${rewardPercent}%)
+
+📊 *Risk/Reward:* 1:${(parseFloat(rewardPercent) / parseFloat(riskPercent)).toFixed(2)}
+
+⏰ *Time:* ${new Date().toLocaleString()}`;
+
+        return await this.send(message);
+    }
+
+    async sendCryptoEntry(symbol, entryPrice, stopLoss, takeProfit, quantity, tier) {
+        if (!this.enabled) return false;
+
+        const riskPercent = ((entryPrice - stopLoss) / entryPrice * 100).toFixed(2);
+        const rewardPercent = ((takeProfit - entryPrice) / entryPrice * 100).toFixed(2);
+        const positionValue = (quantity * entryPrice).toFixed(2);
+
+        const message = `🚀 *NEW CRYPTO POSITION ENTERED* 🚀
+
+💎 *Symbol:* ${symbol}
+📊 *Tier:* ${tier.toUpperCase()}
+📈 *Quantity:* ${quantity.toFixed(6)} ($${positionValue})
+
+💰 *Entry Price:* $${entryPrice.toFixed(2)}
+🔻 *Stop Loss:* $${stopLoss.toFixed(2)} (-${riskPercent}%)
+🎯 *Take Profit:* $${takeProfit.toFixed(2)} (+${rewardPercent}%)
+
+📊 *Risk/Reward:* 1:${(parseFloat(rewardPercent) / parseFloat(riskPercent)).toFixed(2)}
+
+⚡ *24/7 Trading Active*
+⏰ *Time:* ${new Date().toLocaleString()}`;
+
+        return await this.send(message);
+    }
+
+    async sendCryptoStopLoss(symbol, entryPrice, currentPrice, loss, stopLoss) {
+        if (!this.enabled) return false;
+
+        const message = `🚨 *CRYPTO STOP LOSS HIT* 🚨
+
+📛 *Symbol:* ${symbol}
+💰 *Entry:* $${entryPrice.toFixed(2)}
+📉 *Current:* $${currentPrice.toFixed(2)}
+🔻 *Stop Loss:* $${stopLoss.toFixed(2)}
+💸 *Loss:* ${loss.toFixed(2)}%
+
+⚡ *High volatility asset - Risk managed*
+⏰ *Time:* ${new Date().toLocaleString()}`;
+
+        return await this.send(message);
+    }
+
+    async sendCryptoTakeProfit(symbol, entryPrice, currentPrice, profit, target) {
+        if (!this.enabled) return false;
+
+        const message = `🎯 *CRYPTO PROFIT TARGET HIT* 🎯
+
+💎 *Symbol:* ${symbol}
+💰 *Entry:* $${entryPrice.toFixed(2)}
+📈 *Current:* $${currentPrice.toFixed(2)}
+🎯 *Target:* $${target.toFixed(2)}
+💵 *Profit:* +${profit.toFixed(2)}%
+
+🚀 *Crypto volatility = Bigger gains!*
+⏰ *Time:* ${new Date().toLocaleString()}`;
+
+        return await this.send(message);
+    }
+
+    async send(message) {
+        if (!this.enabled) {
+            console.log('📱 Telegram disabled - would have sent:', message.split('\n')[0]);
+            return false;
+        }
+
+        try {
+            await this.bot.sendMessage(this.chatId, message, {
+                parse_mode: 'Markdown',
+                disable_notification: false
+            });
+
+            console.log(`✅ Telegram message sent successfully`);
+            return true;
+
+        } catch (error) {
+            console.error('❌ Failed to send Telegram message:', error.message);
+            return false;
+        }
+    }
+
+    async sendHeartbeatAlert(botName, silentMinutes) {
+        const message = `⚠️ *${botName} SILENT ALERT*\n\nBot has not executed any scans in the last *${silentMinutes} minutes*.\n\nCheck Railway logs.\n⏰ ${new Date().toISOString()}`;
+        return await this.send(message);
+    }
+
+    // ===== AGENT AI ALERTS (v4.4) =====
+
+    async sendAgentRejection(botName, symbol, direction, reason, confidence, riskFlags) {
+        if (!this.enabled) return false;
+        const flagsLine = riskFlags?.length ? `\n🚩 *Flags:* ${riskFlags.join(', ')}` : '';
+        const message = `🤖 *AGENT REJECTION* — ${botName}
+
+📛 *${symbol}* ${direction.toUpperCase()}
+🧠 *Confidence:* ${(confidence * 100).toFixed(0)}%
+📝 *Reason:* ${reason}${flagsLine}
+
+⏰ ${new Date().toLocaleString()}`;
+        return await this.send(message);
+    }
+
+    async sendAgentApproval(botName, symbol, direction, confidence, sizeMultiplier, regime) {
+        if (!this.enabled) return false;
+        const regimeLine = regime ? `\n📊 *Regime:* ${regime}` : '';
+        const message = `✅ *AGENT APPROVED* — ${botName}
+
+💎 *${symbol}* ${direction.toUpperCase()}
+🧠 *Confidence:* ${(confidence * 100).toFixed(0)}%
+📏 *Size:* ${sizeMultiplier.toFixed(2)}x${regimeLine}
+
+⏰ ${new Date().toLocaleString()}`;
+        return await this.send(message);
+    }
+
+    async sendKillSwitchAlert(botName, reason) {
+        if (!this.enabled) return false;
+        const message = `🚨🚨 *KILL SWITCH ACTIVATED* 🚨🚨
+
+🤖 *Bot:* ${botName}
+⛔ *Reason:* ${reason}
+
+All trades blocked until manually resumed.
+Check /agent dashboard or POST /agent/resume.
+
+⏰ ${new Date().toLocaleString()}`;
+        return await this.send(message);
+    }
+
+    // Test Telegram
+    async sendTestAlert() {
+        const message = `📱 *NexusTradeAI Telegram Test*
+
+✅ This is a test alert from your trading bot.
+
+If you receive this, Telegram alerts are working correctly!
+
+🚀 *FREE unlimited alerts!*
+
+⏰ *Time:* ${new Date().toLocaleString()}`;
+
+        return await this.send(message);
+    }
 }
 
-module.exports = { getTelegramAlertService };
+// Singleton instance
+let instance = null;
+
+module.exports = {
+    getTelegramAlertService: () => {
+        if (!instance) {
+            instance = new TelegramAlertService();
+        }
+        return instance;
+    }
+};
