@@ -117,13 +117,13 @@
 
 ---
 
-## Discrepancies Found This Refresh (do NOT fix — freeze through 2026-05-24)
+## Discrepancies — Investigated 2026-05-22 (read-only, freeze-safe)
 
-| # | Discrepancy | Severity | Post-freeze action |
+| # | Discrepancy | Verdict | Action |
 |---|---|---|---|
-| 1 | Stock `momentum` is marked DISABLED but a momentum trade fired 2026-05-13 (WOLF, −$31.11), `last_entry=2026-05-13`. | MEDIUM | Read `unified-trading-bot.js` to confirm whether momentum is truly gated, or if a tier1-momentum path bypasses the disable. |
-| 2 | Crypto momentum flipped from +$17.87 to −$10.73 (all-time) and edge engine reports `negative_edge` in MEAN_REVERTING regime. Kill-switch flagged it in shadow mode (not enforced). | HIGH (outcome) | Founder decision: enforce the shadow flag / disable crypto momentum in MEAN_REVERTING / leave running. Not an engineering bug — strategy call. |
-| 3 | ORB has not produced a signal since 2026-04-22 (~1 month). | LOW–MED | Confirm ORB gating isn't silently over-filtering (introspection endpoint, like forex `/api/forex/diagnose`). |
+| 1 | Stock `momentum` marked DISABLED but a momentum trade fired 2026-05-13 (WOLF, −$31.11). | **CONFIRMED BUG** — two analyze paths drifted. The global/shadow scan `analyzeMomentum()` disabled momentum 2026-04-02 (`if (false && momentumAllowed)`, line 4150, commit `b466092`), but the per-user engine `analyzeMomentumForEngine()` still runs it (`if (momentumAllowed)`, line 7043, pushes `strategy:'momentum'` at 7092). Real-money per-user accounts kept trading the worst stock strategy. Silent path divergence (Rules 8/12). | One-line fix queued post-freeze: mirror the disable at line 7043 in `clients/` (+`deploy/`) with a `// SAFETY-REVIEWED` comment. **Draft-PR routine `trig_01DS5acW178pQVaPcpyjpk5H` fires 2026-05-27 08:00Z.** Backlog Item 8. |
+| 2 | Crypto momentum flipped +$17.87 → −$10.73 (all-time); edge engine reports `negative_edge` in MEAN_REVERTING; kill-switch flagged it (shadow, not enforced). | Outcome, not an engineering bug. | Founder decision post-freeze (enforce flag / disable / leave). Trustworthy only after Item 4 (`decision_run_id` linkage) lands — fires 2026-05-25. |
+| 3 | ORB no signal since 2026-04-22 (~1 month). | **WORKING AS DESIGNED** — the v25.0 regime gate (commit `5a91e8d`, 2026-04-22, the exact silence date) blocks ORB unless regime is `TRENDING_UP` (lines 1776-1786); the market has been MEAN_REVERTING (same regime that flipped crypto momentum negative). Narrow 9:45–11:00 AM ET window compounds it. | None — loosening the gate is a strategy call, not a fix. Backlog Item 9. |
 
 ---
 
