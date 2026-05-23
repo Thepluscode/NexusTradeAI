@@ -162,7 +162,7 @@ jobs:
                        displacement.js fvg-detector.js macd.js regime-detector.js \
                        entry-qualifier.js confidence-calibrator.js cost-model.js multi-timeframe.js \
                        strategy-registry.js strategy-context.js schema.js \
-                       strategy-evidence.js \
+                       strategy-evidence.js edge-stats.js \
                        cross-asset.js microstructure.js liquidity-sweep.js \
                        portfolio-intelligence.js event-calendar.js; do
               cp "services/signals/$SIG" "$BOT_DIR/signals/$SIG" 2>/dev/null || true
