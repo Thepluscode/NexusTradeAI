@@ -4957,6 +4957,140 @@ app.get('/api/intraday-equity', async (req, res) => {
     }
 });
 
+// ── Edge-attribution statistical helpers (Item 3, 2026-05-22) ──────────────────────────────────────
+// These pure-JS helpers are used only by /api/edge-attribution. No external dependencies.
+
+/** Geometric RV with mean 1/p; used by the stationary bootstrap block sampler. */
+function _geomRV(p) {
+    return Math.ceil(Math.log(1 - Math.random()) / Math.log(1 - Math.min(p, 0.9999)));
+}
+
+/**
+ * Stationary bootstrap CI (Politis & Romano 1994).
+ * B resamples of `series` using geometric block lengths with mean b = max(2, round(sqrt(n))).
+ * Returns { low, high } = 2.5th / 97.5th percentile of the bootstrap mean distribution.
+ */
+function _stationaryBootstrapCI(series, B = 5000) {
+    const n = series.length;
+    if (n < 2) return { low: series[0] ?? 0, high: series[0] ?? 0 };
+    const b = Math.max(2, Math.round(Math.sqrt(n)));
+    const p = 1 / b;
+    const means = new Float64Array(B);
+    for (let i = 0; i < B; i++) {
+        let sum = 0, drawn = 0;
+        let start = Math.floor(Math.random() * n);
+        while (drawn < n) {
+            const blk = Math.min(_geomRV(p), n - drawn);
+            for (let j = 0; j < blk; j++) sum += series[(start + j) % n];
+            drawn += blk;
+            start = Math.floor(Math.random() * n);
+        }
+        means[i] = sum / n;
+    }
+    means.sort();
+    return {
+        low: means[Math.floor(0.025 * B)],
+        high: means[Math.floor(0.975 * B)]
+    };
+}
+
+/**
+ * Effective sample size correcting for lag-1 autocorrelation (Priestley 1981).
+ * rho clamped to [0, 0.99]; returns n unchanged when n < 3.
+ */
+function _nEffective(series) {
+    const n = series.length;
+    if (n < 3) return n;
+    let mean = 0;
+    for (let i = 0; i < n; i++) mean += series[i];
+    mean /= n;
+    let cov1 = 0, var0 = 0;
+    for (let i = 0; i < n - 1; i++) cov1 += (series[i] - mean) * (series[i + 1] - mean);
+    for (let i = 0; i < n; i++) var0 += (series[i] - mean) ** 2;
+    const rho = var0 > 0 ? Math.max(0, Math.min(0.99, cov1 / var0)) : 0;
+    return n * (1 - rho) / (1 + rho);
+}
+
+/** Normal CDF via rational poly (Abramowitz & Stegun 26.2.17, max error 7.5e-8). */
+function _normCDF(x) {
+    const t = 1 / (1 + 0.2316419 * Math.abs(x));
+    const poly = t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+    const phi = Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI) * poly;
+    return x >= 0 ? 1 - phi : phi;
+}
+
+/** Inverse normal CDF (Beasley-Springer-Moro algorithm). */
+function _invNormCDF(p) {
+    if (p <= 0) return -Infinity;
+    if (p >= 1) return Infinity;
+    const a = [2.50662823884, -18.61500062529, 41.39119773534, -25.44106049637];
+    const b = [-8.47351093090, 23.08336743743, -21.06224101826, 3.13082909833];
+    const c = [0.3374754822726147, 0.9761690190917186, 0.1607979714918209,
+               0.0276438810333863, 0.0038405729373609, 0.0003951896511349,
+               0.0000321767881768, 0.0000002888167364, 0.0000003960315187];
+    const y = p - 0.5;
+    if (Math.abs(y) < 0.42) {
+        const r = y * y;
+        return y * (((a[3] * r + a[2]) * r + a[1]) * r + a[0]) /
+               ((((b[3] * r + b[2]) * r + b[1]) * r + b[0]) * r + 1);
+    }
+    const r2 = p < 0.5 ? Math.log(-Math.log(p)) : Math.log(-Math.log(1 - p));
+    let xv = c[0];
+    for (let i = 1; i < 9; i++) xv += c[i] * r2 ** i;
+    return p < 0.5 ? -xv : xv;
+}
+
+/**
+ * Daily-bucketed Sharpe + Deflated Sharpe Ratio (Bailey & Lopez de Prado 2014).
+ * SR is computed on daily-summed pnl_pct with no annualisation assumption.
+ * DSR corrects for non-normality (skew/kurtosis) and multiple testing (M = total bucket count).
+ * Returns { sharpe, dsr, dsr_pvalue } or nulls when insufficient data.
+ */
+function _dsrStats(series, dates, M) {
+    if (!series.length || !dates.length || M < 1) {
+        return { sharpe: null, dsr: null, dsr_pvalue: null };
+    }
+    // Bucket per-trade returns into daily sums
+    const byDay = {};
+    for (let i = 0; i < series.length; i++) {
+        const d = String(dates[i]).slice(0, 10);
+        byDay[d] = (byDay[d] || 0) + series[i];
+    }
+    const daily = Object.values(byDay);
+    const T = daily.length;
+    if (T < 4) return { sharpe: null, dsr: null, dsr_pvalue: null };
+    let mean = 0;
+    for (const r of daily) mean += r;
+    mean /= T;
+    let v = 0, m3 = 0, m4 = 0;
+    for (const r of daily) {
+        const d = r - mean;
+        v += d * d; m3 += d ** 3; m4 += d ** 4;
+    }
+    v /= (T - 1);
+    const std = Math.sqrt(v);
+    if (std === 0) return { sharpe: null, dsr: null, dsr_pvalue: null };
+    const SR = mean / std;
+    // Full (not excess) kurtosis for PSR denominator (Bailey & Lopez de Prado eq. 4)
+    const kurtFull = (m4 / T) / (v * v);
+    const skew = (m3 / T) / (std ** 3);
+    // Expected maximum SR from M IID standard-normal trials (Gumbel EVT, BSM eq. 9)
+    const EULER_M = 0.5772156649015328;
+    const SR0 = M <= 1
+        ? 0
+        : (1 - EULER_M) * _invNormCDF(1 - 1 / M) + EULER_M * _invNormCDF(1 - 1 / (M * Math.E));
+    // PSR non-normality denominator
+    const denom2 = 1 - skew * SR + ((kurtFull - 1) / 4) * SR * SR;
+    if (denom2 <= 0) return { sharpe: parseFloat(SR.toFixed(6)), dsr: null, dsr_pvalue: null };
+    const z = (SR - SR0) * Math.sqrt(T - 1) / Math.sqrt(denom2);
+    const dsr = _normCDF(z);
+    return {
+        sharpe: parseFloat(SR.toFixed(6)),
+        dsr: parseFloat(dsr.toFixed(6)),
+        dsr_pvalue: parseFloat((1 - dsr).toFixed(6))
+    };
+}
+
 // [2026-05-09] Edge attribution — per (bot, strategy, regime) P&L over a time window.
 // Source of truth is `trades` (not the rollup) so we get all 3 bots, time-window slicing,
 // and statistical bands in one query without per-bot write paths to maintain.
@@ -4968,9 +5102,11 @@ app.get('/api/intraday-equity', async (req, res) => {
 // Response shape:
 //   { success, window_days, min_n, generated_at, data: [{ bot, strategy, regime,
 //     n, win_rate_pct, total_pnl_usd, avg_pnl_pct, stddev_pnl_pct,
-//     pnl_pct_ci_low, pnl_pct_ci_high, most_recent_trade, status }] }
+//     pnl_pct_ci_low, pnl_pct_ci_high, most_recent_trade, status,
+//     n_effective, regime_counts, dominant_regime_share, regime_coverage,
+//     sharpe, dsr, dsr_pvalue }] }
 //
-// status: 'positive_edge' (95% CI lower > 0), 'negative_edge' (CI upper < 0),
+// status: 'positive_edge' (95% bootstrap CI lower > 0), 'negative_edge' (CI upper < 0),
 //         'low_n' (n < 20), 'inconclusive' (CI straddles 0).
 app.get('/api/edge-attribution', async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not configured', data: [] });
@@ -5002,6 +5138,10 @@ app.get('/api/edge-attribution', async (req, res) => {
         // [2026-05-09] Group by both `regime` (System-3 strategy/session label, populated for all
         // historical trades) AND `market_regime` (System-1 4-state classifier, NULL for trades
         // before 2026-05-09 deploy). Old data buckets to '(pre-2026-05-09)' so it stays separable.
+        //
+        // [2026-05-22] Item 3: CI is now computed in JS via stationary bootstrap (3a).
+        // pnl_pct_series and exit_dates are fetched per-bucket; regime_counts comes from regime_dist
+        // CTE. The parametric CI columns are removed from SQL.
         const sql = `
             WITH closed AS (
                 SELECT
@@ -5011,33 +5151,87 @@ app.get('/api/edge-attribution', async (req, res) => {
                     COALESCE(NULLIF(market_regime, ''), '(pre-2026-05-09)') AS market_regime,
                     ${cleanPnlUsd} AS pnl_usd_clean,
                     ${cleanPnlPct} AS pnl_pct_clean,
-                    exit_time
+                    exit_time,
+                    DATE(exit_time) AS exit_date
                 FROM trades
                 WHERE status = 'closed'
                   ${windowFilter}
+            ),
+            buckets AS (
+                SELECT
+                    bot, strategy, regime, market_regime,
+                    COUNT(*)::INT AS n,
+                    ROUND(100.0 * COUNT(*) FILTER (WHERE pnl_usd_clean > 0) / NULLIF(COUNT(*), 0), 1)::FLOAT AS win_rate_pct,
+                    ROUND(COALESCE(SUM(pnl_usd_clean), 0)::numeric, 2)::FLOAT AS total_pnl_usd,
+                    ROUND(AVG(pnl_pct_clean)::numeric, 6)::FLOAT AS avg_pnl_pct,
+                    ROUND(STDDEV(pnl_pct_clean)::numeric, 6)::FLOAT AS stddev_pnl_pct,
+                    MAX(exit_time) AS most_recent_trade,
+                    array_agg(pnl_pct_clean ORDER BY exit_time) FILTER (WHERE pnl_pct_clean IS NOT NULL) AS pnl_pct_series,
+                    array_agg(exit_date::text ORDER BY exit_time) FILTER (WHERE pnl_pct_clean IS NOT NULL) AS exit_dates
+                FROM closed
+                GROUP BY bot, strategy, regime, market_regime
+                HAVING COUNT(*) >= ${minNParamIdx}
+            ),
+            regime_dist AS (
+                SELECT bot, strategy, regime,
+                       jsonb_object_agg(market_regime, n) AS regime_counts
+                FROM buckets
+                GROUP BY bot, strategy, regime
             )
-            SELECT
-                bot, strategy, regime, market_regime,
-                COUNT(*)::INT AS n,
-                ROUND(100.0 * COUNT(*) FILTER (WHERE pnl_usd_clean > 0) / NULLIF(COUNT(*), 0), 1)::FLOAT AS win_rate_pct,
-                ROUND(COALESCE(SUM(pnl_usd_clean), 0)::numeric, 2)::FLOAT AS total_pnl_usd,
-                ROUND(AVG(pnl_pct_clean)::numeric, 6)::FLOAT AS avg_pnl_pct,
-                ROUND(STDDEV(pnl_pct_clean)::numeric, 6)::FLOAT AS stddev_pnl_pct,
-                ROUND((AVG(pnl_pct_clean) - 1.96 * STDDEV(pnl_pct_clean) / SQRT(GREATEST(COUNT(*), 1)))::numeric, 6)::FLOAT AS pnl_pct_ci_low,
-                ROUND((AVG(pnl_pct_clean) + 1.96 * STDDEV(pnl_pct_clean) / SQRT(GREATEST(COUNT(*), 1)))::numeric, 6)::FLOAT AS pnl_pct_ci_high,
-                MAX(exit_time) AS most_recent_trade
-            FROM closed
-            GROUP BY bot, strategy, regime, market_regime
-            HAVING COUNT(*) >= ${minNParamIdx}
-            ORDER BY total_pnl_usd DESC NULLS LAST
+            SELECT b.*, rd.regime_counts
+            FROM buckets b
+            JOIN regime_dist rd USING (bot, strategy, regime)
+            ORDER BY b.total_pnl_usd DESC NULLS LAST
         `;
         const r = await dbPool.query(sql, params);
+        const totalBuckets = r.rows.length;
         const rows = r.rows.map(row => {
+            const series = Array.isArray(row.pnl_pct_series) ? row.pnl_pct_series : [];
+            const dates  = Array.isArray(row.exit_dates)     ? row.exit_dates     : [];
+
+            // 3a. Stationary bootstrap CI (replaces parametric mean ± 1.96*se)
+            const ci = series.length >= 2
+                ? _stationaryBootstrapCI(series)
+                : { low: row.avg_pnl_pct ?? 0, high: row.avg_pnl_pct ?? 0 };
+            const pnl_pct_ci_low  = parseFloat(ci.low.toFixed(6));
+            const pnl_pct_ci_high = parseFloat(ci.high.toFixed(6));
+
+            // 3b. Effective sample size
+            const n_effective = parseFloat(_nEffective(series).toFixed(2));
+
+            // 3c. Regime distribution fields
+            const regime_counts = row.regime_counts || {};
+            const regimeVals = Object.values(regime_counts).map(Number);
+            const regimeTotal = regimeVals.reduce((a, v) => a + v, 0);
+            const dominant_regime_share = regimeTotal > 0
+                ? parseFloat((Math.max(...regimeVals) / regimeTotal).toFixed(4))
+                : null;
+            const regime_coverage = regimeVals.filter(v => v >= 10).length;
+
+            // 3d. Sharpe + DSR (daily-bucketed, corrected for M = total bucket count)
+            const { sharpe, dsr, dsr_pvalue } = _dsrStats(series, dates, totalBuckets);
+
+            // Status uses bootstrap CI bounds (same field names, semantics preserved)
             let status = 'inconclusive';
             if (row.n < 20) status = 'low_n';
-            else if (row.pnl_pct_ci_low != null && row.pnl_pct_ci_low > 0) status = 'positive_edge';
-            else if (row.pnl_pct_ci_high != null && row.pnl_pct_ci_high < 0) status = 'negative_edge';
-            return { ...row, status };
+            else if (pnl_pct_ci_low > 0) status = 'positive_edge';
+            else if (pnl_pct_ci_high < 0) status = 'negative_edge';
+
+            // eslint-disable-next-line no-unused-vars
+            const { pnl_pct_series: _s, exit_dates: _d, ...rest } = row;
+            return {
+                ...rest,
+                pnl_pct_ci_low,
+                pnl_pct_ci_high,
+                n_effective,
+                regime_counts,
+                dominant_regime_share,
+                regime_coverage,
+                sharpe,
+                dsr,
+                dsr_pvalue,
+                status
+            };
         });
         res.json({
             success: true,
