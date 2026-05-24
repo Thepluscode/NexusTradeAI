@@ -813,6 +813,38 @@ async function dbCryptoOpen(symbol, tier, entry, stopLoss, takeProfit, quantity,
     } catch (e) { console.warn('DB crypto open failed:', e.message); return null; }
 }
 
+// [2026-05-18] Cohort kill-switch lookup with in-memory cache. The
+// strategy_kill_switches table is populated by a daily GHA cron at 06:00 UTC
+// (see ADR-0008 + .github/workflows/auto-disable-stale-strategies.yml), so a
+// 5-minute cache is safe and avoids per-scan DB pressure. Fails OPEN
+// (returns null) on any DB error: the kill-switch is an optimization, not a
+// safety mechanism, and a DB hiccup must not halt all trading.
+const COHORT_KILL_SWITCH_CACHE_MS = 5 * 60 * 1000;
+let _cohortKillSwitchCache = { rows: [], expiresAt: 0 };
+
+async function isCohortKilled(strategy, marketRegime) {
+    if (!dbPool || !strategy || !marketRegime) return null;
+    try {
+        if (Date.now() > _cohortKillSwitchCache.expiresAt) {
+            const r = await dbPool.query(
+                `SELECT strategy, market_regime, reason, expires_at
+                 FROM strategy_kill_switches
+                 WHERE bot = 'crypto' AND expires_at > NOW()`
+            );
+            _cohortKillSwitchCache = {
+                rows: r.rows || [],
+                expiresAt: Date.now() + COHORT_KILL_SWITCH_CACHE_MS,
+            };
+        }
+        return _cohortKillSwitchCache.rows.find(
+            row => row.strategy === strategy && row.market_regime === marketRegime
+        ) || null;
+    } catch (e) {
+        console.warn('[kill-switch] cache refresh failed (fail-open):', e.message);
+        return null;
+    }
+}
+
 async function dbCryptoClose(id, exitPrice, pnlUsd, pnlPct, reason) {
     if (!dbPool || !id) return;
     const client = await dbPool.connect();
@@ -3355,6 +3387,28 @@ class CryptoTradingEngine {
                 return null;
             }
 
+            // [2026-05-18] Cohort kill-switch gate — closes ADR-0008 shadow
+            // mode. Reads strategy_kill_switches via isCohortKilled() (cached)
+            // and refuses entry for (strategy, market_regime) cohorts the daily
+            // auto-disable cron has flagged as statistically losing. Opt-in via
+            // env var per ADR-0010 (default off → identical to pre-merge
+            // behavior; flip COHORT_KILL_SWITCH_ENABLED=true on Railway to
+            // enforce after merge).
+            if (process.env.COHORT_KILL_SWITCH_ENABLED === 'true') {
+                const ksTags = buildCryptoTradeTags(signal, signal.tier);
+                const killed = await isCohortKilled(ksTags.strategy, ksTags.marketRegimeClass);
+                if (killed) {
+                    console.log(`⛔ [KILL-SWITCH] ${signal.symbol}: cohort (${ksTags.strategy}, ${ksTags.marketRegimeClass}) disabled — ${killed.reason}`);
+                    this._recordDecision(signal.symbol, 'kill_switch_cohort', 'block', {
+                        strategy: ksTags.strategy,
+                        market_regime: ksTags.marketRegimeClass,
+                        reason: killed.reason,
+                        expires_at: killed.expires_at,
+                    });
+                    return null;
+                }
+            }
+
             console.log(`\n📈 EXECUTING CRYPTO TRADE:`);
             console.log(`   Symbol: ${signal.symbol}`);
             console.log(`   Tier: ${signal.tier}`);
@@ -5193,6 +5247,7 @@ app.get('/api/crypto/decision-trace', (req, res) => {
                 received: 'Signal arrived at trading loop from scanForOpportunities',
                 position_check: 'Already holding a position in this symbol',
                 kill_switch: 'Bridge agent hard-blocked (safety override)',
+                kill_switch_cohort: 'strategy_kill_switches table flagged this (strategy, market_regime) cohort as statistically losing — only fires when env var COHORT_KILL_SWITCH_ENABLED=true (see ADR-0008)',
                 lane_paused: 'Adaptive guardrail paused trading after consecutive losses',
                 min_score: 'Signal score below MIN_SIGNAL_SCORE env threshold',
                 regime_direction: 'Regime detector says TRENDING_DOWN (long-only bot sits out)',
