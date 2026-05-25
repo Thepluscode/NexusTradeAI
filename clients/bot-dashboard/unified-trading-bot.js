@@ -7328,7 +7328,7 @@ app.get('/api/trades', async (req, res) => {
     if (!dbPool) return res.json({ success: false, error: 'DB not configured', trades: [] });
     try {
         const limit = Math.min(parseInt(req.query.limit) || 100, 500);
-        const bot = req.query.bot || null; // null = all bots (dashboard "All" tab), 'stock'/'forex'/'crypto' = filter
+        const bot = 'stock'; // always scope to this bot's own rows
         // Optional: filter to the calling user's trades when JWT is present
         const mine = req.query.mine === 'true';
         let userId = null;
