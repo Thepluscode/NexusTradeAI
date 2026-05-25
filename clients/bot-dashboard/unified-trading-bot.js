@@ -7040,7 +7040,7 @@ async function analyzeMomentumForEngine(symbol, engine) {
             const rr = candidateStop > 0 ? (candidateTarget - current) / (current - candidateStop) : 0;
             if (rr >= 1.8) { atrStop = candidateStop; atrTarget = candidateTarget; }
         }
-        if (momentumAllowed) {
+        if (false && momentumAllowed) { // SAFETY-REVIEWED: momentum disabled platform-wide 2026-04-02 (commit b466092); per-user path was missed — Item 8
             let tier = null, config = null;
             const tierCandidates = [];
             if (percentChange >= MOMENTUM_CONFIG.tier3.threshold) tierCandidates.push('tier3');
