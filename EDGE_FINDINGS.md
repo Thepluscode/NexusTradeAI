@@ -73,3 +73,42 @@ signature — the same pattern that overturned theplus-bot's `box_symmetric`.
    premise. Profitability, if pursued, is a NEW edge source (differentiated
    data / structural niche / non-retail execution), not a continuation of these
    strategies. Cross-ref `theplus-bot/EDGE_FINDINGS.md` and `PIVOT_SCOPE.md`.
+
+## Appendix — Why it fails (reverse-engineered, 2026-05-26)
+
+Decomposing the live-trade P&L into win-rate × payoff geometry shows the failure
+is **mechanical**, not a tuning miss.
+
+| Strategy | WR | payoff (avgW / avgL) | breakeven WR | gap | expectancy |
+|----------|---:|---------------------:|-------------:|----:|-----------:|
+| crypto / momentum | 33% | 1.71 (3.89 / 2.28) | 37% | −4 pts | −$0.135 |
+| stock / openingRangeBreakout | 37% | 1.49 (8.76 / 5.88) | 40% | −3 pts | −$0.137 |
+| forex / pullbackContinuation | 0% | n/a (0 / 102.97) | n/a | broken | −$14.04 |
+
+*breakeven WR = 1 / (1 + payoff); payoff = avg win ÷ |avg loss|; gap = actual WR − breakeven WR (must be > 0 to profit).*
+
+**Root cause.** A breakout/trend system with payoff ~1.6 and win rate ~35% is
+exactly what *random entries* produce. With a fixed stop:target, win rate is set
+by geometry — P(hit target before stop) — not by signal quality. These land
+precisely where no-signal entries would, and cost/slippage drag tips the small
+remainder negative (the −3 to −4 pt gap). The in-sample → out-of-sample collapse
+(crypto t 0.01 → −6.36) confirms it: the entries carry no predictive information.
+
+**Why tuning can't fix it (the inverse).** Expectancy = WR·avgW − (1−WR)·|avgL|.
+Three levers, two are dead ends here:
+1. *Raise WR above breakeven* (crypto 33→37%, stock 37→40%, net of cost) — needs
+   entries that actually predict direction. There is no signal to amplify (OOS
+   proves it), so this is unreachable by tuning.
+2. *Raise payoff* (crypto 1.71→2.03, stock 1.49→1.70) — on a no-signal base,
+   widening the target lowers WR proportionally; you slide *along* the
+   random-entry frontier and expectancy stays pinned at ≈ −cost.
+3. *Cut cost* — at zero cost crypto ≈ breakeven; helpful, but reaches breakeven,
+   not profit, and the gap is too wide to close with retail cost savings.
+
+So a profitable version requires a **genuine predictive edge or a structural/cost
+advantage** — a NEW edge source, not these price-pattern entries. This makes
+rule #2 (no restarting strategy tuning) *mathematically*, not just empirically,
+correct: on a no-signal base, parameter/geometry tuning cannot create expectancy.
+
+**The broken one.** `forex/pullbackContinuation` (0% WR, −$103/trade) is a bug,
+not a marginal edge — confirm no live capital can route to it, then retire it.
