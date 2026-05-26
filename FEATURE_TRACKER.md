@@ -68,6 +68,10 @@
 | `/api/edge-attribution` (forex-bot host) | **VERIFIED** | 200, real data. 30d window, min_n=5. Crypto momentum split by regime: `(pre-2026-05-09)` n=32 / 56.3% / +$5.9 / inconclusive; **`MEAN_REVERTING` n=107 / 30.8% / −$37.05 / `negative_edge`**. Only crypto momentum has n≥5 in 30d. |
 | `/api/kill-switches` (forex-bot host) | **VERIFIED** | 200, `mode:"shadow"`, **1 active flag**: crypto/momentum/MEAN_REVERTING — `disabled_at 2026-05-22T07:19Z`, `expires 2026-05-29T07:19Z`, reason `n=107, pnl=$-37.05, 95%CI upper=-0.0013`. |
 | Shadow-mode auto-disable cron | **VERIFIED** | **Fired for the first time 2026-05-22 07:19Z** — flagged crypto momentum (MEAN_REVERTING). Previously DEPLOYED-but-never-triggered. Shadow mode = observe-only; **bots do not enforce yet** (by design). |
+| `/api/edge-attribution` **stats upgrade** — stationary-bootstrap CI + n_effective + regime fields + DSR (Item 3, PR #44) | **READY — NOT DEPLOYED** | Draft PR #44 (supersedes #43, which undercovered at the operational n). Local evidence only: 93–95% CI coverage at n=50/70/130 vs parametric 82–86% (`node services/signals/edge-stats-coverage.js`); full signals suite 537 tests green. **NOT verified — not merged, not deployed, zero prod evidence.** Verification gate ↓ |
+
+> **Item 3 (PR #44) verification gate — do NOT mark VERIFIED until all of these:**
+> 1. Freeze ended (≥2026-05-25). 2. **Item 4 (PR #37) merged + VERIFIED in prod first** (better stats on an unlinked dataset is still the wrong dataset). 3. Item 3 itself merged + deployed to the forex-bot service. 4. Live check: `curl -s '.../api/edge-attribution' ` returns `method:"stationary_bootstrap"` and per-bucket `n_effective` / `regime_counts` / `dominant_regime_share` / `sharpe` / `dsr` / `dsr_pvalue` with sane values, and `pnl_pct_ci_low/high` reflect the bootstrap. Only after observing (4) does this flip to VERIFIED. (Item 4 *deploying* alone is NOT verification of Item 3.)
 
 > The loop works end-to-end: edge attribution detected negative edge → auto-disable cron flagged it in shadow mode. First real proof this system functions in production. Enforcement is still off by design.
 
