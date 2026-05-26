@@ -64,6 +64,16 @@ try {
         sharedIndicators = null;
     }
 }
+// [Item 3] Edge-attribution statistics — stationary-bootstrap CI, effective-n, DSR.
+// Optional: if unavailable, /api/edge-attribution falls back to the parametric CI.
+let edgeStats;
+try {
+    edgeStats = require('./signals/edge-stats');
+} catch (e) {
+    try { edgeStats = require('../../services/signals/edge-stats'); } catch (_) {
+        edgeStats = null;
+    }
+}
 // [v24.3] 4-state regime detector
 let sharedRegimeDetector;
 try {
@@ -4966,9 +4976,15 @@ app.get('/api/intraday-equity', async (req, res) => {
 //   minN    — minimum trades per bucket to include (default 5).
 //
 // Response shape:
-//   { success, window_days, min_n, generated_at, data: [{ bot, strategy, regime,
+//   { success, window_days, min_n, method, generated_at, data: [{ bot, strategy, regime,
 //     n, win_rate_pct, total_pnl_usd, avg_pnl_pct, stddev_pnl_pct,
-//     pnl_pct_ci_low, pnl_pct_ci_high, most_recent_trade, status }] }
+//     pnl_pct_ci_low, pnl_pct_ci_high, most_recent_trade, status,
+//     // [Item 3] additive fields when the edge-stats module is loaded:
+//     n_effective, regime_counts, dominant_regime_share, regime_coverage, sharpe, dsr, dsr_pvalue }] }
+//
+// [Item 3] pnl_pct_ci_low/high are now the stationary-bootstrap (Politis-Romano) CI — correct
+// coverage under the fat tails + serial correlation of trade P&L. `method` reports which path ran
+// ('stationary_bootstrap' or 'parametric' fallback). Field names are unchanged for downstream consumers.
 //
 // status: 'positive_edge' (95% CI lower > 0), 'negative_edge' (CI upper < 0),
 //         'low_n' (n < 20), 'inconclusive' (CI straddles 0).
@@ -5025,26 +5041,87 @@ app.get('/api/edge-attribution', async (req, res) => {
                 ROUND(STDDEV(pnl_pct_clean)::numeric, 6)::FLOAT AS stddev_pnl_pct,
                 ROUND((AVG(pnl_pct_clean) - 1.96 * STDDEV(pnl_pct_clean) / SQRT(GREATEST(COUNT(*), 1)))::numeric, 6)::FLOAT AS pnl_pct_ci_low,
                 ROUND((AVG(pnl_pct_clean) + 1.96 * STDDEV(pnl_pct_clean) / SQRT(GREATEST(COUNT(*), 1)))::numeric, 6)::FLOAT AS pnl_pct_ci_high,
-                MAX(exit_time) AS most_recent_trade
+                MAX(exit_time) AS most_recent_trade,
+                json_agg(json_build_object('p', pnl_pct_clean, 'e', EXTRACT(EPOCH FROM exit_time))
+                         ORDER BY exit_time NULLS LAST)
+                    FILTER (WHERE pnl_pct_clean IS NOT NULL) AS trade_series
             FROM closed
             GROUP BY bot, strategy, regime, market_regime
             HAVING COUNT(*) >= ${minNParamIdx}
             ORDER BY total_pnl_usd DESC NULLS LAST
         `;
         const r = await dbPool.query(sql, params);
-        const rows = r.rows.map(row => {
-            let status = 'inconclusive';
-            if (row.n < 20) status = 'low_n';
-            else if (row.pnl_pct_ci_low != null && row.pnl_pct_ci_low > 0) status = 'positive_edge';
-            else if (row.pnl_pct_ci_high != null && row.pnl_pct_ci_high < 0) status = 'negative_edge';
-            return { ...row, status };
+        const round = (x, d) => (x == null || !Number.isFinite(x)) ? null : Math.round(x * 10 ** d) / 10 ** d;
+
+        // [Item 3] First pass per bucket: replace the parametric CI with the stationary-bootstrap
+        // CI (3a) and add effective-n (3b) + a daily-bucketed P&L series for Sharpe/DSR (3d).
+        // Degrades to the SQL parametric CI when the edge-stats module is unavailable (Rule 9).
+        const buckets = r.rows.map(row => {
+            const ts = Array.isArray(row.trade_series) ? row.trade_series : [];
+            const series = ts.map(x => x && x.p).filter(v => typeof v === 'number' && Number.isFinite(v));
+            let ci_low = row.pnl_pct_ci_low, ci_high = row.pnl_pct_ci_high, n_effective = row.n, daily = null;
+            if (edgeStats && series.length >= 2) {
+                const [lo, hi] = edgeStats.stationaryBootstrapCI(series, 5000);
+                ci_low = round(lo, 6); ci_high = round(hi, 6);
+                n_effective = round(edgeStats.effectiveN(series), 1);
+                const byDay = new Map();
+                for (const x of ts) {
+                    if (!x || typeof x.p !== 'number') continue;
+                    const key = (x.e != null) ? Math.floor(x.e / 86400) : `t${byDay.size}`;
+                    byDay.set(key, (byDay.get(key) || 0) + x.p);
+                }
+                daily = [...byDay.values()];
+            }
+            const { trade_series, ...base } = row;
+            return { base, ci_low, ci_high, n_effective, daily };
         });
+
+        // [Item 3] Cross-bucket: DSR multiple-testing trials = number of buckets; regime coverage (3c)
+        // aggregated per (bot, strategy) across its regime sub-buckets.
+        const trials = Math.max(2, buckets.length);
+        const bucketSharpes = [];
+        if (edgeStats) for (const b of buckets) if (b.daily && b.daily.length >= 3) bucketSharpes.push(edgeStats.sharpe(b.daily));
+        const meanSh = bucketSharpes.length ? bucketSharpes.reduce((s, x) => s + x, 0) / bucketSharpes.length : 0;
+        const varSR = bucketSharpes.length > 1 ? bucketSharpes.reduce((s, x) => s + (x - meanSh) ** 2, 0) / (bucketSharpes.length - 1) : 0.01;
+
+        const regimeByKey = new Map(); // "bot|strategy" -> { market_regime: n }
+        for (const b of buckets) {
+            const k = `${b.base.bot}|${b.base.strategy}`;
+            const rc = regimeByKey.get(k) || {};
+            rc[b.base.market_regime] = (rc[b.base.market_regime] || 0) + b.base.n;
+            regimeByKey.set(k, rc);
+        }
+
+        const data = buckets.map(b => {
+            let status = 'inconclusive';
+            if (b.base.n < 20) status = 'low_n';
+            else if (b.ci_low != null && b.ci_low > 0) status = 'positive_edge';
+            else if (b.ci_high != null && b.ci_high < 0) status = 'negative_edge';
+
+            const out = { ...b.base, pnl_pct_ci_low: b.ci_low, pnl_pct_ci_high: b.ci_high, status };
+            if (edgeStats) {
+                const rc = regimeByKey.get(`${b.base.bot}|${b.base.strategy}`) || {};
+                const counts = Object.values(rc);
+                const sum = counts.reduce((s, x) => s + x, 0) || 1;
+                out.n_effective = b.n_effective;
+                out.regime_counts = rc;
+                out.dominant_regime_share = round((counts.length ? Math.max(...counts) : 0) / sum, 3);
+                out.regime_coverage = counts.filter(c => c >= 10).length;
+                if (b.daily && b.daily.length >= 3) {
+                    const d = edgeStats.deflatedSharpe(b.daily, trials, varSR);
+                    out.sharpe = round(d.sharpe, 4); out.dsr = round(d.dsr, 4); out.dsr_pvalue = round(d.dsr_pvalue, 4);
+                } else { out.sharpe = null; out.dsr = null; out.dsr_pvalue = null; }
+            }
+            return out;
+        });
+
         res.json({
             success: true,
             window_days: useWindow ? windowDays : null,
             min_n: minN,
+            method: edgeStats ? 'stationary_bootstrap' : 'parametric',
             generated_at: new Date().toISOString(),
-            data: rows
+            data
         });
     } catch (e) {
         console.error('[edge-attribution]', e.message);
