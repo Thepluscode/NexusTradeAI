@@ -3091,6 +3091,27 @@ async function executeTrade(signal) {
         units = signal.direction === 'long' ? capUnits : -capUnits;
     }
 
+    // [v25.2 — 2026-05-27 safety/ops-hygiene] SAFETY-REVIEWED: absolute USD-notional fail-closed cap.
+    // The %-of-balance cap above clamps; if `balance` itself is bogus (reporting bug,
+    // JPY-pair USD-conversion error, stacked-multiplier inflation) the % cap can be
+    // bypassed in absolute terms. The 2026-05-27 strategy monitor reported some
+    // historical position_size_usd values in the millions — anomalies that would
+    // have slipped past the % cap. This guard REJECTS the trade rather than silently
+    // clamping, so the underlying bug surfaces instead of being masked. Tune via
+    // MAX_NOTIONAL_USD_ABS (default $100,000 — well above any sane retail-paper
+    // single-trade notional; raise only if you know exactly why).
+    // Misconfigured env var (non-numeric / ≤0) falls back to the $100k default
+    // — safety guard fails CLOSED on bad config, not open.
+    let MAX_NOTIONAL_USD_ABS = parseFloat(process.env.MAX_NOTIONAL_USD_ABS || '100000');
+    if (!Number.isFinite(MAX_NOTIONAL_USD_ABS) || MAX_NOTIONAL_USD_ABS <= 0) {
+        MAX_NOTIONAL_USD_ABS = 100000;
+    }
+    const finalNotionalUsd = Math.abs(units) * (_baseCurrency === 'USD' ? 1 : effectiveEntry);
+    if (finalNotionalUsd > MAX_NOTIONAL_USD_ABS) {
+        console.error(`🛑 [NotionalAbsCap] ${_pair}: notional $${finalNotionalUsd.toFixed(0)} exceeds absolute cap $${MAX_NOTIONAL_USD_ABS} — REJECTING trade. Investigate: balance=$${balance.toFixed(0)}, units=${Math.abs(units)}, entry=${effectiveEntry}, base=${_baseCurrency}, strategy=${signal.strategy || '?'}.`);
+        return false;
+    }
+
     // [v15.0] Safety guard: never submit an order with 0 units — would be accepted by OANDA
     // but creates a 0-unit position entry that corrupts the dashboard display.
     if (Math.abs(units) < 1) {
