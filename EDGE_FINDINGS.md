@@ -112,3 +112,26 @@ correct: on a no-signal base, parameter/geometry tuning cannot create expectancy
 
 **The broken one.** `forex/pullbackContinuation` (0% WR, −$103/trade) is a bug,
 not a marginal edge — confirm no live capital can route to it, then retire it.
+
+---
+
+## ✅ EDGE HUNT CLOSED — 2026-05-26 (joint with theplus-bot)
+
+The combined trade-bots edge hunt across this repo and the sibling
+`theplus-bot` is now CLOSED. Five hypotheses were tested across both repos
+under the same falsifiable discipline; **5/5 produced no deployable edge**
+(4 NO EDGE; the S&P-600 index-reconstitution effect formally PASSED its gate
+but is real-and-arbitraged-to-marginal at retail today, 2026 +0.7% gross).
+See the full results table, meta-insight, and **binding operating rules** in
+`theplus-bot/EDGE_FINDINGS.md` (the canonical joint record).
+
+NexusTradeAI's contribution to the joint conclusion is the live-trade audit
+above: the same no-edge reality proven on this project's real paper-trade
+history (396 trades; crypto IS → OOS t collapse 0.01 → −6.36 — textbook
+overfit signature). The verdict here is unchanged: no tradeable edge in these
+strategies; the platform's value is the honest-evaluation harness, not the
+strategies.
+
+The reopening bar defined in `theplus-bot/EDGE_FINDINGS.md` ("Operating rules
+going forward") applies here too. Energy goes to the honesty-detector product,
+not to re-tuning these bots.
