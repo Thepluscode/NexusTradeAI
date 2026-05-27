@@ -800,6 +800,26 @@ function buildCryptoTradeTags(signal = {}, tier) {
 async function dbCryptoOpen(symbol, tier, entry, stopLoss, takeProfit, quantity, positionSize, signal = {}) {
     if (!dbPool) return null;
     try {
+        // [v25.3 — 2026-05-27 safety/ops-hygiene] Duplicate-open-trade guard.
+        // Monitor 2026-05-27 flagged crypto trade fan-out: same (symbol, decision_run_id)
+        // opened more than once. Per-decision uniqueness is the correct constraint: a
+        // single decision_run_id should produce at most one open trade per (user_id,
+        // symbol). This is the legacy global path (NULL user_id); the user-scoped
+        // variant near line 5631 has the same guard. If decisionRunId is missing we
+        // cannot dedupe here — falling back to the engine's in-memory position guard
+        // (line 3092) and the scanner's anti-churning cooldowns.
+        if (signal.decisionRunId != null) {
+            const dup = await dbPool.query(
+                `SELECT id, entry_time FROM trades
+                 WHERE bot='crypto' AND symbol=$1 AND decision_run_id=$2
+                   AND status='open' AND user_id IS NULL LIMIT 1`,
+                [symbol, signal.decisionRunId]
+            );
+            if (dup.rows.length > 0) {
+                console.warn(`⚠️  [DupTradeGuard] crypto ${symbol}: open trade #${dup.rows[0].id} already exists for decision_run_id ${signal.decisionRunId} (opened ${dup.rows[0].entry_time}) — skipping duplicate INSERT`);
+                return null;
+            }
+        }
         const tags = buildCryptoTradeTags({ ...signal, symbol }, tier);
         const r = await dbPool.query(
             `INSERT INTO trades (bot,symbol,direction,tier,strategy,regime,market_regime,status,entry_price,quantity,
@@ -5631,6 +5651,24 @@ async function getOrCreateCryptoEngine(userId) {
         userEngine._dbOpen = async function(symbol, tier, entry, stopLoss, takeProfit, quantity, positionSize, signal = {}) {
             if (!dbPool) return null;
             try {
+                // [v25.3 — 2026-05-27 safety/ops-hygiene] Duplicate-open-trade guard.
+                // See global dbCryptoOpen for full rationale (monitor 2026-05-27 trade
+                // fan-out). User-scoped uniqueness key: (user_id, symbol, decision_run_id)
+                // where status='open'. Multiple users may legitimately share a
+                // decision_run_id (multi-tenant SaaS), but a single user must not
+                // open the same (symbol, decision_run_id) twice.
+                if (signal.decisionRunId != null) {
+                    const dup = await dbPool.query(
+                        `SELECT id, entry_time FROM trades
+                         WHERE user_id=$1 AND bot='crypto' AND symbol=$2
+                           AND decision_run_id=$3 AND status='open' LIMIT 1`,
+                        [userId, symbol, signal.decisionRunId]
+                    );
+                    if (dup.rows.length > 0) {
+                        console.warn(`⚠️  [DupTradeGuard] crypto ${symbol}: open trade #${dup.rows[0].id} already exists for user ${userId} with decision_run_id ${signal.decisionRunId} (opened ${dup.rows[0].entry_time}) — skipping duplicate INSERT`);
+                        return null;
+                    }
+                }
                 const tags = buildCryptoTradeTags({ ...signal, symbol }, tier);
                 const r = await dbPool.query(
                     `INSERT INTO trades (user_id,bot,symbol,direction,tier,strategy,regime,market_regime,status,entry_price,quantity,
