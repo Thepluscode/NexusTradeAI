@@ -313,8 +313,28 @@ function buildForexTradeTags(signal = {}, tier, direction, session) {
     };
 }
 
+// [v25.4 — 2026-05-27 safety/ops-hygiene] Helper for the missing-context entry
+// guard. Returns true if the signal carries at least one piece of meaningful
+// context (rsi, volumeRatio, marketRegime, or a strategy tag). A fresh
+// (non-restored) entry with all of these null almost always means the scanner
+// fired before indicators were computed — a race or bug masquerading as a real
+// signal. Restored positions legitimately have empty signal (recovering OANDA
+// state) and are exempt at the call site, not here.
+function _forexEntryHasContext(signal) {
+    if (!signal || typeof signal !== 'object') return false;
+    return signal.rsi != null
+        || signal.volumeRatio != null
+        || signal.marketRegime != null
+        || (typeof signal.strategy === 'string' && signal.strategy.length > 0);
+}
+
 async function dbForexOpen(pair, direction, tier, entry, stopLoss, takeProfit, units, session, signal = {}) {
     if (!dbPool) { console.warn(`⚠️  [DB] dbForexOpen(${pair}) skipped — dbPool is null`); return null; }
+    // [v25.4] Missing-context entry rejection — see _forexEntryHasContext above.
+    if (session !== 'restored' && !_forexEntryHasContext(signal)) {
+        console.warn(`⚠️  [MissingContextGuard] dbForexOpen(${pair}, ${direction}): non-restored entry with no signal context (rsi/volumeRatio/marketRegime/strategy all null) — REJECTING. session=${session}, signal=${JSON.stringify(signal).slice(0, 200)}`);
+        return null;
+    }
     try {
         const absUnits = Math.abs(units);
         const positionSizeUsd = entry > 0 ? parseFloat((absUnits * entry).toFixed(2)) : null;
@@ -600,6 +620,23 @@ const FOREX_PERF_FILE = path.join(__dirname, 'data/forex-performance.json');
 // ===== EVALUATION PERSISTENCE (Improvement 1) =====
 const EVAL_FILE = path.join(__dirname, 'data', 'forex-evaluations.json');
 
+// [v25.5 — 2026-05-27 safety/ops-hygiene] SQL fragment to exclude
+// reconciliation / restart trades from forex performance aggregation. Use in
+// every WHERE clause that produces PF / win-rate / consec-loss / dashboard
+// summary numbers. NOT used in raw trade-list endpoints (users want to see
+// everything there, including orphans).
+//
+// Reconciliation trades are NOT real strategy outcomes:
+//   - close_reason='orphaned_restart': bot restart found a DB-open trade
+//     with no matching OANDA position; recorded as $0 P&L recovery.
+//   - session='restored': position recovered from OANDA on restart; the
+//     entry was not a strategy decision, so its eventual exit isn't a real
+//     strategy outcome either.
+// COALESCE handles open trades and pre-session-tagging rows where the column
+// may be NULL — NULL safely treats those as "not a reconciliation trade".
+const FOREX_PERF_EXCLUDE_RECON_SQL =
+    `(COALESCE(close_reason, '') != 'orphaned_restart' AND COALESCE(session, '') != 'restored')`;
+
 async function loadForexEvaluationsFromDB() {
     if (!dbPool) {
         console.log('[Persistence] No DB — starting with empty forex evaluations');
@@ -611,7 +648,7 @@ async function loadForexEvaluationsFromDB() {
                    entry_time, exit_time, close_reason, signal_score, entry_context,
                    strategy, regime, session
             FROM trades
-            WHERE bot = 'forex' AND status = 'closed' AND pnl_usd IS NOT NULL AND close_reason != 'orphaned_restart'
+            WHERE bot = 'forex' AND status = 'closed' AND pnl_usd IS NOT NULL AND ${FOREX_PERF_EXCLUDE_RECON_SQL}
             ORDER BY exit_time DESC NULLS LAST
             LIMIT 500
         `);
@@ -3091,6 +3128,27 @@ async function executeTrade(signal) {
         units = signal.direction === 'long' ? capUnits : -capUnits;
     }
 
+    // [v25.2 — 2026-05-27 safety/ops-hygiene] SAFETY-REVIEWED: absolute USD-notional fail-closed cap.
+    // The %-of-balance cap above clamps; if `balance` itself is bogus (reporting bug,
+    // JPY-pair USD-conversion error, stacked-multiplier inflation) the % cap can be
+    // bypassed in absolute terms. The 2026-05-27 strategy monitor reported some
+    // historical position_size_usd values in the millions — anomalies that would
+    // have slipped past the % cap. This guard REJECTS the trade rather than silently
+    // clamping, so the underlying bug surfaces instead of being masked. Tune via
+    // MAX_NOTIONAL_USD_ABS (default $100,000 — well above any sane retail-paper
+    // single-trade notional; raise only if you know exactly why).
+    // Misconfigured env var (non-numeric / ≤0) falls back to the $100k default
+    // — safety guard fails CLOSED on bad config, not open.
+    let MAX_NOTIONAL_USD_ABS = parseFloat(process.env.MAX_NOTIONAL_USD_ABS || '100000');
+    if (!Number.isFinite(MAX_NOTIONAL_USD_ABS) || MAX_NOTIONAL_USD_ABS <= 0) {
+        MAX_NOTIONAL_USD_ABS = 100000;
+    }
+    const finalNotionalUsd = Math.abs(units) * (_baseCurrency === 'USD' ? 1 : effectiveEntry);
+    if (finalNotionalUsd > MAX_NOTIONAL_USD_ABS) {
+        console.error(`🛑 [NotionalAbsCap] ${_pair}: notional $${finalNotionalUsd.toFixed(0)} exceeds absolute cap $${MAX_NOTIONAL_USD_ABS} — REJECTING trade. Investigate: balance=$${balance.toFixed(0)}, units=${Math.abs(units)}, entry=${effectiveEntry}, base=${_baseCurrency}, strategy=${signal.strategy || '?'}.`);
+        return false;
+    }
+
     // [v15.0] Safety guard: never submit an order with 0 units — would be accepted by OANDA
     // but creates a 0-unit position entry that corrupts the dashboard display.
     if (Math.abs(units) < 1) {
@@ -4854,6 +4912,7 @@ app.get('/api/trades/summary', async (req, res) => {
                 COALESCE(ABS(SUM(${cleanPnlUsd}) FILTER (WHERE status='closed' AND ${cleanPnlUsd} < 0)), 0)::FLOAT AS gross_loss
             FROM trades
             WHERE bot='forex' AND created_at >= NOW() - INTERVAL '1 day' * $1
+              AND ${FOREX_PERF_EXCLUDE_RECON_SQL}
             GROUP BY day ORDER BY day DESC
         `, [days]);
         const totals = await dbPool.query(`
@@ -4865,7 +4924,7 @@ app.get('/api/trades/summary', async (req, res) => {
                 COALESCE(SUM(${cleanPnlUsd}) FILTER (WHERE status='closed'), 0)::FLOAT AS total_pnl,
                 COALESCE(SUM(${cleanPnlUsd}) FILTER (WHERE status='closed' AND ${cleanPnlUsd} > 0), 0)::FLOAT AS gross_profit,
                 COALESCE(ABS(SUM(${cleanPnlUsd}) FILTER (WHERE status='closed' AND ${cleanPnlUsd} < 0)), 0)::FLOAT AS gross_loss
-            FROM trades WHERE bot='forex'
+            FROM trades WHERE bot='forex' AND ${FOREX_PERF_EXCLUDE_RECON_SQL}
         `);
         res.json({ success: true, daily: r.rows, totals: totals.rows });
     } catch (e) { res.status(500).json({ success: false, error: 'Internal server error', daily: [], totals: [] }); }
@@ -5451,6 +5510,11 @@ class UserForexEngine {
 
     async dbForexOpen(pair, direction, tier, entry, stopLoss, takeProfit, units, session, signal = {}) {
         if (!dbPool) return null;
+        // [v25.4] Missing-context entry rejection — see _forexEntryHasContext at file scope.
+        if (session !== 'restored' && !_forexEntryHasContext(signal)) {
+            console.warn(`⚠️  [MissingContextGuard] dbForexOpen(${pair}, ${direction}) [user=${this.userId}]: non-restored entry with no signal context — REJECTING. session=${session}, signal=${JSON.stringify(signal).slice(0, 200)}`);
+            return null;
+        }
         try {
             const absUnits = Math.abs(units);
             const positionSizeUsd = entry > 0 ? parseFloat((absUnits * entry).toFixed(2)) : null;
@@ -6369,6 +6433,7 @@ app.listen(PORT, async () => {
                 SELECT ${cleanPnl} AS pnl FROM trades
                 WHERE bot='forex' AND status='closed' AND ${cleanPnl} IS NOT NULL
                 AND exit_time >= CURRENT_DATE
+                AND ${FOREX_PERF_EXCLUDE_RECON_SQL}
                 ORDER BY exit_time DESC NULLS LAST LIMIT 50
             `);
             let consec = 0, maxConsec = 0, runConsec = 0;
