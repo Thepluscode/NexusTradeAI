@@ -313,8 +313,28 @@ function buildForexTradeTags(signal = {}, tier, direction, session) {
     };
 }
 
+// [v25.4 — 2026-05-27 safety/ops-hygiene] Helper for the missing-context entry
+// guard. Returns true if the signal carries at least one piece of meaningful
+// context (rsi, volumeRatio, marketRegime, or a strategy tag). A fresh
+// (non-restored) entry with all of these null almost always means the scanner
+// fired before indicators were computed — a race or bug masquerading as a real
+// signal. Restored positions legitimately have empty signal (recovering OANDA
+// state) and are exempt at the call site, not here.
+function _forexEntryHasContext(signal) {
+    if (!signal || typeof signal !== 'object') return false;
+    return signal.rsi != null
+        || signal.volumeRatio != null
+        || signal.marketRegime != null
+        || (typeof signal.strategy === 'string' && signal.strategy.length > 0);
+}
+
 async function dbForexOpen(pair, direction, tier, entry, stopLoss, takeProfit, units, session, signal = {}) {
     if (!dbPool) { console.warn(`⚠️  [DB] dbForexOpen(${pair}) skipped — dbPool is null`); return null; }
+    // [v25.4] Missing-context entry rejection — see _forexEntryHasContext above.
+    if (session !== 'restored' && !_forexEntryHasContext(signal)) {
+        console.warn(`⚠️  [MissingContextGuard] dbForexOpen(${pair}, ${direction}): non-restored entry with no signal context (rsi/volumeRatio/marketRegime/strategy all null) — REJECTING. session=${session}, signal=${JSON.stringify(signal).slice(0, 200)}`);
+        return null;
+    }
     try {
         const absUnits = Math.abs(units);
         const positionSizeUsd = entry > 0 ? parseFloat((absUnits * entry).toFixed(2)) : null;
@@ -5472,6 +5492,11 @@ class UserForexEngine {
 
     async dbForexOpen(pair, direction, tier, entry, stopLoss, takeProfit, units, session, signal = {}) {
         if (!dbPool) return null;
+        // [v25.4] Missing-context entry rejection — see _forexEntryHasContext at file scope.
+        if (session !== 'restored' && !_forexEntryHasContext(signal)) {
+            console.warn(`⚠️  [MissingContextGuard] dbForexOpen(${pair}, ${direction}) [user=${this.userId}]: non-restored entry with no signal context — REJECTING. session=${session}, signal=${JSON.stringify(signal).slice(0, 200)}`);
+            return null;
+        }
         try {
             const absUnits = Math.abs(units);
             const positionSizeUsd = entry > 0 ? parseFloat((absUnits * entry).toFixed(2)) : null;
