@@ -620,6 +620,23 @@ const FOREX_PERF_FILE = path.join(__dirname, 'data/forex-performance.json');
 // ===== EVALUATION PERSISTENCE (Improvement 1) =====
 const EVAL_FILE = path.join(__dirname, 'data', 'forex-evaluations.json');
 
+// [v25.5 — 2026-05-27 safety/ops-hygiene] SQL fragment to exclude
+// reconciliation / restart trades from forex performance aggregation. Use in
+// every WHERE clause that produces PF / win-rate / consec-loss / dashboard
+// summary numbers. NOT used in raw trade-list endpoints (users want to see
+// everything there, including orphans).
+//
+// Reconciliation trades are NOT real strategy outcomes:
+//   - close_reason='orphaned_restart': bot restart found a DB-open trade
+//     with no matching OANDA position; recorded as $0 P&L recovery.
+//   - session='restored': position recovered from OANDA on restart; the
+//     entry was not a strategy decision, so its eventual exit isn't a real
+//     strategy outcome either.
+// COALESCE handles open trades and pre-session-tagging rows where the column
+// may be NULL — NULL safely treats those as "not a reconciliation trade".
+const FOREX_PERF_EXCLUDE_RECON_SQL =
+    `(COALESCE(close_reason, '') != 'orphaned_restart' AND COALESCE(session, '') != 'restored')`;
+
 async function loadForexEvaluationsFromDB() {
     if (!dbPool) {
         console.log('[Persistence] No DB — starting with empty forex evaluations');
@@ -631,7 +648,7 @@ async function loadForexEvaluationsFromDB() {
                    entry_time, exit_time, close_reason, signal_score, entry_context,
                    strategy, regime, session
             FROM trades
-            WHERE bot = 'forex' AND status = 'closed' AND pnl_usd IS NOT NULL AND close_reason != 'orphaned_restart'
+            WHERE bot = 'forex' AND status = 'closed' AND pnl_usd IS NOT NULL AND ${FOREX_PERF_EXCLUDE_RECON_SQL}
             ORDER BY exit_time DESC NULLS LAST
             LIMIT 500
         `);
@@ -4895,6 +4912,7 @@ app.get('/api/trades/summary', async (req, res) => {
                 COALESCE(ABS(SUM(${cleanPnlUsd}) FILTER (WHERE status='closed' AND ${cleanPnlUsd} < 0)), 0)::FLOAT AS gross_loss
             FROM trades
             WHERE bot='forex' AND created_at >= NOW() - INTERVAL '1 day' * $1
+              AND ${FOREX_PERF_EXCLUDE_RECON_SQL}
             GROUP BY day ORDER BY day DESC
         `, [days]);
         const totals = await dbPool.query(`
@@ -4906,7 +4924,7 @@ app.get('/api/trades/summary', async (req, res) => {
                 COALESCE(SUM(${cleanPnlUsd}) FILTER (WHERE status='closed'), 0)::FLOAT AS total_pnl,
                 COALESCE(SUM(${cleanPnlUsd}) FILTER (WHERE status='closed' AND ${cleanPnlUsd} > 0), 0)::FLOAT AS gross_profit,
                 COALESCE(ABS(SUM(${cleanPnlUsd}) FILTER (WHERE status='closed' AND ${cleanPnlUsd} < 0)), 0)::FLOAT AS gross_loss
-            FROM trades WHERE bot='forex'
+            FROM trades WHERE bot='forex' AND ${FOREX_PERF_EXCLUDE_RECON_SQL}
         `);
         res.json({ success: true, daily: r.rows, totals: totals.rows });
     } catch (e) { res.status(500).json({ success: false, error: 'Internal server error', daily: [], totals: [] }); }
@@ -6415,6 +6433,7 @@ app.listen(PORT, async () => {
                 SELECT ${cleanPnl} AS pnl FROM trades
                 WHERE bot='forex' AND status='closed' AND ${cleanPnl} IS NOT NULL
                 AND exit_time >= CURRENT_DATE
+                AND ${FOREX_PERF_EXCLUDE_RECON_SQL}
                 ORDER BY exit_time DESC NULLS LAST LIMIT 50
             `);
             let consec = 0, maxConsec = 0, runConsec = 0;
