@@ -4537,6 +4537,7 @@ class CryptoTradingEngine {
         this._isStarting = false;
         this.demoMode = false;
         this.saveState();
+        this._saveStateToDB?.().catch(e => console.warn('⚠️ start() DB persist failed:', e.message));
         this.tradingLoop().catch(e => console.error('❌ Crypto trading loop crashed:', e));
     }
 
@@ -4593,18 +4594,21 @@ class CryptoTradingEngine {
         this.isRunning = false;
         this.isPaused = false;
         this.saveState();
+        this._saveStateToDB?.().catch(e => console.warn('⚠️ stop() DB persist failed:', e.message));
     }
 
     pause() {
         console.log('⏸  Pausing Crypto Trading Engine (existing positions still managed)...');
         this.isPaused = true;
         this.saveState();
+        this._saveStateToDB?.().catch(e => console.warn('⚠️ pause() DB persist failed:', e.message));
     }
 
     resume() {
         console.log('▶️  Resuming Crypto Trading Engine...');
         this.isPaused = false;
         this.saveState();
+        this._saveStateToDB?.().catch(e => console.warn('⚠️ resume() DB persist failed:', e.message));
     }
 
     async refreshConnectionState(force = false) {
@@ -6317,17 +6321,29 @@ app.listen(PORT, async () => {
         console.warn('⚠️  Crypto startup Telegram credential load failed:', e.message);
     }
 
-    // Register engines for all existing users with Kraken credentials (staggered)
+    // Register engines for all existing users with Kraken credentials (staggered).
+    // Only auto-start when the user's last persisted state was running (or no state row exists).
+    // Respects explicit Stop intent across redeploys — DB is the source of truth.
     setTimeout(async () => {
         try {
             if (dbPool) {
-                const users = await dbPool.query('SELECT id FROM users ORDER BY id ASC');
+                const users = await dbPool.query(
+                    `SELECT u.id, COALESCE((es.state_json->>'isRunning')::boolean, true) AS should_run
+                     FROM users u
+                     LEFT JOIN engine_state es ON es.user_id = u.id AND es.bot = 'crypto'
+                     ORDER BY u.id ASC`
+                );
                 let delay = 0;
                 for (const row of users.rows) {
                     setTimeout(async () => {
                         try {
                             const eng = await getOrCreateCryptoEngine(row.id);
-                            if (eng) await eng.start();
+                            if (!eng) return;
+                            if (row.should_run) {
+                                await eng.start();
+                            } else {
+                                console.log(`⏸  Crypto engine pre-registered for user ${row.id} but kept stopped (user intent persisted in DB)`);
+                            }
                         } catch (e) { console.warn(`⚠️  Crypto engine init failed for user ${row.id}:`, e.message); }
                     }, delay);
                     delay += 6000;
