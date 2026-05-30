@@ -1922,6 +1922,11 @@ class CryptoTradingEngine {
         this.credentialsValid = null;
         this.credentialsError = null;
         this.lastCredentialCheckAt = 0;
+        // Exponential backoff on repeated auth failure. Prevents the bot from
+        // hammering the exchange every scan with failing keys — which on Kraken
+        // triggers a per-account "Temporary lockout" that never clears while
+        // anything keeps probing. Reset to 0 on first success.
+        this._consecutiveAuthFailures = 0;
 
         // Monte Carlo position sizer (v9.0)
         this.monteCarloSizer = new MonteCarloSizer();
@@ -3981,9 +3986,11 @@ class CryptoTradingEngine {
                 console.log(`${'='.repeat(60)}`);
                 console.log(`📊 Positions: ${this.positions.size}/${this.config.maxTotalPositions} | Trades today: ${this.dailyTradeCount}/${this.config.maxTradesPerDay}`);
 
-                // In demo mode, periodically retry credentials (user may save them via settings UI)
+                // In demo mode, periodically retry credentials (user may save them via settings UI).
+                // Backoff grows with consecutive auth failures so a bad/locked-out key isn't
+                // re-probed every 5 min (which keeps Kraken's per-account lockout alive forever).
                 if (this.demoMode) {
-                    const retryInterval = 5 * 60 * 1000; // Retry every 5 minutes
+                    const retryInterval = this.getCredentialRetryInterval();
                     const timeSinceLastCheck = Date.now() - (this.lastCredentialCheckAt || 0);
                     if (timeSinceLastCheck >= retryInterval) {
                         console.log('🔄 DEMO MODE - Checking if credentials have been configured...');
@@ -4634,14 +4641,26 @@ class CryptoTradingEngine {
             this.credentialsValid = Boolean(account);
             this.credentialsError = null;
             this.lastCredentialCheckAt = Date.now();
+            this._consecutiveAuthFailures = 0;
             return this.credentialsValid;
         } catch (error) {
             this.demoMode = true;
             this.credentialsValid = false;
             this.credentialsError = error.message || 'Kraken credentials invalid or expired';
             this.lastCredentialCheckAt = Date.now();
+            this._consecutiveAuthFailures = (this._consecutiveAuthFailures || 0) + 1;
             return false;
         }
+    }
+
+    // Backoff before the next credential re-probe, grows with consecutive
+    // failures: 5m, 10m, 20m, 40m, capped at 60m. A lockout/invalid key stops
+    // getting hammered every 5m, so Kraken's per-account lockout can expire.
+    getCredentialRetryInterval() {
+        const base = 5 * 60 * 1000;
+        const cap = 60 * 60 * 1000;
+        const n = Math.max(0, (this._consecutiveAuthFailures || 0) - 1);
+        return Math.min(base * Math.pow(2, n), cap);
     }
 
     // ===== ADAPTIVE GUARDRAILS (v4.6) =====
@@ -5455,6 +5474,7 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
         // Reset credential check timer so trading loop retries immediately on next scan
         if (broker === 'crypto' && updated > 0) {
             engine.lastCredentialCheckAt = 0;
+            engine._consecutiveAuthFailures = 0; // fresh key — clear backoff so it's probed immediately
             const apiKey = process.env.CRYPTO_API_KEY;
             const apiSecret = process.env.CRYPTO_API_SECRET;
             if (!apiKey || !apiSecret) {
