@@ -4512,6 +4512,7 @@ class CryptoTradingEngine {
             this.credentialsValid = false;
             this.credentialsError = 'No Kraken credentials configured';
             this.saveState();
+            this._saveStateToDB?.().catch(e => console.warn('⚠️ start() demo-no-keys DB persist failed:', e.message));
             this.tradingLoop().catch(e => console.error('❌ Crypto trading loop crashed:', e));
             return;
         }
@@ -4524,6 +4525,7 @@ class CryptoTradingEngine {
             this._isStarting = false;
             this.demoMode = true;
             this.saveState();
+            this._saveStateToDB?.().catch(e => console.warn('⚠️ start() demo-conn-failed DB persist failed:', e.message));
             this.tradingLoop().catch(e => console.error('❌ Crypto trading loop crashed:', e));
             return;
         }
