@@ -135,3 +135,40 @@ strategies.
 The reopening bar defined in `theplus-bot/EDGE_FINDINGS.md` ("Operating rules
 going forward") applies here too. Energy goes to the honesty-detector product,
 not to re-tuning these bots.
+
+---
+
+## Addendum — 2026-06-04: the stubbed `qualifyEntry` gate has no edge either
+
+While wiring the `/api/health/detailed` monitoring endpoint, production verification
+exposed that the shared `require('../../services/signals/…')` block **fails silently
+on Railway** (each bot is served from `deploy/<bot>/`, so that path doesn't resolve).
+Several secondary gates were therefore running as permissive inline stubs in prod:
+`qualifyEntry` (EV/threshold gate) = always `qualified:true`, `computePortfolioHeat` =
+always `canOpen`, `calibrateConfidence` = passthrough. The **primary** safety gate —
+`canTrade()` anti-churning — is inline and was never affected.
+
+Before enabling `qualifyEntry`, it was backtested (Rule 4 FP/FN) by replaying the real
+committee inputs stored in each trade's `entry_context` through the actual module.
+Harness: `services/trading/qualifier-backtest.js` (+ tests). Verdict — **no discriminative power:**
+
+| Bot | n (committee-instrumented) | blocked | block precision | base loser rate | kept-trade win rate |
+|-----|--:|--:|--:|--:|--:|
+| crypto | 289 | 287 (99%) | 70.6% | **70.8%** | 0% (2 kept, both lost) |
+| stock  | 17  | 17 (100%) | 64.7% | ~64.7% | — (0 kept) |
+| forex  | 3   | 0 | — | — | — |
+
+**Block precision ≈ the base loser rate** → the gate does not select bad trades, it
+suppresses ~99–100% of *all* trades at the base rate. The apparent +$287 crypto P&L
+"improvement" is entirely *"trade almost nothing on a negative-edge strategy"* — the
+job of the existing strategy auto-disable, not a per-trade entry gate. Dominant cause:
+257/289 crypto blocks are the 0.45 confidence floor, i.e. the committee confidence
+distribution sits below 0.45 in this period (no high-conviction setups), consistent
+with the no-edge audit above.
+
+**Decision: do NOT enable `qualifyEntry` / heat / calibration as a "fix."** Enabling them
+is a trade-selection change with zero demonstrated discrimination — it confirms, not
+overturns, the closed edge audit. The correct lever for a losing strategy remains
+strategy-level enable/disable, which already exists. Only the read-only health modules
+(`health-monitor`, `health-pnl`) were moved to local-first loading so monitoring reports
+real data; no trade-decision module loading was changed.
