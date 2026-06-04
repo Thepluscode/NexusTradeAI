@@ -172,3 +172,33 @@ overturns, the closed edge audit. The correct lever for a losing strategy remain
 strategy-level enable/disable, which already exists. Only the read-only health modules
 (`health-monitor`, `health-pnl`) were moved to local-first loading so monitoring reports
 real data; no trade-decision module loading was changed.
+
+---
+
+## Addendum — 2026-06-04: kill-switch enforcement DOES discriminate (OOS), wired opt-in
+
+Unlike the per-trade `qualifyEntry` gate, the **statistical kill-switch** — disable a
+`(strategy, market_regime)` bucket when n≥30 AND the 95% CI upper bound on pnl_pct < 0,
+re-evaluated daily with a 7-day TTL — was tested **out-of-sample, walk-forward** (each
+decision uses only trades that closed before it; zero look-ahead). Harness:
+`services/signals/backtest/kill-switch-oos.js` (+ tests).
+
+| Bot | n | blocked | block precision | base loser rate | blocked WR | kept WR | OOS P&L improvement |
+|-----|--:|--:|--:|--:|--:|--:|--:|
+| crypto | 318 | 147 | **80.4%** | 68.8% | 19.6% | 41.8% | **+$40.95** (−64.83 → −23.88) |
+| stock  | 90  | 0 | — | — | — | — | $0 (nothing met n≥30 ∧ CI<0) |
+| forex  | 31  | 0 | — | — | — | — | $0 |
+
+The decisive contrast with `qualifyEntry`: here **block precision (80.4%) exceeds the base
+loser rate (68.8%)** — the gate preferentially removes losers (blocked WR 19.6% vs kept WR
+41.8%). That is genuine, if modest, selection skill on held-out data, because the n≥30 +
+95%-CI test isolates buckets that are *confidently* losing rather than blocking per-trade
+noise. **But it reduces losses, it does not create profit** — the kept book is still −$23.88,
+and per the OOS-collapse evidence above that residual is not a demonstrated edge.
+
+**Action: enforcement wired, default OFF** (`ENFORCE_KILL_SWITCHES`, per bot). This does not
+reopen strategy tuning — it operationalises the *existing* statistical auto-disable as an
+opt-in loss-reducer, with the OOS backtest as its gate. Today only
+`crypto/momentum/MEAN_REVERTING` is flagged. The reopening bar for *adding/tuning* strategies
+is unchanged; this only lets the operator stop a bucket the evidence already condemns, and it
+auto-resumes when the bucket stops being statistically losing.

@@ -71,6 +71,16 @@ try {
   catch (e) { console.log(`[INIT] health-pnl unavailable — /api/health/detailed P&L disabled: ${e.message}`); }
 }
 
+// Kill-switch enforcement (opt-in via ENFORCE_KILL_SWITCHES). Local-first like the health
+// modules. Fallback no-op gate never blocks, so a load failure can't halt trading.
+let createKillSwitchGate = () => ({ isKilled: async () => null, refresh: async () => {} });
+try {
+  ({ createKillSwitchGate } = require('./signals/kill-switch'));
+} catch (_) {
+  try { ({ createKillSwitchGate } = require('../../services/signals/kill-switch')); }
+  catch (e) { console.log(`[INIT] kill-switch module unavailable — enforcement disabled: ${e.message}`); }
+}
+
 // Shared signal functions (compat wrappers preserve old interface)
 let sharedSignals;
 try {
@@ -4493,6 +4503,24 @@ class CryptoTradingEngine {
                             }
                         } catch (_heatErr) { /* non-fatal */ }
 
+                        // [2026-06-04] Kill-switch enforcement — opt-in via ENFORCE_KILL_SWITCHES (default OFF).
+                        // Skips signals whose (strategy, market_regime) bucket the auto-disable scanner flagged
+                        // as statistically losing (n>=30, 95% CI upper<0). Uses the SAME (strategy, regime) that
+                        // will be stamped on the trade, so the key matches the scanner's flag exactly.
+                        // canTrade() anti-churning remains the safety floor regardless of this flag.
+                        if (process.env.ENFORCE_KILL_SWITCHES === 'true') {
+                            if (!this._killSwitchGate && dbPool) this._killSwitchGate = createKillSwitchGate({ dbPool, bot: 'crypto' });
+                            if (this._killSwitchGate) {
+                                const ksTags = buildCryptoTradeTags(signal, signal.tier);
+                                const killed = await this._killSwitchGate.isKilled(ksTags.strategy, ksTags.marketRegimeClass);
+                                if (killed) {
+                                    console.log(`[KILL_SWITCH] ${signal.symbol} BLOCKED — ${killed.key} disabled (${killed.reason || 'auto-disabled bucket'})`);
+                                    this._recordDecision(signal.symbol, 'kill_switch_enforced', 'block', { key: killed.key, reason: killed.reason });
+                                    continue;
+                                }
+                            }
+                        }
+
                         await this.executeTrade(signal);
                     }
                 }
@@ -4953,6 +4981,7 @@ app.get('/api/health/detailed', async (req, res) => {
             isRunning: engine.isRunning,
             isPaused: engine.isPaused,
             demoMode: engine.demoMode || false,
+            enforceKillSwitches: process.env.ENFORCE_KILL_SWITCHES === 'true',
             pnl: {
                 source: pnl.available ? 'db' : 'unavailable',
                 today: pnl.pnlToday,

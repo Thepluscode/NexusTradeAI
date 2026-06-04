@@ -77,6 +77,17 @@ try {
   catch (e) { console.log(`[INIT] health-pnl unavailable — /api/health/detailed P&L disabled: ${e.message}`); }
 }
 
+// Kill-switch enforcement (opt-in via ENFORCE_KILL_SWITCHES). Local-first like the health
+// modules. Fallback no-op gate never blocks, so a load failure can't halt trading.
+let createKillSwitchGate = () => ({ isKilled: async () => null, refresh: async () => {} });
+let _killSwitchGate = null;
+try {
+  ({ createKillSwitchGate } = require('./signals/kill-switch'));
+} catch (_) {
+  try { ({ createKillSwitchGate } = require('../../services/signals/kill-switch')); }
+  catch (e) { console.log(`[INIT] kill-switch module unavailable — enforcement disabled: ${e.message}`); }
+}
+
 // Signal schema initializer — creates historical_bars_cache, backtest_results,
 // shadow_signals, strategy_enabled tables. Idempotent.
 let initSignalSchema;
@@ -4568,6 +4579,20 @@ async function analyzeMomentum(symbol, { backtestMode = false } = {}) {
 async function executeTrade(signal, strategy) {
     try {
         const tier = signal.tier || 'tier1';
+
+        // [2026-06-04] Kill-switch enforcement — opt-in via ENFORCE_KILL_SWITCHES (default OFF).
+        // Skips signals whose (strategy, market_regime) bucket the auto-disable scanner flagged
+        // as statistically losing. Anti-churning canTrade() remains the safety floor regardless.
+        if (process.env.ENFORCE_KILL_SWITCHES === 'true' && dbPool) {
+            if (!_killSwitchGate) _killSwitchGate = createKillSwitchGate({ dbPool, bot: 'stock' });
+            const ksTags = buildStockTradeTags(signal, strategy, tier);
+            const killed = await _killSwitchGate.isKilled(ksTags.strategy, ksTags.marketRegimeClass);
+            if (killed) {
+                console.log(`[KILL_SWITCH] ${signal.symbol} BLOCKED — ${killed.key} disabled (${killed.reason || 'auto-disabled bucket'})`);
+                return null;
+            }
+        }
+
         const config = signal.config || MOMENTUM_CONFIG.tier1;
 
         const accountUrl = `${alpacaConfig.baseURL}/v2/account`;
@@ -5495,6 +5520,7 @@ app.get('/api/health/detailed', async (req, res) => {
             status: health,
             isRunning: botRunning,
             isPaused: botPaused,
+            enforceKillSwitches: process.env.ENFORCE_KILL_SWITCHES === 'true',
             pnl: {
                 source: pnl.available ? 'db' : 'unavailable',
                 today: pnl.pnlToday,

@@ -5,11 +5,12 @@ name: Auto-disable stale strategies
 # strategy_kill_switches for any (bot, strategy, market_regime) bucket where
 # n>=30 AND 95% CI upper bound < 0 (i.e., statistically losing money).
 #
-# SHADOW MODE: bots do NOT yet read kill_switches at signal time. This job
-# only POPULATES the table so we can observe what would be auto-disabled
-# before any real disabling. A follow-up commit wires the gate.
+# This job only POPULATES the table. Enforcement is wired at signal time but
+# OPT-IN: a bot skips flagged (strategy, market_regime) buckets only when
+# ENFORCE_KILL_SWITCHES=true is set on that bot (default off = shadow/observe).
+# OOS evidence for enabling: services/signals/backtest/kill-switch-oos.js + EDGE_FINDINGS.md.
 #
-# Read endpoint: GET /api/kill-switches (no auth) for inspection.
+# Read endpoint: GET /api/kill-switches (no auth) — reports mode shadow|enforcing.
 # To override defaults manually, curl the endpoint directly with auth.
 
 on:

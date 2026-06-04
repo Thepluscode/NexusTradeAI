@@ -111,6 +111,8 @@ git push main → GitHub Actions CI → Railway auto-deploy
 - `services/signals/compat.js` — Backward-compatible wrappers for inline function interfaces
 - `services/signals/health-monitor.js` — Pure health-check primitives (scan/error/trading/memory) behind `/health`
 - `services/signals/health-pnl.js` — DB-backed P&L/trade/position summary behind `/api/health/detailed` (read-only, never throws)
+- `services/signals/kill-switch.js` — signal-time enforcement of `strategy_kill_switches` (opt-in via `ENFORCE_KILL_SWITCHES`; cached, fail-open)
+- `services/signals/backtest/kill-switch-oos.js` — out-of-sample walk-forward evaluation of kill-switch enforcement (the evidence gate)
 - `clients/bot-dashboard/shared/auth.js` — Auth middleware, encryption, JWT, auth routes
 - `services/trading/monte-carlo-sizer.js` — Monte Carlo position sizing
 
@@ -168,6 +170,7 @@ SELECT * FROM trades WHERE bot='stock' AND status='closed' ORDER BY exit_time DE
 - `BOT_PAUSED=true` — pauses forex bot (survives Railway deploys)
 - `MAX_TRADES_PER_DAY=15` — daily trade limit
 - `CORS_ORIGIN` — comma-separated allowed origins
+- `ENFORCE_KILL_SWITCHES=true` — **opt-in, per bot, default OFF.** When on, the bot skips signals whose `(strategy, market_regime)` bucket the daily auto-disable scanner flagged as statistically losing (`strategy_kill_switches`: n≥30, 95% CI upper < 0). Fail-open (a DB error never blocks); anti-churning `canTrade()` is unaffected. OOS evidence: `services/signals/backtest/kill-switch-oos.js` + EDGE_FINDINGS.md. Verify per bot via `/api/health/detailed → enforceKillSwitches`, and `GET /api/kill-switches → mode` (shadow|enforcing). **Currently only the `crypto/momentum/MEAN_REVERTING` bucket is flagged**, so turning it on mainly gates crypto momentum while in that regime; flags auto-expire in 7 days and re-evaluate daily.
 
 **Infrastructure:**
 - `DATABASE_URL` — PostgreSQL connection string
