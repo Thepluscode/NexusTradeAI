@@ -60,6 +60,17 @@ try {
   catch (e) { console.log(`[INIT] health-pnl unavailable — /api/health/detailed P&L disabled: ${e.message}`); }
 }
 
+// Kill-switch enforcement (opt-in via ENFORCE_KILL_SWITCHES). Local-first like the health
+// modules. Fallback no-op gate never blocks, so a load failure can't halt trading.
+let createKillSwitchGate = () => ({ isKilled: async () => null, refresh: async () => {} });
+let _killSwitchGate = null;
+try {
+  ({ createKillSwitchGate } = require('./signals/kill-switch'));
+} catch (_) {
+  try { ({ createKillSwitchGate } = require('../../services/signals/kill-switch')); }
+  catch (e) { console.log(`[INIT] kill-switch module unavailable — enforcement disabled: ${e.message}`); }
+}
+
 // Shared signal functions (compat wrappers preserve old interface)
 let sharedSignals;
 try {
@@ -221,9 +232,9 @@ async function initTradeDb() {
             CREATE INDEX IF NOT EXISTS idx_trades_user_bot ON trades(user_id, bot);
             CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy);
             CREATE INDEX IF NOT EXISTS idx_trades_regime ON trades(regime);
-            -- [2026-05-09] strategy_kill_switches: shadow-mode auto-disable list driven by edge-attribution.
-            -- Bots will NOT enforce these flags yet — first we observe the table populating sensibly,
-            -- then a follow-up commit will wire the gate at signal time.
+            -- [2026-05-09] strategy_kill_switches: auto-disable list driven by edge-attribution.
+            -- [2026-06-04] Enforcement wired at signal time, OPT-IN via ENFORCE_KILL_SWITCHES
+            -- (default off = observe only). See services/signals/kill-switch.js.
             CREATE TABLE IF NOT EXISTS strategy_kill_switches (
                 id SERIAL PRIMARY KEY,
                 bot VARCHAR(20) NOT NULL,
@@ -3029,6 +3040,19 @@ async function scanForSignals(heldPositions = positions) {
 // ===== TRADE EXECUTION =====
 
 async function executeTrade(signal) {
+    // [2026-06-04] Kill-switch enforcement — opt-in via ENFORCE_KILL_SWITCHES (default OFF).
+    // Skips signals whose (strategy, market_regime) bucket the auto-disable scanner flagged
+    // as statistically losing. Anti-churning canTrade() remains the safety floor regardless.
+    if (process.env.ENFORCE_KILL_SWITCHES === 'true' && dbPool) {
+        if (!_killSwitchGate) _killSwitchGate = createKillSwitchGate({ dbPool, bot: 'forex' });
+        const ksTags = buildForexTradeTags(signal, signal.tier, signal.direction, signal.session);
+        const killed = await _killSwitchGate.isKilled(ksTags.strategy, ksTags.marketRegimeClass);
+        if (killed) {
+            console.log(`[KILL_SWITCH] ${signal.pair} BLOCKED — ${killed.key} disabled (${killed.reason || 'auto-disabled bucket'})`);
+            return false;
+        }
+    }
+
     // Currency concentration limit — max 2 positions sharing the same currency
     // Data: all 5 losing trades were JPY pairs (100% correlated)
     const MAX_CURRENCY_CONCENTRATION = 2;
@@ -4266,6 +4290,7 @@ app.get('/api/health/detailed', async (req, res) => {
             isRunning: botRunning,
             isPaused: botPaused,
             botPausedEnv: process.env.BOT_PAUSED === 'true',
+            enforceKillSwitches: process.env.ENFORCE_KILL_SWITCHES === 'true',
             pnl: {
                 source: pnl.available ? 'db' : 'unavailable',
                 today: pnl.pnlToday,
@@ -5263,10 +5288,10 @@ app.get('/api/edge-attribution', async (req, res) => {
 });
 
 // [2026-05-09] Auto-disable scanner — populates strategy_kill_switches based on edge-attribution data.
-// SHADOW MODE: bots do not enforce these flags yet. This endpoint is called daily by a GitHub Action;
-// the kill-switch rows it writes are observation-only until a follow-up commit wires the gate at
-// signal-build time. Criteria for flagging: n_trades >= minN AND 95% CI upper bound < 0 (i.e.,
-// strategy is statistically losing money in the chosen window/regime combo).
+// Called daily by a GitHub Action. Criteria for flagging: n_trades >= minN AND 95% CI upper bound < 0
+// (i.e., strategy is statistically losing money in the chosen window/regime combo).
+// [2026-06-04] Enforcement is wired at signal time but OPT-IN per bot via ENFORCE_KILL_SWITCHES
+// (default off). This endpoint only writes the table; it does not change live behaviour by itself.
 app.post('/api/admin/refresh-kill-switches', requireJwtOrApiSecret, async (req, res) => {
     if (!dbPool) return res.status(503).json({ success: false, error: 'DB not configured' });
     try {
@@ -5327,7 +5352,7 @@ app.post('/api/admin/refresh-kill-switches', requireJwtOrApiSecret, async (req, 
 
         res.json({
             success: true,
-            mode: 'shadow', // bots do NOT enforce yet
+            mode: process.env.ENFORCE_KILL_SWITCHES === 'true' ? 'enforcing' : 'shadow', // per ENFORCE_KILL_SWITCHES (this bot)
             window_days: windowDays,
             min_n: minN,
             ttl_days: ttlDays,
@@ -5355,7 +5380,7 @@ app.get('/api/kill-switches', async (req, res) => {
             WHERE expires_at IS NULL OR expires_at > NOW()
             ORDER BY disabled_at DESC
         `);
-        res.json({ success: true, mode: 'shadow', data: r.rows, count: r.rows.length });
+        res.json({ success: true, mode: process.env.ENFORCE_KILL_SWITCHES === 'true' ? 'enforcing' : 'shadow', data: r.rows, count: r.rows.length });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
     }
