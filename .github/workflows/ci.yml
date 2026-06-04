@@ -179,3 +179,55 @@ jobs:
             (echo "Attempt $i failed: $RESULT" && [ $i -lt 3 ] && sleep 15)
           done
           echo "$RESULT" | grep -q OK || (echo "Crypto Bot API contract failed" && exit 1)
+
+      # Verify the unauthenticated monitoring endpoint exposes P&L / trades / positions
+      # on every bot. Enforces "if present, must be correct": because smoke-tests run
+      # against live Railway in parallel with this commit's own deploy, a brand-new
+      # endpoint may not be live yet on the first rollout — a 404 is treated as
+      # not-yet-deployed (soft pass) and self-heals on the next deploy. A 200 with a
+      # broken contract is a hard failure.
+      - name: API contract — /api/health/detailed (all bots)
+        run: |
+          check_detailed() {
+            NAME="$1"; URL="$2"
+            for i in 1 2 3; do
+              CODE=$(curl -s -o "/tmp/${NAME}_detailed.json" -w "%{http_code}" \
+                     --max-time 15 "$URL/api/health/detailed" 2>/dev/null) || CODE="000"
+              if [ "$CODE" = "404" ]; then
+                echo "$NAME → 404 (endpoint not live yet — will enforce after deploy completes)"
+                return 0
+              fi
+              if [ "$CODE" = "200" ]; then
+                RESULT=$(python3 -c "
+          import json, sys
+          b = json.load(open('/tmp/${NAME}_detailed.json'))
+          for k in ('bot', 'healthy', 'pnl', 'trades', 'positions'):
+              if k not in b:
+                  print('FAIL — missing %s' % k); sys.exit(1)
+          for k in ('today', 'total', 'winRatePct'):
+              if k not in b['pnl']:
+                  print('FAIL — pnl.%s missing' % k); sys.exit(1)
+          for k in ('today', 'total'):
+              if k not in b['trades']:
+                  print('FAIL — trades.%s missing' % k); sys.exit(1)
+          for k in ('live', 'dbOpen', 'list'):
+              if k not in b['positions']:
+                  print('FAIL — positions.%s missing' % k); sys.exit(1)
+          print('OK — pnlTotal=%s trades=%s open=%s' % (
+              b['pnl']['total'], b['trades']['total'], b['positions']['live']))
+                " 2>&1)
+                echo "$NAME → $RESULT"
+                echo "$RESULT" | grep -q OK && return 0 || { echo "$NAME contract broken"; return 1; }
+              fi
+              echo "$NAME attempt $i: HTTP $CODE" && [ $i -lt 3 ] && sleep 15
+            done
+            echo "$NAME /api/health/detailed unreachable after retries"; return 1
+          }
+          FAILURES=0
+          check_detailed stock  https://nexus-stock-bot-production.up.railway.app  || FAILURES=$((FAILURES+1))
+          check_detailed forex  https://nexus-forex-bot-production.up.railway.app  || FAILURES=$((FAILURES+1))
+          check_detailed crypto https://nexus-crypto-bot-production.up.railway.app || FAILURES=$((FAILURES+1))
+          if [ "$FAILURES" -gt 0 ]; then
+            echo "ERROR: $FAILURES /api/health/detailed contract check(s) failed"
+            exit 1
+          fi

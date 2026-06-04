@@ -29,6 +29,7 @@ let checkErrorRate = () => ({ healthy: true });
 let checkTradingHealth = () => ({ healthy: true });
 let checkMemoryHealth = () => ({ healthy: true });
 let aggregateHealth = () => ({ status: 'ok' });
+let getPnlSummary = async () => ({ available: false, error: 'health-pnl module not loaded', pnlToday: 0, pnlTotal: 0, tradesToday: 0, tradesTotal: 0, winnersTotal: 0, losersTotal: 0, winRatePct: null, openPositions: 0 });
 try {
   ({ createSignalEndpoints } = require('../../services/signals/api-handlers'));
   ({ BOT_COMPONENTS, computeCommitteeScore: sharedCommitteeScore } = require('../../services/signals/committee-scorer'));
@@ -37,6 +38,7 @@ try {
   ({ computeCorrelationGuard, computePortfolioHeat, computeEquityCurveMultiplier } = require('../../services/signals/exit-manager'));
   ({ optimize: autoOptimize, evaluateStrategies: autoEvaluateStrategies, PARAM_BOUNDS: AUTO_PARAM_BOUNDS } = require('../../services/signals/auto-optimizer'));
   ({ checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth } = require('../../services/signals/health-monitor'));
+  ({ getPnlSummary } = require('../../services/signals/health-pnl'));
 } catch (e) {
   console.log('[INIT] Signal modules not available — trying local fallbacks');
   // [v17.1] On Railway, auto-optimizer ships alongside bot.js
@@ -4202,8 +4204,9 @@ app.get('/api/portfolio/risk', async (req, res) => {
     }
 });
 
-app.get('/health', (req, res) => {
-    const health = aggregateHealth({
+// Build the standard health-check object (shared by /health and /api/health/detailed)
+function buildForexHealth() {
+    return aggregateHealth({
         scan: checkScanHealth(lastScanCompletedAt, 300000),
         errors: checkErrorRate(recentErrors),
         trading: checkTradingHealth({
@@ -4215,7 +4218,62 @@ app.get('/health', (req, res) => {
         }),
         memory: checkMemoryHealth(),
     });
-    res.json(health);
+}
+
+// Health check (fast liveness probe — used by Railway healthcheck + CI smoke test)
+app.get('/health', (req, res) => {
+    res.json(buildForexHealth());
+});
+
+// Detailed health — unauthenticated monitoring view with live positions + DB-backed P&L.
+// Lets you watch actual performance without digging into logs or the DB directly.
+app.get('/api/health/detailed', async (req, res) => {
+    try {
+        const health = buildForexHealth();
+        const healthy = health.healthy !== false && health.status !== 'degraded';
+        const pnl = await getPnlSummary(dbPool, 'forex');
+        const livePositions = Array.from(positions.values()).map(p => ({
+            symbol: p.instrument ?? p.symbol ?? null,
+            direction: p.direction || null,
+            entry: p.entry ?? null,
+            stopLoss: p.stopLoss ?? null,
+            takeProfit: p.takeProfit ?? null,
+            size: p.units ?? null,
+            strategy: p.strategy ?? null,
+            entryTime: p.entryTime ?? null,
+        }));
+        res.json({
+            success: true,
+            bot: 'forex',
+            healthy,
+            status: health,
+            isRunning: botRunning,
+            isPaused: botPaused,
+            botPausedEnv: process.env.BOT_PAUSED === 'true',
+            pnl: {
+                source: pnl.available ? 'db' : 'unavailable',
+                today: pnl.pnlToday,
+                total: pnl.pnlTotal,
+                winRatePct: pnl.winRatePct,
+                ...(pnl.error ? { error: pnl.error } : {}),
+            },
+            trades: {
+                today: pnl.tradesToday,
+                total: pnl.tradesTotal,
+                winners: pnl.winnersTotal,
+                losers: pnl.losersTotal,
+            },
+            positions: {
+                live: livePositions.length,
+                dbOpen: pnl.openPositions,
+                list: livePositions,
+            },
+            timestamp: new Date().toISOString(),
+        });
+    } catch (err) {
+        console.error(`[health/detailed] forex failed: ${err.message}`);
+        res.status(500).json({ success: false, bot: 'forex', error: 'health detail unavailable', detail: err.message });
+    }
 });
 
 app.get('/api/ops/status', (req, res) => {

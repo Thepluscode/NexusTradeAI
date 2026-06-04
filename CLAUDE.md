@@ -109,11 +109,13 @@ git push main → GitHub Actions CI → Railway auto-deploy
 - `services/signals/indicators.js` — RSI, EMA, SMA, MACD, Bollinger Bands
 - `services/signals/normalizers.js` — Bar format adapters (crypto/forex/stock)
 - `services/signals/compat.js` — Backward-compatible wrappers for inline function interfaces
+- `services/signals/health-monitor.js` — Pure health-check primitives (scan/error/trading/memory) behind `/health`
+- `services/signals/health-pnl.js` — DB-backed P&L/trade/position summary behind `/api/health/detailed` (read-only, never throws)
 - `clients/bot-dashboard/shared/auth.js` — Auth middleware, encryption, JWT, auth routes
 - `services/trading/monte-carlo-sizer.js` — Monte Carlo position sizing
 
 ### Tests
-- `services/signals/__tests__/` — 20 test suites, 129 tests
+- `services/signals/__tests__/` — 46 test suites, 561 tests (incl. `health-pnl.test.js` — 24 tests)
 - `clients/bot-dashboard/shared/__tests__/` — 1 test suite, 18 tests (auth)
 - `tests/unit/anti-churning.test.js` — 32 tests (anti-churning protection)
 - `tests/unit/monte-carlo-sizer.test.js` — 28 tests (position sizer)
@@ -179,10 +181,24 @@ SELECT * FROM trades WHERE bot='stock' AND status='closed' ORDER BY exit_time DE
 
 ### Check bot health
 ```bash
+# Fast liveness probe (scan/error/trading/memory status — Railway healthcheck uses this)
 curl -s https://nexus-stock-bot-production.up.railway.app/health
 curl -s https://nexus-forex-bot-production.up.railway.app/health
 curl -s https://nexus-crypto-bot-production.up.railway.app/health
 ```
+
+### Monitor performance without auth (P&L + positions + trades)
+`GET /api/health/detailed` — **unauthenticated** monitoring view on each bot. Returns
+DB-backed P&L (today + all-time), trade counts, win rate, and the live in-memory
+position list. Built for uptime monitors, alerting, and accountability reporting
+without digging into logs or the DB. Full contract: `docs/health-detailed-endpoint.md`.
+```bash
+curl -s https://nexus-crypto-bot-production.up.railway.app/api/health/detailed | jq
+curl -s https://nexus-stock-bot-production.up.railway.app/api/health/detailed | jq '.pnl, .trades, .positions.live'
+curl -s https://nexus-forex-bot-production.up.railway.app/api/health/detailed | jq
+```
+Numbers match `GET /api/trades/summary` exactly (same `status='closed'`,
+NaN-guarded `pnl_usd` aggregation). Source: `services/signals/health-pnl.js`.
 
 ### Pull trade data
 ```bash
@@ -235,12 +251,18 @@ gh run list --limit 1   # check CI status
 
 ---
 
-## Performance Baselines (April 2, 2026)
+## Performance Baselines (June 2, 2026)
 
 | Bot | Trades | Win Rate | Net P&L | Best Strategy |
 |-----|--------|----------|---------|---------------|
-| Stock | 47 | 36.9% | -$6.37 | ORB (breakeven) |
-| Forex | 70+ | 0% | -$200+ | All disabled, v20.0 untested |
-| Crypto | 58 | 29.3% | +$2.55 | Momentum (+$20.49) |
+| Stock | 90 | 36.7% | -$82.79 | ORB (37.2% WR, -$10.67) — no signal since 2026-04-22 (regime gate: MEAN_REVERTING) |
+| Forex | 30 | 0% | -$744.87 | All legacy disabled. v20.0 (boxBreakout + meanReversion) deployed but zero real signals since deploy — correctly gated |
+| Crypto | 213 | 35.7% | -$28.67 | Momentum (37.1% WR, -$10.73) — flagged negative_edge in MEAN_REVERTING regime. Auto-disable cron fired (shadow mode, not enforcing) |
 
-**Total across all bots:** 159 trades, ~breakeven. The bots execute trades correctly — the strategies need improvement.
+**Total across all bots:** 333 closed trades, all net-negative. The bots execute correctly — the strategies have no demonstrated edge (see EDGE_FINDINGS.md).
+
+**Key issues:**
+- Stock ORB silent since 2026-04-22 (regime gate blocks unless TRENDING_UP)
+- Crypto momentum exits via Momentum Fade at ~60min with negligible PnL ($0.10 wins, -$0.03 losses)
+- Forex v20.0 needs market conditions that haven't occurred since deploy
+- Edge hunt CLOSED 2026-05-26 — no strategy tuning without overturning audit evidence
