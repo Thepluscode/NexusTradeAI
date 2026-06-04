@@ -48,13 +48,29 @@ try {
   ({ calibrateConfidence: sharedCalibrateConfidence, fitPlattScaling: sharedFitPlattScaling } = require('../../services/signals/confidence-calibrator'));
   ({ computeCorrelationGuard, computePortfolioHeat, computeEquityCurveMultiplier } = require('../../services/signals/exit-manager'));
   ({ optimize: autoOptimize, evaluateStrategies: autoEvalStrategies, PARAM_BOUNDS: AUTO_PARAM_BOUNDS } = require('../../services/signals/auto-optimizer'));
-  ({ checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth } = require('../../services/signals/health-monitor'));
-  ({ getPnlSummary } = require('../../services/signals/health-pnl'));
 } catch (e) {
   console.log('[INIT] Signal modules not available — trying local fallbacks');
   // [v17.1] On Railway, auto-optimizer ships alongside bot.js
   try { ({ optimize: autoOptimize, evaluateStrategies: autoEvalStrategies, PARAM_BOUNDS: AUTO_PARAM_BOUNDS } = require('./auto-optimizer')); console.log('[INIT] auto-optimizer loaded from local'); } catch (_) {}
 }
+
+// Health modules — load local-first. Railway serves each bot from deploy/<bot>/ where
+// these are synced into ./signals/; the shared block above only resolves
+// ../../services/signals/ in dev. Mirrors how sharedSignals/sharedIndicators load on
+// Railway — this is what makes /health and /api/health/detailed return real data in prod.
+try {
+  ({ checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth } = require('./signals/health-monitor'));
+} catch (_) {
+  try { ({ checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth } = require('../../services/signals/health-monitor')); }
+  catch (e) { console.log(`[INIT] health-monitor unavailable — health checks stubbed: ${e.message}`); }
+}
+try {
+  ({ getPnlSummary } = require('./signals/health-pnl'));
+} catch (_) {
+  try { ({ getPnlSummary } = require('../../services/signals/health-pnl')); }
+  catch (e) { console.log(`[INIT] health-pnl unavailable — /api/health/detailed P&L disabled: ${e.message}`); }
+}
+
 // Shared signal functions (compat wrappers preserve old interface)
 let sharedSignals;
 try {

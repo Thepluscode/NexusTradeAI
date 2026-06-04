@@ -235,6 +235,8 @@ gh run list --limit 1   # check CI status
 
 4. **Root jest.config.js broken** — references missing `tests/setup/custom-matchers.js`. Use `--config='{}'` to bypass.
 
+5. **Signal-module loading is local-first on Railway** — Railway serves each bot from `deploy/<bot>/`, so `require('../../services/signals/X')` does **not** resolve in production. Modules that must work in prod use the dual pattern `require('./signals/X')` first (deploy.yml syncs them into `deploy/<bot>/signals/`), then fall back to `../../services/signals/X` for local dev. The big shared `try { require('../../services/signals/…') }` block at the top of each bot only loads in dev; in prod those names fall to their inline stubs/fallbacks. When adding a shared module a bot needs **at runtime in prod**, (a) add it to the deploy.yml sync list, and (b) load it local-first — not only inside the shared block. `health-monitor` and `health-pnl` follow this pattern.
+
 ---
 
 ## Rules for Making Changes
