@@ -2,7 +2,7 @@
  * qualifier-backtest — verifies the FP/FN classification + P&L accounting logic
  * against the REAL qualifyEntry module on synthetic, controlled trades.
  */
-const { backtestQualifier } = require('../../trading/qualifier-backtest');
+const { backtestQualifier } = require('../backtest/qualifier-backtest');
 
 // Helper to build a trade row in the shape /api/trades returns.
 function trade({ id, conf, components, pnl_usd, pnl_pct = 0, t = '2026-01-01T00:00:00Z', symbol = 'X' }) {
