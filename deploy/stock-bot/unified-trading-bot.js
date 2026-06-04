@@ -46,6 +46,7 @@ let aggregateHealth = (checks) => {
     const allHealthy = Object.values(checks).every(c => c.healthy !== false);
     return { status: allHealthy ? 'ok' : 'degraded', checks, timestamp: new Date().toISOString() };
 };
+let getPnlSummary = async () => ({ available: false, error: 'health-pnl module not loaded', pnlToday: 0, pnlTotal: 0, tradesToday: 0, tradesTotal: 0, winnersTotal: 0, losersTotal: 0, winRatePct: null, openPositions: 0 });
 try {
   ({ createSignalEndpoints } = require('../../services/signals/api-handlers'));
   ({ BOT_COMPONENTS, computeCommitteeScore: sharedCommitteeScore } = require('../../services/signals/committee-scorer'));
@@ -53,6 +54,7 @@ try {
   ({ calibrateConfidence, fitPlattScaling } = require('../../services/signals/confidence-calibrator'));
   ({ computeCorrelationGuard, computePortfolioHeat, computeEquityCurveMultiplier } = require('../../services/signals/exit-manager'));
   ({ checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth } = require('../../services/signals/health-monitor'));
+  ({ getPnlSummary } = require('../../services/signals/health-pnl'));
   ({ optimize, evaluateStrategies } = require('../../services/signals/auto-optimizer'));
 } catch (e) {
   console.log('[INIT] Signal modules not available — trying local fallbacks');
@@ -5432,8 +5434,9 @@ app.get('/api/portfolio/risk', async (req, res) => {
     }
 });
 
-app.get('/health', (req, res) => {
-    const health = aggregateHealth({
+// Build the standard health-check object (shared by /health and /api/health/detailed)
+function buildStockHealth() {
+    return aggregateHealth({
         scan: checkScanHealth(lastScanCompletedAt, 60000),
         errors: checkErrorRate(recentErrors),
         trading: checkTradingHealth({
@@ -5445,7 +5448,61 @@ app.get('/health', (req, res) => {
         }),
         memory: checkMemoryHealth(),
     });
-    res.json(health);
+}
+
+// Health check (fast liveness probe — used by Railway healthcheck + CI smoke test)
+app.get('/health', (req, res) => {
+    res.json(buildStockHealth());
+});
+
+// Detailed health — unauthenticated monitoring view with live positions + DB-backed P&L.
+// Lets you watch actual performance without digging into logs or the DB directly.
+app.get('/api/health/detailed', async (req, res) => {
+    try {
+        const health = buildStockHealth();
+        const healthy = health.healthy !== false && health.status !== 'degraded';
+        const pnl = await getPnlSummary(dbPool, 'stock');
+        const livePositions = Array.from(positions.values()).map(p => ({
+            symbol: p.symbol,
+            direction: 'long', // stock bot is long-only
+            entry: p.entry ?? null,
+            stopLoss: p.stopLoss ?? null,
+            takeProfit: p.target ?? null,
+            size: p.shares ?? null,
+            strategy: p.strategy ?? null,
+            entryTime: p.entryTime ?? null,
+        }));
+        res.json({
+            success: true,
+            bot: 'stock',
+            healthy,
+            status: health,
+            isRunning: botRunning,
+            isPaused: botPaused,
+            pnl: {
+                source: pnl.available ? 'db' : 'unavailable',
+                today: pnl.pnlToday,
+                total: pnl.pnlTotal,
+                winRatePct: pnl.winRatePct,
+                ...(pnl.error ? { error: pnl.error } : {}),
+            },
+            trades: {
+                today: pnl.tradesToday,
+                total: pnl.tradesTotal,
+                winners: pnl.winnersTotal,
+                losers: pnl.losersTotal,
+            },
+            positions: {
+                live: livePositions.length,
+                dbOpen: pnl.openPositions,
+                list: livePositions,
+            },
+            timestamp: new Date().toISOString(),
+        });
+    } catch (err) {
+        console.error(`[health/detailed] stock failed: ${err.message}`);
+        res.status(500).json({ success: false, bot: 'stock', error: 'health detail unavailable', detail: err.message });
+    }
 });
 
 async function getStockStrategyStatusSummaries() {
