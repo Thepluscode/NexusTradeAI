@@ -4932,23 +4932,6 @@ app.get('/api/portfolio/risk', async (req, res) => {
 
 // Build the standard health-check object (shared by /health and /api/health/detailed)
 function buildCryptoHealth() {
-    // Demo/parked: with no exchange credentials the scan loop runs as a heartbeat but
-    // `continue`s before fetching live data or placing trades (see scan-loop demo branch).
-    // Report a healthy "demo/parked" state instead of false "scan stalled" / "trading
-    // critical" alarms — those only describe a LIVE bot. errors + memory stay real checks.
-    // Only triggers when actually in demo mode, so a genuinely-live bot keeps real alarms.
-    if (engine.demoMode) {
-        const demo = aggregateHealth({
-            scan: { healthy: true, demo: true, reason: 'Demo mode — scan loop alive; no live data (no credentials)' },
-            errors: checkErrorRate(recentErrors),
-            trading: { healthy: true, demo: true, severity: 'demo', warnings: [], reason: 'Demo mode — not trading (no credentials configured)' },
-            memory: checkMemoryHealth(),
-        });
-        demo.mode = 'demo';
-        demo.summary = 'Demo mode — parked (no credentials, not trading)';
-        return demo;
-    }
-
     const closedTrades = engine.winningTrades + engine.losingTrades;
     const winRate = closedTrades > 0 ? engine.winningTrades / closedTrades : 0.5;
     const profitFactor = engine.totalLoss > 0
