@@ -4246,25 +4246,6 @@ app.get('/api/portfolio/risk', async (req, res) => {
 
 // Build the standard health-check object (shared by /health and /api/health/detailed)
 function buildForexHealth() {
-    // Multi-tenant: when per-user engines are running, the global tradingLoop is skipped
-    // (see Init guard) so the module-level lastScanCompletedAt / sim* stats stay stale and
-    // would falsely report "scan stalled" + "0% win". Report the REAL per-user engine
-    // health instead. errors + memory remain real checks. Falls through to global health
-    // when no per-user engines are running (env-var mode, which DOES run the global loop).
-    const running = Array.from(forexEngineRegistry.values()).filter(e => e.botRunning);
-    if (running.length > 0) {
-        const configured = running.filter(e => e.oandaConfig && e.oandaConfig.accessToken && e.oandaConfig.accountId).length;
-        const result = aggregateHealth({
-            scan: { healthy: true, perUser: true, reason: `Per-user mode — ${running.length} engine(s) scanning (global loop skipped by design)` },
-            errors: checkErrorRate(recentErrors),
-            trading: { healthy: true, perUser: true, severity: 'ok', warnings: [], reason: `Per-user mode — ${configured}/${running.length} engine(s) OANDA-configured` },
-            memory: checkMemoryHealth(),
-        });
-        result.mode = 'per-user';
-        result.engines = { total: forexEngineRegistry.size, running: running.length, oandaConfigured: configured };
-        result.summary = `Per-user mode — ${running.length} engine(s) active`;
-        return result;
-    }
     return aggregateHealth({
         scan: checkScanHealth(lastScanCompletedAt, 300000),
         errors: checkErrorRate(recentErrors),
