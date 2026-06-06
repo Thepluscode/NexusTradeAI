@@ -5493,7 +5493,7 @@ function buildStockHealth() {
 
 // Health check (fast liveness probe — used by Railway healthcheck + CI smoke test)
 app.get('/health', (req, res) => {
-    res.json(buildStockHealth());
+    res.json({ ...buildStockHealth(), version: process.env.RAILWAY_GIT_COMMIT_SHA ? process.env.RAILWAY_GIT_COMMIT_SHA.slice(0, 7) : 'hc-fix-2026-06-06' });
 });
 
 // Detailed health — unauthenticated monitoring view with live positions + DB-backed P&L.
