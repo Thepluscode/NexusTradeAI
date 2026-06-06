@@ -92,8 +92,11 @@ jobs:
             local url="$1"
             local raw n_24h pnl_24h n_open
             raw=$(curl -sf --max-time 15 "$url" 2>/dev/null || echo '{"trades":[]}')
-            n_24h=$(echo "$raw" | jq '[.trades[]? | select(.status=="closed") | select(.exit_time != null) | select((.exit_time | fromdateiso8601) > (now - 86400))] | length' 2>/dev/null || echo 0)
-            pnl_24h=$(echo "$raw" | jq '[.trades[]? | select(.status=="closed") | select(.exit_time != null) | select((.exit_time | fromdateiso8601) > (now - 86400)) | (.pnl_pct // "0") | tonumber] | add // 0 | . * 10000 | round / 100' 2>/dev/null || echo 0)
+            # exit_time carries millisecond precision (e.g. ...07.255Z); fromdateiso8601 only
+            # parses whole-second ...SSZ, so strip the fractional part first or every 24h count
+            # silently falls back to 0.
+            n_24h=$(echo "$raw" | jq '[.trades[]? | select(.status=="closed") | select(.exit_time != null) | select(((.exit_time | sub("\\.[0-9]+Z$";"Z")) | fromdateiso8601) > (now - 86400))] | length' 2>/dev/null || echo 0)
+            pnl_24h=$(echo "$raw" | jq '[.trades[]? | select(.status=="closed") | select(.exit_time != null) | select(((.exit_time | sub("\\.[0-9]+Z$";"Z")) | fromdateiso8601) > (now - 86400)) | (.pnl_pct // "0") | tonumber] | add // 0 | . * 10000 | round / 100' 2>/dev/null || echo 0)
             n_open=$(echo "$raw" | jq '[.trades[]? | select(.status=="open")] | length' 2>/dev/null)
             [ -z "$n_open" ] && n_open="?"
             # default to 0 if jq returned empty
