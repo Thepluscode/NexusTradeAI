@@ -113,6 +113,7 @@ git push main → GitHub Actions CI → Railway auto-deploy
 - `services/signals/health-pnl.js` — DB-backed P&L/trade/position summary behind `/api/health/detailed` (read-only, never throws)
 - `services/signals/kill-switch.js` — signal-time enforcement of `strategy_kill_switches` (opt-in via `ENFORCE_KILL_SWITCHES`; cached, fail-open)
 - `services/signals/backtest/kill-switch-oos.js` — out-of-sample walk-forward evaluation of kill-switch enforcement (the evidence gate)
+- `services/signals/engine-registry-summary.js` — per-user engine rollup + `operationalStatus` for `/api/health/detailed` (real trading is per-user, not the global env-cred engine)
 - `clients/bot-dashboard/shared/auth.js` — Auth middleware, encryption, JWT, auth routes
 - `services/trading/monte-carlo-sizer.js` — Monte Carlo position sizing
 

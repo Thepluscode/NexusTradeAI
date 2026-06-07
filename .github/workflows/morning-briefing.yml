@@ -54,24 +54,27 @@ jobs:
           # briefing a false red): down=unreachable, demo=creds failed over, scan-stalled=loop
           # not advancing, else ok. Also carries real lifetime P&L.
           R=$(curl -sf --max-time 15 https://nexus-stock-bot-production.up.railway.app/api/health/detailed || echo '{}')
-          echo "status=$(echo "$R" | jq -r 'if (.bot|not) then "down" elif (.demoMode==true) then "demo" elif (.status.checks.scan.healthy==false) then "scan-stalled" else "ok" end')" >> "$GITHUB_OUTPUT"
+          echo "status=$(echo "$R" | jq -r '.operationalStatus // "down"')" >> "$GITHUB_OUTPUT"
           echo "pnl_total=$(echo "$R" | jq -r '.pnl.total // "?"')" >> "$GITHUB_OUTPUT"
+          echo "engines=$(echo "$R" | jq -r 'if .userEngines then "\(.userEngines.running)/\(.userEngines.total)" else "?" end')" >> "$GITHUB_OUTPUT"
 
       - name: Crypto Bot health
         if: steps.dst_guard.outputs.proceed == 'true'
         id: crypto_health
         run: |
           R=$(curl -sf --max-time 15 https://nexus-crypto-bot-production.up.railway.app/api/health/detailed || echo '{}')
-          echo "status=$(echo "$R" | jq -r 'if (.bot|not) then "down" elif (.demoMode==true) then "demo" elif (.status.checks.scan.healthy==false) then "scan-stalled" else "ok" end')" >> "$GITHUB_OUTPUT"
+          echo "status=$(echo "$R" | jq -r '.operationalStatus // "down"')" >> "$GITHUB_OUTPUT"
           echo "pnl_total=$(echo "$R" | jq -r '.pnl.total // "?"')" >> "$GITHUB_OUTPUT"
+          echo "engines=$(echo "$R" | jq -r 'if .userEngines then "\(.userEngines.running)/\(.userEngines.total)" else "?" end')" >> "$GITHUB_OUTPUT"
 
       - name: Forex Bot health
         if: steps.dst_guard.outputs.proceed == 'true'
         id: forex_health
         run: |
           R=$(curl -sf --max-time 15 https://nexus-forex-bot-production.up.railway.app/api/health/detailed || echo '{}')
-          echo "status=$(echo "$R" | jq -r 'if (.bot|not) then "down" elif (.demoMode==true) then "demo" elif (.status.checks.scan.healthy==false) then "scan-stalled" else "ok" end')" >> "$GITHUB_OUTPUT"
+          echo "status=$(echo "$R" | jq -r '.operationalStatus // "down"')" >> "$GITHUB_OUTPUT"
           echo "pnl_total=$(echo "$R" | jq -r '.pnl.total // "?"')" >> "$GITHUB_OUTPUT"
+          echo "engines=$(echo "$R" | jq -r 'if .userEngines then "\(.userEngines.running)/\(.userEngines.total)" else "?" end')" >> "$GITHUB_OUTPUT"
 
       - name: Strategy Bridge health
         if: steps.dst_guard.outputs.proceed == 'true'
@@ -135,21 +138,25 @@ jobs:
           S_PNL_TOTAL: ${{ steps.stock_health.outputs.pnl_total }}
           C_PNL_TOTAL: ${{ steps.crypto_health.outputs.pnl_total }}
           F_PNL_TOTAL: ${{ steps.forex_health.outputs.pnl_total }}
+          S_ENG: ${{ steps.stock_health.outputs.engines }}
+          C_ENG: ${{ steps.crypto_health.outputs.engines }}
+          F_ENG: ${{ steps.forex_health.outputs.engines }}
         run: |
           if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
             echo "::warning::Telegram credentials not configured — skipping send"
             exit 0
           fi
-          # ✅ ok · ⚠️ degraded (demo creds / scan stalled) · 🔴 down/unreachable
-          icon() { case "$1" in ok) printf '✅' ;; demo|scan-stalled) printf '⚠️' ;; *) printf '🔴' ;; esac; }
+          # ✅ ok · 💤 idle/demo-idle (per-user model, no active engine — expected) ·
+          # 🔄 starting · ⚠️ scan-stalled (real) · 🔴 down/unreachable
+          icon() { case "$1" in ok) printf '✅' ;; idle|demo-idle) printf '💤' ;; starting) printf '🔄' ;; scan-stalled) printf '⚠️' ;; *) printf '🔴' ;; esac; }
           DATE=$(date -u +"%a %b %d")
           # Build message with literal newlines; --data-urlencode handles all escaping.
-          # Per bot: status icon + word, open positions, 24h trades & P&L%, and lifetime $ P&L.
-          MSG=$(printf '☀️ Morning Briefing — %s\n\n%s Stock  [%s] · %s open · 24h: %s trades, %s%% · total $%s\n%s Crypto [%s] · %s open · 24h: %s trades, %s%% · total $%s\n%s Forex  [%s] · %s open · 24h: %s trades, %s%% · total $%s\n%s Bridge [%s]\n' \
+          # Per bot: status icon + word, running/total user engines, open positions, 24h trades & P&L%, lifetime $ P&L.
+          MSG=$(printf '☀️ Morning Briefing — %s\n\n%s Stock  [%s] · %s eng · %s open · 24h: %s trades, %s%% · total $%s\n%s Crypto [%s] · %s eng · %s open · 24h: %s trades, %s%% · total $%s\n%s Forex  [%s] · %s eng · %s open · 24h: %s trades, %s%% · total $%s\n%s Bridge [%s]\n' \
             "$DATE" \
-            "$(icon "$S_STATUS")" "$S_STATUS" "$S_OPEN" "$S_TRADES" "$S_PNL" "$S_PNL_TOTAL" \
-            "$(icon "$C_STATUS")" "$C_STATUS" "$C_OPEN" "$C_TRADES" "$C_PNL" "$C_PNL_TOTAL" \
-            "$(icon "$F_STATUS")" "$F_STATUS" "$F_OPEN" "$F_TRADES" "$F_PNL" "$F_PNL_TOTAL" \
+            "$(icon "$S_STATUS")" "$S_STATUS" "$S_ENG" "$S_OPEN" "$S_TRADES" "$S_PNL" "$S_PNL_TOTAL" \
+            "$(icon "$C_STATUS")" "$C_STATUS" "$C_ENG" "$C_OPEN" "$C_TRADES" "$C_PNL" "$C_PNL_TOTAL" \
+            "$(icon "$F_STATUS")" "$F_STATUS" "$F_ENG" "$F_OPEN" "$F_TRADES" "$F_PNL" "$F_PNL_TOTAL" \
             "$(icon "$B_STATUS")" "$B_STATUS")
           # Capture full response so failures show the API error code.
           RESPONSE=$(curl -s -w '\nHTTP:%{http_code}' --max-time 10 \
@@ -184,16 +191,19 @@ jobs:
           S_PNL_TOTAL: ${{ steps.stock_health.outputs.pnl_total }}
           C_PNL_TOTAL: ${{ steps.crypto_health.outputs.pnl_total }}
           F_PNL_TOTAL: ${{ steps.forex_health.outputs.pnl_total }}
+          S_ENG: ${{ steps.stock_health.outputs.engines }}
+          C_ENG: ${{ steps.crypto_health.outputs.engines }}
+          F_ENG: ${{ steps.forex_health.outputs.engines }}
         run: |
           {
             echo "## Morning Briefing"
             echo
-            echo "_Status reflects operational health (down/demo/scan-stalled/ok), not the no-edge trading flag._"
+            echo "_Status = operational health of the per-user engines (ok/idle/demo-idle/starting/scan-stalled/down), not the no-edge trading flag. 'Eng' = running/total user engines._"
             echo
-            echo "| Service | Status | Open | 24h trades | 24h P&L (sum %) | Total P&L (\$) |"
-            echo "|---|---|---|---|---|---|"
-            echo "| Stock | ${S_STATUS} | ${S_OPEN} | ${S_TRADES} | ${S_PNL} | ${S_PNL_TOTAL} |"
-            echo "| Crypto | ${C_STATUS} | ${C_OPEN} | ${C_TRADES} | ${C_PNL} | ${C_PNL_TOTAL} |"
-            echo "| Forex | ${F_STATUS} | ${F_OPEN} | ${F_TRADES} | ${F_PNL} | ${F_PNL_TOTAL} |"
-            echo "| Bridge | ${B_STATUS} | — | — | — | — |"
+            echo "| Service | Status | Eng (run/total) | Open | 24h trades | 24h P&L (sum %) | Total P&L (\$) |"
+            echo "|---|---|---|---|---|---|---|"
+            echo "| Stock | ${S_STATUS} | ${S_ENG} | ${S_OPEN} | ${S_TRADES} | ${S_PNL} | ${S_PNL_TOTAL} |"
+            echo "| Crypto | ${C_STATUS} | ${C_ENG} | ${C_OPEN} | ${C_TRADES} | ${C_PNL} | ${C_PNL_TOTAL} |"
+            echo "| Forex | ${F_STATUS} | ${F_ENG} | ${F_OPEN} | ${F_TRADES} | ${F_PNL} | ${F_PNL_TOTAL} |"
+            echo "| Bridge | ${B_STATUS} | — | — | — | — | — |"
           } >> "$GITHUB_STEP_SUMMARY"

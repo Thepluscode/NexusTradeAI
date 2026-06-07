@@ -88,6 +88,17 @@ try {
   catch (e) { console.log(`[INIT] kill-switch module unavailable — enforcement disabled: ${e.message}`); }
 }
 
+// Per-user engine registry summary for /api/health/detailed (real trading is per-user, not the
+// global env-cred engine). Local-first like the other shared modules; safe no-op fallback.
+let summarizeRegistry = () => ({ total: 0, running: 0, validCreds: 0, demo: 0, openPositions: 0, lastScanAt: null, lastScanAgeSec: null });
+let operationalStatus = () => 'unknown';
+try {
+  ({ summarizeRegistry, operationalStatus } = require('./signals/engine-registry-summary'));
+} catch (_) {
+  try { ({ summarizeRegistry, operationalStatus } = require('../../services/signals/engine-registry-summary')); }
+  catch (e) { console.log(`[INIT] engine-registry-summary unavailable: ${e.message}`); }
+}
+
 // Signal schema initializer — creates historical_bars_cache, backtest_results,
 // shadow_signals, strategy_enabled tables. Idempotent.
 let initSignalSchema;
@@ -5503,6 +5514,11 @@ app.get('/api/health/detailed', async (req, res) => {
         const health = buildStockHealth();
         const healthy = health.healthy !== false && health.status !== 'degraded';
         const pnl = await getPnlSummary(dbPool, 'stock');
+        const userEngines = summarizeRegistry(engineRegistry);
+        const opStatus = operationalStatus(
+            { demoMode: false, scanHealthy: health.checks?.scan?.healthy, userEngines },
+            { scanThresholdSec: 180 }
+        );
         const livePositions = Array.from(positions.values()).map(p => ({
             symbol: p.symbol,
             direction: 'long', // stock bot is long-only
@@ -5521,6 +5537,8 @@ app.get('/api/health/detailed', async (req, res) => {
             isRunning: botRunning,
             isPaused: botPaused,
             enforceKillSwitches: process.env.ENFORCE_KILL_SWITCHES === 'true',
+            operationalStatus: opStatus,
+            userEngines,
             pnl: {
                 source: pnl.available ? 'db' : 'unavailable',
                 today: pnl.pnlToday,
@@ -6985,6 +7003,7 @@ class UserTradingEngine {
         this.resetDailyCounters();
         this.scanCount++;
         this.lastScanTime = new Date();
+        this.lastScanAt = Date.now(); // per-engine liveness for /api/health/detailed registry summary
         await this.checkEndOfDay();
         await this.managePositions();
         if (!this.botRunning || this.botPaused) return;

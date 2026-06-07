@@ -43,10 +43,23 @@ https://nexus-crypto-bot-production.up.railway.app/api/health/detailed
   "bot": "crypto",                 // 'stock' | 'forex' | 'crypto'
   "healthy": true,                 // false when the aggregate health check is degraded/critical
   "status": { … },                 // full aggregateHealth() object (same checks as /health)
-  "isRunning": true,
+  "isRunning": true,               // GLOBAL (env-cred) engine — legacy; real trading is per-user
   "isPaused": false,
-  "demoMode": false,               // crypto only
+  "demoMode": false,               // crypto only — global engine demo (no env Kraken key)
   "botPausedEnv": false,           // forex only — reflects BOT_PAUSED env var
+
+  "operationalStatus": "demo-idle", // ← read this, not the global flags. Derived from the
+                                    // per-user registry: ok | idle | starting | scan-stalled |
+                                    // demo-idle (no users + global demo, expected) | down
+  "userEngines": {                 // per-user engines (creds from app Settings) — where real trading runs
+    "total": 0,                    // engines registered
+    "running": 0,                  // engines actively looping
+    "validCreds": 0,               // engines with valid broker creds (crypto-specific)
+    "demo": 0,                     // engines in demo fallback (crypto-specific)
+    "openPositions": 0,            // summed across user engines
+    "lastScanAt": null,            // newest per-engine scan (epoch ms) — null if none scanning
+    "lastScanAgeSec": null
+  },
 
   "pnl": {
     "source": "db",                // 'db' when the query succeeded, 'unavailable' otherwise

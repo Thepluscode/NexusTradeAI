@@ -81,6 +81,17 @@ try {
   catch (e) { console.log(`[INIT] kill-switch module unavailable — enforcement disabled: ${e.message}`); }
 }
 
+// Per-user engine registry summary for /api/health/detailed (real trading is per-user, not the
+// global env-cred engine). Local-first like the other shared modules; safe no-op fallback.
+let summarizeRegistry = () => ({ total: 0, running: 0, validCreds: 0, demo: 0, openPositions: 0, lastScanAt: null, lastScanAgeSec: null });
+let operationalStatus = () => 'unknown';
+try {
+  ({ summarizeRegistry, operationalStatus } = require('./signals/engine-registry-summary'));
+} catch (_) {
+  try { ({ summarizeRegistry, operationalStatus } = require('../../services/signals/engine-registry-summary')); }
+  catch (e) { console.log(`[INIT] engine-registry-summary unavailable: ${e.message}`); }
+}
+
 // Shared signal functions (compat wrappers preserve old interface)
 let sharedSignals;
 try {
@@ -3979,6 +3990,7 @@ class CryptoTradingEngine {
                 }
 
                 this.scanCount++;
+                this.lastScanAt = Date.now(); // per-engine liveness for /api/health/detailed registry summary
 
                 // ── Auto-optimizer: run every 4 hours ────────────────────────
                 const AUTO_OPTIM_INTERVAL_MS = 4 * 60 * 60 * 1000;
@@ -4963,6 +4975,11 @@ app.get('/api/health/detailed', async (req, res) => {
         const health = buildCryptoHealth();
         const healthy = health.healthy !== false && health.status !== 'degraded';
         const pnl = await getPnlSummary(dbPool, 'crypto');
+        const userEngines = summarizeRegistry(cryptoEngineRegistry);
+        const opStatus = operationalStatus(
+            { demoMode: engine.demoMode === true, scanHealthy: health.checks?.scan?.healthy, userEngines },
+            { scanThresholdSec: Math.round((((engine.config && engine.config.scanInterval) || 60000) * 3) / 1000) }
+        );
         const livePositions = Array.from(engine.positions.values()).map(p => ({
             symbol: p.symbol,
             direction: p.direction || 'long',
@@ -4982,6 +4999,8 @@ app.get('/api/health/detailed', async (req, res) => {
             isPaused: engine.isPaused,
             demoMode: engine.demoMode || false,
             enforceKillSwitches: process.env.ENFORCE_KILL_SWITCHES === 'true',
+            operationalStatus: opStatus,
+            userEngines,
             pnl: {
                 source: pnl.available ? 'db' : 'unavailable',
                 today: pnl.pnlToday,
