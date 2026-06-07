@@ -5621,6 +5621,11 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
             } else {
                 try {
                     engine.kraken = new KrakenClient({ apiKey, apiSecret });
+                    // [2026-06-07] Keep config.exchange in sync — refreshConnectionState() gates on
+                    // config.exchange.apiKey, so swapping only the client left it reporting
+                    // "No Kraken credentials configured" (false negative) on the next probe.
+                    engine.config.exchange.apiKey = apiKey;
+                    engine.config.exchange.apiSecret = apiSecret;
                     if (engine.demoMode) {
                         // Call _privateRequest directly so real Kraken errors propagate (getAccountInfo swallows them)
                         const account = await engine.kraken._privateRequest('Balance');
@@ -5647,7 +5652,12 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
                         apiKey: process.env.CRYPTO_API_KEY,
                         apiSecret: process.env.CRYPTO_API_SECRET,
                     });
-                    console.log(`🔧 [CryptoEngine ${userId}] Kraken client updated`);
+                    // [2026-06-07] keep config in sync (see global engine above) + force re-probe
+                    existingEngine.config.exchange.apiKey = process.env.CRYPTO_API_KEY;
+                    existingEngine.config.exchange.apiSecret = process.env.CRYPTO_API_SECRET;
+                    existingEngine.lastCredentialCheckAt = 0;
+                    existingEngine._consecutiveAuthFailures = 0;
+                    console.log(`🔧 [CryptoEngine ${userId}] Kraken client + config updated`);
                 } else if (!existingEngine) {
                     getOrCreateCryptoEngine(userId).then(eng => {
                         if (eng) { eng.start().catch(err => console.warn('[ALERT] Engine start failed:', err.message)); }
