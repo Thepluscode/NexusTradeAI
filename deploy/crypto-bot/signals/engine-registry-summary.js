@@ -67,4 +67,26 @@ function operationalStatus(detail, opts = {}) {
   return 'ok';
 }
 
-module.exports = { summarizeRegistry, operationalStatus, EMPTY };
+/**
+ * Per-engine credential state for the admin endpoint. NEVER includes secret values —
+ * only userId, running/demo flags, validity, and the human-readable credentialsError.
+ * @param {Map<any, object>|null} registry
+ * @returns {Array<{userId:any, running:boolean, demo:boolean, credentialsValid:(boolean|null), credentialsError:(string|null)}>}
+ */
+function listEngineCredentials(registry) {
+  if (!registry || typeof registry.entries !== 'function') return [];
+  const out = [];
+  for (const [userId, eng] of registry.entries()) {
+    if (!eng) continue;
+    out.push({
+      userId,
+      running: (eng.isRunning ?? eng.botRunning) === true,
+      demo: eng.demoMode === true,
+      credentialsValid: eng.credentialsValid ?? null,
+      credentialsError: eng.credentialsError ?? null,
+    });
+  }
+  return out;
+}
+
+module.exports = { summarizeRegistry, operationalStatus, listEngineCredentials, EMPTY };
