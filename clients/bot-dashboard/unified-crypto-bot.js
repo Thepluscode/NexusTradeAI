@@ -6421,6 +6421,22 @@ app.listen(PORT, async () => {
             if (firstUserRow.rows.length > 0) {
                 const defaultUserId = String(firstUserRow.rows[0].id);
                 engine._userId = parseInt(defaultUserId);
+                // [2026-06-07] Load the default user's saved Kraken creds from the DB into the global
+                // engine. The default engine is built from env (CRYPTO_CONFIG) and never loaded
+                // user_credentials, so creds didn't survive redeploys (env is wiped on restart) even
+                // though the save persisted them to the DB. This makes saved creds durable.
+                try {
+                    const defCreds = await loadUserCredentials(defaultUserId, 'crypto');
+                    if (defCreds.CRYPTO_API_KEY && defCreds.CRYPTO_API_SECRET) {
+                        engine.config.exchange.apiKey = defCreds.CRYPTO_API_KEY;
+                        engine.config.exchange.apiSecret = defCreds.CRYPTO_API_SECRET;
+                        engine.kraken = new KrakenClient({ apiKey: defCreds.CRYPTO_API_KEY, apiSecret: defCreds.CRYPTO_API_SECRET });
+                        engine.lastCredentialCheckAt = 0;
+                        console.log(`🔑 [CryptoRegistry] Loaded saved Kraken creds for default user ${defaultUserId} from DB`);
+                    }
+                } catch (credErr) {
+                    console.warn(`⚠️ [CryptoRegistry] Could not load default-user creds from DB: ${credErr.message}`);
+                }
                 cryptoEngineRegistry.set(defaultUserId, engine);
                 console.log(`🔧 [CryptoRegistry] Default engine pre-registered for user ${defaultUserId}`);
             }
