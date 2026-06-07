@@ -71,6 +71,17 @@ try {
   catch (e) { console.log(`[INIT] kill-switch module unavailable — enforcement disabled: ${e.message}`); }
 }
 
+// Per-user engine registry summary for /api/health/detailed (real trading is per-user, not the
+// global env-cred engine). Local-first like the other shared modules; safe no-op fallback.
+let summarizeRegistry = () => ({ total: 0, running: 0, validCreds: 0, demo: 0, openPositions: 0, lastScanAt: null, lastScanAgeSec: null });
+let operationalStatus = () => 'unknown';
+try {
+  ({ summarizeRegistry, operationalStatus } = require('./signals/engine-registry-summary'));
+} catch (_) {
+  try { ({ summarizeRegistry, operationalStatus } = require('../../services/signals/engine-registry-summary')); }
+  catch (e) { console.log(`[INIT] engine-registry-summary unavailable: ${e.message}`); }
+}
+
 // Shared signal functions (compat wrappers preserve old interface)
 let sharedSignals;
 try {
@@ -4272,6 +4283,11 @@ app.get('/api/health/detailed', async (req, res) => {
         const health = buildForexHealth();
         const healthy = health.healthy !== false && health.status !== 'degraded';
         const pnl = await getPnlSummary(dbPool, 'forex');
+        const userEngines = summarizeRegistry(forexEngineRegistry);
+        const opStatus = operationalStatus(
+            { demoMode: false, scanHealthy: health.checks?.scan?.healthy, userEngines },
+            { scanThresholdSec: 900 }
+        );
         const livePositions = Array.from(positions.values()).map(p => ({
             symbol: p.instrument ?? p.symbol ?? null,
             direction: p.direction || null,
@@ -4291,6 +4307,8 @@ app.get('/api/health/detailed', async (req, res) => {
             isPaused: botPaused,
             botPausedEnv: process.env.BOT_PAUSED === 'true',
             enforceKillSwitches: process.env.ENFORCE_KILL_SWITCHES === 'true',
+            operationalStatus: opStatus,
+            userEngines,
             pnl: {
                 source: pnl.available ? 'db' : 'unavailable',
                 today: pnl.pnlToday,
@@ -5855,6 +5873,7 @@ class UserForexEngine {
 
     async tradingLoop() {
         if (!this.botRunning || this.botPaused) return;
+        this.lastScanAt = Date.now(); // per-engine liveness for /api/health/detailed registry summary
         // [v6.3] Daily counter reset — check date boundary each loop iteration
         const today = new Date().toISOString().slice(0, 10);
         if (today !== this.lastResetDate) {
