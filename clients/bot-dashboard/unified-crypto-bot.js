@@ -85,10 +85,11 @@ try {
 // global env-cred engine). Local-first like the other shared modules; safe no-op fallback.
 let summarizeRegistry = () => ({ total: 0, running: 0, validCreds: 0, demo: 0, openPositions: 0, lastScanAt: null, lastScanAgeSec: null });
 let operationalStatus = () => 'unknown';
+let listEngineCredentials = () => [];
 try {
-  ({ summarizeRegistry, operationalStatus } = require('./signals/engine-registry-summary'));
+  ({ summarizeRegistry, operationalStatus, listEngineCredentials } = require('./signals/engine-registry-summary'));
 } catch (_) {
-  try { ({ summarizeRegistry, operationalStatus } = require('../../services/signals/engine-registry-summary')); }
+  try { ({ summarizeRegistry, operationalStatus, listEngineCredentials } = require('../../services/signals/engine-registry-summary')); }
   catch (e) { console.log(`[INIT] engine-registry-summary unavailable: ${e.message}`); }
 }
 
@@ -4966,6 +4967,23 @@ function buildCryptoHealth() {
 // Health check (fast liveness probe — used by Railway healthcheck + CI smoke test)
 app.get('/health', (req, res) => {
     res.json({ ...buildCryptoHealth(), version: process.env.RAILWAY_GIT_COMMIT_SHA ? process.env.RAILWAY_GIT_COMMIT_SHA.slice(0, 7) : 'hc-fix-2026-06-06' });
+});
+
+// Admin: per-user engine credential state — which user's keys are failing and why.
+// Secret-gated (NEXUS_API_SECRET); returns userId + flags + human-readable error only,
+// NEVER secret values. Use to pinpoint a 'demo'/invalid-cred engine seen in /api/health/detailed.
+app.get('/api/admin/engine-credentials', requireApiSecret, (req, res) => {
+    try {
+        const engines = listEngineCredentials(cryptoEngineRegistry);
+        res.json({
+            success: true, bot: 'crypto', broker: 'kraken', count: engines.length,
+            failing: engines.filter(e => e.credentialsValid === false || e.demo).length,
+            engines,
+        });
+    } catch (e) {
+        console.error('[admin/engine-credentials] crypto:', e.message);
+        res.status(500).json({ success: false, error: 'Internal server error' });
+    }
 });
 
 // Detailed health — unauthenticated monitoring view with live positions + DB-backed P&L.

@@ -1,7 +1,7 @@
 /**
  * engine-registry-summary — registry rollup + operational-status derivation.
  */
-const { summarizeRegistry, operationalStatus } = require('../engine-registry-summary');
+const { summarizeRegistry, operationalStatus, listEngineCredentials } = require('../engine-registry-summary');
 
 const NOW = 1_000_000_000_000;
 const eng = (o) => ({ isRunning: false, demoMode: false, credentialsValid: null, ...o });
@@ -54,6 +54,27 @@ describe('summarizeRegistry', () => {
     const s = summarizeRegistry(reg([null, eng({ lastScanAt: NaN }), eng({ lastScanAt: undefined })]), NOW);
     expect(s.total).toBe(2);
     expect(s.lastScanAt).toBeNull();
+  });
+});
+
+describe('listEngineCredentials', () => {
+  it('returns per-engine cred state keyed by registry userId, never secret values', () => {
+    const registry = new Map([
+      [42, { isRunning: true, demoMode: true, credentialsValid: false, credentialsError: 'Kraken credentials invalid or expired', apiKey: 'SECRET', apiSecret: 'SECRET' }],
+      [7, { botRunning: true, credentialsValid: true, credentialsError: null }],
+    ]);
+    const list = listEngineCredentials(registry);
+    expect(list).toEqual([
+      { userId: 42, running: true, demo: true, credentialsValid: false, credentialsError: 'Kraken credentials invalid or expired' },
+      { userId: 7, running: true, demo: false, credentialsValid: true, credentialsError: null },
+    ]);
+    // no secret leakage
+    expect(JSON.stringify(list)).not.toContain('SECRET');
+  });
+
+  it('empty / null registry → empty array; skips null engines', () => {
+    expect(listEngineCredentials(null)).toEqual([]);
+    expect(listEngineCredentials(new Map([[1, null]]))).toEqual([]);
   });
 });
 

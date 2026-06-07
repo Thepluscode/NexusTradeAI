@@ -204,6 +204,15 @@ curl -s https://nexus-forex-bot-production.up.railway.app/api/health/detailed | 
 Numbers match `GET /api/trades/summary` exactly (same `status='closed'`,
 NaN-guarded `pnl_usd` aggregation). Source: `services/signals/health-pnl.js`.
 
+### Pinpoint which user's broker creds are failing (admin)
+`GET /api/admin/engine-credentials` — **secret-gated** (`NEXUS_API_SECRET`). Returns per-user
+engine cred state `{userId, running, demo, credentialsValid, credentialsError}` (no secret values).
+Each bot reports its own broker (crypto→kraken, stock→alpaca, forex→oanda).
+```bash
+curl -H "Authorization: Bearer $NEXUS_API_SECRET" \
+  https://nexus-crypto-bot-production.up.railway.app/api/admin/engine-credentials | jq
+```
+
 ### Pull trade data
 ```bash
 curl -s 'https://nexus-stock-bot-production.up.railway.app/api/trades?limit=50' -o /tmp/stock_trades.json
