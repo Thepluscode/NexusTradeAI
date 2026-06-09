@@ -115,6 +115,16 @@ try {
         sharedIndicators = null;
     }
 }
+// Edge-attribution statistics for /api/edge-attribution. Optional: falls back to
+// parametric CI if the shared module is unavailable in a local/dev layout.
+let edgeStats;
+try {
+    edgeStats = require('./signals/edge-stats');
+} catch (e) {
+    try { edgeStats = require('../../services/signals/edge-stats'); } catch (_) {
+        edgeStats = null;
+    }
+}
 // [v24.3] 4-state regime detector
 let sharedRegimeDetector;
 try {
@@ -729,6 +739,22 @@ async function initTradeDb() {
             CREATE INDEX IF NOT EXISTS idx_trades_user_bot ON trades(user_id, bot);
             CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy);
             CREATE INDEX IF NOT EXISTS idx_trades_regime ON trades(regime);
+            CREATE TABLE IF NOT EXISTS strategy_kill_switches (
+                id SERIAL PRIMARY KEY,
+                bot VARCHAR(20) NOT NULL,
+                strategy VARCHAR(50) NOT NULL,
+                market_regime VARCHAR(30) NOT NULL DEFAULT '(any)',
+                n_trades INTEGER NOT NULL,
+                total_pnl_usd FLOAT,
+                avg_pnl_pct FLOAT,
+                pnl_pct_ci_upper FLOAT,
+                disabled_at TIMESTAMPTZ DEFAULT NOW(),
+                expires_at TIMESTAMPTZ,
+                reason TEXT,
+                window_days INTEGER NOT NULL DEFAULT 30,
+                UNIQUE(bot, strategy, market_regime)
+            );
+            CREATE INDEX IF NOT EXISTS idx_kill_switches_lookup ON strategy_kill_switches(bot, strategy, market_regime);
         `);
         console.log('✅ Crypto bot: Trades table ready');
         await dbPool.query(`
@@ -5609,13 +5635,30 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
         console.log(`⚙️  Credentials updated: broker=${broker} keys=${updated} storage=${storage}`);
 
         let reconnectWarning = null;
+        let cryptoApiKey = null;
+        let cryptoApiSecret = null;
+        if (broker === 'crypto' && updated > 0) {
+            if (userId) {
+                try {
+                    const savedCryptoCreds = await loadUserCredentials(userId, 'crypto');
+                    cryptoApiKey = savedCryptoCreds.CRYPTO_API_KEY || process.env.CRYPTO_API_KEY || null;
+                    cryptoApiSecret = savedCryptoCreds.CRYPTO_API_SECRET || process.env.CRYPTO_API_SECRET || null;
+                } catch (credLoadErr) {
+                    warnings.push('Credentials saved, but the saved crypto credential pair could not be loaded immediately');
+                    console.warn(`⚠️ Failed to load saved crypto credentials for user ${userId}:`, credLoadErr.message);
+                }
+            } else {
+                cryptoApiKey = process.env.CRYPTO_API_KEY || null;
+                cryptoApiSecret = process.env.CRYPTO_API_SECRET || null;
+            }
+        }
         // If crypto keys were updated, reinitialise the exchange client and reconnect
         // Reset credential check timer so trading loop retries immediately on next scan
         if (broker === 'crypto' && updated > 0) {
             engine.lastCredentialCheckAt = 0;
             engine._consecutiveAuthFailures = 0; // fresh key — clear backoff so it's probed immediately
-            const apiKey = process.env.CRYPTO_API_KEY;
-            const apiSecret = process.env.CRYPTO_API_SECRET;
+            const apiKey = cryptoApiKey;
+            const apiSecret = cryptoApiSecret;
             if (!apiKey || !apiSecret) {
                 reconnectWarning = 'Credentials saved, but Kraken reconnect was skipped until both API key and secret are present';
             } else {
@@ -5647,14 +5690,14 @@ app.post('/api/config/credentials', requireJwtOrApiSecret, async (req, res) => {
         if (userId && broker === 'crypto') {
             try {
                 const existingEngine = cryptoEngineRegistry.get(String(userId));
-                if (existingEngine && process.env.CRYPTO_API_KEY && process.env.CRYPTO_API_SECRET) {
+                if (existingEngine && cryptoApiKey && cryptoApiSecret) {
                     existingEngine.kraken = new KrakenClient({
-                        apiKey: process.env.CRYPTO_API_KEY,
-                        apiSecret: process.env.CRYPTO_API_SECRET,
+                        apiKey: cryptoApiKey,
+                        apiSecret: cryptoApiSecret,
                     });
                     // [2026-06-07] keep config in sync (see global engine above) + force re-probe
-                    existingEngine.config.exchange.apiKey = process.env.CRYPTO_API_KEY;
-                    existingEngine.config.exchange.apiSecret = process.env.CRYPTO_API_SECRET;
+                    existingEngine.config.exchange.apiKey = cryptoApiKey;
+                    existingEngine.config.exchange.apiSecret = cryptoApiSecret;
                     existingEngine.lastCredentialCheckAt = 0;
                     existingEngine._consecutiveAuthFailures = 0;
                     console.log(`🔧 [CryptoEngine ${userId}] Kraken client + config updated`);
@@ -6187,6 +6230,200 @@ app.get('/api/crypto/strategy-performance', async (req, res) => {
         res.json({ success: true, data: { performance: result.rows, currentWeights: strategyRegimeWeights } });
     } catch (e) {
         res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+});
+
+app.get('/api/edge-attribution', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not configured', data: [] });
+    try {
+        const windowRaw = req.query.window;
+        let windowDays;
+        if (windowRaw === undefined) {
+            windowDays = 30;
+        } else {
+            const parsed = parseInt(windowRaw, 10);
+            if (!Number.isFinite(parsed)) return res.status(400).json({ success: false, error: 'window must be an integer (days), or 0 for all time' });
+            if (parsed < 0 || parsed > 365) return res.status(400).json({ success: false, error: 'window must be between 0 and 365 days' });
+            windowDays = parsed;
+        }
+        const useWindow = windowDays > 0;
+        const minN = Math.max(1, Math.min(parseInt(req.query.minN) || 5, 1000));
+        const cleanPnlUsd = `CASE WHEN pnl_usd IS NULL OR pnl_usd::text = 'NaN' THEN NULL ELSE pnl_usd::FLOAT END`;
+        const cleanPnlPct = `CASE WHEN pnl_pct IS NULL OR pnl_pct::text = 'NaN' THEN NULL ELSE pnl_pct::FLOAT END`;
+        const windowFilter = useWindow ? `AND COALESCE(exit_time, created_at) >= NOW() - INTERVAL '1 day' * $1` : '';
+        const params = useWindow ? [windowDays, minN] : [minN];
+        const minNParamIdx = useWindow ? '$2' : '$1';
+        const sql = `
+            WITH closed AS (
+                SELECT
+                    bot,
+                    COALESCE(NULLIF(strategy, ''), '(unknown)') AS strategy,
+                    COALESCE(NULLIF(regime, ''), '(unknown)') AS regime,
+                    COALESCE(NULLIF(market_regime, ''), '(pre-2026-05-09)') AS market_regime,
+                    ${cleanPnlUsd} AS pnl_usd_clean,
+                    ${cleanPnlPct} AS pnl_pct_clean,
+                    exit_time
+                FROM trades
+                WHERE bot = 'crypto'
+                  AND status = 'closed'
+                  AND COALESCE(close_reason, '') <> 'orphaned_restart'
+                  ${windowFilter}
+            )
+            SELECT
+                bot, strategy, regime, market_regime,
+                COUNT(*)::INT AS n,
+                ROUND(100.0 * COUNT(*) FILTER (WHERE pnl_usd_clean > 0) / NULLIF(COUNT(*), 0), 1)::FLOAT AS win_rate_pct,
+                ROUND(COALESCE(SUM(pnl_usd_clean), 0)::numeric, 2)::FLOAT AS total_pnl_usd,
+                ROUND(AVG(pnl_pct_clean)::numeric, 6)::FLOAT AS avg_pnl_pct,
+                ROUND(STDDEV(pnl_pct_clean)::numeric, 6)::FLOAT AS stddev_pnl_pct,
+                ROUND((AVG(pnl_pct_clean) - 1.96 * STDDEV(pnl_pct_clean) / SQRT(GREATEST(COUNT(*), 1)))::numeric, 6)::FLOAT AS pnl_pct_ci_low,
+                ROUND((AVG(pnl_pct_clean) + 1.96 * STDDEV(pnl_pct_clean) / SQRT(GREATEST(COUNT(*), 1)))::numeric, 6)::FLOAT AS pnl_pct_ci_high,
+                MAX(exit_time) AS most_recent_trade,
+                json_agg(json_build_object('p', pnl_pct_clean, 'e', EXTRACT(EPOCH FROM exit_time))
+                         ORDER BY exit_time NULLS LAST)
+                    FILTER (WHERE pnl_pct_clean IS NOT NULL) AS trade_series
+            FROM closed
+            GROUP BY bot, strategy, regime, market_regime
+            HAVING COUNT(*) >= ${minNParamIdx}
+            ORDER BY total_pnl_usd DESC NULLS LAST
+        `;
+        const r = await dbPool.query(sql, params);
+        const round = (x, d) => (x == null || !Number.isFinite(x)) ? null : Math.round(x * 10 ** d) / 10 ** d;
+        const buckets = r.rows.map(row => {
+            const ts = Array.isArray(row.trade_series) ? row.trade_series : [];
+            const series = ts.map(x => x && x.p).filter(v => typeof v === 'number' && Number.isFinite(v));
+            let ci_low = row.pnl_pct_ci_low, ci_high = row.pnl_pct_ci_high, n_effective = row.n, daily = null;
+            if (edgeStats && series.length >= 2) {
+                const [lo, hi] = edgeStats.stationaryBootstrapCI(series, 5000);
+                ci_low = round(lo, 6); ci_high = round(hi, 6);
+                n_effective = round(edgeStats.effectiveN(series), 1);
+                const byDay = new Map();
+                for (const x of ts) {
+                    if (!x || typeof x.p !== 'number') continue;
+                    const key = (x.e != null) ? Math.floor(x.e / 86400) : `t${byDay.size}`;
+                    byDay.set(key, (byDay.get(key) || 0) + x.p);
+                }
+                daily = [...byDay.values()];
+            }
+            const { trade_series, ...base } = row;
+            return { base, ci_low, ci_high, n_effective, daily };
+        });
+        const trials = Math.max(2, buckets.length);
+        const bucketSharpes = [];
+        if (edgeStats) for (const b of buckets) if (b.daily && b.daily.length >= 3) bucketSharpes.push(edgeStats.sharpe(b.daily));
+        const meanSh = bucketSharpes.length ? bucketSharpes.reduce((s, x) => s + x, 0) / bucketSharpes.length : 0;
+        const varSR = bucketSharpes.length > 1 ? bucketSharpes.reduce((s, x) => s + (x - meanSh) ** 2, 0) / (bucketSharpes.length - 1) : 0.01;
+        const regimeByKey = new Map();
+        for (const b of buckets) {
+            const k = `${b.base.bot}|${b.base.strategy}`;
+            const rc = regimeByKey.get(k) || {};
+            rc[b.base.market_regime] = (rc[b.base.market_regime] || 0) + b.base.n;
+            regimeByKey.set(k, rc);
+        }
+        const data = buckets.map(b => {
+            let status = 'inconclusive';
+            if (b.base.n < 20) status = 'low_n';
+            else if (b.ci_low != null && b.ci_low > 0) status = 'positive_edge';
+            else if (b.ci_high != null && b.ci_high < 0) status = 'negative_edge';
+            const out = { ...b.base, pnl_pct_ci_low: b.ci_low, pnl_pct_ci_high: b.ci_high, status };
+            if (edgeStats) {
+                const rc = regimeByKey.get(`${b.base.bot}|${b.base.strategy}`) || {};
+                const counts = Object.values(rc);
+                const sum = counts.reduce((s, x) => s + x, 0) || 1;
+                out.n_effective = b.n_effective;
+                out.regime_counts = rc;
+                out.dominant_regime_share = round((counts.length ? Math.max(...counts) : 0) / sum, 3);
+                out.regime_coverage = counts.filter(c => c >= 10).length;
+                if (b.daily && b.daily.length >= 3) {
+                    const d = edgeStats.deflatedSharpe(b.daily, trials, varSR);
+                    out.sharpe = round(d.sharpe, 4); out.dsr = round(d.dsr, 4); out.dsr_pvalue = round(d.dsr_pvalue, 4);
+                } else { out.sharpe = null; out.dsr = null; out.dsr_pvalue = null; }
+            }
+            return out;
+        });
+        res.json({ success: true, window_days: useWindow ? windowDays : null, min_n: minN, method: edgeStats ? 'stationary_bootstrap' : 'parametric', generated_at: new Date().toISOString(), data });
+    } catch (e) {
+        console.error('[crypto edge-attribution]', e.message);
+        res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+});
+
+app.post('/api/admin/refresh-kill-switches', requireJwtOrApiSecret, async (req, res) => {
+    if (!dbPool) return res.status(503).json({ success: false, error: 'DB not configured' });
+    try {
+        const windowDays = Math.max(7, Math.min(parseInt(req.query.window) || 30, 365));
+        const minN = Math.max(10, Math.min(parseInt(req.query.minN) || 30, 1000));
+        const ttlDays = Math.max(1, Math.min(parseInt(req.query.ttlDays) || 7, 90));
+        const cleanPnlUsd = `CASE WHEN pnl_usd IS NULL OR pnl_usd::text = 'NaN' THEN NULL ELSE pnl_usd::FLOAT END`;
+        const cleanPnlPct = `CASE WHEN pnl_pct IS NULL OR pnl_pct::text = 'NaN' THEN NULL ELSE pnl_pct::FLOAT END`;
+        const candidatesSql = `
+            WITH closed AS (
+                SELECT
+                    bot,
+                    COALESCE(NULLIF(strategy, ''), '(unknown)') AS strategy,
+                    COALESCE(NULLIF(market_regime, ''), '(any)') AS market_regime,
+                    ${cleanPnlUsd} AS pnl_usd_clean,
+                    ${cleanPnlPct} AS pnl_pct_clean
+                FROM trades
+                WHERE bot = 'crypto'
+                  AND status = 'closed'
+                  AND COALESCE(close_reason, '') <> 'orphaned_restart'
+                  AND COALESCE(exit_time, created_at) >= NOW() - INTERVAL '1 day' * $1
+            )
+            SELECT
+                bot, strategy, market_regime,
+                COUNT(*)::INT AS n,
+                ROUND(COALESCE(SUM(pnl_usd_clean), 0)::numeric, 2)::FLOAT AS total_pnl_usd,
+                ROUND(AVG(pnl_pct_clean)::numeric, 6)::FLOAT AS avg_pnl_pct,
+                ROUND((AVG(pnl_pct_clean) + 1.96 * STDDEV(pnl_pct_clean) / SQRT(GREATEST(COUNT(*), 1)))::numeric, 6)::FLOAT AS ci_upper
+            FROM closed
+            GROUP BY bot, strategy, market_regime
+            HAVING COUNT(*) >= $2
+        `;
+        const { rows } = await dbPool.query(candidatesSql, [windowDays, minN]);
+        const flagged = [];
+        const skipped = [];
+        for (const row of rows) {
+            const isLosing = row.ci_upper != null && row.ci_upper < 0;
+            if (!isLosing) { skipped.push({ ...row, why: 'ci_upper>=0' }); continue; }
+            const reason = `auto-disable: n=${row.n}, pnl=$${row.total_pnl_usd}, 95%CI upper=${row.ci_upper.toFixed(4)} (window=${windowDays}d)`;
+            await dbPool.query(`
+                INSERT INTO strategy_kill_switches (bot, strategy, market_regime, n_trades, total_pnl_usd, avg_pnl_pct, pnl_pct_ci_upper, disabled_at, expires_at, reason, window_days)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW() + INTERVAL '1 day' * $8, $9, $10)
+                ON CONFLICT (bot, strategy, market_regime) DO UPDATE SET
+                    n_trades = EXCLUDED.n_trades,
+                    total_pnl_usd = EXCLUDED.total_pnl_usd,
+                    avg_pnl_pct = EXCLUDED.avg_pnl_pct,
+                    pnl_pct_ci_upper = EXCLUDED.pnl_pct_ci_upper,
+                    disabled_at = NOW(),
+                    expires_at = EXCLUDED.expires_at,
+                    reason = EXCLUDED.reason,
+                    window_days = EXCLUDED.window_days
+            `, [row.bot, row.strategy, row.market_regime, row.n, row.total_pnl_usd, row.avg_pnl_pct, row.ci_upper, ttlDays, reason, windowDays]);
+            flagged.push({ ...row, reason });
+        }
+        const expired = await dbPool.query(`DELETE FROM strategy_kill_switches WHERE bot = 'crypto' AND expires_at < NOW() RETURNING bot, strategy, market_regime`);
+        res.json({ success: true, mode: process.env.ENFORCE_KILL_SWITCHES === 'true' ? 'enforcing' : 'shadow', window_days: windowDays, min_n: minN, ttl_days: ttlDays, evaluated: rows.length, flagged_count: flagged.length, skipped_count: skipped.length, expired_count: expired.rows.length, flagged, generated_at: new Date().toISOString() });
+    } catch (e) {
+        console.error('[crypto refresh-kill-switches]', e.message);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+app.get('/api/kill-switches', async (req, res) => {
+    if (!dbPool) return res.json({ success: false, error: 'DB not configured', data: [] });
+    try {
+        const r = await dbPool.query(`
+            SELECT bot, strategy, market_regime, n_trades, total_pnl_usd, avg_pnl_pct, pnl_pct_ci_upper,
+                   disabled_at, expires_at, reason, window_days
+            FROM strategy_kill_switches
+            WHERE bot = 'crypto'
+              AND (expires_at IS NULL OR expires_at > NOW())
+            ORDER BY disabled_at DESC
+        `);
+        res.json({ success: true, mode: process.env.ENFORCE_KILL_SWITCHES === 'true' ? 'enforcing' : 'shadow', data: r.rows, count: r.rows.length });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
     }
 });
 

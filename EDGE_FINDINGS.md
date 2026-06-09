@@ -202,3 +202,35 @@ opt-in loss-reducer, with the OOS backtest as its gate. Today only
 `crypto/momentum/MEAN_REVERTING` is flagged. The reopening bar for *adding/tuning* strategies
 is unchanged; this only lets the operator stop a bucket the evidence already condemns, and it
 auto-resumes when the bucket stops being statistically losing.
+
+---
+
+## Addendum — 2026-06-09: refreshed live audit before monetization
+
+Production trade pull on 2026-06-09 (`/api/trades?limit=5000`, excluding
+`close_reason='orphaned_restart'`) still does **not** clear the sellable-strategy bar.
+
+| Scope | n | Win rate | Total PnL | Profit factor | EV/trade | t-stat |
+|-------|--:|---------:|----------:|--------------:|---------:|-------:|
+| stock/all | 86 | 38.4% | -$82.79 | 0.77 | -$0.963 | -0.88 |
+| stock/openingRangeBreakout/opening-range | 74 | 39.2% | -$10.67 | 0.96 | -$0.144 | -0.13 |
+| crypto/all | 308 | 30.8% | -$64.81 | 0.84 | -$0.210 | -0.51 |
+| crypto/momentum/MEAN_REVERTING | 214 | 24.3% | -$73.19 | 0.15 | -$0.342 | -6.38 |
+| crypto/momentum/low | 73 | 43.8% | -$218.78 | 0.25 | -$2.997 | -2.99 |
+| crypto/momentum/risk-on | 11 | 90.9% | +$245.83 | 42.11 | +$22.348 | +3.56 |
+| forex/all | 6 | 0.0% | -$744.87 | 0.00 | -$124.145 | -1.87 |
+
+The `crypto/momentum/risk-on` slice is the only positive candidate, but `n=11`
+is below the minimum evidence bar. Treat it as a hypothesis for walk-forward
+validation, **not** as a product claim or live-only regime filter yet.
+
+Updated OOS kill-switch replay on the same crypto pull (`window=30`, `minN=30`)
+still validates the loss-reduction gate: 320 evaluated, 149 blocked, block
+precision 80.0%, PnL improvement +$40.93. The kept book remains negative
+(-$23.88, kept WR 41.8%), so kill-switch enforcement reduces damage but does
+not create a chargeable edge.
+
+Action taken in code: crypto now exposes the same evidence controls as the
+forex bot: `/api/edge-attribution`, `POST /api/admin/refresh-kill-switches`,
+and `/api/kill-switches`. These are scoped to `bot='crypto'` and do not enable
+trading enforcement unless `ENFORCE_KILL_SWITCHES=true`.
