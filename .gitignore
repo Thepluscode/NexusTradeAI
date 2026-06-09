@@ -108,3 +108,22 @@ infrastructure/
 
 # Mobile app — not active, kept locally for reference only
 clients/mobile-app/
+
+# Machine-local tooling and agent state — never commit
+.venv/
+.base/
+.carl/
+.mcp.json
+.claude/scheduled_tasks.lock
+.claude/skills/
+graphify-out/
+services/graphify-out/
+__pycache__/
+*.tmp.*
+
+# Strategy-engine runtime memory (audit/decision JSONL grows at runtime)
+services/strategy-engine/memory/
+
+# Stale root copies of performance trackers — canonical versions live in docs/archive/
+/3_STRATEGY_PERFORMANCE_TRACKER.csv
+/STOCK_BOT_PERFORMANCE_TRACKER.csv
