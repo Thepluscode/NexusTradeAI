@@ -31,7 +31,7 @@ function tradesArray(payload) {
 }
 
 function tradeTime(trade) {
-    return new Date(trade.entry_time || trade.created_at || trade.exit_time || 0).getTime();
+    return new Date(trade.exit_time || trade.entry_time || trade.created_at || 0).getTime();
 }
 
 function bucketKey(trade) {
@@ -182,7 +182,11 @@ async function main() {
     }
 }
 
-main().catch(error => {
-    console.error(`FAIL: ${error.message}`);
-    process.exit(1);
-});
+if (require.main === module) {
+    main().catch(error => {
+        console.error(`FAIL: ${error.message}`);
+        process.exit(1);
+    });
+}
+
+module.exports = { bucketKey, summarize, tradeTime, tradesArray };
