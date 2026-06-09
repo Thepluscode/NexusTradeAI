@@ -1,0 +1,102 @@
+name: Crypto Edge Controls
+
+# Keeps crypto strategy kill-switches fresh and verifies enforcement daily.
+# Fails if:
+# - NEXUS_API_SECRET is missing
+# - the refresh endpoint fails
+# - crypto kill-switch mode is not enforcing
+# - the monitor detects trades from an active killed bucket since the cutoff
+
+on:
+  schedule:
+    - cron: '15 6 * * *' # 06:15 UTC daily, after the legacy 06:00 stale-strategy scan
+  workflow_dispatch:
+    inputs:
+      since:
+        description: 'ISO timestamp for monitor cutoff. Defaults to last 26h.'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crypto-edge-controls
+  cancel-in-progress: false
+
+jobs:
+  refresh-and-monitor:
+    name: Refresh kill-switches and monitor leakage
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Refresh crypto kill-switches
+        env:
+          NEXUS_API_SECRET: ${{ secrets.NEXUS_API_SECRET }}
+        run: |
+          if [ -z "$NEXUS_API_SECRET" ]; then
+            echo "::error::NEXUS_API_SECRET secret not configured"
+            exit 1
+          fi
+
+          URL="https://nexus-crypto-bot-production.up.railway.app/api/admin/refresh-kill-switches?window=30&minN=30&ttlDays=7"
+          RESPONSE=$(curl -sS -w '\nHTTP:%{http_code}' --max-time 30 \
+            -X POST \
+            -H "Authorization: Bearer ${NEXUS_API_SECRET}" \
+            "$URL" 2>&1)
+          STATUS=$(echo "$RESPONSE" | grep -oE 'HTTP:[0-9]+' | tail -1 | cut -d: -f2)
+          BODY=$(echo "$RESPONSE" | sed -E 's/HTTP:[0-9]+$//')
+          echo "$BODY" | tee refresh.json
+
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Refresh failed — HTTP $STATUS"
+            exit 1
+          fi
+
+          SUCCESS=$(jq -r '.success // false' refresh.json)
+          MODE=$(jq -r '.mode // "unknown"' refresh.json)
+          if [ "$SUCCESS" != "true" ]; then
+            echo "::error::Refresh response success=false"
+            exit 1
+          fi
+          if [ "$MODE" != "enforcing" ]; then
+            echo "::error::Crypto kill-switch mode is $MODE, expected enforcing"
+            exit 1
+          fi
+
+          {
+            echo "## Crypto kill-switch refresh"
+            echo
+            echo "- Mode: ${MODE}"
+            echo "- Window: $(jq -r '.window_days' refresh.json)d"
+            echo "- Min N: $(jq -r '.min_n' refresh.json)"
+            echo "- TTL: $(jq -r '.ttl_days' refresh.json)d"
+            echo "- Evaluated: $(jq -r '.evaluated' refresh.json)"
+            echo "- Flagged: $(jq -r '.flagged_count' refresh.json)"
+            echo "- Expired cleaned: $(jq -r '.expired_count' refresh.json)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Monitor crypto edge controls
+        env:
+          EDGE_MONITOR_SINCE_INPUT: ${{ github.event.inputs.since || '' }}
+        run: |
+          if [ -n "$EDGE_MONITOR_SINCE_INPUT" ]; then
+            export EDGE_MONITOR_SINCE="$EDGE_MONITOR_SINCE_INPUT"
+          else
+            export EDGE_MONITOR_SINCE="$(date -u -d '26 hours ago' +'%Y-%m-%dT%H:%M:%SZ')"
+          fi
+
+          node scripts/crypto-edge-monitor.js | tee monitor.md
+          {
+            echo
+            echo "## Crypto edge monitor"
+            echo
+            cat monitor.md
+          } >> "$GITHUB_STEP_SUMMARY"
