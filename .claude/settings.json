@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl https://nexus-stock-bot-production.up.railway.app/*)",
+      "Bash(curl https://nexus-forex-bot-production.up.railway.app/*)",
+      "Bash(curl https://nexus-crypto-bot-production.up.railway.app/*)",
+      "Bash(curl https://nexus-strategy-bridge-production.up.railway.app/*)",
+      "Bash(curl https://nexus-dashboard-production-e6e6.up.railway.app/*)",
+      "Bash(curl http://localhost:*)",
+      "Bash(curl http://127.0.0.1:*)",
+      "Bash(railway logs *)",
+      "Bash(railway logs)",
+      "Bash(railway status)",
+      "Bash(railway whoami)",
+      "Bash(railway list)",
+      "Bash(railway list *)",
+      "Bash(npx jest *)",
+      "Bash(npx jest)",
+      "Bash(jest *)",
+      "Bash(jest)",
+      "Bash(pnpm check *)",
+      "Bash(pnpm test *)",
+      "Bash(pnpm typecheck *)",
+      "Bash(pnpm lint *)"
+    ]
+  }
+}
