@@ -127,3 +127,5 @@ services/strategy-engine/memory/
 # Stale root copies of performance trackers — canonical versions live in docs/archive/
 /3_STRATEGY_PERFORMANCE_TRACKER.csv
 /STOCK_BOT_PERFORMANCE_TRACKER.csv
+.agents/
+.codex/
