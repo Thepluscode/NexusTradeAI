@@ -128,5 +128,39 @@ Sources: [ARC Group — trust overfunding in a deal-starved SPAC market](https:/
 [CrossingBridge Pre-Merger SPAC ETF](https://www.crossingbridgefunds.com/spac-etf),
 [Boardroom Alpha SPAC statistics](https://www.boardroomalpha.com/spac-statistics/).
 
-### Candidate A — odd-lot tender arbitrage: queued (next)
+### Candidate A — odd-lot tender arbitrage: **REAL BUT MARGINAL** (2026-06-10)
+
+Gate executed: `tools/oddlot_tender_gate.py` →
+`reports/oddlot_tender_gate_20260610.json`. EDGAR FTS, 214 initial SC TO-I
+filings mentioning odd lots (2021-06 → 2026-06), 133 with verified odd-lot
+priority/proration-exemption language.
+
+| Bar | Result | Verdict |
+|-----|--------|---------|
+| (a) ≥8 events/yr | **26.6/yr**, stable every year (17–29) | PASS |
+| (b) median net spread ≥2% | all events: **−2.9%** (most trade above tender → non-trades for an opt-in arb); tradeable (positive-spread) events only: **+8.2%** median (ex-outlier), 34% of measured events | PASS on tradeable subset; the bar as drafted was ambiguous — both readings recorded |
+| (c) completion ≥80% | **91.4%** price-convergence proxy — biased *low* for odd-lots (e.g. PMCB: market priced proration risk odd-lot holders are exempt from) | PASS |
+| (d) ≥$400/yr at 99-sh size | measured-only: **$230–378/yr**; scaled to full qualifying universe (26% measurement coverage): **$875–1,436/yr** | BORDERLINE — hinges on extrapolation |
+
+**Data-quality caveats (honest):** spread measured on only 35/133 events
+(Yahoo 404s on delisted/OTC names; ~30 ticker-regex failures on filings with
+no ticker in EDGAR display names — fixed in the tool but not re-run; a
+repeating interval-fund quarterly repurchase may inflate the qualifying
+count). A $/yr bug (suspect events leaking into the dollar sum) was found
+and fixed; numbers above are corrected.
+
+**Verdict: the anomaly is real and structurally protected (the ≤99-share
+exemption IS the moat — institutions cannot harvest it), occurring ~9
+tradeable times/yr at ~+2–19% spreads. But at odd-lot size it is worth
+roughly $0.2–1.4k/yr per account, each event requiring a manual broker
+tender instruction (and some brokers charge $0–38/tender, eating much of a
+$50–400 event).** This is the Candidate-#5 shape again: real, persistent,
+and too small to matter. NOT promoted to automation. Recorded as an optional
+manual playbook: watch EDGAR FTS for SC TO-I + odd-lot priority language,
+act only when market price < tender price by >2%.
+
+Phase-2 (only if ever revisited): fix measurement coverage (delisted-ticker
+price source, re-run with CIK-regex fix), verify per-event completion from
+SC TO-I/A results amendments, net out per-broker tender fees.
+
 ### Candidate B — listing-announcement events: queued
