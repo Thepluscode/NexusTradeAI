@@ -118,6 +118,8 @@
 | Deploy: thin-loader pattern (`deploy/*/bot.js` → `clients/bot-dashboard/*.js`) | VERIFIED | 16-line wrappers. |
 | Gitleaks pre-commit secret scan | DEPLOYED | Per commit `4c66f1d` + `.gitleaks.toml` + `.husky/`. Hook installed; not yet verified to have blocked a real secret. |
 | Telegram alerts | DEPLOYED | Env vars present. Not verified to fire on real events. |
+| Manifest-driven module loading + observable stubs — crypto (RFC #46) | VERIFIED | 2026-06-10: prod `GET /api/health/detailed → sharedModules` = `{16 real (all local, fromServices:0), 7 stub}`; stub set exactly matches golden-parity prediction (big-block ×6 chain-broken at `api-handlers` + `monte-carlo-sizer`); kill-switch/health/normalizers REAL. 18 loader tests + parity + deploy.yml contract test in CI. Forex/stock migrations PLANNED. |
+| `monte-carlo-sizer.js` tracked in git (was silently untracked) | DEPLOYED | Commit `968892f`: `services/trading/` blanket-gitignore swallowed it — CI/fresh clones ran the inline Kelly stub while its unit test was tracked. Found by the RFC #46 parity test. |
 
 ---
 
