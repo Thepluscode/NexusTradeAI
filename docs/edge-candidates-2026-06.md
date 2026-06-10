@@ -163,4 +163,50 @@ Phase-2 (only if ever revisited): fix measurement coverage (delisted-ticker
 price source, re-run with CIK-regex fix), verify per-event completion from
 SC TO-I/A results amendments, net out per-broker tender fees.
 
-### Candidate B — listing-announcement events: queued
+### Candidate B — listing events: method note (2026-06-10, recorded BEFORE any returns computed)
+
+Blog-announcement scraping (Coinbase/Kraken) is fragile and incomplete on free
+data. Operationalization substituted, pre-registered here before measurement:
+**event = first trade date of a new USD pair on Kraken** (detected as the
+start of its daily OHLC history; Kraken's public API returns max 720 daily
+candles, so the observable cohort is listings since ~2024-06 — which IS the
+pre-registered OOS window). Hypothesis tested: post-listing drift on the
+listing venue, the version actually tradeable by this platform's crypto bot
+(buy first daily close, exit +1d / +3d close). Returns BTC-adjusted, net of
+2× 0.26% taker + 0.3% slippage (0.82% round trip). Bars unchanged: OOS net
+mean > 0 with cluster-robust t ≥ 2 AND ≥1% net per event. Left-censored pairs
+(history starting at the API horizon) are excluded, not treated as listings.
+
+### Candidate B — listing events: **FAIL** (2026-06-10) — significantly NEGATIVE
+
+Gate executed: `tools/listing_event_gate.py` →
+`reports/listing_event_gate_20260610.json`. Cohort: **438 new Kraken USD
+listings** since 2024-06-20 (89 weekly clusters), BTC-adjusted, net of 0.82%
+round-trip cost.
+
+| Hold | n | net mean | median | win rate | clustered t |
+|------|--:|---------:|-------:|---------:|------------:|
+| +1d | 438 | **−4.02%** | −3.28% | 29% | **−4.39** |
+| +3d | 438 | **−5.68%** | −5.31% | 29% | **−4.15** |
+
+Not merely no-edge — post-listing drift on Kraken is *significantly negative*
+(new listings dump). The long version of the listing effect is dead on this
+venue with high statistical confidence. Bounded caveat (not hope): the
+inverse (shorting day-0 listings) is statistically suggested but **not
+retail-executable** — no borrow/margin availability on fresh pairs — and
+testing it would be goalpost-moving; not pursued. Verdict final per register
+rules: no per-venue or per-coin re-slicing.
+
+---
+
+## Register conclusion (2026-06-10) — all three gates executed
+
+**C: FAIL. A: real but marginal (~$0.2–1.4k/yr, manual playbook only,
+not automated). B: FAIL (significantly negative).** The meta-insight from
+the joint edge hunt holds: the free, public, retail-accessible edge space
+is exhausted. This register is CLOSED at the same standard as
+`theplus-bot/EDGE_FINDINGS.md`; reopening requires a genuinely new edge
+source (differentiated data, structural niche with non-trivial capacity, or
+non-retail execution) with its own pre-registered free kill-gate. Energy
+returns to the honest-evaluation harness as the product — which these three
+gates again demonstrated working as designed.
