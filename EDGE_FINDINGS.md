@@ -291,3 +291,44 @@ loss-prevention lever is either live or verified-unnecessary. The book cannot
 be made *profitable* from here by configuration — the kept book has no
 demonstrated edge. Making the edge "more profitable" now strictly means a NEW
 edge source that clears the reopening bar in `theplus-bot/EDGE_FINDINGS.md`.
+
+---
+
+## Addendum — 2026-06-10: strategy-bridge AI verdicts have NO discrimination (Rule 4 baseline)
+
+Before any CoT/Self-Consistency upgrade to the strategy-bridge evaluator, its
+stored verdicts were replayed against realized outcomes (Rule 4: measurement
+before change). Harness: `services/signals/backtest/bridge-eval-replay.js`
+(+11 tests); report: `reports/bridge_eval_replay_20260610.json`. The bridge is
+ADVISORY (rejections at confidence > 0.7 get 0.7× sizing; approvals never
+boost), so rejected signals still traded — both classes observable, zero
+selection bias.
+
+**Stock (the only scoreable bot, n=86, 28 approved / 58 rejected):**
+
+| Verdict | n | Win rate | Total PnL | EV/trade |
+|---|--:|--:|--:|--:|
+| APPROVED | 28 | 21.4% | −$95.19 | −$3.40 |
+| REJECTED | 58 | 46.6% | +$12.40 | +$0.21 |
+
+Block precision **0.534 < base loser rate 0.616** → rejections do not select
+losers (the kill-switch cleared this same bar at 0.80 vs 0.69; the bridge
+fails it). The verdict is directionally **inverted** — approved trades did
+worse than rejected ones (EV-contrast t = −1.15, not significant). Confidence
+does not calibrate (all buckets negative EV), and the advisory's sole action
+(0.7× sizing on 5 high-conf rejections) **cost $2** — those trades won.
+
+**Crypto (n=308) and forex (n=6) are unscoreable:** every row persists
+`agent_approved=false, agent_confidence=null` — the advisory metadata never
+reaches the DB on those bots (default-false at the INSERT when the bridge
+path doesn't populate the signal). Data-quality bug, not evidence of
+discrimination either way.
+
+**Decision: do NOT invest in bridge prompt upgrades (CoT/Self-Consistency).**
+Improving the reasoning of an advisor whose verdicts carry zero (directionally
+negative) discrimination is the `qualifyEntry` lesson again — a better-argued
+opinion about a no-edge signal is still a no-edge opinion. The measurement
+cost an hour and saved the prompt-engineering effort. If the bridge is ever
+revisited, the bar is this baseline: block precision must exceed the base
+loser rate on held-out trades. The crypto/forex persistence bug may be fixed
+for observability (it's a Rule 8 issue), but fixing it changes no decisions.

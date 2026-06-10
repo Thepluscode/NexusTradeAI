@@ -1,0 +1,144 @@
+{
+ "asof": "2026-06-10",
+ "source": "GET /api/trades (production)",
+ "bots": {
+  "stock": {
+   "label": "stock",
+   "usable": 86,
+   "skipped": 4,
+   "dataQuality": {
+    "confidenceNonNull": 33,
+    "degenerate": false,
+    "degenerateReason": null
+   },
+   "verdictCounts": {
+    "approved": 28,
+    "rejected": 58
+   },
+   "byVerdict": {
+    "approved": {
+     "n": 28,
+     "winRate": 0.21428571428571427,
+     "totalPnl": -95.19,
+     "evPerTrade": -3.4
+    },
+    "rejected": {
+     "n": 58,
+     "winRate": 0.46551724137931033,
+     "totalPnl": 12.4,
+     "evPerTrade": 0.214
+    }
+   },
+   "confusion": {
+    "tp": 31,
+    "fp": 27,
+    "fn": 22,
+    "tn": 6
+   },
+   "blockPrecision": 0.534,
+   "baseLoserRate": 0.616,
+   "discriminates": false,
+   "lossRecall": 0.585,
+   "evDiffTStat": -1.15,
+   "calibration": [
+    {
+     "bucket": "[0.5,0.7)",
+     "n": 13,
+     "winRate": 0.15384615384615385,
+     "totalPnl": -32.44,
+     "evPerTrade": -2.495
+    },
+    {
+     "bucket": "[0.7,0.85)",
+     "n": 8,
+     "winRate": 0.375,
+     "totalPnl": -19.65,
+     "evPerTrade": -2.456
+    },
+    {
+     "bucket": "[0.85,1.01)",
+     "n": 12,
+     "winRate": 0.3333333333333333,
+     "totalPnl": -38.43,
+     "evPerTrade": -3.202
+    }
+   ],
+   "advisoryReduce": {
+    "n": 5,
+    "pnlActual": 4.67,
+    "pnlFullSizeCounterfactual": 6.67,
+    "savedUsd": -2
+   }
+  },
+  "forex": {
+   "label": "forex",
+   "usable": 6,
+   "skipped": 25,
+   "dataQuality": {
+    "confidenceNonNull": 0,
+    "degenerate": true,
+    "degenerateReason": "all stored verdicts are REJECTED (or default-false) — single class, unscoreable"
+   },
+   "verdictCounts": {
+    "approved": 0,
+    "rejected": 6
+   },
+   "byVerdict": {
+    "approved": {
+     "n": 0,
+     "winRate": null,
+     "totalPnl": 0,
+     "evPerTrade": null
+    },
+    "rejected": {
+     "n": 6,
+     "winRate": 0,
+     "totalPnl": -744.87,
+     "evPerTrade": -124.145
+    }
+   },
+   "calibration": null,
+   "advisoryReduce": {
+    "n": 0,
+    "pnlActual": 0,
+    "pnlFullSizeCounterfactual": 0,
+    "savedUsd": 0
+   }
+  },
+  "crypto": {
+   "label": "crypto",
+   "usable": 308,
+   "skipped": 12,
+   "dataQuality": {
+    "confidenceNonNull": 0,
+    "degenerate": true,
+    "degenerateReason": "all stored verdicts are REJECTED (or default-false) — single class, unscoreable"
+   },
+   "verdictCounts": {
+    "approved": 0,
+    "rejected": 308
+   },
+   "byVerdict": {
+    "approved": {
+     "n": 0,
+     "winRate": null,
+     "totalPnl": 0,
+     "evPerTrade": null
+    },
+    "rejected": {
+     "n": 308,
+     "winRate": 0.30844155844155846,
+     "totalPnl": -64.81,
+     "evPerTrade": -0.21
+    }
+   },
+   "calibration": null,
+   "advisoryReduce": {
+    "n": 0,
+    "pnlActual": 0,
+    "pnlFullSizeCounterfactual": 0,
+    "savedUsd": 0
+   }
+  }
+ }
+}
