@@ -120,6 +120,7 @@
 | Telegram alerts | DEPLOYED | Env vars present. Not verified to fire on real events. |
 | Manifest-driven module loading + observable stubs — ALL THREE BOTS (RFC #46) | VERIFIED | 2026-06-10: prod `GET /api/health/detailed → sharedModules` on each bot exactly matches golden-parity prediction. Crypto `{16 real, 7 stub}`, forex `{12 real, 7 stub}`, stock `{14 real, 9 stub — incl. signal-schema + vwap-reversal-strategy}`; all `fromServices: 0` (proves `../../` never resolves on Railway); kill-switch + health-monitor REAL on all three. 25 loader/parity tests + deploy.yml contract test in CI; binding-parity check 33/29/32 names, none missing/unused. |
 | `monte-carlo-sizer.js` tracked in git (was silently untracked) | DEPLOYED | Commit `968892f`: `services/trading/` blanket-gitignore swallowed it — CI/fresh clones ran the inline Kelly stub while its unit test was tracked. Found by the RFC #46 parity test. |
+| Tender Scout (odd-lot tender decision-support bot, `services/tender-scout/`) | VERIFIED | 2026-06-10 live run: 9 odd-lot-priority SC TO-I offers found in 45 days; 1 actionable (OPTU $2.50 tender vs $1.20, expires 2026-06-30); NHP preferred-class artifact caught by the share-class guard. 16 deterministic tests. Places NO trades — operationalizes the Candidate A manual playbook. Run: `python3 services/tender-scout/scout.py --once`. |
 
 ---
 
