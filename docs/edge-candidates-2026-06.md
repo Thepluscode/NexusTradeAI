@@ -94,3 +94,39 @@ C (hours) → A (a day) → B (1–2 days). One at a time; a FAIL is final at
 this register's bars. Any PASS graduates to the existing harness standard
 (walk-forward, real costs, pre-registered promotion criteria) before any
 paper-trading module is built.
+
+---
+
+## Gate results
+
+### Candidate C — SPAC trust-value floor: **FAIL** (2026-06-10)
+
+Market-structure evidence, three independent sources, all pointing the same
+direction — the redemption floor is fully crowded, so open-market discounts
+meeting the bar do not exist at scale:
+
+1. **The 2026 SPAC market is "arbitrage-dominated":** aggregate redemption
+   rates frequently exceed 95%; institutions run SPAC trusts as cash
+   management at 5–7% annual — that return includes IPO-unit/warrant
+   economics retail open-market buyers cannot access (ARC Group, 2026;
+   89 SPAC IPOs / $16.28B YTD as of May 20 2026).
+2. **Common trades at/above trust, not below:** SPACs with 100% trust show
+   average first-day VWAP **+$0.07 above NAV** — the discount pool the bar
+   requires (≥10 names ≥ T-bill + 2%) is arbitraged away on day one.
+3. **Best-case professional ceiling:** the CrossingBridge Pre-Merger SPAC
+   ETF returned 6.85% in 2025 vs 4.87% for the ICE BofA 0–3yr Treasury
+   index — ~+2 pts over Treasuries *with* IPO allocations and unit
+   splitting. Open-market common-only retail strictly underperforms that.
+
+Caveat recorded honestly: a per-name screen was not run (free screeners are
+now paywalled — spactrack.net redirects to listingtrack.io, HTTP 403).
+Verdict stands on market structure; reopening requires producing an actual
+screen showing ≥10 names at open-market net yield ≥ T-bill + 2%. The bar
+itself does not move.
+
+Sources: [ARC Group — trust overfunding in a deal-starved SPAC market](https://arc-group.com/trust-overfunding-deal-starved-spac-market/),
+[CrossingBridge Pre-Merger SPAC ETF](https://www.crossingbridgefunds.com/spac-etf),
+[Boardroom Alpha SPAC statistics](https://www.boardroomalpha.com/spac-statistics/).
+
+### Candidate A — odd-lot tender arbitrage: queued (next)
+### Candidate B — listing-announcement events: queued
