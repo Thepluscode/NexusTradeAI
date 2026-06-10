@@ -234,3 +234,60 @@ Action taken in code: crypto now exposes the same evidence controls as the
 forex bot: `/api/edge-attribution`, `POST /api/admin/refresh-kill-switches`,
 and `/api/kill-switches`. These are scoped to `bot='crypto'` and do not enable
 trading enforcement unless `ENFORCE_KILL_SWITCHES=true`.
+
+---
+
+## Addendum — 2026-06-10: profitability sweep — remaining levers closed out
+
+Follow-up pass on "make the edge more profitable" within the binding rules.
+Fresh production pull (320 crypto trades, 308 closed ex-orphan). Four results:
+
+**1. Kill-switch enforcement is LIVE on crypto (verified).**
+`GET /api/kill-switches → mode: "enforcing"`, `/api/health/detailed →
+enforceKillSwitches: true`. The `crypto/momentum/MEAN_REVERTING` bucket
+(n=212, CI upper < 0) is flagged through 2026-06-16, auto re-evaluated daily.
+Since regime instrumentation began (2026-05-10), 214/216 closed trades were in
+that bucket (−$73.19); the kept book is 2 trades (−$0.73). The OOS-validated
+loss reducer is therefore operating and is doing essentially all available
+loss-prevention work. Forex remains `mode: "shadow"` and stock does not expose
+the endpoint — both no-ops today (no flagged buckets for either bot).
+
+**2. The `crypto/momentum/risk-on` slice (n=11, +$245.83, t=+3.56) is a
+LABELING ARTIFACT — hypothesis CLOSED.** The trade rows carry two regime
+fields across two eras: before 2026-05-10 the label lived in
+`entry_context.marketRegime` (old taxonomy; `low`, n=73, −$218.78, t=−2.99);
+from 2026-05-10 it moved to the `market_regime` column (`MEAN_REVERTING` etc.).
+The `regime` column is `risk-on` for 300/308 trades — near-constant, zero
+discriminative power. The "risk-on n=11 winner" is exactly the residual bucket
+of trades with **no regime label at all**: 11 trades clustered on just TWO
+days (2026-03-09 and 2026-03-14), all longs, during a March rally — ~2
+independent observations, not 11. This is not a regime filter candidate and
+must not be walk-forward "validated" into one. (Corollary: the `low` losing
+slice is also pre-2026-05-10 era only — its taxonomy no longer exists in prod,
+so no kill-switch extension is needed for it.)
+
+**3. Forex rule #4 CONFIRMED: no new capital can route to
+`pullbackContinuation`.** Code-level audit of `unified-forex-bot.js`:
+`scanForSignals()` has exactly four signal-emission sites (lines ~2836, ~2896,
+~2979, ~3014), all explicitly tagged `strategy: 'boxBreakout'` or
+`'meanReversion'`. `pullbackContinuation`/`trendContinuation` appear only as a
+fallback **label** inside `buildForexTradeTags()` (line ~313) for signals with
+no strategy tag, and the v25.4 missing-context guard (`_forexEntryHasContext`,
+enforced in both `dbForexOpen` paths) rejects any non-restored entry with no
+signal context. Legacy tags can therefore only appear on orphan-restored
+positions, never on new entries. Open item from the 2026-05-26 audit: closed.
+
+**4. Exit/time-stop tuning has nothing left to win.** The hard time-stop is
+already running at 240 min in production (recent Time Stop exits read 240–245
+min; CLAUDE.md's "default 480" describes the code default, not the live env).
+Of −$68.36 total time-stop-exit P&L, −$68.19 sits in the now-enforced
+`MEAN_REVERTING` bucket; the residual time-stop book the bot can still trade
+is −$0.17. Per the appendix math, further exit-geometry tuning on a no-signal
+base slides along the random-entry frontier — and here the residual is
+empirically ~zero anyway. No exit knob changes are justified.
+
+**Bottom line (unchanged, now fully operationalized):** every sanctioned
+loss-prevention lever is either live or verified-unnecessary. The book cannot
+be made *profitable* from here by configuration — the kept book has no
+demonstrated edge. Making the edge "more profitable" now strictly means a NEW
+edge source that clears the reopening bar in `theplus-bot/EDGE_FINDINGS.md`.

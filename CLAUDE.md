@@ -59,7 +59,7 @@ All services use port 8080 on Railway (Railway routes externally). Local dev use
 - BTC SMA50 gate: blocks all altcoin longs when BTC is below its 50-period SMA.
 - Trades 24/7, 25 pairs on Kraken.
 - **Exit-tuning env knobs (default OFF / unchanged behaviour):**
-  - `CRYPTO_HARD_TIMESTOP_MIN` (default `480`) — hard close at this many minutes. Drop to `240` to halve the worst loss-runs that the dashboard shows dominate "Time Stop" exits at 481 min.
+  - `CRYPTO_HARD_TIMESTOP_MIN` (code default `480`; **set to `240` on Railway** — recent Time Stop exits read 240–245 min) — hard close at this many minutes.
   - `CRYPTO_SOFT_TIMESTOP_MIN` (default `240`) — when to trail stop to breakeven.
   - `CRYPTO_MOMENTUM_FADE_EXIT` (default `false`). When `true`: any position with `|price - entry| / entry < CRYPTO_MOMENTUM_FADE_PCT` (default `0.003` = 0.3%) after `CRYPTO_MOMENTUM_FADE_AFTER_MIN` minutes (default `60`) is closed as `Momentum Fade Exit`. Targets the "entered but didn't follow through" pattern.
   - **Backtest before flipping any of these on**; they change live exit behaviour.
@@ -171,7 +171,7 @@ SELECT * FROM trades WHERE bot='stock' AND status='closed' ORDER BY exit_time DE
 - `BOT_PAUSED=true` — pauses forex bot (survives Railway deploys)
 - `MAX_TRADES_PER_DAY=15` — daily trade limit
 - `CORS_ORIGIN` — comma-separated allowed origins
-- `ENFORCE_KILL_SWITCHES=true` — **opt-in, per bot, default OFF.** When on, the bot skips signals whose `(strategy, market_regime)` bucket the daily auto-disable scanner flagged as statistically losing (`strategy_kill_switches`: n≥30, 95% CI upper < 0). Fail-open (a DB error never blocks); anti-churning `canTrade()` is unaffected. OOS evidence: `services/signals/backtest/kill-switch-oos.js` + EDGE_FINDINGS.md. Verify per bot via `/api/health/detailed → enforceKillSwitches`, and `GET /api/kill-switches → mode` (shadow|enforcing). **Currently only the `crypto/momentum/MEAN_REVERTING` bucket is flagged**, so turning it on mainly gates crypto momentum while in that regime; flags auto-expire in 7 days and re-evaluate daily.
+- `ENFORCE_KILL_SWITCHES=true` — **opt-in, per bot.** As of 2026-06-10: **crypto = ENFORCING**, forex = shadow, stock = endpoint not deployed (both no-ops — no flagged buckets). When on, the bot skips signals whose `(strategy, market_regime)` bucket the daily auto-disable scanner flagged as statistically losing (`strategy_kill_switches`: n≥30, 95% CI upper < 0). Fail-open (a DB error never blocks); anti-churning `canTrade()` is unaffected. OOS evidence: `services/signals/backtest/kill-switch-oos.js` + EDGE_FINDINGS.md. Verify per bot via `/api/health/detailed → enforceKillSwitches`, and `GET /api/kill-switches → mode` (shadow|enforcing). **Currently only the `crypto/momentum/MEAN_REVERTING` bucket is flagged**, so turning it on mainly gates crypto momentum while in that regime; flags auto-expire in 7 days and re-evaluate daily.
 
 **Infrastructure:**
 - `DATABASE_URL` — PostgreSQL connection string
