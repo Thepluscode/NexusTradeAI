@@ -12,109 +12,29 @@ const { requireApiSecret, requireJwt, requireJwtOrApiSecret, getEncryptionKey, e
 const { buildOpsStatus } = require('./shared/ops-status');
 const { buildAuditEvent } = require('./shared/live-safety');
 const { createUserCredentialStore } = require('./userCredentialStore');
-// Signal modules — try local signal-analytics (ships with deploy), fall back to no-op
-let createSignalEndpoints;
-try { createSignalEndpoints = require('./signal-analytics').createSignalEndpoints; } catch (_) { createSignalEndpoints = () => {}; }
-let BOT_COMPONENTS = { stock: { components: ['momentum','orderFlow','displacement','volumeProfile','fvg','volumeRatio','mtfConfluence'] } };
-let sharedCommitteeScore; // Unified committee scorer from services/signals/committee-scorer.js
-let qualifyEntry = () => ({ qualified: true, reason: 'no-qualifier', ev: 0, allocationFactor: 1.0 });
-let calibrateConfidence = (raw) => raw;
-let fitPlattScaling = () => null;
-let computeCorrelationGuard = () => ({ blocked: false });
-let computePortfolioHeat = () => ({ heat: 0, canOpen: true });
-let computeEquityCurveMultiplier = () => ({ multiplier: 1.0, aboveMA: true });
-let optimize = () => ({ improved: false });
-let evaluateStrategies = () => ({});
+// [RFC #46] Manifest-driven module loading. All shared/optional module
+// resolution (previously ~200 lines of try/require/stub chains here) lives in
+// stock-modules.manifest.js, loaded once at boot by shared/module-loader.js.
+// Resolution outcomes are unchanged — golden parity test:
+// shared/__tests__/module-loader.test.js — and observable via
+// moduleRegistry.report(), exposed as `sharedModules` on /api/health/detailed.
+const { loadModules } = require('./shared/module-loader');
+const moduleRegistry = loadModules(require('./stock-modules.manifest'), { baseDir: __dirname });
+let {
+    createSignalEndpoints, BOT_COMPONENTS, sharedCommitteeScore, qualifyEntry,
+    calibrateConfidence, fitPlattScaling,
+    computeCorrelationGuard, computePortfolioHeat, computeEquityCurveMultiplier,
+    optimize, evaluateStrategies,
+    checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth,
+    getPnlSummary, createKillSwitchGate,
+    summarizeRegistry, operationalStatus, listEngineCredentials,
+    sharedSignals, sharedIndicators, sharedRegimeDetector,
+    portfolioIntelligence, eventCalendar,
+    crossAssetModule, microstructureModule, liquiditySweepModule,
+    initSignalSchema, vwapReversalStrategy, MonteCarloSizer,
+} = moduleRegistry.exports;
 let lastStrategyPerf = {}; // [v14.1] Stores latest evaluateStrategies() output for INACTIVE enforcement
-let checkScanHealth = (lastScanAt, intervalMs) => {
-    const elapsed = Date.now() - (lastScanAt || 0);
-    return { healthy: elapsed < intervalMs * 3, lastScanMs: elapsed, threshold: intervalMs * 3 };
-};
-let checkErrorRate = (errors) => {
-    const recent = (errors || []).filter(e => Date.now() - e.timestamp < 300000);
-    return { healthy: recent.length < 10, recentErrors: recent.length, window: '5m' };
-};
-let checkTradingHealth = (opts) => {
-    return { healthy: true, positions: opts?.positionCount || 0, tradesToday: opts?.tradesToday || 0 };
-};
-let checkMemoryHealth = () => {
-    const mem = process.memoryUsage();
-    const heapMB = Math.round(mem.heapUsed / 1024 / 1024);
-    return { healthy: heapMB < 512, heapUsedMB: heapMB, rss: Math.round(mem.rss / 1024 / 1024) };
-};
-let aggregateHealth = (checks) => {
-    const allHealthy = Object.values(checks).every(c => c.healthy !== false);
-    return { status: allHealthy ? 'ok' : 'degraded', checks, timestamp: new Date().toISOString() };
-};
-let getPnlSummary = async () => ({ available: false, error: 'health-pnl module not loaded', pnlToday: 0, pnlTotal: 0, tradesToday: 0, tradesTotal: 0, winnersTotal: 0, losersTotal: 0, winRatePct: null, openPositions: 0 });
-try {
-  ({ createSignalEndpoints } = require('../../services/signals/api-handlers'));
-  ({ BOT_COMPONENTS, computeCommitteeScore: sharedCommitteeScore } = require('../../services/signals/committee-scorer'));
-  ({ qualifyEntry } = require('../../services/signals/entry-qualifier'));
-  ({ calibrateConfidence, fitPlattScaling } = require('../../services/signals/confidence-calibrator'));
-  ({ computeCorrelationGuard, computePortfolioHeat, computeEquityCurveMultiplier } = require('../../services/signals/exit-manager'));
-  ({ optimize, evaluateStrategies } = require('../../services/signals/auto-optimizer'));
-} catch (e) {
-  console.log('[INIT] Signal modules not available — trying local fallbacks');
-  // [v17.1] On Railway, auto-optimizer ships alongside bot.js
-  try { ({ optimize, evaluateStrategies } = require('./auto-optimizer')); console.log('[INIT] auto-optimizer loaded from local'); } catch (_) {}
-}
-
-// Health modules — load local-first. Railway serves each bot from deploy/<bot>/ where
-// these are synced into ./signals/; the shared block above only resolves
-// ../../services/signals/ in dev. Mirrors how sharedSignals/sharedIndicators load on
-// Railway — this is what makes /health and /api/health/detailed return real data in prod.
-try {
-  ({ checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth } = require('./signals/health-monitor'));
-} catch (_) {
-  try { ({ checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth } = require('../../services/signals/health-monitor')); }
-  catch (e) { console.log(`[INIT] health-monitor unavailable — health checks stubbed: ${e.message}`); }
-}
-try {
-  ({ getPnlSummary } = require('./signals/health-pnl'));
-} catch (_) {
-  try { ({ getPnlSummary } = require('../../services/signals/health-pnl')); }
-  catch (e) { console.log(`[INIT] health-pnl unavailable — /api/health/detailed P&L disabled: ${e.message}`); }
-}
-
-// Kill-switch enforcement (opt-in via ENFORCE_KILL_SWITCHES). Local-first like the health
-// modules. Fallback no-op gate never blocks, so a load failure can't halt trading.
-let createKillSwitchGate = () => ({ isKilled: async () => null, refresh: async () => {} });
 let _killSwitchGate = null;
-try {
-  ({ createKillSwitchGate } = require('./signals/kill-switch'));
-} catch (_) {
-  try { ({ createKillSwitchGate } = require('../../services/signals/kill-switch')); }
-  catch (e) { console.log(`[INIT] kill-switch module unavailable — enforcement disabled: ${e.message}`); }
-}
-
-// Per-user engine registry summary for /api/health/detailed (real trading is per-user, not the
-// global env-cred engine). Local-first like the other shared modules; safe no-op fallback.
-let summarizeRegistry = () => ({ total: 0, running: 0, validCreds: 0, demo: 0, openPositions: 0, lastScanAt: null, lastScanAgeSec: null });
-let operationalStatus = () => 'unknown';
-let listEngineCredentials = () => [];
-try {
-  ({ summarizeRegistry, operationalStatus, listEngineCredentials } = require('./signals/engine-registry-summary'));
-} catch (_) {
-  try { ({ summarizeRegistry, operationalStatus, listEngineCredentials } = require('../../services/signals/engine-registry-summary')); }
-  catch (e) { console.log(`[INIT] engine-registry-summary unavailable: ${e.message}`); }
-}
-
-// Signal schema initializer — creates historical_bars_cache, backtest_results,
-// shadow_signals, strategy_enabled tables. Idempotent.
-let initSignalSchema;
-try {
-  ({ initSignalSchema } = require('../../services/signals/schema'));
-} catch (e) {
-  console.log('[INIT] signals/schema not available — signal tables will not be created');
-}
-// VWAP Reversal strategy — mean-reversion for below-VWAP stocks
-let vwapReversalStrategy;
-try {
-  vwapReversalStrategy = require('../../services/signals/strategies/stock-vwap-reversal');
-} catch (e) {
-  console.log('[INIT] stock-vwap-reversal strategy not available');
-}
 
 // [v23.1] Strategy registry — load all strategy modules for shadow-mode comparison
 // Try local path first (shipped with deploy by CI), fall back to services/ for dev
@@ -134,109 +54,9 @@ try {
 } catch (e) {
   console.log(`[INIT] strategy-registry not available: ${e.message}`);
 }
-// Shared signal functions (compat wrappers preserve old interface)
-let sharedSignals;
-try {
-    sharedSignals = require('./signals/compat');
-    console.log('[INIT] sharedSignals loaded from ./signals/compat');
-} catch (e) {
-    try { sharedSignals = require('../../services/signals/compat');
-        console.log('[INIT] sharedSignals loaded from ../../services/signals/compat');
-    } catch (_) {
-        console.log('[INIT] sharedSignals NOT available — order flow/displacement/volume-profile gates disabled');
-        sharedSignals = null;
-    }
-}
-// Shared indicator calculations — delegate to centralized module, inline fallback for Railway
-let sharedIndicators;
-try {
-    sharedIndicators = require('./signals/indicators');
-} catch (e) {
-    try { sharedIndicators = require('../../services/signals/indicators'); } catch (_) {
-        sharedIndicators = null;
-    }
-}
-// [v24.3] 4-state regime detector — replaces inline 3-bucket ATR-only detector
-let sharedRegimeDetector;
-try {
-    sharedRegimeDetector = require('./signals/regime-detector');
-} catch (e) {
-    try { sharedRegimeDetector = require('../../services/signals/regime-detector'); } catch (_) {
-        sharedRegimeDetector = null;
-    }
-}
-if (sharedRegimeDetector) console.log('[INIT] 4-state regime detector loaded');
-
-// [v24.8] Portfolio intelligence — cross-bot correlation + equity curve sizing
-let portfolioIntelligence;
-try {
-    portfolioIntelligence = require('./signals/portfolio-intelligence');
-} catch (e) {
-    try { portfolioIntelligence = require('../../services/signals/portfolio-intelligence'); } catch (_) {
-        portfolioIntelligence = null;
-    }
-}
-if (portfolioIntelligence) console.log('[INIT] Portfolio intelligence loaded');
-
-// [v24.7] Economic event calendar — pause around FOMC/NFP/CPI
-let eventCalendar;
-try {
-    eventCalendar = require('./signals/event-calendar');
-} catch (e) {
-    try { eventCalendar = require('../../services/signals/event-calendar'); } catch (_) {
-        eventCalendar = null;
-    }
-}
-if (eventCalendar) console.log('[INIT] Economic event calendar loaded');
-
-// [v24.12] Cross-asset, microstructure, liquidity sweep — Phase 3 alpha modules
-let crossAssetModule, microstructureModule, liquiditySweepModule;
-try {
-    crossAssetModule = require('./signals/cross-asset');
-} catch (e) {
-    try { crossAssetModule = require('../../services/signals/cross-asset'); } catch (_) { crossAssetModule = null; }
-}
-try {
-    microstructureModule = require('./signals/microstructure');
-} catch (e) {
-    try { microstructureModule = require('../../services/signals/microstructure'); } catch (_) { microstructureModule = null; }
-}
-try {
-    liquiditySweepModule = require('./signals/liquidity-sweep');
-} catch (e) {
-    try { liquiditySweepModule = require('../../services/signals/liquidity-sweep'); } catch (_) { liquiditySweepModule = null; }
-}
-if (crossAssetModule) console.log('[INIT] Cross-asset signal module loaded');
-if (microstructureModule) console.log('[INIT] Microstructure (VPIN) module loaded');
-if (liquiditySweepModule) console.log('[INIT] Liquidity sweep module loaded');
 
 // Load .env from project root (Railway injects env vars directly, so dotenv is a no-op there)
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
-
-// ===== MONTE CARLO POSITION SIZER =====
-// Try external module, fallback to inline Kelly-based sizer for Railway deploy
-let MonteCarloSizer;
-try {
-    MonteCarloSizer = require('../../services/trading/monte-carlo-sizer');
-} catch (_) {
-    MonteCarloSizer = class MonteCarloSizer {
-        constructor() { this.tradeReturns = []; this.lastOptimization = null; }
-        addTrade(r) { this.tradeReturns.push(r); if (this.tradeReturns.length > 500) this.tradeReturns.shift(); }
-        optimize() {
-            if (this.tradeReturns.length < 20) return { optimalFraction: 0.02, halfKelly: 0.01, medianReturn: 0, confidence: 'low' };
-            const wins = this.tradeReturns.filter(r => r > 0);
-            const losses = this.tradeReturns.filter(r => r <= 0);
-            const winRate = wins.length / this.tradeReturns.length;
-            const avgWin = wins.length ? wins.reduce((a, b) => a + b, 0) / wins.length : 0;
-            const avgLoss = losses.length ? Math.abs(losses.reduce((a, b) => a + b, 0) / losses.length) : 1;
-            const kelly = avgLoss > 0 ? Math.max(0, (winRate * avgWin - (1 - winRate) * avgLoss) / avgWin) : 0.01;
-            const halfKelly = Math.min(Math.max(kelly / 2, 0.005), 0.125);
-            this.lastOptimization = { optimalFraction: kelly, halfKelly, medianReturn: 0, confidence: this.tradeReturns.length >= 50 ? 'high' : 'medium' };
-            return this.lastOptimization;
-        }
-    };
-    console.log('[MONTE-CARLO] Using inline fallback sizer (external module not available)');
-}
 const monteCarloSizer = new MonteCarloSizer();
 
 // ===== PRODUCTION INFRASTRUCTURE =====
@@ -5555,6 +5375,9 @@ app.get('/api/health/detailed', async (req, res) => {
             isRunning: botRunning,
             isPaused: botPaused,
             enforceKillSwitches: process.env.ENFORCE_KILL_SWITCHES === 'true',
+            // [RFC #46] Which shared modules resolved real vs stub at boot (Rule 8 —
+            // the 2026-06-04 silent-stub class becomes an observable field).
+            sharedModules: moduleRegistry.report(),
             operationalStatus: opStatus,
             userEngines,
             pnl: {

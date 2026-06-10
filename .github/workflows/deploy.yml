@@ -185,8 +185,10 @@ jobs:
             done
           done
 
-          # [RFC #46] Per-bot module manifests (crypto migrated first; forex/stock pending)
+          # [RFC #46] Per-bot module manifests
           cp clients/bot-dashboard/crypto-modules.manifest.js deploy/crypto-bot/crypto-modules.manifest.js
+          cp clients/bot-dashboard/forex-modules.manifest.js deploy/forex-bot/forex-modules.manifest.js
+          cp clients/bot-dashboard/stock-modules.manifest.js deploy/stock-bot/stock-modules.manifest.js
 
           echo "Sync complete"
           wc -l deploy/stock-bot/unified-trading-bot.js deploy/forex-bot/unified-forex-bot.js deploy/crypto-bot/unified-crypto-bot.js

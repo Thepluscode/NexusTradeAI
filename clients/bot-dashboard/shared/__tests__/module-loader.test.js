@@ -20,6 +20,9 @@ const { loadModules } = require('../module-loader');
 const REPO_ROOT = path.resolve(__dirname, '../../../..');
 const DEPLOY_YML = path.join(REPO_ROOT, '.github/workflows/deploy.yml');
 const cryptoManifest = require('../../crypto-modules.manifest');
+const forexManifest = require('../../forex-modules.manifest');
+const stockManifest = require('../../stock-modules.manifest');
+const ALL_MANIFESTS = [cryptoManifest, forexManifest, stockManifest];
 
 function notFound(p) {
     const e = new Error(`Cannot find module '${p}'`);
@@ -265,16 +268,78 @@ describe('golden parity: crypto manifest vs original inline chains', () => {
     });
 });
 
+describe('golden parity: forex + stock manifests (prod stub sets, dev clean)', () => {
+    const { sigList } = parseDeploySync();
+    const sentinel = (p) => ({ __sentinel: p });
+    const deployRequire = (p) => {
+        if (p === './signal-analytics' || p === './auto-optimizer') return sentinel(p);
+        const m = p.match(/^\.\/signals\/([\w-]+)$/);
+        if (m && sigList.includes(`${m[1]}.js`)) return sentinel(p);
+        throw notFound(p);
+    };
+    const devRequire = (p) => {
+        if (p === './signal-analytics' || p.startsWith('../../services/')) return sentinel(p);
+        throw notFound(p);
+    };
+
+    const PROD_STUBS = {
+        forex: ['api-handlers', 'auto-optimizer', 'committee-scorer', 'confidence-calibrator',
+            'entry-qualifier', 'exit-manager', 'monte-carlo-sizer'],
+        // Stock adds its services-only extras, undefined-in-prod as in the original.
+        stock: ['api-handlers', 'auto-optimizer', 'committee-scorer', 'confidence-calibrator',
+            'entry-qualifier', 'exit-manager', 'monte-carlo-sizer',
+            'signal-schema', 'vwap-reversal-strategy'],
+    };
+
+    for (const manifest of [forexManifest, stockManifest]) {
+        const bot = manifest.bot;
+        test(`${bot} PROD layout: deliberate stub set exact, rescue real, locals real`, () => {
+            const reg = loadModules(manifest, { baseDir: '/app', log: noLog, requireFn: deployRequire });
+            const r = reg.report();
+            expect([...r.stubsActive].sort()).toEqual([...PROD_STUBS[bot]].sort());
+            const byName = Object.fromEntries(r.entries.map(e => [e.name, e]));
+            expect(byName['auto-optimizer-local']).toMatchObject({ status: 'real', source: './auto-optimizer' });
+            expect(byName['kill-switch'].status).toBe('real');
+            expect(byName['health-monitor'].status).toBe('real');
+            expect(reg.exports.qualifyEntry()).toEqual({ qualified: true, reason: 'no-qualifier', ev: 0, allocationFactor: 1.0 });
+        });
+        test(`${bot} DEV layout: nothing stubbed`, () => {
+            const reg = loadModules(manifest, { baseDir: '/repo/clients/bot-dashboard', log: noLog, requireFn: devRequire });
+            expect(reg.report().stubsActive).toEqual([]);
+        });
+        test(`${bot} REAL dev filesystem: transcription loads the real modules`, () => {
+            const reg = loadModules(manifest, {
+                baseDir: path.resolve(__dirname, '../..'), log: noLog, overrides: {},
+            });
+            expect(reg.report().stubsActive).toEqual([]);
+            expect(typeof reg.exports.qualifyEntry).toBe('function');
+            expect(typeof reg.exports.MonteCarloSizer).toBe('function');
+        });
+    }
+
+    test('stock functional health stubs behave like the original local implementations', () => {
+        const reg = loadModules(stockManifest, {
+            baseDir: '/x', log: noLog, requireFn: (p) => { throw notFound(p); },
+        });
+        const scan = reg.exports.checkScanHealth(Date.now() - 1000, 60000);
+        expect(scan).toMatchObject({ healthy: true, threshold: 180000 });
+        expect(reg.exports.checkMemoryHealth()).toHaveProperty('heapUsedMB');
+        expect(reg.exports.aggregateHealth({ a: { healthy: false } }).status).toBe('degraded');
+    });
+});
+
 describe('manifest ↔ deploy.yml contract', () => {
     const { sigList, yml } = parseDeploySync();
 
-    test('every ./signals/ candidate in the crypto manifest is in the deploy.yml sync list', () => {
+    test('every ./signals/ candidate in every manifest is in the deploy.yml sync list', () => {
         const missing = [];
-        for (const group of cryptoManifest.groups) {
-            for (const entry of [...group.entries, ...(group.onChainFail || [])]) {
-                for (const p of entry.from) {
-                    const m = p.match(/^\.\/signals\/([\w-]+)$/);
-                    if (m && !sigList.includes(`${m[1]}.js`)) missing.push(p);
+        for (const manifest of ALL_MANIFESTS) {
+            for (const group of manifest.groups) {
+                for (const entry of [...group.entries, ...(group.onChainFail || [])]) {
+                    for (const p of entry.from) {
+                        const m = p.match(/^\.\/signals\/([\w-]+)$/);
+                        if (m && !sigList.includes(`${m[1]}.js`)) missing.push(`${manifest.bot}:${p}`);
+                    }
                 }
             }
         }
@@ -282,9 +347,11 @@ describe('manifest ↔ deploy.yml contract', () => {
         expect(missing).toEqual([]);
     });
 
-    test('deploy.yml syncs the loader and the crypto manifest into deploy dirs', () => {
+    test('deploy.yml syncs the loader and all three manifests into deploy dirs', () => {
         expect(yml).toContain('shared/module-loader.js');
         expect(yml).toContain('crypto-modules.manifest.js');
+        expect(yml).toContain('forex-modules.manifest.js');
+        expect(yml).toContain('stock-modules.manifest.js');
     });
 
     test('non-signals local candidates are synced by deploy.yml', () => {
