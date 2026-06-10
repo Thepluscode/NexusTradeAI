@@ -86,6 +86,10 @@ services/websocket/
 
 # Exceptions — active files inside otherwise-ignored directories
 !services/trading/popular-stocks-list.js
+# Load-bearing source used by all bots, tested by tests/unit/monte-carlo-sizer.test.js.
+# Discovered via the RFC #46 parity test: CI checkouts silently lacked this file,
+# so dev-from-clone ran the inline Kelly stub while only this machine had the real module.
+!services/trading/monte-carlo-sizer.js
 !services/trading/data/
 !services/trading/data/**
 !services/risk-management/
