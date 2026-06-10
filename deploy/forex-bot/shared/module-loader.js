@@ -91,7 +91,7 @@ function loadModules(manifest, opts) {
     }
 
     const log = opts.log || console.log;
-    const requireFn = opts.requireFn || createRequire(path.join(opts.baseDir, '__module_loader__.js'));
+    const requireFn = opts.requireFn || createRequire(path.join(path.resolve(opts.baseDir), '__module_loader__.js'));
     const bindings = {};
     const entryReports = [];
 
