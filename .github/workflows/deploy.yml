@@ -153,6 +153,8 @@ jobs:
             cp clients/bot-dashboard/shared/auth.js "$BOT_DIR/shared/auth.js"
             cp clients/bot-dashboard/shared/ops-status.js "$BOT_DIR/shared/ops-status.js"
             cp clients/bot-dashboard/shared/live-safety.js "$BOT_DIR/shared/live-safety.js"
+            # [RFC #46] Manifest-driven module loader (loader for all bots; manifests per-bot below)
+            cp clients/bot-dashboard/shared/module-loader.js "$BOT_DIR/shared/module-loader.js"
 
             # Shared signals (source of truth: services/signals/)
             mkdir -p "$BOT_DIR/signals"
@@ -182,6 +184,9 @@ jobs:
               cp "services/signals/strategies/$STRAT" "$BOT_DIR/signals/strategies/$STRAT" 2>/dev/null || true
             done
           done
+
+          # [RFC #46] Per-bot module manifests (crypto migrated first; forex/stock pending)
+          cp clients/bot-dashboard/crypto-modules.manifest.js deploy/crypto-bot/crypto-modules.manifest.js
 
           echo "Sync complete"
           wc -l deploy/stock-bot/unified-trading-bot.js deploy/forex-bot/unified-forex-bot.js deploy/crypto-bot/unified-crypto-bot.js
