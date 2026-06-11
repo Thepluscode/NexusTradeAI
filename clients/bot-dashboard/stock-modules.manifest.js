@@ -138,6 +138,13 @@ module.exports = {
                     note: 'fallback gate never blocks — a load failure cannot halt trading (Rule 9)',
                 },
                 {
+                    name: 'order-intent',
+                    from: ['./signals/order-intent', '../../services/signals/order-intent'],
+                    picks: { computeOrderIntentId: 'computeOrderIntentId' },
+                    stubs: { computeOrderIntentId: () => null },
+                    note: 'idempotency keys for broker orders; stub returns null and call sites omit the field (Rule 9)',
+                },
+                {
                     name: 'engine-registry-summary',
                     from: ['./signals/engine-registry-summary', '../../services/signals/engine-registry-summary'],
                     picks: { summarizeRegistry: 'summarizeRegistry', operationalStatus: 'operationalStatus', listEngineCredentials: 'listEngineCredentials' },

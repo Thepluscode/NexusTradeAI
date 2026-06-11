@@ -159,7 +159,7 @@ jobs:
             # Shared signals (source of truth: services/signals/)
             mkdir -p "$BOT_DIR/signals"
             for SIG in compat.js indicators.js api-handlers.js committee-scorer.js exit-manager.js \
-                       health-monitor.js health-pnl.js kill-switch.js engine-registry-summary.js auto-optimizer.js stop-manager.js index.js normalizers.js \
+                       health-monitor.js health-pnl.js kill-switch.js engine-registry-summary.js order-intent.js auto-optimizer.js stop-manager.js index.js normalizers.js \
                        momentum.js trend.js order-flow.js volume-profile.js volume-ratio.js \
                        displacement.js fvg-detector.js macd.js regime-detector.js \
                        entry-qualifier.js confidence-calibrator.js cost-model.js multi-timeframe.js \
