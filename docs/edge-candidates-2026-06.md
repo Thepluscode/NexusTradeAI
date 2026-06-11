@@ -288,6 +288,34 @@ dilution, expiry compression). Pricing harness: extract subscription price +
 expiry from prospectuses, join to market prices at/after expiry. ~A day of
 work, now justified.
 
+### Candidate E pricing result: **FAIL as measured — with a measurement caveat stated plainly** (2026-06-11)
+
+`tools/rights_offering_pricing.py` → `reports/rights_offering_pricing_20260611.json`.
+
+**The honest headline is a coverage failure:** of 163 listed entities, regex
+extraction parsed usable terms (subscription price + expiry + in-document
+oversubscription clause) for only **10 (6% coverage; 147 terms_unparsed)** —
+rights-offering terms live in exhibit structures cheap text regexes don't
+reach. The completion bar therefore measured the parser, not the offerings.
+
+**On the measurable slice, the prior was right:** median net discount
+**−0.99%** (vs the frozen ≥3% bar), only 3/10 positive, range −14.6% (OPP, a
+closed-end fund — a class known to punish non-participants) to +9.2% (SEG).
+Subscription prices are set near market and the "discount" is gone or negative
+by expiry — the TERP-illusion pattern, exactly where this class was expected
+to die.
+
+**Verdict: FAIL at the frozen bars on available evidence.** n=10 is too thin
+to call decisive falsification, and is recorded as such — but the burden now
+sits on any reopening: it requires a term-extraction method achieving ≥50%
+coverage (structured exhibit parsing or paid corporate-actions data) run
+against the SAME frozen bars. No bar moves; no third cheap-regex pass after
+seeing a negative median (that would be instrument-hunting).
+
+**Register v2 outcome:** the event-family expansion ends with **Candidate A as
+the only harvestable class**. D structurally absent, E fails-as-measured with
+the burden parked, F (playbook calibration on A's own data) still queued.
+
 ## Candidate F — tender deadline-spread persistence (bars frozen 2026-06-11, before any measurement)
 
 **What it really is:** not a standalone edge — a playbook parameter for

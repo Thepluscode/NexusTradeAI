@@ -1,0 +1,251 @@
+{
+ "asof": "2026-06-11",
+ "population": 163,
+ "measured": 10,
+ "skips": {
+  "terms_unparsed": 147,
+  "offering_still_open": 3,
+  "unit_or_preferred_class": 2,
+  "no_price_at_expiry": 1
+ },
+ "median_net_discount_pct": -0.99,
+ "positive_net_share": 0.3,
+ "completion_proxy": 0.062,
+ "friction_pct": 1.0,
+ "bars": {
+  "median_net_discount_pct": 3.0,
+  "completion_rate": 0.7
+ },
+ "verdict": {
+  "median_net_discount": false,
+  "completion": false,
+  "PASS": false
+ },
+ "rows": [
+  {
+   "cik": "1487610",
+   "half": "2026H1",
+   "name": "Neuberger High Yield Strategies Fund Inc.  (NHS)  (CIK 0001487610)",
+   "first_date": "2026-03-23",
+   "filings": 30,
+   "forms": {
+    "POS EX": 20,
+    "424B2": 10
+   },
+   "ticker": "NHS",
+   "form": "424B2",
+   "adsh": "0001213900-26-032989",
+   "sub_price": 6.84,
+   "per": "share",
+   "expiry_raw": "April 15, 2026",
+   "preferred": false,
+   "expiry": "2026-04-15",
+   "close_at_expiry": 6.510000228881836,
+   "gross_discount_pct": -4.82,
+   "net_discount_pct": -5.82
+  },
+  {
+   "cik": "887396",
+   "half": "2026H1",
+   "name": "EMPIRE PETROLEUM CORP  (EP)  (CIK 0000887396)",
+   "first_date": "2026-02-02",
+   "filings": 4,
+   "forms": {
+    "8-K": 4
+   },
+   "ticker": "EP",
+   "form": "424B5",
+   "adsh": "0001072613-26-000069",
+   "sub_price": 2.99,
+   "per": "share",
+   "expiry_raw": "February 27, 2026",
+   "preferred": false,
+   "expiry": "2026-02-27",
+   "close_at_expiry": 3.299999952316284,
+   "gross_discount_pct": 10.37,
+   "net_discount_pct": 9.37
+  },
+  {
+   "cik": "1578987",
+   "half": "2026H1",
+   "name": "ArrowMark Financial Corp.  (BANX, BANXR)  (CIK 0001578987)",
+   "first_date": "2026-01-13",
+   "filings": 42,
+   "forms": {
+    "497AD": 11,
+    "8-K": 21,
+    "424B2": 10
+   },
+   "ticker": "BANX",
+   "form": "424B2",
+   "adsh": "0001999371-26-001463",
+   "sub_price": 19.93,
+   "per": "share",
+   "expiry_raw": "February 18, 2026",
+   "preferred": false,
+   "expiry": "2026-02-18",
+   "close_at_expiry": 19.829999923706055,
+   "gross_discount_pct": -0.5,
+   "net_discount_pct": -1.5
+  },
+  {
+   "cik": "1400897",
+   "half": "2025H2",
+   "name": "NXG Cushing Midstream Energy Fund  (SRV, SRV-RW)  (CIK 0001400897)",
+   "first_date": "2025-11-17",
+   "filings": 40,
+   "forms": {
+    "8-K": 30,
+    "424B2": 10
+   },
+   "ticker": "SRV",
+   "form": "424B2",
+   "adsh": "0001398344-25-021029",
+   "sub_price": 40.24,
+   "per": "share",
+   "expiry_raw": "December 11, 2025",
+   "preferred": false,
+   "expiry": "2025-12-11",
+   "close_at_expiry": 39.75,
+   "gross_discount_pct": -1.22,
+   "net_discount_pct": -2.22
+  },
+  {
+   "cik": "1452477",
+   "half": "2025H2",
+   "name": "Seven Hills Realty Trust  (SEVN)  (CIK 0001452477)",
+   "first_date": "2025-10-30",
+   "filings": 75,
+   "forms": {
+    "8-K": 55,
+    "8-A12B": 10,
+    "424B5": 10
+   },
+   "ticker": "SEVN",
+   "form": "424B5",
+   "adsh": "0001104659-25-104056",
+   "sub_price": 8.65,
+   "per": "share",
+   "expiry_raw": "December 4, 2025",
+   "preferred": false,
+   "expiry": "2025-12-04",
+   "close_at_expiry": 8.720000267028809,
+   "gross_discount_pct": 0.81,
+   "net_discount_pct": -0.19
+  },
+  {
+   "cik": "1678130",
+   "half": "2024H2",
+   "name": "RiverNorth/DoubleLine Strategic Opportunity Fund, Inc.  (OPP, OPP-PA, OPP-PB)  (CIK 0001678130)",
+   "first_date": "2024-10-31",
+   "filings": 25,
+   "forms": {
+    "POS EX": 15,
+    "424B2": 10
+   },
+   "ticker": "OPP",
+   "form": "424B2",
+   "adsh": "0001398344-24-019690",
+   "sub_price": 10.0,
+   "per": "share",
+   "expiry_raw": "November 5, 2024",
+   "preferred": false,
+   "expiry": "2024-11-05",
+   "close_at_expiry": 8.640000343322754,
+   "gross_discount_pct": -13.6,
+   "net_discount_pct": -14.6
+  },
+  {
+   "cik": "1400897",
+   "half": "2024H2",
+   "name": "NXG Cushing Midstream Energy Fund  (SRV)  (CIK 0001400897)",
+   "first_date": "2024-10-10",
+   "filings": 48,
+   "forms": {
+    "8-K": 30,
+    "424B2": 10,
+    "497AD": 8
+   },
+   "ticker": "SRV",
+   "form": "424B2",
+   "adsh": "0001398344-24-019290",
+   "sub_price": 42.78,
+   "per": "share",
+   "expiry_raw": "November 14, 2024",
+   "preferred": false,
+   "expiry": "2024-11-14",
+   "close_at_expiry": 42.83000183105469,
+   "gross_discount_pct": 0.12,
+   "net_discount_pct": -0.88
+  },
+  {
+   "cik": "887396",
+   "half": "2024H2",
+   "name": "EMPIRE PETROLEUM CORP  (EP)  (CIK 0000887396)",
+   "first_date": "2024-10-01",
+   "filings": 5,
+   "forms": {
+    "8-K": 5
+   },
+   "ticker": "EP",
+   "form": "424B5",
+   "adsh": "0001072613-24-000741",
+   "sub_price": 5.05,
+   "per": "share",
+   "expiry_raw": "October 16, 2024",
+   "preferred": false,
+   "expiry": "2024-10-16",
+   "close_at_expiry": 5.320000171661377,
+   "gross_discount_pct": 5.35,
+   "net_discount_pct": 4.35
+  },
+  {
+   "cik": "1219120",
+   "half": "2024H2",
+   "name": "ADVENT CONVERTIBLE & INCOME FUND  (AVK, AVK-RI)  (CIK 0001219120)",
+   "first_date": "2024-07-23",
+   "filings": 68,
+   "forms": {
+    "N-2": 10,
+    "8-K": 40,
+    "424B2": 10,
+    "497AD": 8
+   },
+   "ticker": "AVK",
+   "form": "424B2",
+   "adsh": "0001821268-24-000276",
+   "sub_price": 11.42,
+   "per": "share",
+   "expiry_raw": "October 17, 2024",
+   "preferred": false,
+   "expiry": "2024-10-17",
+   "close_at_expiry": 11.40999984741211,
+   "gross_discount_pct": -0.09,
+   "net_discount_pct": -1.09
+  },
+  {
+   "cik": "2009684",
+   "half": "2024H2",
+   "name": "Seaport Entertainment Group Inc.  (SEG)  (CIK 0002009684)",
+   "first_date": "2024-07-19",
+   "filings": 137,
+   "forms": {
+    "S-1/A": 88,
+    "8-K": 32,
+    "424B3": 10,
+    "10-12B/A": 7
+   },
+   "ticker": "SEG",
+   "form": "S-1/A",
+   "adsh": "0001628280-24-035286",
+   "sub_price": 25.0,
+   "per": "share",
+   "expiry_raw": "October 25, 2024",
+   "preferred": false,
+   "expiry": "2024-10-25",
+   "close_at_expiry": 27.549999237060547,
+   "gross_discount_pct": 10.2,
+   "net_discount_pct": 9.2
+  }
+ ]
+}
