@@ -54,6 +54,9 @@ The playbook, every time:
    charge $0–38 for this — factor it against the expected ~$50–400.
 4. Cash arrives shortly after the offer expires. Dutch auctions pay at least
    the low end shown (the scout prices conservatively at the minimum).
+5. **Timing (Candidate F calibration, 2026-06-11, n=7):** spreads historically
+   persisted into expiry week (median +3.7% at T−5 days), so acting within a
+   few days of an alert is usually fine — re-check the spread at order time.
 
 ## What it deliberately is NOT
 

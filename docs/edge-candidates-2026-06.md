@@ -336,3 +336,31 @@ gate cannot "fail" into a dead end — it calibrates the live playbook.
 
 **Refusals:** no per-event-size or per-exchange slicing; expiry dates from
 filings only (no hand-corrections after seeing spreads).
+
+### Candidate F result: **ACT-LATE OK** (2026-06-11) — small-n, stated plainly
+
+`tools/tender_spread_persistence.py` →
+`reports/tender_spread_persistence_20260611.json`. Of 73 fixed-price A-events,
+7 were cleanly measurable (filing-positive spread, parseable expiry, clean
+prices; 27 lost to unparsed expiry, 27 to the suspect/class filters the
+original gate lacked). On those 7: **median T−5 spread +3.69%** (bar ≥1.5%)
+and **71.4% still positive at T−5** (bar ≥60%).
+
+**Operational meaning (with n=7 humility):** the odd-lot spread is a
+proration-risk discount, and the discount persists into expiry week because
+the institutions it deters stay deterred — so acting within a few days of a
+scout alert historically still captured the edge. Playbook: act within the
+week, re-check the spread at order time. Confidence is weak at n=7; the scout
+accumulates new events that will sharpen this for free.
+
+---
+
+## Register v2 — CLOSED (2026-06-11)
+
+D dead (structural absence), E fail-as-measured (TERP-illusion on the
+measurable slice; reopening parked behind ≥50% extraction coverage), F
+calibrated ACT-LATE-OK. **Candidate A remains the family's only harvestable
+member**; the scout + playbook are its full operationalization. The data-moat
+archiver (market_snapshots, hourly) is the standing investment toward a
+future qualifying hypothesis. Same closing rule as v1: reopening any verdict
+requires evidence at the bar that produced it.

@@ -1,0 +1,78 @@
+{
+ "asof": "2026-06-11",
+ "candidates": 73,
+ "population_positive_at_filing": 7,
+ "skips": {
+  "class_warning": 1,
+  "no_expiry": 27,
+  "expiry_out_of_range": 3,
+  "insufficient_prices": 5,
+  "not_positive_at_filing": 3,
+  "suspect_spread": 27
+ },
+ "median_t5_spread_pct": 3.69,
+ "positive_share_at_t5": 0.714,
+ "bars": {
+  "median_t5_spread_pct": 1.5,
+  "positive_share_at_t5": 0.6
+ },
+ "verdict": "ACT-LATE OK",
+ "rows": [
+  {
+   "ticker": "PMCB",
+   "file_date": "2023-05-11",
+   "expiry": "2024-05-30",
+   "tender_price": 3.25,
+   "spread_filing_pct": 18.61,
+   "spread_t5_pct": 52.58
+  },
+  {
+   "ticker": "TNET",
+   "file_date": "2023-08-01",
+   "expiry": "2023-08-28",
+   "tender_price": 107.0,
+   "spread_filing_pct": 1.68,
+   "spread_t5_pct": 1.65
+  },
+  {
+   "ticker": "TBPH",
+   "file_date": "2022-09-28",
+   "expiry": "2022-11-10",
+   "tender_price": 10.5,
+   "spread_filing_pct": 4.79,
+   "spread_t5_pct": 5.74
+  },
+  {
+   "ticker": "GTIM",
+   "file_date": "2021-08-13",
+   "expiry": "2021-09-10",
+   "tender_price": 4.6,
+   "spread_filing_pct": 2.91,
+   "spread_t5_pct": -14.34
+  },
+  {
+   "ticker": "OPXS",
+   "file_date": "2022-08-18",
+   "expiry": "2022-09-15",
+   "tender_price": 2.75,
+   "spread_filing_pct": 37.5,
+   "spread_t5_pct": -1.08
+  },
+  {
+   "ticker": "MTBLY",
+   "file_date": "2025-09-03",
+   "expiry": "2025-09-30",
+   "tender_price": 3.0,
+   "spread_filing_pct": 45.28,
+   "spread_t5_pct": 5.04
+  },
+  {
+   "ticker": "SFES",
+   "file_date": "2021-09-02",
+   "expiry": "2021-10-01",
+   "tender_price": 9.0,
+   "spread_filing_pct": 14.21,
+   "spread_t5_pct": 3.69
+  }
+ ]
+}
