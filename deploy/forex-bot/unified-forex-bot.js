@@ -24,7 +24,7 @@ let {
     computeCorrelationGuard, computePortfolioHeat, computeEquityCurveMultiplier,
     autoOptimize, autoEvaluateStrategies, AUTO_PARAM_BOUNDS,
     checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth,
-    getPnlSummary, createKillSwitchGate,
+    getPnlSummary, createKillSwitchGate, computeOrderIntentId,
     summarizeRegistry, operationalStatus, listEngineCredentials,
     sharedSignals, sharedIndicators, edgeStats, sharedRegimeDetector,
     portfolioIntelligence, eventCalendar, MonteCarloSizer,
@@ -1394,10 +1394,14 @@ function getPricePrecision(instrument) {
 
 async function createOrder(instrument, units, stopLoss, takeProfit) {
     const precision = getPricePrecision(instrument);
+    // Idempotency key: OANDA rejects duplicate clientExtensions.id, blocking
+    // double-submission from races/restarts within the 10-min intent bucket.
+    const intentId = computeOrderIntentId({ bot: 'forex', action: 'entry', symbol: instrument, units, maxLen: 64 });
 
     const order = {
         order: {
             type: 'MARKET',
+            ...(intentId ? { clientExtensions: { id: intentId } } : {}),
             instrument,
             units: units.toString(),
             stopLossOnFill: { price: stopLoss.toFixed(precision) },
@@ -5497,7 +5501,8 @@ class UserForexEngine {
 
     async createOrder(instrument, units, stopLoss, takeProfit) {
         const precision = instrument.includes('JPY') ? 3 : 5;
-        const order = { order: { type: 'MARKET', instrument, units: units.toString(),
+        const intentId = computeOrderIntentId({ bot: 'forex', action: 'entry', symbol: instrument, units, maxLen: 64 });
+        const order = { order: { type: 'MARKET', ...(intentId ? { clientExtensions: { id: intentId } } : {}), instrument, units: units.toString(),
             stopLossOnFill: { price: stopLoss.toFixed(precision) },
             takeProfitOnFill: { price: takeProfit.toFixed(precision) }, timeInForce: 'FOK' }};
         return await this.oandaReq('post', `/v3/accounts/${this.oandaConfig.accountId}/orders`, order);

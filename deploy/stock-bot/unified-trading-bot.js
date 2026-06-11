@@ -26,7 +26,7 @@ let {
     computeCorrelationGuard, computePortfolioHeat, computeEquityCurveMultiplier,
     optimize, evaluateStrategies,
     checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth,
-    getPnlSummary, createKillSwitchGate,
+    getPnlSummary, createKillSwitchGate, computeOrderIntentId,
     summarizeRegistry, operationalStatus, listEngineCredentials,
     sharedSignals, sharedIndicators, sharedRegimeDetector,
     portfolioIntelligence, eventCalendar,
@@ -2676,8 +2676,10 @@ async function coverOrphanShorts(config, label = 'global') {
                 continue;
             }
             try {
+                const coverIntentId = computeOrderIntentId({ bot: 'stock', action: 'orphan-cover', symbol: p.symbol, side: 'buy', qty });
                 await axios.post(`${config.baseURL}/v2/orders`, {
-                    symbol: p.symbol, qty, side: 'buy', type: 'market', time_in_force: 'day'
+                    symbol: p.symbol, qty, side: 'buy', type: 'market', time_in_force: 'day',
+                    ...(coverIntentId ? { client_order_id: coverIntentId } : {})
                 }, {
                     headers: { 'APCA-API-KEY-ID': config.apiKey, 'APCA-API-SECRET-KEY': config.secretKey }
                 });
@@ -4562,12 +4564,14 @@ async function executeTrade(signal, strategy) {
         let orderResponse;
         const orderUrl = `${alpacaConfig.baseURL}/v2/orders`;
         try {
+            const entryIntentId = computeOrderIntentId({ bot: 'stock', action: 'entry', symbol: signal.symbol, side: 'buy', qty: shares });
             orderResponse = await axios.post(orderUrl, {
                 symbol: signal.symbol,
                 qty: shares,
                 side: 'buy',
                 type: 'market',
-                time_in_force: 'day'
+                time_in_force: 'day',
+                ...(entryIntentId ? { client_order_id: entryIntentId } : {})
             }, {
                 headers: {
                     'APCA-API-KEY-ID': alpacaConfig.apiKey,
@@ -4723,12 +4727,14 @@ async function closePosition(symbol, qty, reason = 'Manual') {
         // Crypto assets need 'gtc' time-in-force; stocks use 'day'
         const isCrypto = /USD$/.test(symbol) && symbol.length <= 8;
         const orderUrl = `${alpacaConfig.baseURL}/v2/orders`;
+        const closeIntentId = computeOrderIntentId({ bot: 'stock', action: 'close', symbol, side: 'sell', qty });
         await axios.post(orderUrl, {
             symbol,
             qty: parseFloat(qty),   // Alpaca requires a number, not a string
             side: 'sell',
             type: 'market',
-            time_in_force: isCrypto ? 'gtc' : 'day'
+            time_in_force: isCrypto ? 'gtc' : 'day',
+            ...(closeIntentId ? { client_order_id: closeIntentId } : {})
         }, {
             headers: {
                 'APCA-API-KEY-ID': alpacaConfig.apiKey,
@@ -6468,9 +6474,11 @@ class UserTradingEngine {
                 }
             }
             const isCrypto = /USD$/.test(symbol) && symbol.length <= 8;
+            const closeIntentId = computeOrderIntentId({ bot: 'stock', action: 'close', symbol, side: 'sell', qty });
             await axios.post(`${this.alpacaConfig.baseURL}/v2/orders`, {
                 symbol, qty: parseFloat(qty), side: 'sell', type: 'market',
-                time_in_force: isCrypto ? 'gtc' : 'day'
+                time_in_force: isCrypto ? 'gtc' : 'day',
+                ...(closeIntentId ? { client_order_id: closeIntentId } : {})
             }, {
                 headers: { 'APCA-API-KEY-ID': this.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': this.alpacaConfig.secretKey }
             });
@@ -6637,8 +6645,10 @@ class UserTradingEngine {
             const stopPrice  = (signal.atrStop  || effectiveEntry * (1 - eAtrStopPct)).toFixed(2);
             const targetPrice = (signal.atrTarget || effectiveEntry * (1 + eAtrTargetPct)).toFixed(2);
             if (signal.atrPct) console.log(`   [ATR Stops] [Engine ${this.userId}] atrPct=${(signal.atrPct*100).toFixed(2)}% | Stop: ${(eAtrStopPct*100).toFixed(2)}% ($${stopPrice}) | Target: ${(eAtrTargetPct*100).toFixed(2)}% ($${targetPrice})`);
+            const entryIntentId = computeOrderIntentId({ bot: 'stock', action: 'entry', symbol: signal.symbol, side: 'buy', qty: shares });
             const orderResponse = await axios.post(`${this.alpacaConfig.baseURL}/v2/orders`, {
-                symbol: signal.symbol, qty: shares, side: 'buy', type: 'market', time_in_force: 'day'
+                symbol: signal.symbol, qty: shares, side: 'buy', type: 'market', time_in_force: 'day',
+                ...(entryIntentId ? { client_order_id: entryIntentId } : {})
             }, {
                 headers: { 'APCA-API-KEY-ID': this.alpacaConfig.apiKey, 'APCA-API-SECRET-KEY': this.alpacaConfig.secretKey }
             });
