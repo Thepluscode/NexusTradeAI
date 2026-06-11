@@ -210,3 +210,53 @@ source (differentiated data, structural niche with non-trivial capacity, or
 non-retail execution) with its own pre-registered free kill-gate. Energy
 returns to the honest-evaluation harness as the product — which these three
 gates again demonstrated working as designed.
+
+---
+
+# Register v2 — event-family expansion (pre-registered 2026-06-11, before any data)
+
+Candidate A proved the *family*: corporate actions where ≤99-share size is
+structurally privileged. v2 gates the adjacent classes with the same
+discipline. Bars written before any query is run; FAIL is final at these bars;
+no re-slicing after results.
+
+## Candidate D — odd-lot provisions in THIRD-PARTY tenders & exchange offers (SC TO-T)
+
+**Edge source class:** capacity-constrained structural niche (same moat as A).
+Third-party/merger-related tenders are rarer than issuer self-tenders but
+typically larger and better-priced; odd-lot preference clauses appear in the
+same standard language.
+
+**Kill-gate ($0):** EDGAR FTS, trailing 5 years, forms **SC TO-T**, same
+method as Candidate A (`tools/oddlot_tender_gate.py` lineage, regexes from
+`services/tender-scout/tender_lib.py` incl. the share-class guard): census of
+filings with verified odd-lot priority language → tender price extraction →
+spread vs market at filing date → completion proxy.
+
+**Pre-registered PASS bars (all required):**
+- ≥ 6 qualifying events/yr on average
+- median tradeable (positive) spread ≥ 2% at 99-share size
+- ≥ 70% completion proxy (third-party offers carry real deal risk — bar set
+  lower than A's 80% deliberately, BEFORE seeing data)
+- implied ≥ $300/yr at 99-share size (measured + scaled both reported)
+
+**Refusals:** no per-acquirer/per-sector re-slicing after a FAIL; no merging
+D's events into A's census to rescue either bar; suspect spreads (>50% or
+class-mismatch) audited individually before counting.
+
+## Candidate E — rights offerings with oversubscription privileges (gate design, runs after D)
+
+**Edge source class:** structural niche — retail holders can oversubscribe at
+the subscription price when others don't exercise; documented retail-favoring
+structure. **Method sketch:** EDGAR census (S-1/S-3/424B + 8-K announcements)
+of rights offerings with oversubscription clauses; measure subscription-price
+discount vs market at expiry and fill rates. **Bars (frozen now):** ≥6
+events/yr retail-accessible; median realized discount ≥ 3% net at
+oversubscription fill; ≥ 70% completion. Gate harness to be built only after
+D's verdict (one at a time).
+
+## Candidate F — tender deadline-spread compression (design queued)
+
+Spread-close behavior into expiry on A/D events, measurable from data the
+scout already collects. Not yet pre-registered with bars — listed to prevent
+post-hoc invention; bars must be frozen here before any measurement.
