@@ -271,8 +271,40 @@ reason to privilege odd-lots, so the clause is essentially absent. Candidate A
 remains the family's only harvestable member on the tender side. FAIL is
 final; no phrase-loosening or form-widening re-runs.
 
-## Candidate F — tender deadline-spread compression (design queued)
+### Candidate E census result: **PASS** (2026-06-11) — pricing phase justified
 
-Spread-close behavior into expiry on A/D events, measurable from data the
-scout already collects. Not yet pre-registered with bars — listed to prevent
-post-hoc invention; bars must be frozen here before any measurement.
+`tools/rights_offering_gate.py` → `reports/rights_offering_census_20260611.json`.
+Five-year EDGAR census (both phrase variants, 374 + 6,446 raw hits): **398
+offering entities, 299 exchange-listed → 59.8/yr** vs the frozen ≥6/yr bar —
+and rising (2024: 67, 2025: 80). Transient FTS 500s near the end of the
+hyphenated-phrase pagination mean the count is if anything UNDERSTATED.
+
+**What this does and does not mean:** frequency is the cheapest kill
+dimension and it survived — rights offerings with oversubscription privileges
+are abundant. The edge itself is still unproven: the pricing phase (frozen
+bars: median realized discount ≥3% net at oversubscription fill, ≥70%
+completion) is where this class typically dies (TERP-illusory discounts,
+dilution, expiry compression). Pricing harness: extract subscription price +
+expiry from prospectuses, join to market prices at/after expiry. ~A day of
+work, now justified.
+
+## Candidate F — tender deadline-spread persistence (bars frozen 2026-06-11, before any measurement)
+
+**What it really is:** not a standalone edge — a playbook parameter for
+Candidate A. Question: how late after the scout alert can you still act and
+capture the spread? If positive spreads persist near expiry, the edge is
+robust to slow manual execution; if they compress immediately, alerts must be
+acted on same-day.
+
+**Method (when run):** on Candidate A's historical qualifying FIXED-price
+events with daily price data, measure the spread at T−5 trading days before
+the offer's expiry (expiry from the filing's stated date) vs the spread at
+filing date.
+
+**Frozen bars:** median spread at T−5 ≥ 1.5% AND ≥ 60% of filing-date-positive
+events still positive at T−5 → verdict "ACT-LATE OK"; otherwise "ACT-FAST"
+(alerts are same-day-or-lose). Either verdict is operationally useful; this
+gate cannot "fail" into a dead end — it calibrates the live playbook.
+
+**Refusals:** no per-event-size or per-exchange slicing; expiry dates from
+filings only (no hand-corrections after seeing spreads).

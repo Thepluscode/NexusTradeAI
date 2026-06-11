@@ -1,0 +1,2372 @@
+{
+ "asof": "2026-06-11",
+ "window": [
+  "2021-06-11",
+  "2026-06-10"
+ ],
+ "raw_hits": {
+  "\"oversubscription privilege\"": 374,
+  "\"over-subscription privilege\"": 6446
+ },
+ "offering_entities_total": 398,
+ "offering_entities_listed": 299,
+ "events_per_year_listed": 59.8,
+ "per_year": {
+  "2021": 31,
+  "2022": 46,
+  "2023": 28,
+  "2024": 67,
+  "2025": 80,
+  "2026": 47
+ },
+ "bar_events_per_year": 6.0,
+ "census_pass": true,
+ "note": "census phase only \u2014 pricing/discount phase gated on census_pass",
+ "entities": [
+  {
+   "cik": "1157842",
+   "half": "2026H1",
+   "name": "COHEN & STEERS QUALITY INCOME REALTY FUND INC  (RQI)  (CIK 0001157842)",
+   "first_date": "2026-06-08",
+   "filings": 17,
+   "forms": {
+    "N-2ASR": 10,
+    "497AD": 7
+   },
+   "ticker": "RQI"
+  },
+  {
+   "cik": "897421",
+   "half": "2026H1",
+   "name": "NUVEEN VIRGINIA QUALITY MUNICIPAL INCOME FUND  (NPV)  (CIK 0000897421)",
+   "first_date": "2026-06-03",
+   "filings": 10,
+   "forms": {
+    "N-2/A": 10
+   },
+   "ticker": "NPV"
+  },
+  {
+   "cik": "1739194",
+   "half": "2026H1",
+   "name": "DeFelice Laura A  (CIK 0001739194)",
+   "first_date": "2026-05-26",
+   "filings": 10,
+   "forms": {
+    "4": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "901243",
+   "half": "2026H1",
+   "name": "BLACKROCK MUNIASSETS FUND, INC.  (MUA)  (CIK 0000901243)",
+   "first_date": "2026-05-22",
+   "filings": 20,
+   "forms": {
+    "N-2": 20
+   },
+   "ticker": "MUA"
+  },
+  {
+   "cik": "1472215",
+   "half": "2026H1",
+   "name": "Nuveen Mortgage & Income Fund/MA/  (JLS)  (CIK 0001472215)",
+   "first_date": "2026-05-19",
+   "filings": 10,
+   "forms": {
+    "N-2": 10
+   },
+   "ticker": "JLS"
+  },
+  {
+   "cik": "2034933",
+   "half": "2026H1",
+   "name": "Gerber Charles  (CIK 0002034933)",
+   "first_date": "2026-05-15",
+   "filings": 20,
+   "forms": {
+    "4/A": 10,
+    "4": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "61004",
+   "half": "2026H1",
+   "name": "LGL GROUP INC  (LGL)  (CIK 0000061004)",
+   "first_date": "2026-05-11",
+   "filings": 116,
+   "forms": {
+    "S-1": 46,
+    "424B3": 9,
+    "8-K": 61
+   },
+   "ticker": "LGL"
+  },
+  {
+   "cik": "1493683",
+   "half": "2026H1",
+   "name": "BlackRock Taxable Municipal Bond Trust  (BBN)  (CIK 0001493683)",
+   "first_date": "2026-05-11",
+   "filings": 20,
+   "forms": {
+    "N-2ASR": 20
+   },
+   "ticker": "BBN"
+  },
+  {
+   "cik": "1268533",
+   "half": "2026H1",
+   "name": "TORTOISE ENERGY INFRASTRUCTURE CORP  (TYG)  (CIK 0001268533)",
+   "first_date": "2026-05-08",
+   "filings": 76,
+   "forms": {
+    "POS EX": 37,
+    "424B2": 20,
+    "N-2ASR": 10,
+    "497AD": 9
+   },
+   "ticker": "TYG"
+  },
+  {
+   "cik": "1551047",
+   "half": "2026H1",
+   "name": "Bluerock Private Real Estate Fund  (BPRE)  (CIK 0001551047)",
+   "first_date": "2026-04-30",
+   "filings": 10,
+   "forms": {
+    "N-2ASR": 10
+   },
+   "ticker": "BPRE"
+  },
+  {
+   "cik": "1748786",
+   "half": "2026H1",
+   "name": "Lind Joseph  (CIK 0001748786)",
+   "first_date": "2026-04-24",
+   "filings": 11,
+   "forms": {
+    "4": 11
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1616678",
+   "half": "2026H1",
+   "name": "BlackRock Science & Technology Trust  (BST)  (CIK 0001616678)",
+   "first_date": "2026-04-23",
+   "filings": 20,
+   "forms": {
+    "N-2ASR": 20
+   },
+   "ticker": "BST"
+  },
+  {
+   "cik": "830271",
+   "half": "2026H1",
+   "name": "NUVEEN MUNICIPAL INCOME FUND INC  (NMI)  (CIK 0000830271)",
+   "first_date": "2026-04-16",
+   "filings": 20,
+   "forms": {
+    "N-2": 10,
+    "N-2/A": 10
+   },
+   "ticker": "NMI"
+  },
+  {
+   "cik": "897419",
+   "half": "2026H1",
+   "name": "NUVEEN MASSACHUSETTS QUALITY MUNICIPAL INCOME FUND  (NMT)  (CIK 0000897419)",
+   "first_date": "2026-04-09",
+   "filings": 20,
+   "forms": {
+    "N-2": 10,
+    "N-2/A": 10
+   },
+   "ticker": "NMT"
+  },
+  {
+   "cik": "818851",
+   "half": "2026H1",
+   "name": "NUVEEN CALIFORNIA MUNICIPAL VALUE FUND  (NCA)  (CIK 0000818851)",
+   "first_date": "2026-04-09",
+   "filings": 20,
+   "forms": {
+    "N-2": 10,
+    "N-2/A": 10
+   },
+   "ticker": "NCA"
+  },
+  {
+   "cik": "892992",
+   "half": "2026H1",
+   "name": "NUVEEN ARIZONA QUALITY MUNICIPAL INCOME FUND  (NAZ)  (CIK 0000892992)",
+   "first_date": "2026-04-09",
+   "filings": 20,
+   "forms": {
+    "N-2": 10,
+    "N-2/A": 10
+   },
+   "ticker": "NAZ"
+  },
+  {
+   "cik": "1061353",
+   "half": "2026H1",
+   "name": "CREDIT SUISSE HIGH YIELD CREDIT FUND  (DHY)  (CIK 0001061353)",
+   "first_date": "2026-04-02",
+   "filings": 70,
+   "forms": {
+    "POS EX": 20,
+    "N-2/A": 20,
+    "424B5": 10,
+    "497AD": 20
+   },
+   "ticker": "DHY"
+  },
+  {
+   "cik": "1801785",
+   "half": "2026H1",
+   "name": "ROONEY ROBERT GERALD  (CIK 0001801785)",
+   "first_date": "2026-03-30",
+   "filings": 10,
+   "forms": {
+    "4": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1182336",
+   "half": "2026H1",
+   "name": "McMillan Peter  (CIK 0001182336)",
+   "first_date": "2026-03-30",
+   "filings": 10,
+   "forms": {
+    "4": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1183870",
+   "half": "2026H1",
+   "name": "HADEN PATRICK C  (CIK 0001183870)",
+   "first_date": "2026-03-30",
+   "filings": 10,
+   "forms": {
+    "4": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1531536",
+   "half": "2026H1",
+   "name": "ROGERS VICTORIA B  (CIK 0001531536)",
+   "first_date": "2026-03-30",
+   "filings": 10,
+   "forms": {
+    "4": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1506488",
+   "half": "2026H1",
+   "name": "NXG NextGen Infrastructure Income Fund  (NXG)  (CIK 0001506488)",
+   "first_date": "2026-03-27",
+   "filings": 50,
+   "forms": {
+    "8-K": 30,
+    "424B2": 10,
+    "497AD": 10
+   },
+   "ticker": "NXG"
+  },
+  {
+   "cik": "812801",
+   "half": "2026H1",
+   "name": "NUVEEN MUNICIPAL VALUE FUND INC  (NUV)  (CIK 0000812801)",
+   "first_date": "2026-03-27",
+   "filings": 10,
+   "forms": {
+    "N-2ASR": 10
+   },
+   "ticker": "NUV"
+  },
+  {
+   "cik": "1832871",
+   "half": "2026H1",
+   "name": "BlackRock 2037 Municipal Target Term Trust  (BMN)  (CIK 0001832871)",
+   "first_date": "2026-03-26",
+   "filings": 20,
+   "forms": {
+    "N-2": 20
+   },
+   "ticker": "BMN"
+  },
+  {
+   "cik": "1487610",
+   "half": "2026H1",
+   "name": "Neuberger High Yield Strategies Fund Inc.  (NHS)  (CIK 0001487610)",
+   "first_date": "2026-03-23",
+   "filings": 30,
+   "forms": {
+    "POS EX": 20,
+    "424B2": 10
+   },
+   "ticker": "NHS"
+  },
+  {
+   "cik": "1562818",
+   "half": "2026H1",
+   "name": "BlackRock Multi-Sector Income Trust  (BIT)  (CIK 0001562818)",
+   "first_date": "2026-03-23",
+   "filings": 20,
+   "forms": {
+    "N-2ASR": 20
+   },
+   "ticker": "BIT"
+  },
+  {
+   "cik": "2117535",
+   "half": "2026H1",
+   "name": "Franklin Lexington Venture & Growth Fund  (CIK 0002117535)",
+   "first_date": "2026-03-20",
+   "filings": 10,
+   "forms": {
+    "N-2": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1902314",
+   "half": "2026H1",
+   "name": "M-tron Industries, Inc.  (MPTI)  (CIK 0001902314)",
+   "first_date": "2026-03-18",
+   "filings": 75,
+   "forms": {
+    "8-K": 47,
+    "8-A12B/A": 2,
+    "8-K/A": 2,
+    "8-A12B": 11,
+    "424B2": 10,
+    "10-Q": 3
+   },
+   "ticker": "MPTI"
+  },
+  {
+   "cik": "1774342",
+   "half": "2026H1",
+   "name": "Nuveen Municipal Credit Opportunities Fund  (NMCO)  (CIK 0001774342)",
+   "first_date": "2026-03-10",
+   "filings": 10,
+   "forms": {
+    "N-2/A": 10
+   },
+   "ticker": "NMCO"
+  },
+  {
+   "cik": "910068",
+   "half": "2026H1",
+   "name": "WESTERN ASSET HIGH INCOME OPPORTUNITY FUND INC.  (HIO)  (CIK 0000910068)",
+   "first_date": "2026-03-09",
+   "filings": 20,
+   "forms": {
+    "N-2/A": 20
+   },
+   "ticker": "HIO"
+  },
+  {
+   "cik": "1497186",
+   "half": "2026H1",
+   "name": "Western Asset High Yield Opportunity Fund Inc.  (HYI)  (CIK 0001497186)",
+   "first_date": "2026-03-09",
+   "filings": 30,
+   "forms": {
+    "N-2/A": 30
+   },
+   "ticker": "HYI"
+  },
+  {
+   "cik": "1289868",
+   "half": "2026H1",
+   "name": "XAI Madison Equity Premium Income Fund  (MCN)  (CIK 0001289868)",
+   "first_date": "2026-03-06",
+   "filings": 20,
+   "forms": {
+    "N-2": 20
+   },
+   "ticker": "MCN"
+  },
+  {
+   "cik": "1528988",
+   "half": "2026H1",
+   "name": "BlackRock Utilities, Infrastructure & Power Opportunities Trust  (BUI)  (CIK 0001528988)",
+   "first_date": "2026-02-27",
+   "filings": 40,
+   "forms": {
+    "POS EX": 20,
+    "424B2": 10,
+    "497AD": 10
+   },
+   "ticker": "BUI"
+  },
+  {
+   "cik": "794685",
+   "half": "2026H1",
+   "name": "GABELLI EQUITY TRUST INC  (GAB, GAB-PG, GAB-PH, GAB-PK)  (CIK 0000794685)",
+   "first_date": "2026-02-25",
+   "filings": 51,
+   "forms": {
+    "POS EX": 11,
+    "497AD": 20,
+    "424B2": 10,
+    "424B4": 10
+   },
+   "ticker": "GAB"
+  },
+  {
+   "cik": "1090116",
+   "half": "2026H1",
+   "name": "Nuveen AMT-Free Municipal Credit Income Fund  (NVG)  (CIK 0001090116)",
+   "first_date": "2026-02-25",
+   "filings": 10,
+   "forms": {
+    "N-2ASR": 10
+   },
+   "ticker": "NVG"
+  },
+  {
+   "cik": "1137887",
+   "half": "2026H1",
+   "name": "Nuveen Municipal Credit Income Fund  (NZF)  (CIK 0001137887)",
+   "first_date": "2026-02-25",
+   "filings": 10,
+   "forms": {
+    "N-2ASR": 10
+   },
+   "ticker": "NZF"
+  },
+  {
+   "cik": "1083839",
+   "half": "2026H1",
+   "name": "Nuveen Quality Municipal Income Fund  (NAD)  (CIK 0001083839)",
+   "first_date": "2026-02-25",
+   "filings": 10,
+   "forms": {
+    "N-2ASR": 10
+   },
+   "ticker": "NAD"
+  },
+  {
+   "cik": "1287480",
+   "half": "2026H1",
+   "name": "BLACKROCK FLOATING RATE INCOME TRUST  (BGT)  (CIK 0001287480)",
+   "first_date": "2026-02-20",
+   "filings": 20,
+   "forms": {
+    "N-2/A": 20
+   },
+   "ticker": "BGT"
+  },
+  {
+   "cik": "809559",
+   "half": "2026H1",
+   "name": "TCW STRATEGIC INCOME FUND INC  (TSI)  (CIK 0000809559)",
+   "first_date": "2026-02-19",
+   "filings": 50,
+   "forms": {
+    "8-K": 40,
+    "424B2": 10
+   },
+   "ticker": "TSI"
+  },
+  {
+   "cik": "1195737",
+   "half": "2026H1",
+   "name": "Nuveen AMT-Free Quality Municipal Income Fund  (NEA)  (CIK 0001195737)",
+   "first_date": "2026-02-13",
+   "filings": 10,
+   "forms": {
+    "N-2ASR": 10
+   },
+   "ticker": "NEA"
+  },
+  {
+   "cik": "2094188",
+   "half": "2026H1",
+   "name": "Franklin Infrastructure Solutions Fund  (CIK 0002094188)",
+   "first_date": "2026-02-12",
+   "filings": 10,
+   "forms": {
+    "N-2": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1268884",
+   "half": "2026H1",
+   "name": "CBRE GLOBAL REAL ESTATE INCOME FUND  (IGR)  (CIK 0001268884)",
+   "first_date": "2026-02-06",
+   "filings": 10,
+   "forms": {
+    "N-2ASR": 10
+   },
+   "ticker": "IGR"
+  },
+  {
+   "cik": "1743894",
+   "half": "2026H1",
+   "name": "Delbos David  (CIK 0001743894)",
+   "first_date": "2026-02-05",
+   "filings": 10,
+   "forms": {
+    "4": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1051003",
+   "half": "2026H1",
+   "name": "BLACKROCK DEBT STRATEGIES FUND, INC.  (DSU)  (CIK 0001051003)",
+   "first_date": "2026-02-04",
+   "filings": 20,
+   "forms": {
+    "N-2/A": 20
+   },
+   "ticker": "DSU"
+  },
+  {
+   "cik": "887396",
+   "half": "2026H1",
+   "name": "EMPIRE PETROLEUM CORP  (EP)  (CIK 0000887396)",
+   "first_date": "2026-02-02",
+   "filings": 4,
+   "forms": {
+    "8-K": 4
+   },
+   "ticker": "EP"
+  },
+  {
+   "cik": "1228509",
+   "half": "2026H1",
+   "name": "WESTERN ASSET GLOBAL HIGH INCOME FUND INC.  (EHI)  (CIK 0001228509)",
+   "first_date": "2026-01-28",
+   "filings": 1,
+   "forms": {
+    "N-CSRS": 1
+   },
+   "ticker": "EHI"
+  },
+  {
+   "cik": "875355",
+   "half": "2026H1",
+   "name": "BLOOMIA HOLDINGS, INC.  (LDWY, TULP)  (CIK 0000875355)",
+   "first_date": "2026-01-23",
+   "filings": 143,
+   "forms": {
+    "S-1/A": 82,
+    "424B3": 20,
+    "S-1": 10,
+    "8-K": 24,
+    "SCHEDULE 13D/A": 4,
+    "10-Q": 3
+   },
+   "ticker": "LDWY"
+  },
+  {
+   "cik": "946644",
+   "half": "2026H1",
+   "name": "AIM ImmunoTech Inc.  (AIM)  (CIK 0000946644)",
+   "first_date": "2026-01-23",
+   "filings": 106,
+   "forms": {
+    "S-1/A": 86,
+    "424B4": 10,
+    "424B3": 10
+   },
+   "ticker": "AIM"
+  },
+  {
+   "cik": "895531",
+   "half": "2026H1",
+   "name": "Invesco California Value Municipal Income Trust  (VCV)  (CIK 0000895531)",
+   "first_date": "2026-01-23",
+   "filings": 10,
+   "forms": {
+    "N-2/A": 10
+   },
+   "ticker": "VCV"
+  },
+  {
+   "cik": "1261166",
+   "half": "2026H1",
+   "name": "NEUBERGER REAL ESTATE SECURITIES INCOME FUND INC  (NRO)  (CIK 0001261166)",
+   "first_date": "2026-01-22",
+   "filings": 20,
+   "forms": {
+    "N-2/A": 10,
+    "N-2": 10
+   },
+   "ticker": "NRO"
+  },
+  {
+   "cik": "1539337",
+   "half": "2026H1",
+   "name": "Nuveen Real Asset Income & Growth Fund  (JRI)  (CIK 0001539337)",
+   "first_date": "2026-01-21",
+   "filings": 35,
+   "forms": {
+    "424B5": 10,
+    "N-2/A": 10,
+    "497AD": 15
+   },
+   "ticker": "JRI"
+  },
+  {
+   "cik": "2064307",
+   "half": "2026H1",
+   "name": "ContextLogic Holdings Inc.  (LOGC)  (CIK 0002064307)",
+   "first_date": "2026-01-20",
+   "filings": 10,
+   "forms": {
+    "S-1": 10
+   },
+   "ticker": "LOGC"
+  },
+  {
+   "cik": "1578987",
+   "half": "2026H1",
+   "name": "ArrowMark Financial Corp.  (BANX, BANXR)  (CIK 0001578987)",
+   "first_date": "2026-01-13",
+   "filings": 42,
+   "forms": {
+    "497AD": 11,
+    "8-K": 21,
+    "424B2": 10
+   },
+   "ticker": "BANX"
+  },
+  {
+   "cik": "1195738",
+   "half": "2026H1",
+   "name": "NUVEEN CALIFORNIA AMT-FREE QUALITY MUNICIPAL INCOME FUND  (NKX)  (CIK 0001195738)",
+   "first_date": "2026-01-13",
+   "filings": 10,
+   "forms": {
+    "N-2/A": 10
+   },
+   "ticker": "NKX"
+  },
+  {
+   "cik": "1518461",
+   "half": "2026H1",
+   "name": "AmpliTech Group, Inc.  (AMPG, AMPGW)  (CIK 0001518461)",
+   "first_date": "2026-01-12",
+   "filings": 10,
+   "forms": {
+    "8-K": 10
+   },
+   "ticker": "AMPG"
+  },
+  {
+   "cik": "1768995",
+   "half": "2026H1",
+   "name": "Arteaga Ivan  (CIK 0001768995)",
+   "first_date": "2026-01-08",
+   "filings": 20,
+   "forms": {
+    "4": 20
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1419806",
+   "half": "2026H1",
+   "name": "RARE ELEMENT RESOURCES LTD  (REEMF)  (CIK 0001419806)",
+   "first_date": "2026-01-06",
+   "filings": 36,
+   "forms": {
+    "8-K": 30,
+    "424B5": 6
+   },
+   "ticker": "REEMF"
+  },
+  {
+   "cik": "1222401",
+   "half": "2026H1",
+   "name": "BLACKROCK CORPORATE HIGH YIELD FUND, INC.  (HYT)  (CIK 0001222401)",
+   "first_date": "2026-01-05",
+   "filings": 40,
+   "forms": {
+    "POS EX": 20,
+    "497AD": 10,
+    "424B5": 10
+   },
+   "ticker": "HYT"
+  },
+  {
+   "cik": "937797",
+   "half": "2025H2",
+   "name": "MALONE JOHN C  (CIK 0000937797)",
+   "first_date": "2025-12-29",
+   "filings": 3,
+   "forms": {
+    "4": 3
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1061353",
+   "half": "2025H2",
+   "name": "CREDIT SUISSE HIGH YIELD CREDIT FUND  (DHY)  (CIK 0001061353)",
+   "first_date": "2025-12-19",
+   "filings": 20,
+   "forms": {
+    "N-2": 20
+   },
+   "ticker": "DHY"
+  },
+  {
+   "cik": "1287480",
+   "half": "2025H2",
+   "name": "BLACKROCK FLOATING RATE INCOME TRUST  (BGT)  (CIK 0001287480)",
+   "first_date": "2025-12-19",
+   "filings": 20,
+   "forms": {
+    "N-2": 20
+   },
+   "ticker": "BGT"
+  },
+  {
+   "cik": "1492597",
+   "half": "2025H2",
+   "name": "Alban John  (CIK 0001492597)",
+   "first_date": "2025-12-19",
+   "filings": 10,
+   "forms": {
+    "4": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1836710",
+   "half": "2025H2",
+   "name": "Lorenzini Thomas J.  (CIK 0001836710)",
+   "first_date": "2025-12-15",
+   "filings": 7,
+   "forms": {
+    "4": 7
+   },
+   "ticker": null
+  },
+  {
+   "cik": "946644",
+   "half": "2025H2",
+   "name": "AIM ImmunoTech Inc.  (AIM, AIMI)  (CIK 0000946644)",
+   "first_date": "2025-12-12",
+   "filings": 10,
+   "forms": {
+    "S-1": 10
+   },
+   "ticker": "AIM"
+  },
+  {
+   "cik": "1222401",
+   "half": "2025H2",
+   "name": "BLACKROCK CORPORATE HIGH YIELD FUND, INC.  (HYT)  (CIK 0001222401)",
+   "first_date": "2025-12-12",
+   "filings": 30,
+   "forms": {
+    "497AD": 10,
+    "N-2ASR": 20
+   },
+   "ticker": "HYT"
+  },
+  {
+   "cik": "1635977",
+   "half": "2025H2",
+   "name": "abrdn World Healthcare Fund  (THW)  (CIK 0001635977)",
+   "first_date": "2025-12-05",
+   "filings": 10,
+   "forms": {
+    "N-2": 10
+   },
+   "ticker": "THW"
+  },
+  {
+   "cik": "1774342",
+   "half": "2025H2",
+   "name": "Nuveen Municipal Credit Opportunities Fund  (NMCO)  (CIK 0001774342)",
+   "first_date": "2025-12-03",
+   "filings": 10,
+   "forms": {
+    "N-2": 10
+   },
+   "ticker": "NMCO"
+  },
+  {
+   "cik": "1051003",
+   "half": "2025H2",
+   "name": "BLACKROCK DEBT STRATEGIES FUND, INC.  (DSU)  (CIK 0001051003)",
+   "first_date": "2025-12-01",
+   "filings": 20,
+   "forms": {
+    "N-2": 20
+   },
+   "ticker": "DSU"
+  },
+  {
+   "cik": "1527541",
+   "half": "2025H2",
+   "name": "Wheeler Real Estate Investment Trust, Inc.  (WHLR, WHLRD, WHLRL, WHLRP)  (CIK 0001527541)",
+   "first_date": "2025-11-24",
+   "filings": 3,
+   "forms": {
+    "SCHEDULE 13D/A": 3
+   },
+   "ticker": "WHLR"
+  },
+  {
+   "cik": "1195738",
+   "half": "2025H2",
+   "name": "NUVEEN CALIFORNIA AMT-FREE QUALITY MUNICIPAL INCOME FUND  (NKX)  (CIK 0001195738)",
+   "first_date": "2025-11-19",
+   "filings": 10,
+   "forms": {
+    "N-2": 10
+   },
+   "ticker": "NKX"
+  },
+  {
+   "cik": "897421",
+   "half": "2025H2",
+   "name": "NUVEEN VIRGINIA QUALITY MUNICIPAL INCOME FUND  (NPV)  (CIK 0000897421)",
+   "first_date": "2025-11-19",
+   "filings": 10,
+   "forms": {
+    "N-2": 10
+   },
+   "ticker": "NPV"
+  },
+  {
+   "cik": "1400897",
+   "half": "2025H2",
+   "name": "NXG Cushing Midstream Energy Fund  (SRV, SRV-RW)  (CIK 0001400897)",
+   "first_date": "2025-11-17",
+   "filings": 40,
+   "forms": {
+    "8-K": 30,
+    "424B2": 10
+   },
+   "ticker": "SRV"
+  },
+  {
+   "cik": "1539337",
+   "half": "2025H2",
+   "name": "Nuveen Real Asset Income & Growth Fund  (JRI)  (CIK 0001539337)",
+   "first_date": "2025-11-17",
+   "filings": 11,
+   "forms": {
+    "N-2": 11
+   },
+   "ticker": "JRI"
+  },
+  {
+   "cik": "58361",
+   "half": "2025H2",
+   "name": "LEE ENTERPRISES, Inc  (LEE)  (CIK 0000058361)",
+   "first_date": "2025-11-10",
+   "filings": 30,
+   "forms": {
+    "S-1": 10,
+    "DEFA14A": 10,
+    "8-K": 10
+   },
+   "ticker": "LEE"
+  },
+  {
+   "cik": "61004",
+   "half": "2025H2",
+   "name": "LGL GROUP INC  (LGL, LGL-WT)  (CIK 0000061004)",
+   "first_date": "2025-11-06",
+   "filings": 36,
+   "forms": {
+    "8-K": 36
+   },
+   "ticker": "LGL"
+  },
+  {
+   "cik": "2057463",
+   "half": "2025H2",
+   "name": "GCI Liberty, Inc.  (GLIBA, GLIBB, GLIBK)  (CIK 0002057463)",
+   "first_date": "2025-11-05",
+   "filings": 55,
+   "forms": {
+    "S-1": 45,
+    "8-K": 7,
+    "424B4": 3
+   },
+   "ticker": "GLIBA"
+  },
+  {
+   "cik": "1497186",
+   "half": "2025H2",
+   "name": "Western Asset High Yield Opportunity Fund Inc.  (HYI)  (CIK 0001497186)",
+   "first_date": "2025-10-31",
+   "filings": 20,
+   "forms": {
+    "N-2": 20
+   },
+   "ticker": "HYI"
+  },
+  {
+   "cik": "1518461",
+   "half": "2025H2",
+   "name": "AmpliTech Group, Inc.  (AMPG, AMPGW)  (CIK 0001518461)",
+   "first_date": "2025-10-30",
+   "filings": 56,
+   "forms": {
+    "8-K": 40,
+    "424B5": 16
+   },
+   "ticker": "AMPG"
+  },
+  {
+   "cik": "1452477",
+   "half": "2025H2",
+   "name": "Seven Hills Realty Trust  (SEVN)  (CIK 0001452477)",
+   "first_date": "2025-10-30",
+   "filings": 75,
+   "forms": {
+    "8-K": 55,
+    "8-A12B": 10,
+    "424B5": 10
+   },
+   "ticker": "SEVN"
+  },
+  {
+   "cik": "910068",
+   "half": "2025H2",
+   "name": "WESTERN ASSET HIGH INCOME OPPORTUNITY FUND INC.  (HIO)  (CIK 0000910068)",
+   "first_date": "2025-10-28",
+   "filings": 20,
+   "forms": {
+    "N-2": 20
+   },
+   "ticker": "HIO"
+  },
+  {
+   "cik": "1887947",
+   "half": "2025H2",
+   "name": "Roth Michael  (CIK 0001887947)",
+   "first_date": "2025-10-24",
+   "filings": 2,
+   "forms": {
+    "4": 2
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1902314",
+   "half": "2025H2",
+   "name": "M-tron Industries, Inc.  (MPTI, MPTI-WT)  (CIK 0001902314)",
+   "first_date": "2025-10-23",
+   "filings": 40,
+   "forms": {
+    "8-K": 40
+   },
+   "ticker": "MPTI"
+  },
+  {
+   "cik": "1678130",
+   "half": "2025H2",
+   "name": "RiverNorth/DoubleLine Strategic Opportunity Fund, Inc.  (OPP, OPP-PA, OPP-PB, OPP-PC)  (CIK 0001678130)",
+   "first_date": "2025-10-22",
+   "filings": 24,
+   "forms": {
+    "POS EX": 14,
+    "424B2": 10
+   },
+   "ticker": "OPP"
+  },
+  {
+   "cik": "1573260",
+   "half": "2025H2",
+   "name": "Morton Benjamin  (CIK 0001573260)",
+   "first_date": "2025-10-20",
+   "filings": 3,
+   "forms": {
+    "4": 3
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1365947",
+   "half": "2025H2",
+   "name": "Clark Michael G  (CIK 0001365947)",
+   "first_date": "2025-10-20",
+   "filings": 3,
+   "forms": {
+    "4": 3
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1635560",
+   "half": "2025H2",
+   "name": "Junkans Dean  (CIK 0001635560)",
+   "first_date": "2025-10-20",
+   "filings": 3,
+   "forms": {
+    "4": 3
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1655302",
+   "half": "2025H2",
+   "name": "Maginnis Gerald J.  (CIK 0001655302)",
+   "first_date": "2025-10-20",
+   "filings": 2,
+   "forms": {
+    "4": 2
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1181440",
+   "half": "2025H2",
+   "name": "DERECHIN ADAM M  (CIK 0001181440)",
+   "first_date": "2025-10-20",
+   "filings": 2,
+   "forms": {
+    "4": 2
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1850860",
+   "half": "2025H2",
+   "name": "Rogers-Windsor Ramona Lynn  (CIK 0001850860)",
+   "first_date": "2025-10-20",
+   "filings": 2,
+   "forms": {
+    "4": 2
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1370755",
+   "half": "2025H2",
+   "name": "BlackRock TCP Capital Corp.  (TCPC)  (CIK 0001370755)",
+   "first_date": "2025-09-23",
+   "filings": 10,
+   "forms": {
+    "N-2ASR": 10
+   },
+   "ticker": "TCPC"
+  },
+  {
+   "cik": "1468327",
+   "half": "2025H2",
+   "name": "Rent the Runway, Inc.  (RENT)  (CIK 0001468327)",
+   "first_date": "2025-09-18",
+   "filings": 83,
+   "forms": {
+    "424B3": 8,
+    "S-1": 8,
+    "S-1/A": 67
+   },
+   "ticker": "RENT"
+  },
+  {
+   "cik": "832327",
+   "half": "2025H2",
+   "name": "BLACKROCK INCOME TRUST, INC.  (BKT, BKT-RW)  (CIK 0000832327)",
+   "first_date": "2025-09-12",
+   "filings": 70,
+   "forms": {
+    "POS EX": 20,
+    "N-2/A": 20,
+    "497AD": 20,
+    "424B2": 10
+   },
+   "ticker": "BKT"
+  },
+  {
+   "cik": "895531",
+   "half": "2025H2",
+   "name": "Invesco California Value Municipal Income Trust  (VCV)  (CIK 0000895531)",
+   "first_date": "2025-09-12",
+   "filings": 10,
+   "forms": {
+    "N-2": 10
+   },
+   "ticker": "VCV"
+  },
+  {
+   "cik": "1275617",
+   "half": "2025H2",
+   "name": "COHEN & STEERS INFRASTRUCTURE FUND INC  (UTF)  (CIK 0001275617)",
+   "first_date": "2025-09-10",
+   "filings": 67,
+   "forms": {
+    "POS EX": 30,
+    "N-2ASR": 20,
+    "424B2": 10,
+    "497AD": 7
+   },
+   "ticker": "UTF"
+  },
+  {
+   "cik": "1501072",
+   "half": "2025H2",
+   "name": "RIVERNORTH OPPORTUNITIES FUND, INC.  (RIV, RIV-PA)  (CIK 0001501072)",
+   "first_date": "2025-09-08",
+   "filings": 24,
+   "forms": {
+    "POS EX": 14,
+    "424B2": 10
+   },
+   "ticker": "RIV"
+  },
+  {
+   "cik": "1362481",
+   "half": "2025H2",
+   "name": "abrdn Global Dynamic Dividend Fund  (AGD)  (CIK 0001362481)",
+   "first_date": "2025-08-22",
+   "filings": 9,
+   "forms": {
+    "N-2": 9
+   },
+   "ticker": "AGD"
+  },
+  {
+   "cik": "1899813",
+   "half": "2025H2",
+   "name": "Nelson Blake  (CIK 0001899813)",
+   "first_date": "2025-08-22",
+   "filings": 10,
+   "forms": {
+    "4": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1777679",
+   "half": "2025H2",
+   "name": "Mullins Andrea  (CIK 0001777679)",
+   "first_date": "2025-08-22",
+   "filings": 21,
+   "forms": {
+    "4": 21
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1957908",
+   "half": "2025H2",
+   "name": "Sunderland Todd  (CIK 0001957908)",
+   "first_date": "2025-08-21",
+   "filings": 20,
+   "forms": {
+    "4": 20
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1615905",
+   "half": "2025H2",
+   "name": "Nuveen Global High Income Fund  (JGH)  (CIK 0001615905)",
+   "first_date": "2025-08-15",
+   "filings": 35,
+   "forms": {
+    "424B2": 10,
+    "N-2/A": 10,
+    "497AD": 15
+   },
+   "ticker": "JGH"
+  },
+  {
+   "cik": "1517518",
+   "half": "2025H2",
+   "name": "ClearBridge Energy Midstream Opportunity Fund Inc.  (EMO)  (CIK 0001517518)",
+   "first_date": "2025-08-14",
+   "filings": 49,
+   "forms": {
+    "POS EX": 23,
+    "N-2ASR": 20,
+    "424B2": 6
+   },
+   "ticker": "EMO"
+  },
+  {
+   "cik": "1930147",
+   "half": "2025H2",
+   "name": "Sound Point Meridian Capital, Inc.  (SPMA, SPMC, SPME)  (CIK 0001930147)",
+   "first_date": "2025-08-12",
+   "filings": 20,
+   "forms": {
+    "N-2/A": 20
+   },
+   "ticker": "SPMA"
+  },
+  {
+   "cik": "707549",
+   "half": "2025H2",
+   "name": "LAM RESEARCH CORP  (LRCX)  (CIK 0000707549)",
+   "first_date": "2025-08-11",
+   "filings": 1,
+   "forms": {
+    "S-3ASR": 1
+   },
+   "ticker": "LRCX"
+  },
+  {
+   "cik": "809559",
+   "half": "2025H2",
+   "name": "TCW STRATEGIC INCOME FUND INC  (TSI)  (CIK 0000809559)",
+   "first_date": "2025-08-08",
+   "filings": 50,
+   "forms": {
+    "N-2": 20,
+    "N-2/A": 30
+   },
+   "ticker": "TSI"
+  },
+  {
+   "cik": "1074952",
+   "half": "2025H2",
+   "name": "Nuveen California Quality Municipal Income Fund  (NAC)  (CIK 0001074952)",
+   "first_date": "2025-08-07",
+   "filings": 10,
+   "forms": {
+    "N-2ASR": 10
+   },
+   "ticker": "NAC"
+  },
+  {
+   "cik": "1562818",
+   "half": "2025H2",
+   "name": "BlackRock Multi-Sector Income Trust  (BIT)  (CIK 0001562818)",
+   "first_date": "2025-08-06",
+   "filings": 49,
+   "forms": {
+    "POS EX": 20,
+    "424B2": 10,
+    "497AD": 19
+   },
+   "ticker": "BIT"
+  },
+  {
+   "cik": "1074769",
+   "half": "2025H2",
+   "name": "NUVEEN NEW YORK QUALITY MUNICIPAL INCOME FUND  (NAN)  (CIK 0001074769)",
+   "first_date": "2025-08-06",
+   "filings": 10,
+   "forms": {
+    "N-2/A": 10
+   },
+   "ticker": "NAN"
+  },
+  {
+   "cik": "1233681",
+   "half": "2025H2",
+   "name": "BLACKROCK Ltd DURATION INCOME TRUST  (BLW)  (CIK 0001233681)",
+   "first_date": "2025-08-01",
+   "filings": 20,
+   "forms": {
+    "N-2/A": 20
+   },
+   "ticker": "BLW"
+  },
+  {
+   "cik": "1259708",
+   "half": "2025H2",
+   "name": "BLACKROCK FLOATING RATE INCOME STRATEGIES FUND, INC.  (FRA)  (CIK 0001259708)",
+   "first_date": "2025-07-30",
+   "filings": 40,
+   "forms": {
+    "N-2/A": 20,
+    "N-2": 20
+   },
+   "ticker": "FRA"
+  },
+  {
+   "cik": "830487",
+   "half": "2025H2",
+   "name": "WESTERN ASSET MUNICIPAL HIGH INCOME FUND INC.  (MHF)  (CIK 0000830487)",
+   "first_date": "2025-07-16",
+   "filings": 20,
+   "forms": {
+    "N-2/A": 20
+   },
+   "ticker": "MHF"
+  },
+  {
+   "cik": "887396",
+   "half": "2025H2",
+   "name": "EMPIRE PETROLEUM CORP  (EP)  (CIK 0000887396)",
+   "first_date": "2025-07-10",
+   "filings": 5,
+   "forms": {
+    "8-K": 5
+   },
+   "ticker": "EP"
+  },
+  {
+   "cik": "1506488",
+   "half": "2025H2",
+   "name": "NXG NextGen Infrastructure Income Fund  (NXG)  (CIK 0001506488)",
+   "first_date": "2025-07-10",
+   "filings": 53,
+   "forms": {
+    "8-K": 30,
+    "424B2": 10,
+    "497AD": 13
+   },
+   "ticker": "NXG"
+  },
+  {
+   "cik": "1644771",
+   "half": "2025H2",
+   "name": "RiverNorth Capital & Income Fund, Inc.  (RSF, RSF-RI)  (CIK 0001644771)",
+   "first_date": "2025-07-08",
+   "filings": 21,
+   "forms": {
+    "497AD": 21
+   },
+   "ticker": "RSF"
+  },
+  {
+   "cik": "1058239",
+   "half": "2025H2",
+   "name": "WESTERN ASSET HIGH INCOME FUND II INC.  (HIX)  (CIK 0001058239)",
+   "first_date": "2025-07-07",
+   "filings": 27,
+   "forms": {
+    "N-2/A": 20,
+    "N-CSRS": 5,
+    "N-CSR": 2
+   },
+   "ticker": "HIX"
+  },
+  {
+   "cik": "826020",
+   "half": "2025H2",
+   "name": "Saba Capital Income & Opportunities Fund  (BRW)  (CIK 0000826020)",
+   "first_date": "2025-07-03",
+   "filings": 71,
+   "forms": {
+    "POS EX": 31,
+    "N-2": 10,
+    "497AD": 10,
+    "N-2/A": 10,
+    "424B5": 10
+   },
+   "ticker": "BRW"
+  },
+  {
+   "cik": "1584371",
+   "half": "2025H2",
+   "name": "IceCure Medical Ltd.  (ICCM)  (CIK 0001584371)",
+   "first_date": "2025-07-03",
+   "filings": 60,
+   "forms": {
+    "6-K": 30,
+    "424B3": 10,
+    "F-1/A": 20
+   },
+   "ticker": "ICCM"
+  },
+  {
+   "cik": "1074769",
+   "half": "2025H1",
+   "name": "NUVEEN NEW YORK QUALITY MUNICIPAL INCOME FUND  (NAN)  (CIK 0001074769)",
+   "first_date": "2025-06-26",
+   "filings": 10,
+   "forms": {
+    "N-2": 10
+   },
+   "ticker": "NAN"
+  },
+  {
+   "cik": "832327",
+   "half": "2025H1",
+   "name": "BLACKROCK INCOME TRUST, INC.  (BKT)  (CIK 0000832327)",
+   "first_date": "2025-06-20",
+   "filings": 20,
+   "forms": {
+    "N-2": 20
+   },
+   "ticker": "BKT"
+  },
+  {
+   "cik": "1527541",
+   "half": "2025H1",
+   "name": "Wheeler Real Estate Investment Trust, Inc.  (WHLR, WHLRD, WHLRL, WHLRP)  (CIK 0001527541)",
+   "first_date": "2025-06-13",
+   "filings": 3,
+   "forms": {
+    "SCHEDULE 13D/A": 3
+   },
+   "ticker": "WHLR"
+  },
+  {
+   "cik": "1644771",
+   "half": "2025H1",
+   "name": "RiverNorth Capital & Income Fund, Inc.  (RSF)  (CIK 0001644771)",
+   "first_date": "2025-05-30",
+   "filings": 24,
+   "forms": {
+    "POS EX": 14,
+    "424B2": 10
+   },
+   "ticker": "RSF"
+  },
+  {
+   "cik": "1615905",
+   "half": "2025H1",
+   "name": "Nuveen Global High Income Fund  (JGH)  (CIK 0001615905)",
+   "first_date": "2025-05-27",
+   "filings": 10,
+   "forms": {
+    "N-2": 10
+   },
+   "ticker": "JGH"
+  },
+  {
+   "cik": "1584371",
+   "half": "2025H1",
+   "name": "IceCure Medical Ltd.  (ICCM)  (CIK 0001584371)",
+   "first_date": "2025-05-23",
+   "filings": 40,
+   "forms": {
+    "F-1/A": 10,
+    "DRS": 10,
+    "F-1": 10,
+    "6-K": 10
+   },
+   "ticker": "ICCM"
+  },
+  {
+   "cik": "1816321",
+   "half": "2025H1",
+   "name": "Parks Kevin  (CIK 0001816321)",
+   "first_date": "2025-05-16",
+   "filings": 20,
+   "forms": {
+    "4/A": 10,
+    "4": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1724113",
+   "half": "2025H1",
+   "name": "Prabhu Sreeniwas  (CIK 0001724113)",
+   "first_date": "2025-05-16",
+   "filings": 20,
+   "forms": {
+    "4": 10,
+    "4/A": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1724044",
+   "half": "2025H1",
+   "name": "Fierman Michael  (CIK 0001724044)",
+   "first_date": "2025-05-16",
+   "filings": 21,
+   "forms": {
+    "4/A": 11,
+    "4": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1947282",
+   "half": "2025H1",
+   "name": "Eldredge William  (CIK 0001947282)",
+   "first_date": "2025-05-16",
+   "filings": 10,
+   "forms": {
+    "4": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1777480",
+   "half": "2025H1",
+   "name": "Pate Cheryl  (CIK 0001777480)",
+   "first_date": "2025-05-16",
+   "filings": 10,
+   "forms": {
+    "4": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1777418",
+   "half": "2025H1",
+   "name": "Palsson Johannes  (CIK 0001777418)",
+   "first_date": "2025-05-16",
+   "filings": 10,
+   "forms": {
+    "4": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "61004",
+   "half": "2025H1",
+   "name": "LGL GROUP INC  (LGL, LGL-WT)  (CIK 0000061004)",
+   "first_date": "2025-05-15",
+   "filings": 38,
+   "forms": {
+    "8-K": 23,
+    "424B3": 5,
+    "POS AM": 10
+   },
+   "ticker": "LGL"
+  },
+  {
+   "cik": "830487",
+   "half": "2025H1",
+   "name": "WESTERN ASSET MUNICIPAL HIGH INCOME FUND INC.  (MHF)  (CIK 0000830487)",
+   "first_date": "2025-05-09",
+   "filings": 20,
+   "forms": {
+    "N-2": 20
+   },
+   "ticker": "MHF"
+  },
+  {
+   "cik": "1506488",
+   "half": "2025H1",
+   "name": "NXG NextGen Infrastructure Income Fund  (NXG)  (CIK 0001506488)",
+   "first_date": "2025-05-08",
+   "filings": 10,
+   "forms": {
+    "N-2": 10
+   },
+   "ticker": "NXG"
+  },
+  {
+   "cik": "897419",
+   "half": "2025H1",
+   "name": "NUVEEN MASSACHUSETTS QUALITY MUNICIPAL INCOME FUND  (NMT)  (CIK 0000897419)",
+   "first_date": "2025-05-07",
+   "filings": 20,
+   "forms": {
+    "N-2": 10,
+    "N-2/A": 10
+   },
+   "ticker": "NMT"
+  },
+  {
+   "cik": "1745059",
+   "half": "2025H1",
+   "name": "Angel Oak Financial Strategies Income Term Trust  (FINS)  (CIK 0001745059)",
+   "first_date": "2025-04-11",
+   "filings": 60,
+   "forms": {
+    "8-K": 50,
+    "424B2": 10
+   },
+   "ticker": "FINS"
+  },
+  {
+   "cik": "1400897",
+   "half": "2025H1",
+   "name": "NXG Cushing Midstream Energy Fund  (SRV)  (CIK 0001400897)",
+   "first_date": "2025-04-10",
+   "filings": 9,
+   "forms": {
+    "N-2": 9
+   },
+   "ticker": "SRV"
+  },
+  {
+   "cik": "1487610",
+   "half": "2025H1",
+   "name": "Neuberger Berman High Yield Strategies Fund Inc.  (NHS)  (CIK 0001487610)",
+   "first_date": "2025-04-07",
+   "filings": 20,
+   "forms": {
+    "N-2/A": 20
+   },
+   "ticker": "NHS"
+  },
+  {
+   "cik": "2063946",
+   "half": "2025H1",
+   "name": "Franklin BSP Lending Fund  (CIK 0002063946)",
+   "first_date": "2025-04-07",
+   "filings": 10,
+   "forms": {
+    "N-2": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1058239",
+   "half": "2025H1",
+   "name": "WESTERN ASSET HIGH INCOME FUND II INC.  (HIX)  (CIK 0001058239)",
+   "first_date": "2025-03-21",
+   "filings": 20,
+   "forms": {
+    "N-2": 20
+   },
+   "ticker": "HIX"
+  },
+  {
+   "cik": "1233681",
+   "half": "2025H1",
+   "name": "BLACKROCK Ltd DURATION INCOME TRUST  (BLW)  (CIK 0001233681)",
+   "first_date": "2025-03-21",
+   "filings": 20,
+   "forms": {
+    "N-2": 20
+   },
+   "ticker": "BLW"
+  },
+  {
+   "cik": "1338561",
+   "half": "2025H1",
+   "name": "Nuveen S&P 500 Dynamic Overwrite Fund  (SPXX)  (CIK 0001338561)",
+   "first_date": "2025-03-21",
+   "filings": 10,
+   "forms": {
+    "N-2/A": 10
+   },
+   "ticker": "SPXX"
+  },
+  {
+   "cik": "1227476",
+   "half": "2025H1",
+   "name": "Nuveen Credit Strategies Income Fund  (JQC)  (CIK 0001227476)",
+   "first_date": "2025-03-19",
+   "filings": 44,
+   "forms": {
+    "424B2": 20,
+    "N-2ASR": 10,
+    "497AD": 14
+   },
+   "ticker": "JQC"
+  },
+  {
+   "cik": "1528988",
+   "half": "2025H1",
+   "name": "BlackRock Utilities, Infrastructure & Power Opportunities Trust  (BUI)  (CIK 0001528988)",
+   "first_date": "2025-03-03",
+   "filings": 40,
+   "forms": {
+    "N-2": 20,
+    "N-2/A": 20
+   },
+   "ticker": "BUI"
+  },
+  {
+   "cik": "1562818",
+   "half": "2025H1",
+   "name": "BlackRock Multi-Sector Income Trust  (BIT)  (CIK 0001562818)",
+   "first_date": "2025-02-28",
+   "filings": 40,
+   "forms": {
+    "N-2": 20,
+    "N-2/A": 20
+   },
+   "ticker": "BIT"
+  },
+  {
+   "cik": "892992",
+   "half": "2025H1",
+   "name": "NUVEEN ARIZONA QUALITY MUNICIPAL INCOME FUND  (NAZ)  (CIK 0000892992)",
+   "first_date": "2025-02-28",
+   "filings": 20,
+   "forms": {
+    "N-2": 10,
+    "N-2/A": 10
+   },
+   "ticker": "NAZ"
+  },
+  {
+   "cik": "1902314",
+   "half": "2025H1",
+   "name": "M-tron Industries, Inc.  (MPTI)  (CIK 0001902314)",
+   "first_date": "2025-02-20",
+   "filings": 76,
+   "forms": {
+    "8-A12G": 13,
+    "8-A12B": 15,
+    "10-Q": 10,
+    "8-K": 28,
+    "424B2": 10
+   },
+   "ticker": "MPTI"
+  },
+  {
+   "cik": "1721741",
+   "half": "2025H1",
+   "name": "Lazydays Holdings, Inc.  (GORV)  (CIK 0001721741)",
+   "first_date": "2025-02-12",
+   "filings": 10,
+   "forms": {
+    "8-K": 10
+   },
+   "ticker": "GORV"
+  },
+  {
+   "cik": "1160864",
+   "half": "2025H1",
+   "name": "BLACKROCK CORE BOND TRUST  (BHK)  (CIK 0001160864)",
+   "first_date": "2025-02-07",
+   "filings": 89,
+   "forms": {
+    "POS EX": 19,
+    "497AD": 20,
+    "N-2": 20,
+    "N-2/A": 20,
+    "424B5": 10
+   },
+   "ticker": "BHK"
+  },
+  {
+   "cik": "1059386",
+   "half": "2025H1",
+   "name": "Invesco Senior Income Trust  (VVR)  (CIK 0001059386)",
+   "first_date": "2025-02-07",
+   "filings": 20,
+   "forms": {
+    "N-2/A": 10,
+    "POS EX": 10
+   },
+   "ticker": "VVR"
+  },
+  {
+   "cik": "835333",
+   "half": "2025H1",
+   "name": "Invesco Municipal Income Opportunities Trust  (OIA)  (CIK 0000835333)",
+   "first_date": "2025-02-07",
+   "filings": 20,
+   "forms": {
+    "N-2/A": 10,
+    "POS EX": 10
+   },
+   "ticker": "OIA"
+  },
+  {
+   "cik": "1041859",
+   "half": "2025H1",
+   "name": "Childrens Place, Inc.  (PLCE)  (CIK 0001041859)",
+   "first_date": "2025-02-04",
+   "filings": 44,
+   "forms": {
+    "SCHEDULE 13D/A": 24,
+    "8-K": 10,
+    "424B3": 10
+   },
+   "ticker": "PLCE"
+  },
+  {
+   "cik": "1828859",
+   "half": "2025H1",
+   "name": "Seemab Muhammad Asif  (CIK 0001828859)",
+   "first_date": "2025-02-04",
+   "filings": 20,
+   "forms": {
+    "4": 20
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1633336",
+   "half": "2025H1",
+   "name": "Crescent Capital BDC, Inc.  (CCAP, FCRX)  (CIK 0001633336)",
+   "first_date": "2025-02-03",
+   "filings": 8,
+   "forms": {
+    "N-2/A": 8
+   },
+   "ticker": "CCAP"
+  },
+  {
+   "cik": "1222401",
+   "half": "2025H1",
+   "name": "BLACKROCK CORPORATE HIGH YIELD FUND, INC.  (HYT)  (CIK 0001222401)",
+   "first_date": "2025-01-31",
+   "filings": 20,
+   "forms": {
+    "N-2ASR": 20
+   },
+   "ticker": "HYT"
+  },
+  {
+   "cik": "1228509",
+   "half": "2025H1",
+   "name": "WESTERN ASSET GLOBAL HIGH INCOME FUND INC.  (EHI)  (CIK 0001228509)",
+   "first_date": "2025-01-28",
+   "filings": 1,
+   "forms": {
+    "N-CSRS": 1
+   },
+   "ticker": "EHI"
+  },
+  {
+   "cik": "1703079",
+   "half": "2025H1",
+   "name": "XAI Octagon Floating Rate & Alternative Income Trust  (XFLT, XFLT-PA)  (CIK 0001703079)",
+   "first_date": "2025-01-24",
+   "filings": 19,
+   "forms": {
+    "N-2": 19
+   },
+   "ticker": "XFLT"
+  },
+  {
+   "cik": "1261166",
+   "half": "2025H1",
+   "name": "NEUBERGER BERMAN REAL ESTATE SECURITIES INCOME FUND INC  (NRO)  (CIK 0001261166)",
+   "first_date": "2025-01-24",
+   "filings": 30,
+   "forms": {
+    "POS EX": 20,
+    "424B2": 10
+   },
+   "ticker": "NRO"
+  },
+  {
+   "cik": "1847806",
+   "half": "2025H1",
+   "name": "Genius Group Ltd  (GNS)  (CIK 0001847806)",
+   "first_date": "2025-01-14",
+   "filings": 53,
+   "forms": {
+    "424B2": 20,
+    "6-K": 33
+   },
+   "ticker": "GNS"
+  },
+  {
+   "cik": "1195738",
+   "half": "2025H1",
+   "name": "NUVEEN CALIFORNIA AMT-FREE QUALITY MUNICIPAL INCOME FUND  (NKX)  (CIK 0001195738)",
+   "first_date": "2025-01-13",
+   "filings": 10,
+   "forms": {
+    "N-2/A": 10
+   },
+   "ticker": "NKX"
+  },
+  {
+   "cik": "1270131",
+   "half": "2025H1",
+   "name": "LMP CAPITAL & INCOME FUND INC.  (SCD)  (CIK 0001270131)",
+   "first_date": "2025-01-10",
+   "filings": 68,
+   "forms": {
+    "POS EX": 20,
+    "N-2": 20,
+    "N-2/A": 20,
+    "424B2": 8
+   },
+   "ticker": "SCD"
+  },
+  {
+   "cik": "1276533",
+   "half": "2025H1",
+   "name": "NUVEEN FLOATING RATE INCOME FUND  (JFR)  (CIK 0001276533)",
+   "first_date": "2025-01-08",
+   "filings": 55,
+   "forms": {
+    "424B2": 20,
+    "N-2ASR": 10,
+    "497AD": 25
+   },
+   "ticker": "JFR"
+  },
+  {
+   "cik": "1819559",
+   "half": "2024H2",
+   "name": "Western Asset Diversified Income Fund (WDI)  (WDI)  (CIK 0001819559)",
+   "first_date": "2024-12-18",
+   "filings": 20,
+   "forms": {
+    "N-2ASR": 20
+   },
+   "ticker": "WDI"
+  },
+  {
+   "cik": "1059386",
+   "half": "2024H2",
+   "name": "Invesco Senior Income Trust  (VVR)  (CIK 0001059386)",
+   "first_date": "2024-12-13",
+   "filings": 10,
+   "forms": {
+    "N-2": 10
+   },
+   "ticker": "VVR"
+  },
+  {
+   "cik": "835333",
+   "half": "2024H2",
+   "name": "Invesco Municipal Income Opportunities Trust  (OIA)  (CIK 0000835333)",
+   "first_date": "2024-12-13",
+   "filings": 10,
+   "forms": {
+    "N-2": 10
+   },
+   "ticker": "OIA"
+  },
+  {
+   "cik": "1175151",
+   "half": "2024H2",
+   "name": "Cytosorbents Corp  (CTSO)  (CIK 0001175151)",
+   "first_date": "2024-12-09",
+   "filings": 37,
+   "forms": {
+    "8-K": 24,
+    "424B5": 3,
+    "FWP": 10
+   },
+   "ticker": "CTSO"
+  },
+  {
+   "cik": "1777679",
+   "half": "2024H2",
+   "name": "Mullins Andrea  (CIK 0001777679)",
+   "first_date": "2024-11-26",
+   "filings": 10,
+   "forms": {
+    "4": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1596961",
+   "half": "2024H2",
+   "name": "RumbleOn, Inc.  (RMBL)  (CIK 0001596961)",
+   "first_date": "2024-11-26",
+   "filings": 26,
+   "forms": {
+    "8-K": 26
+   },
+   "ticker": "RMBL"
+  },
+  {
+   "cik": "1555638",
+   "half": "2024H2",
+   "name": "Musgrave John M.  (CIK 0001555638)",
+   "first_date": "2024-11-25",
+   "filings": 10,
+   "forms": {
+    "4": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1957908",
+   "half": "2024H2",
+   "name": "Sunderland Todd  (CIK 0001957908)",
+   "first_date": "2024-11-25",
+   "filings": 10,
+   "forms": {
+    "4": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1678130",
+   "half": "2024H2",
+   "name": "RiverNorth/DoubleLine Strategic Opportunity Fund, Inc.  (OPP, OPP-PA, OPP-PB)  (CIK 0001678130)",
+   "first_date": "2024-10-31",
+   "filings": 25,
+   "forms": {
+    "POS EX": 15,
+    "424B2": 10
+   },
+   "ticker": "OPP"
+  },
+  {
+   "cik": "1487610",
+   "half": "2024H2",
+   "name": "Neuberger Berman High Yield Strategies Fund Inc.  (NHS)  (CIK 0001487610)",
+   "first_date": "2024-10-31",
+   "filings": 10,
+   "forms": {
+    "N-2": 10
+   },
+   "ticker": "NHS"
+  },
+  {
+   "cik": "1397047",
+   "half": "2024H2",
+   "name": "FlexShopper, Inc.  (FPAY)  (CIK 0001397047)",
+   "first_date": "2024-10-28",
+   "filings": 312,
+   "forms": {
+    "S-1/A": 85,
+    "8-K": 113,
+    "S-1": 104,
+    "424B3": 10
+   },
+   "ticker": "FPAY"
+  },
+  {
+   "cik": "2028523",
+   "half": "2024H2",
+   "name": "Massaro Anthony F  (CIK 0002028523)",
+   "first_date": "2024-10-22",
+   "filings": 10,
+   "forms": {
+    "4": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1056513",
+   "half": "2024H2",
+   "name": "ACKMAN WILLIAM A  (CIK 0001056513)",
+   "first_date": "2024-10-22",
+   "filings": 10,
+   "forms": {
+    "4": 10
+   },
+   "ticker": null
+  },
+  {
+   "cik": "1041859",
+   "half": "2024H2",
+   "name": "Childrens Place, Inc.  (PLCE)  (CIK 0001041859)",
+   "first_date": "2024-10-15",
+   "filings": 223,
+   "forms": {
+    "S-1/A": 177,
+    "424B3": 20,
+    "S-1": 10,
+    "8-K": 10,
+    "SC 13D/A": 6
+   },
+   "ticker": "PLCE"
+  },
+  {
+   "cik": "880406",
+   "half": "2024H2",
+   "name": "HERZFELD CARIBBEAN BASIN FUND INC  (CUBA)  (CIK 0000880406)",
+   "first_date": "2024-10-15",
+   "filings": 10,
+   "forms": {
+    "SC TO-I": 10
+   },
+   "ticker": "CUBA"
+  },
+  {
+   "cik": "1195738",
+   "half": "2024H2",
+   "name": "NUVEEN CALIFORNIA AMT-FREE QUALITY MUNICIPAL INCOME FUND  (NKX)  (CIK 0001195738)",
+   "first_date": "2024-10-11",
+   "filings": 10,
+   "forms": {
+    "N-2": 10
+   },
+   "ticker": "NKX"
+  },
+  {
+   "cik": "1400897",
+   "half": "2024H2",
+   "name": "NXG Cushing Midstream Energy Fund  (SRV)  (CIK 0001400897)",
+   "first_date": "2024-10-10",
+   "filings": 48,
+   "forms": {
+    "8-K": 30,
+    "424B2": 10,
+    "497AD": 8
+   },
+   "ticker": "SRV"
+  },
+  {
+   "cik": "897421",
+   "half": "2024H2",
+   "name": "NUVEEN VIRGINIA QUALITY MUNICIPAL INCOME FUND  (NPV)  (CIK 0000897421)",
+   "first_date": "2024-10-09",
+   "filings": 21,
+   "forms": {
+    "N-2": 11,
+    "N-2/A": 10
+   },
+   "ticker": "NPV"
+  },
+  {
+   "cik": "887396",
+   "half": "2024H2",
+   "name": "EMPIRE PETROLEUM CORP  (EP)  (CIK 0000887396)",
+   "first_date": "2024-10-01",
+   "filings": 5,
+   "forms": {
+    "8-K": 5
+   },
+   "ticker": "EP"
+  },
+  {
+   "cik": "1607997",
+   "half": "2024H2",
+   "name": "Nuveen Minnesota Quality Municipal Income Fund  (NMS)  (CIK 0001607997)",
+   "first_date": "2024-10-01",
+   "filings": 19,
+   "forms": {
+    "N-2": 10,
+    "N-2/A": 9
+   },
+   "ticker": "NMS"
+  },
+  {
+   "cik": "1390195",
+   "half": "2024H2",
+   "name": "abrdn Global Premier Properties Fund  (AWP)  (CIK 0001390195)",
+   "first_date": "2024-09-23",
+   "filings": 10,
+   "forms": {
+    "N-2": 10
+   },
+   "ticker": "AWP"
+  },
+  {
+   "cik": "1774342",
+   "half": "2024H2",
+   "name": "Nuveen Municipal Credit Opportunities Fund  (NMCO)  (CIK 0001774342)",
+   "first_date": "2024-09-19",
+   "filings": 10,
+   "forms": {
+    "N-2/A": 10
+   },
+   "ticker": "NMCO"
+  },
+  {
+   "cik": "1228509",
+   "half": "2024H2",
+   "name": "WESTERN ASSET GLOBAL HIGH INCOME FUND INC.  (EHI)  (CIK 0001228509)",
+   "first_date": "2024-08-29",
+   "filings": 39,
+   "forms": {
+    "POS EX": 20,
+    "497AD": 10,
+    "424B2": 9
+   },
+   "ticker": "EHI"
+  },
+  {
+   "cik": "1745059",
+   "half": "2024H2",
+   "name": "Angel Oak Financial Strategies Income Term Trust  (FINS)  (CIK 0001745059)",
+   "first_date": "2024-08-28",
+   "filings": 30,
+   "forms": {
+    "N-2/A": 20,
+    "N-2": 10
+   },
+   "ticker": "FINS"
+  },
+  {
+   "cik": "1478102",
+   "half": "2024H2",
+   "name": "Western Asset Mortgage Opportunity Fund Inc.  (DMO)  (CIK 0001478102)",
+   "first_date": "2024-08-27",
+   "filings": 20,
+   "forms": {
+    "N-2/A": 20
+   },
+   "ticker": "DMO"
+  },
+  {
+   "cik": "1080720",
+   "half": "2024H2",
+   "name": "GABELLI UTILITY TRUST  (GUT, GUT-PC)  (CIK 0001080720)",
+   "first_date": "2024-08-23",
+   "filings": 33,
+   "forms": {
+    "POS EX": 13,
+    "497AD": 10,
+    "424B2": 10
+   },
+   "ticker": "GUT"
+  },
+  {
+   "cik": "1793129",
+   "half": "2024H2",
+   "name": "Nuveen Dynamic Municipal Opportunities Fund  (NDMO)  (CIK 0001793129)",
+   "first_date": "2024-08-22",
+   "filings": 10,
+   "forms": {
+    "N-2/A": 10
+   },
+   "ticker": "NDMO"
+  },
+  {
+   "cik": "1260729",
+   "half": "2024H2",
+   "name": "GABELLI DIVIDEND & INCOME TRUST  (GDV, GDV-PH, GDV-PK)  (CIK 0001260729)",
+   "first_date": "2024-08-16",
+   "filings": 56,
+   "forms": {
+    "N-2ASR": 28,
+    "N-2": 28
+   },
+   "ticker": "GDV"
+  },
+  {
+   "cik": "1515324",
+   "half": "2024H2",
+   "name": "Ares Dynamic Credit Allocation Fund, Inc.  (ARDC)  (CIK 0001515324)",
+   "first_date": "2024-08-15",
+   "filings": 20,
+   "forms": {
+    "N-2/A": 20
+   },
+   "ticker": "ARDC"
+  },
+  {
+   "cik": "1338561",
+   "half": "2024H2",
+   "name": "Nuveen S&P 500 Dynamic Overwrite Fund  (SPXX)  (CIK 0001338561)",
+   "first_date": "2024-07-26",
+   "filings": 10,
+   "forms": {
+    "N-2": 10
+   },
+   "ticker": "SPXX"
+  },
+  {
+   "cik": "1219120",
+   "half": "2024H2",
+   "name": "ADVENT CONVERTIBLE & INCOME FUND  (AVK, AVK-RI)  (CIK 0001219120)",
+   "first_date": "2024-07-23",
+   "filings": 68,
+   "forms": {
+    "N-2": 10,
+    "8-K": 40,
+    "424B2": 10,
+    "497AD": 8
+   },
+   "ticker": "AVK"
+  },
+  {
+   "cik": "2009684",
+   "half": "2024H2",
+   "name": "Seaport Entertainment Group Inc.  (SEG)  (CIK 0002009684)",
+   "first_date": "2024-07-19",
+   "filings": 137,
+   "forms": {
+    "S-1/A": 88,
+    "8-K": 32,
+    "424B3": 10,
+    "10-12B/A": 7
+   },
+   "ticker": "SEG"
+  },
+  {
+   "cik": "1981792",
+   "half": "2024H2",
+   "name": "Howard Hughes Holdings Inc.  (HHH)  (CIK 0001981792)",
+   "first_date": "2024-07-18",
+   "filings": 7,
+   "forms": {
+    "SC 13D/A": 7
+   },
+   "ticker": "HHH"
+  },
+  {
+   "cik": "1659323",
+   "half": "2024H2",
+   "name": "Iterum Therapeutics plc  (ITRM)  (CIK 0001659323)",
+   "first_date": "2024-07-17",
+   "filings": 87,
+   "forms": {
+    "S-1/A": 57,
+    "8-K": 20,
+    "424B3": 10
+   },
+   "ticker": "ITRM"
+  },
+  {
+   "cik": "1385763",
+   "half": "2024H2",
+   "name": "Nuveen Core Equity Alpha Fund  (JCE)  (CIK 0001385763)",
+   "first_date": "2024-07-17",
+   "filings": 10,
+   "forms": {
+    "N-2/A": 10
+   },
+   "ticker": "JCE"
+  },
+  {
+   "cik": "1478888",
+   "half": "2024H2",
+   "name": "Nuveen Taxable Municipal Income Fund  (NBB)  (CIK 0001478888)",
+   "first_date": "2024-07-12",
+   "filings": 10,
+   "forms": {
+    "N-2/A": 10
+   },
+   "ticker": "NBB"
+  },
+  {
+   "cik": "845611",
+   "half": "2024H2",
+   "name": "GABELLI CONVERTIBLE & INCOME SECURITIES FUND INC  (GCV)  (CIK 0000845611)",
+   "first_date": "2024-07-11",
+   "filings": 30,
+   "forms": {
+    "N-2": 30
+   },
+   "ticker": "GCV"
+  },
+  {
+   "cik": "1058239",
+   "half": "2024H2",
+   "name": "WESTERN ASSET HIGH INCOME FUND II INC.  (HIX)  (CIK 0001058239)",
+   "first_date": "2024-07-05",
+   "filings": 8,
+   "forms": {
+    "N-CSRS": 6,
+    "N-CSR": 2
+   },
+   "ticker": "HIX"
+  },
+  {
+   "cik": "1585855",
+   "half": "2024H2",
+   "name": "Gabelli Global Small & Mid Cap Value Trust  (GGZ)  (CIK 0001585855)",
+   "first_date": "2024-07-03",
+   "filings": 28,
+   "forms": {
+    "N-2": 28
+   },
+   "ticker": "GGZ"
+  },
+  {
+   "cik": "921671",
+   "half": "2024H2",
+   "name": "GABELLI MULTIMEDIA TRUST INC.  (GGT, GGT-PE, GGT-PG)  (CIK 0000921671)",
+   "first_date": "2024-07-01",
+   "filings": 41,
+   "forms": {
+    "8-K": 21,
+    "497AD": 20
+   },
+   "ticker": "GGT"
+  },
+  {
+   "cik": "1282957",
+   "half": "2024H1",
+   "name": "GABELLI GLOBAL UTILITY & INCOME TRUST  (GLU, GLU-PA, GLU-PB)  (CIK 0001282957)",
+   "first_date": "2024-06-24",
+   "filings": 27,
+   "forms": {
+    "N-2": 27
+   },
+   "ticker": "GLU"
+  }
+ ]
+}
