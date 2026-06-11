@@ -1,0 +1,47 @@
+{
+ "asof": "2026-06-11",
+ "window": [
+  "2021-06-11",
+  "2026-06-10"
+ ],
+ "raw_filings": 3,
+ "skipped_fetch": 0,
+ "qualifying": 1,
+ "events_per_year": 0.2,
+ "measured": 0,
+ "positive_spread": 0,
+ "median_pos_spread_pct": null,
+ "completion_proxy": null,
+ "dollars_per_year_measured": 0.0,
+ "dollars_per_year_scaled": null,
+ "suspects_excluded": 0,
+ "class_warnings": 0,
+ "bars": {
+  "events_per_year": 6.0,
+  "median_pos_spread_pct": 2.0,
+  "completion_rate": 0.7,
+  "dollars_per_year": 300.0
+ },
+ "verdict": {
+  "events_per_year": false,
+  "median_pos_spread": false,
+  "completion": false,
+  "dollars_per_year": false,
+  "PASS": false
+ },
+ "events": [
+  {
+   "adsh": "0001193125-22-282810",
+   "cik": "1839132",
+   "name": "Pathfinder Acquisition Corp  (MVLA)  (CIK 0001839132)",
+   "file_date": "2022-11-10",
+   "odd_lot_priority": true,
+   "ticker": "MVLA",
+   "expiry_hint": null,
+   "offer_type": "fixed",
+   "tender_price": 10.0,
+   "class_warning": false,
+   "spread_pct": null
+  }
+ ]
+}

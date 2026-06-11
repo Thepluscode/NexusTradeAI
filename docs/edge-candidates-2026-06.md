@@ -255,6 +255,22 @@ events/yr retail-accessible; median realized discount ≥ 3% net at
 oversubscription fill; ≥ 70% completion. Gate harness to be built only after
 D's verdict (one at a time).
 
+### Candidate D result: **FAIL** (2026-06-11) — the clause barely exists in third-party tenders
+
+Gate executed: `tools/oddlot_tot_gate.py` → `reports/oddlot_tot_gate_20260611.json`.
+Five years of SC TO-T filings: **14 raw FTS hits** for "odd lots" (+10 for
+"odd lot", overlapping — census completed with both phrase variants per the
+registered same-method-as-A standard), **3 distinct initial filings**, and
+exactly **1 with verified odd-lot priority language → 0.2 events/yr** vs the
+frozen ≥6/yr bar. All four bars fail; spread/completion unmeasurable at n=1.
+
+**Why (structural, not a query artifact):** the same query family found 214
+filings on SC TO-I — odd-lot preference is an *issuer self-tender* convention
+(companies courting their own small holders). Third-party acquirers have no
+reason to privilege odd-lots, so the clause is essentially absent. Candidate A
+remains the family's only harvestable member on the tender side. FAIL is
+final; no phrase-loosening or form-widening re-runs.
+
 ## Candidate F — tender deadline-spread compression (design queued)
 
 Spread-close behavior into expiry on A/D events, measurable from data the
