@@ -26,7 +26,7 @@ let {
     computeCorrelationGuard, computePortfolioHeat, computeEquityCurveMultiplier,
     autoOptimize, autoEvalStrategies, AUTO_PARAM_BOUNDS,
     checkScanHealth, checkErrorRate, checkTradingHealth, checkMemoryHealth, aggregateHealth,
-    getPnlSummary, createKillSwitchGate,
+    getPnlSummary, createKillSwitchGate, buildAccountSnapshot,
     summarizeRegistry, operationalStatus, listEngineCredentials,
     sharedSignals, sharedIndicators, edgeStats, sharedRegimeDetector,
     portfolioIntelligence, eventCalendar,
@@ -560,6 +560,7 @@ async function initTradeDb() {
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS entry_context JSONB DEFAULT '{}'::jsonb;
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS decision_run_id INTEGER;
             ALTER TABLE trades ADD COLUMN IF NOT EXISTS market_regime VARCHAR(30); -- [2026-05-09] System-1 4-state classifier value
+            ALTER TABLE trades ADD COLUMN IF NOT EXISTS account_snapshot JSONB; -- [2026-06-12] open-positions picture at open/close
             CREATE INDEX IF NOT EXISTS idx_trades_bot ON trades(bot);
             CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
             CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time);
@@ -717,11 +718,12 @@ async function dbCryptoOpen(symbol, tier, entry, stopLoss, takeProfit, quantity,
         const tags = buildCryptoTradeTags({ ...signal, symbol }, tier);
         const r = await dbPool.query(
             `INSERT INTO trades (bot,symbol,direction,tier,strategy,regime,market_regime,status,entry_price,quantity,
-             position_size_usd,stop_loss,take_profit,entry_time,signal_score,entry_context,rsi,volume_ratio,momentum_pct,decision_run_id)
-             VALUES ('crypto',$1,'long',$2,$3,$4,$5,'open',$6,$7,$8,$9,$10,NOW(),$11,$12::jsonb,$13,$14,$15,$16) RETURNING id`,
+             position_size_usd,stop_loss,take_profit,entry_time,signal_score,entry_context,rsi,volume_ratio,momentum_pct,decision_run_id,account_snapshot)
+             VALUES ('crypto',$1,'long',$2,$3,$4,$5,'open',$6,$7,$8,$9,$10,NOW(),$11,$12::jsonb,$13,$14,$15,$16,$17::jsonb) RETURNING id`,
             [symbol, tier, tags.strategy, tags.regime, tags.marketRegimeClass, entry, quantity, positionSize, stopLoss, takeProfit,
              tags.score, JSON.stringify(tags.context), signal.rsi || null, signal.volumeRatio || null, signal.momentum || null,
-             signal.decisionRunId || null]
+             signal.decisionRunId || null,
+             JSON.stringify({ at_open: buildAccountSnapshot(engine?.positions) })]
         );
         return r.rows[0]?.id;
     } catch (e) { console.warn('DB crypto open failed:', e.message); return null; }
@@ -734,8 +736,10 @@ async function dbCryptoClose(id, exitPrice, pnlUsd, pnlPct, reason) {
         await client.query('BEGIN');
         await client.query(
             `UPDATE trades SET status='closed',exit_price=$1,pnl_usd=$2,pnl_pct=$3,
-             exit_time=NOW(),close_reason=$4 WHERE id=$5`,
-            [exitPrice, pnlUsd, pnlPct, reason, id]
+             exit_time=NOW(),close_reason=$4,
+             account_snapshot = COALESCE(account_snapshot,'{}'::jsonb) || $6::jsonb WHERE id=$5`,
+            [exitPrice, pnlUsd, pnlPct, reason, id,
+             JSON.stringify({ at_close: buildAccountSnapshot(engine?.positions) })]
         );
         await client.query('COMMIT');
     } catch (e) {
@@ -5721,11 +5725,12 @@ async function getOrCreateCryptoEngine(userId) {
                 const tags = buildCryptoTradeTags({ ...signal, symbol }, tier);
                 const r = await dbPool.query(
                     `INSERT INTO trades (user_id,bot,symbol,direction,tier,strategy,regime,market_regime,status,entry_price,quantity,
-                     position_size_usd,stop_loss,take_profit,entry_time,signal_score,entry_context,rsi,volume_ratio,momentum_pct,decision_run_id)
-                     VALUES ($1,'crypto',$2,'long',$3,$4,$5,$6,'open',$7,$8,$9,$10,$11,NOW(),$12,$13::jsonb,$14,$15,$16,$17) RETURNING id`,
+                     position_size_usd,stop_loss,take_profit,entry_time,signal_score,entry_context,rsi,volume_ratio,momentum_pct,decision_run_id,account_snapshot)
+                     VALUES ($1,'crypto',$2,'long',$3,$4,$5,$6,'open',$7,$8,$9,$10,$11,NOW(),$12,$13::jsonb,$14,$15,$16,$17,$18::jsonb) RETURNING id`,
                     [userId, symbol, tier, tags.strategy, tags.regime, tags.marketRegimeClass, entry, quantity, positionSize, stopLoss, takeProfit,
                      tags.score, JSON.stringify(tags.context), signal.rsi || null, signal.volumeRatio || null, signal.momentum || null,
-                     signal.decisionRunId || null]
+                     signal.decisionRunId || null,
+                     JSON.stringify({ at_open: buildAccountSnapshot(this.positions) })]
                 );
                 return r.rows[0]?.id;
             } catch (e) { console.warn('DB crypto open failed:', e.message); return null; }
@@ -5736,8 +5741,10 @@ async function getOrCreateCryptoEngine(userId) {
             try {
                 await client.query('BEGIN');
                 await client.query(
-                    `UPDATE trades SET status='closed',exit_price=$1,pnl_usd=$2,pnl_pct=$3,exit_time=NOW(),close_reason=$4 WHERE id=$5`,
-                    [exitPrice, pnlUsd, pnlPct, reason, id]
+                    `UPDATE trades SET status='closed',exit_price=$1,pnl_usd=$2,pnl_pct=$3,exit_time=NOW(),close_reason=$4,
+                     account_snapshot = COALESCE(account_snapshot,'{}'::jsonb) || $6::jsonb WHERE id=$5`,
+                    [exitPrice, pnlUsd, pnlPct, reason, id,
+                     JSON.stringify({ at_close: buildAccountSnapshot(this.positions) })]
                 );
                 await client.query('COMMIT');
             } catch (e) {
