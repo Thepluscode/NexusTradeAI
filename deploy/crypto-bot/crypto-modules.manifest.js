@@ -135,6 +135,13 @@ module.exports = {
                     note: 'fallback gate never blocks — a load failure cannot halt trading (Rule 9)',
                 },
                 {
+                    name: 'account-snapshot',
+                    from: ['./signals/account-snapshot', '../../services/signals/account-snapshot'],
+                    picks: { buildAccountSnapshot: 'buildAccountSnapshot' },
+                    stubs: { buildAccountSnapshot: () => null },
+                    note: 'per-trade account-state snapshots; stub returns null and persistence omits the column value (Rule 9)',
+                },
+                {
                     name: 'engine-registry-summary',
                     from: ['./signals/engine-registry-summary', '../../services/signals/engine-registry-summary'],
                     picks: { summarizeRegistry: 'summarizeRegistry', operationalStatus: 'operationalStatus', listEngineCredentials: 'listEngineCredentials' },
